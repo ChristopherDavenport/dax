@@ -22,7 +22,10 @@ import (
 	"github.com/ChristopherDavenport/dex/internal/tool"
 )
 
-// BuiltinAllow is the allow list dex ships. Writes and bash in general
+// BuiltinAllow is the allow list dex ships. go test, build, vet and
+// list are not on it: they run the repository's code (TestMain, cgo,
+// a vet tool, a toolchain the go.mod names). A user who trusts a
+// repository allows them in the user config; see the README. Writes and bash in general
 // are not on it: they fall to the default, which asks.
 //
 // A bash rule is matched against each subcommand of the command line
@@ -31,7 +34,7 @@ import (
 // `git status && rm -rf x` asks about the rm.
 const BuiltinAllow = "read glob grep ls skill explore memory_search " +
 	"bash(git status:*) bash(git diff:*) bash(git log:*) bash(git show:*) " +
-	"bash(go test:*) bash(go build:*) bash(go vet:*) bash(go list:*) bash(go version:*) " +
+	"bash(go version) bash(go env:*) " +
 	"bash(ls:*) bash(pwd) bash(cd:*)"
 
 // Matchers are the per-tool specifier matchers: bash by its command,

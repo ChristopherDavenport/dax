@@ -145,8 +145,11 @@ dex ships this default:
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls`, `skill`,
   `memory_search`, and the commands `git status`, `git diff`, `git log`,
-  `git show`, `go test`, `go build`, `go vet`, `go list`, `go version`,
-  `ls` and `pwd`, as far as they are in the safe subset below;
+  `git show`, `go version`, `go env NAME`, `ls` and `pwd`, as far as they
+  are in the safe subset below. `go test`, `go build`, `go vet` and `go list`
+  are not on the list: they run the repository's code (a `TestMain`, cgo,
+  a vet tool, a toolchain named in `go.mod`), so a hostile repository
+  would run code as you on the model's say-so;
 - **asks**: `write`, `edit`, every other command, memory writes, and every
   MCP tool.
 
@@ -176,6 +179,22 @@ file is shown as a write to its target, and the question names the part it
 is asking about. The cut is for the question and for deny and ask rules.
 Nothing is allowed because of it: a command outside the subset is allowed
 only by a bare `bash` allow rule or `"fallback": "allow"`.
+
+**Trusting `go test` for your own repositories.** Put the rule in your
+**user** config, `~/.config/dex/config.json`, never a repository's (a
+project file's `allow` rules are ignored):
+
+```json
+{ "policy": { "allow": ["bash(go test:*)", "bash(go vet:*)", "bash(go build:*)"] } }
+```
+
+It applies to every repository you open, so only add what you would run
+by hand in any of them. Each call is still one simple command: `go test
+./... && rm -rf x` asks, as does `go test ./... > out`, and an arbitrary
+`-exec`, `-toolexec` or `-vettool` is yours to decide: tighten with
+`"ask": ["bash(go test -exec:*)", "bash(go build -toolexec:*)", "bash(go vet -vettool:*)"]`
+(the `-o` and `-coverprofile` flags write files and are worth asking about
+too).
 
 Your rules in `policy` add to the default. Because deny beats ask beats
 allow, allow what the default asks about (`"allow": ["write(docs/**)"]`)
