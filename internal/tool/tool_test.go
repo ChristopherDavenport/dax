@@ -34,6 +34,18 @@ func newWS(t testing.TB, dir string) *Workspace {
 	return ws
 }
 
+// stamped is the arguments of a bash call as the policy hook would pass
+// them on: stamped if the line is auto-allowed.
+func stamped(t testing.TB, dir, cmd string) string {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]string{"command": cmd})
+	out, _, err := StampArgs(context.Background(), &Analyzer{Dir: dir}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
 func TestEdit(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -216,7 +228,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 
 	b := Bash(dir)
 	for _, c := range []string{"git status", "git diff", "git log -p", "git show HEAD", "git diff --stat"} {
-		out, err := call(context.Background(), b, `{"command":"`+c+`"}`)
+		out, err := call(context.Background(), b, stamped(t, dir, c))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -241,7 +253,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 		}
 	}
 	// The diff is still a diff.
-	out, _ := call(context.Background(), b, `{"command":"git diff"}`)
+	out, _ := call(context.Background(), b, stamped(t, dir, "git diff"))
 	if !strings.Contains(out, "-a") || !strings.Contains(out, "+b") {
 		t.Errorf("git diff output: %s", out)
 	}
@@ -339,7 +351,15 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 	}
 	// The auto-allowed path is neutralised, and only it.
 	hasGitEnv := func(cmd string) bool {
-		for _, kv := range command(ctx, &Analyzer{Dir: dir}, cmd, DefaultEnv(nil)).Env {
+		var in BashArgs
+		if err := json.Unmarshal([]byte(stamped(t, dir, cmd)), &in); err != nil {
+			t.Fatal(err)
+		}
+		c, err := command(ctx, &Analyzer{Dir: dir}, in, DefaultEnv(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, kv := range c.Env {
 			if kv == "GIT_CONFIG_COUNT=8" {
 				return true
 			}
@@ -366,7 +386,7 @@ func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
 	t.Setenv("GOFLAGS", "")
 	b := Bash(dir)
 	for _, cmd := range []string{"go version", "go env GOFLAGS", "go env GOROOT"} {
-		out, err := call(context.Background(), b, `{"command":"`+cmd+`"}`)
+		out, err := call(context.Background(), b, stamped(t, dir, cmd))
 		if err != nil {
 			t.Fatal(err)
 		}

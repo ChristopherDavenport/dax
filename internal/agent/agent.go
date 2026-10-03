@@ -351,7 +351,10 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		kopts = append(kopts, agentkit.WithMemory(mem, "user", ProjectScope(o.Dir)))
 	}
 	if o.Policy != nil {
-		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(o.Dir, o.MaxReadBytes), policy.Options()...))
+		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(o.Dir, o.MaxReadBytes), policy.Options()...),
+			// A bash call the policy allows without asking carries the
+			// plan it approved, and runs only that plan.
+			agentkit.WithBeforeToolCall(stampBash(&tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})))
 	}
 	if o.Agents {
 		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env)))
@@ -875,4 +878,20 @@ func userSkill(o Options, location string) bool {
 		}
 	}
 	return false
+}
+
+// stampBash is the hook that stamps an auto-allowed bash call with the
+// plan the policy approved, and takes a stamp the model made off any
+// other. It decides nothing itself.
+func stampBash(an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+		if info.Call == nil || info.Call.Name != "bash" {
+			return nil, nil
+		}
+		args, changed, err := tool.StampArgs(ctx, an, info.Args)
+		if err != nil || !changed {
+			return nil, nil // not JSON: the tool will say so
+		}
+		return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args}, nil
+	}
 }
