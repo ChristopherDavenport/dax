@@ -148,10 +148,11 @@ type Session struct {
 	Agent *agentturn.Agent
 	Kit   *agentkit.Kit
 
-	opts   Options
-	ws     *tool.Workspace
-	store  *cas.Store
-	detach func()
+	opts    Options
+	refused []agentkit.Omission // repository files screened out before the kit
+	ws      *tool.Workspace
+	store   *cas.Store
+	detach  func()
 }
 
 // Describe is one line for the user: the call and why it is unanswered.
@@ -286,15 +287,27 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		agentkit.WithTools(tool.Builtins(ws)...),
 	}
 	if o.AgentsMD {
+		// The walk is done here, so that a file that is a link out of
+		// the workspace can be left out; agentsmd is given the screened
+		// files and a name that matches nothing, so it walks to no more.
+		files, refused := agentsFiles(o.Dir)
+		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, agentsmd.Options{
-			Extra:  []string{filepath.Join(o.UserDir, "AGENTS.md")},
+			Names:  []string{".dex-no-such-file"},
+			Extra:  append([]string{filepath.Join(o.UserDir, "AGENTS.md")}, files...),
 			Budget: 32 << 10,
 		}))
 	}
 	if o.Skills {
 		// Neither directory is one the user configured, so either may
 		// be absent; the project's comes first and shadows the user's.
-		kopts = append(kopts, agentkit.WithOptionalSkills(filepath.Join(o.Dir, ".dex", "skills"), filepath.Join(o.UserDir, "skills")))
+		dirs := []string{filepath.Join(o.UserDir, "skills")}
+		if ok, refused := projectSkillsOK(o.Dir); ok {
+			dirs = []string{filepath.Join(o.Dir, ".dex", "skills"), dirs[0]}
+		} else {
+			s.refused = append(s.refused, refused...)
+		}
+		kopts = append(kopts, agentkit.WithOptionalSkills(dirs...))
 		if len(o.SkillsDirs) > 0 {
 			kopts = append(kopts, agentkit.WithSkills(o.SkillsDirs...))
 		}
@@ -464,7 +477,9 @@ func (s *Session) Path() string {
 }
 
 // Omitted is what the instruction layers considered and left out.
-func (s *Session) Omitted() []agentkit.Omission { return s.Kit.Omitted() }
+func (s *Session) Omitted() []agentkit.Omission {
+	return append(append([]agentkit.Omission(nil), s.refused...), s.Kit.Omitted()...)
+}
 
 // Tools lists the tools the kit assembled, each with its source.
 func (s *Session) Tools() []agentkit.ToolOrigin { return s.Kit.Tools() }
