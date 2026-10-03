@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ChristopherDavenport/agentkit"
@@ -242,7 +243,7 @@ func ProjectScope(dir string) agentmemory.Scope {
 // explore is the child agent: a read-only investigator on a fresh
 // transcript whose final answer comes back to the parent as the tool
 // output.
-func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env []string) agentturn.Config {
+func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine]) agentturn.Config {
 	cfg := agentturn.Config{
 		Name: "explore",
 		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
@@ -258,16 +259,14 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env [
 		Retry:     agentturn.Retry{MaxAttempts: 3},
 	}
 	if o.Policy != nil {
-		// The child has no one to ask: a deferred call ends its run and
-		// surfaces to the parent's model as an InputRequiredError. Its
-		// config is fixed before agentkit.New builds the engine, so the
-		// hook is its own rather than the kit's policy.
-		cfg.BeforeToolCall = func(_ context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-			if info.Call.Name == "bash" {
-				return &agentturn.ToolDecision{Action: agentturn.Defer}, nil
-			}
-			return nil, nil
-		}
+		// The child is governed by the parent's policy, the same engine
+		// and rules for every tool: the user's denies, the secret-path
+		// asks, the path rules. The engine does not exist until
+		// agentkit.New has built it, after this config is fixed, so
+		// the hook reads it through eng, which open fills in. A call the
+		// policy asks about is put to the user, through the same Approve
+		// the parent's calls go through, from inside the child's run.
+		cfg.BeforeToolCall = o.childPolicy(eng, &tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})
 	}
 	return cfg
 }
@@ -290,6 +289,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		}
 	}()
 	model := o.Streamer
+	var engine atomic.Pointer[agentpolicy.Engine]
 	env := tool.DefaultEnv(o.PassEnv)
 	s.env = env
 	kopts := []agentkit.Option{
@@ -357,7 +357,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 			agentkit.WithBeforeToolCall(stampBash(&tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})))
 	}
 	if o.Agents {
-		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env)))
+		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env, &engine)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
@@ -421,6 +421,9 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		return nil, err
 	}
 	s.Kit = kit
+	if e := kit.Engine(); e != nil {
+		engine.Store(e)
+	}
 	s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
 	s.detach = kit.Attach(s.Agent)
 	ok = true
@@ -893,5 +896,43 @@ func stampBash(an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) 
 			return nil, nil // not JSON: the tool will say so
 		}
 		return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args}, nil
+	}
+}
+
+// childPolicy decides a call of the explore child under the parent's
+// policy: a verdict of Block blocks it, Allow lets it run (a bash line
+// the policy auto-allows, stamped like the parent's), and a call the
+// policy asks about is put to the user. With no one to ask, it is
+// refused. A policy that is off governs nothing, the child included.
+func (o Options) childPolicy(eng *atomic.Pointer[agentpolicy.Engine], an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+		e := eng.Load()
+		if e == nil {
+			return nil, nil
+		}
+		v, err := e.Would(ctx, info)
+		if err != nil {
+			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
+		}
+		switch v.Action {
+		case agentturn.Block:
+			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: v.Reason, By: agentpolicy.ByPolicy}, nil
+		case agentturn.Defer:
+			reason := "the explore sub-agent asks: " + v.Reason
+			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
+				reason += "; about: " + v.Subject
+			}
+			if o.Approve == nil || !o.Approve(info.Call, reason) {
+				o.log("  ✗ %s denied (explore)", info.Call.Name)
+				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: deniedOutput, By: agentpolicy.ByHuman}, nil
+			}
+			return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}, nil
+		}
+		if info.Call != nil && info.Call.Name == "bash" {
+			if args, changed, err := tool.StampArgs(ctx, an, info.Args); err == nil && changed {
+				return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args}, nil
+			}
+		}
+		return nil, nil
 	}
 }
