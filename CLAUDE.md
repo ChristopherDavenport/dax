@@ -60,6 +60,10 @@ an `Unreleased` changelog line:
   repository could abuse is refused in the project layer.
 - Keys come from the environment and are never printed, logged or
   written to a config file.
+- A bash command is auto-allowed only through `tool.SafeWords` and
+  `tool.ReadOnlyArgs`; widening either needs a test with the review's
+  exploit strings (internal/policy/exploit_test.go) and a reason.
+- A project config field is refused unless it can only tighten.
 - File tools go through `tool.Workspace`; never `os.ReadFile` a
   model-supplied path. A new file tool gets a case in the confinement
   test.

@@ -24,6 +24,27 @@ versions may break flags and the config file.
 - Added: a default policy that is always on: the read-only tools and a
   few safe commands run, writes and every other command ask. `bash` is
   decided per subcommand. `-no-policy` turns it off.
+- Security: a bash call is auto-allowed only if it is one simple command in a
+  safe subset of the syntax with read-only arguments (git status, diff,
+  log, show; ls; pwd; go version; go env NAME); everything else asks. Fixes
+  comment, `$'..'` and `>&word` handling in the splitter that serves asked
+  commands. Git runs with the repository's fsmonitor, pager, ssh command and
+  hooks neutralised and `--no-ext-diff --no-textconv`.
+- Security: `go test`, `go build`, `go vet` and `go list` are no longer
+  auto-allowed; the README says how to allow them in the user config.
+- Security: the project config is tighten-only; it may no longer set the
+  provider, model, base_url, think, instructions_file, skills_dirs,
+  memory_dir, mcp_servers or pass_env, nor add allow rules or carve-outs.
+- Security: path rules match the normalised path; glob, grep and ls are
+  matched on where they search.
+- Security: AGENTS.md files and `.dex/skills` that link out of the workspace
+  are not read; reported as omitted.
+- Security: bash commands and MCP servers start without credentials in their
+  environment (`pass_env` names exceptions); `max_read_bytes` bounds `read`
+  and `edit`; grep and glob skip non-regular files and cannot be made
+  exponential; the session store and memory are `0700`; `/mcp add` uses the
+  `mcp__<name>__` prefix and names may not contain `__`; terminal control
+  sequences are stripped from output.
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
   `DEX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the
