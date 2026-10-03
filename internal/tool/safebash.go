@@ -215,6 +215,27 @@ func ReadOnlyArgs(words []string, dir string) bool {
 	return true
 }
 
+// Allowlisted reports whether the command is one dex runs without
+// asking when ReadOnlyArgs agrees, as opposed to one the user's rules
+// decide: git status, diff, log and show, ls, pwd, go version and go
+// env.
+func Allowlisted(words []string) bool {
+	switch words[0] {
+	case "ls", "pwd":
+		return true
+	case "git":
+		if len(words) > 1 {
+			switch words[1] {
+			case "status", "diff", "log", "show":
+				return true
+			}
+		}
+	case "go":
+		return len(words) > 1 && (words[1] == "version" || words[1] == "env")
+	}
+	return false
+}
+
 func merge(sets ...map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for _, s := range sets {

@@ -212,9 +212,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("f diff=x\n"), 0o644)
 	touch := "sh -c 'touch " + probe + "'"
 	run("config", "core.fsmonitor", touch+"; echo")
-	run("config", "diff.external", touch+"; true #")
 	run("config", "core.pager", touch)
-	run("config", "diff.x.textconv", touch+"; cat #")
 
 	b := Bash(dir)
 	for _, c := range []string{"git status", "git diff", "git log -p", "git show HEAD", "git diff --stat"} {
@@ -227,6 +225,14 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 		}
 		if _, err := os.Stat(probe); err == nil {
 			t.Fatalf("%s ran a program named by the repository's config", c)
+		}
+	}
+	// The flags that switch off an external diff and textconv are added
+	// to the commands that take them.
+	for cmd, want := range map[string]string{"git diff": "git diff --no-ext-diff --no-textconv", "git log -p -n1": "git log --no-ext-diff --no-textconv -p -n1", "git show HEAD": "git show --no-ext-diff --no-textconv HEAD"} {
+		c := command(context.Background(), dir, cmd, DefaultEnv(nil))
+		if got := strings.Join(c.Args, " "); got != want {
+			t.Errorf("%s runs as %q, want %q", cmd, got, want)
 		}
 	}
 	// The diff is still a diff.
@@ -281,5 +287,63 @@ func TestGitEnvSwitchesOffTheGPGPrograms(t *testing.T) {
 	git(GitEnv(), "", "log", "--format=%GG", "-1")
 	if _, err := os.Stat(probe); err == nil {
 		t.Fatal("gpg.program ran under GitEnv")
+	}
+}
+
+// R2-3 of the second review: GitEnv was applied to every command, so an
+// approved git commit skipped the user's hooks and sshCommand.
+func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	probe := filepath.Join(t.TempDir(), "hook-ran")
+	gitIn := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitIn("init", "-q")
+	os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\ntouch "+probe+"\n"), 0o755)
+	gitIn("config", "core.sshCommand", "my-ssh -i key")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
+	t.Setenv("GIT_CONFIG_VALUE_0", "zed")
+	t.Setenv("GIT_CONFIG_KEY_1", "never")
+	b := Bash(dir)
+	ctx := context.Background()
+
+	// git commit is in the safe subset but is not read-only: it asks, and
+	// once approved it runs as the user would run it.
+	out, err := call(ctx, b, `{"command":"git -c user.email=e@x commit --allow-empty -qm x"}`)
+	if err != nil || !strings.Contains(out, "[exit 0]") {
+		t.Fatalf("commit: %q, %v", out, err)
+	}
+	if _, err := os.Stat(probe); err != nil {
+		t.Error("the user's pre-commit hook did not run")
+	}
+	out, _ = call(ctx, b, `{"command":"git config core.sshCommand && git config user.name && echo $GIT_CONFIG_COUNT $GIT_TERMINAL_PROMPT"}`)
+	if !strings.Contains(out, "my-ssh -i key\nzed\n1\n[exit 0]") {
+		t.Errorf("an approved command's environment was changed: %q", out)
+	}
+	// The auto-allowed path is neutralised, and only it.
+	hasGitEnv := func(cmd string) bool {
+		for _, kv := range command(ctx, dir, cmd, DefaultEnv(nil)).Env {
+			if kv == "GIT_CONFIG_COUNT=8" {
+				return true
+			}
+		}
+		return false
+	}
+	for cmd, want := range map[string]bool{"git status": true, "git log -n1": true, "ls": true, "git commit -qm x": false, "git config user.name": false, "make test": false, "echo hi && git status": false} {
+		if got := hasGitEnv(cmd); got != want {
+			t.Errorf("%q: neutralising environment = %v, want %v", cmd, got, want)
+		}
 	}
 }
