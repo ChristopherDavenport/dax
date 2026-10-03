@@ -21,7 +21,7 @@ func decide(t *testing.T, s config.PolicySettings, tool, args string) (agentturn
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng, err := agentpolicy.Build(p, Matchers(), Options()...)
+	eng, err := agentpolicy.Build(p, Matchers(testDir), Options()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,9 @@ func bash(cmd string) string {
 	b, _ := json.Marshal(map[string]string{"command": cmd})
 	return string(b)
 }
+
+// testDir is the workspace the decisions are made in.
+var testDir = "/work/proj"
 
 var defaults = config.PolicySettings{Builtin: true, Fallback: "ask"}
 
@@ -65,8 +68,9 @@ func TestDefaultPolicy(t *testing.T) {
 		{"bash", bash("git diff HEAD~1"), agentturn.Allow},
 		{"bash", bash("git log --oneline -5"), agentturn.Allow},
 		{"bash", bash("go test ./..."), agentturn.Allow},
-		{"bash", bash("go vet ./... 2>&1"), agentturn.Allow},
-		{"bash", bash("cd internal && go test ./..."), agentturn.Allow},
+		{"bash", bash("go vet ./..."), agentturn.Allow},
+		{"bash", bash("go vet ./... 2>&1"), agentturn.Defer},
+		{"bash", bash("cd internal && go test ./..."), agentturn.Defer},
 		{"bash", bash("ls -la"), agentturn.Allow},
 		{"bash", bash("pwd"), agentturn.Allow},
 		// Everything else asks.
@@ -92,7 +96,7 @@ func TestDefaultPolicy(t *testing.T) {
 		{"bash", bash("git log > ~/.bashrc"), agentturn.Defer},
 		{"bash", bash("git log >> notes.txt"), agentturn.Defer},
 		{"bash", bash("ls 2> out"), agentturn.Defer},
-		{"bash", bash("git status > /dev/null"), agentturn.Allow},
+		{"bash", bash("git status > /dev/null"), agentturn.Defer}, // outside the safe subset
 		// Quoted operators are text.
 		{"bash", bash(`ls "a;b"`), agentturn.Allow},
 	}
@@ -135,7 +139,7 @@ func TestUserRulesOverrideTheDefault(t *testing.T) {
 		{"ask about a built-in allowed command", user(config.Rules{Ask: []string{"bash(go test:*)"}}), "bash", bash("go test ./..."), agentturn.Defer},
 		{"deny beats allow", user(config.Rules{Allow: []string{"bash(rm:*)"}, Deny: []string{"bash(rm -rf:*)"}}), "bash", bash("rm -rf /"), agentturn.Block},
 		{"deny reaches a subcommand", user(config.Rules{Deny: []string{"bash(rm:*)"}}), "bash", bash("git status && rm x"), agentturn.Block},
-		{"redirect target is decided by write rules", user(config.Rules{Allow: []string{"write(out/**)"}}), "bash", bash("git log > out/log.txt"), agentturn.Allow},
+		{"a redirect never auto-runs, whatever the write rules say", user(config.Rules{Allow: []string{"write(out/**)"}}), "bash", bash("git log > out/log.txt"), agentturn.Defer},
 		{"redirect elsewhere asks", user(config.Rules{Allow: []string{"write(out/**)"}}), "bash", bash("git log > ~/.bashrc"), agentturn.Defer},
 		{"fallback allow", config.PolicySettings{Builtin: true, Fallback: "allow"}, "bash", bash("rm -rf x"), agentturn.Allow},
 		{"fallback deny", config.PolicySettings{Builtin: true, Fallback: "deny"}, "bash", bash("rm -rf x"), agentturn.Block},
@@ -189,7 +193,7 @@ func TestBadRulesAreErrorsNotSilence(t *testing.T) {
 	s.User = config.Rules{Allow: []string{"mcp__x(foo:*)"}}
 	p, err := Build(s)
 	if err == nil {
-		_, err = agentpolicy.Build(p, Matchers(), Options()...)
+		_, err = agentpolicy.Build(p, Matchers(testDir), Options()...)
 	}
 	if err == nil {
 		t.Error("a specifier on a tool with no matcher should not build")

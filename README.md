@@ -146,15 +146,36 @@ dex ships this default:
 - **runs without asking**: `read`, `glob`, `grep`, `ls`, `skill`,
   `memory_search`, and the commands `git status`, `git diff`, `git log`,
   `git show`, `go test`, `go build`, `go vet`, `go list`, `go version`,
-  `ls`, `pwd` and `cd`;
+  `ls` and `pwd`, as far as they are in the safe subset below;
 - **asks**: `write`, `edit`, every other command, memory writes, and every
   MCP tool.
 
-A command line is cut into its subcommands before the rules see it, so
-`git status && rm -rf /` asks (about the `rm`), `git log > ~/.bashrc`
-asks (as a write to `~/.bashrc`), and anything with `$(...)`, backticks or
-process substitution asks. The splitter is not a shell parser; it errs
-toward asking and blocks a command with an unterminated quote.
+**What runs without asking is a safe subset, not a blacklist.** A `bash`
+call is auto-allowed only when both hold:
+
+1. It is one simple command made of plain words and simple quotes:
+   letters, digits and `_ . / : @ % + , = -` (and `~` or `^` inside a word,
+   as in `HEAD~1`), single-quoted strings, and double-quoted strings with
+   no `$`, backtick or backslash. No `;`, `&`, `|`, `<`, `>`, `#`, `$`,
+   backtick, backslash, newline, glob (`* ? [`), `{`, a word-initial `~`,
+   `=` in the command word, or non-ASCII byte. Anything else asks, whatever
+   the rules say; it is never denied for that.
+2. Its arguments pass a per-command check: `git status|diff|log|show` with
+   read-only flags from an allowlist only (not `--output`, `-o`,
+   `--ext-diff`, `--textconv`, `-c`, `-C`, `--git-dir`, `--work-tree`,
+   `--exec-path`, `--no-index`), `ls` with listing flags, `pwd`, `go version`
+   and `go env NAME`; and every path argument stays inside the working
+   directory after cleaning and resolving links. Git runs with the
+   repository's fsmonitor, pager, ssh command and hooks configuration
+   neutralised, and `git diff|log|show` run with `--no-ext-diff
+   --no-textconv`.
+
+A command that is not in the subset is still cut into its subcommands, so
+a deny or ask rule for `rm` reaches `git status && rm x`, a redirect to a
+file is shown as a write to its target, and the question names the part it
+is asking about. The cut is for the question and for deny and ask rules.
+Nothing is allowed because of it: a command outside the subset is allowed
+only by a bare `bash` allow rule or `"fallback": "allow"`.
 
 Your rules in `policy` add to the default. Because deny beats ask beats
 allow, allow what the default asks about (`"allow": ["write(docs/**)"]`)

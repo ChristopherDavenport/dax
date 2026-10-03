@@ -156,3 +156,12 @@ func TestAWorkspaceReachedThroughALinkStillMatchesItsRealName(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyArgsFollowsLinksOutOfTheWorkspace(t *testing.T) {
+	_, dir, _ := confined(t)
+	for arg, want := range map[string]bool{"inside.txt": true, "alias.txt": true, "sub": true, "linkdir": false, "linkfile": false, "linkdir/secret.txt": false, "sub/up": false} {
+		if got := inWorkspace(arg, dir); got != want {
+			t.Errorf("inWorkspace(%q) = %v, want %v", arg, got, want)
+		}
+	}
+}

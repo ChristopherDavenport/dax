@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -40,8 +41,9 @@ func Bash(dir string) agenttool.Tool {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
+			cmd := command(ctx, dir, in.Command)
 			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), GitEnv()...)
 			// Run in its own process group so cancellation reaches children too.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -74,4 +76,17 @@ func Bash(dir string) agenttool.Tool {
 			}
 			return b.String(), nil
 		}, agenttool.WithSequential())
+}
+
+// command is what runs a bash call. A read-only git diff, log or show
+// of the safe subset runs git directly, with --no-ext-diff and
+// --no-textconv after the subcommand, since the repository's own
+// diff.external and textconv drivers are programs and no configuration
+// switches them off. Everything else is bash -c.
+func command(ctx context.Context, dir, command string) *exec.Cmd {
+	if words, ok := SafeWords(strings.TrimSpace(command)); ok && ReadOnlyGit(words, dir) {
+		args := append([]string{words[1], "--no-ext-diff", "--no-textconv"}, words[2:]...)
+		return exec.CommandContext(ctx, "git", args...)
+	}
+	return exec.CommandContext(ctx, "bash", "-c", command)
 }

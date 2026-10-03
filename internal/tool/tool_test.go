@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -183,4 +184,61 @@ func TestBash(t *testing.T) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
 	})
+}
+
+// The repository's own configuration must not run a program under a
+// read-only git command: fsmonitor, a pager, an external diff and a
+// textconv driver are all programs a .git/config can name.
+func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	probe := filepath.Join(t.TempDir(), "ran")
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	os.WriteFile(filepath.Join(dir, "f"), []byte("a\n"), 0o644)
+	run("add", "f")
+	run("-c", "user.name=n", "-c", "user.email=e@x", "commit", "-qm", "x")
+	os.WriteFile(filepath.Join(dir, "f"), []byte("b\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("f diff=x\n"), 0o644)
+	touch := "sh -c 'touch " + probe + "'"
+	run("config", "core.fsmonitor", touch+"; echo")
+	run("config", "diff.external", touch+"; true #")
+	run("config", "core.pager", touch)
+	run("config", "diff.x.textconv", touch+"; cat #")
+
+	b := Bash(dir)
+	for _, c := range []string{"git status", "git diff", "git log -p", "git show HEAD", "git diff --stat"} {
+		out, err := call(context.Background(), b, `{"command":"`+c+`"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "[exit 0]") {
+			t.Errorf("%s: %s", c, out)
+		}
+		if _, err := os.Stat(probe); err == nil {
+			t.Fatalf("%s ran a program named by the repository's config", c)
+		}
+	}
+	// The diff is still a diff.
+	out, _ := call(context.Background(), b, `{"command":"git diff"}`)
+	if !strings.Contains(out, "-a") || !strings.Contains(out, "+b") {
+		t.Errorf("git diff output: %s", out)
+	}
+}
+
+func TestACommandOutsideTheSubsetStillRunsInBash(t *testing.T) {
+	out, err := call(context.Background(), Bash(t.TempDir()), `{"command":"echo a && echo b | tr b c"}`)
+	if err != nil || !strings.Contains(out, "a\nc\n") {
+		t.Fatalf("%q, %v", out, err)
+	}
 }
