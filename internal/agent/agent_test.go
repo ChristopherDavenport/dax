@@ -806,8 +806,11 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 	if _, err := s.Prompt(ctx, "greet me after looking around"); err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 0 {
-		t.Fatalf("asked about %v after the skill granted Bash(echo:*) and the child ran", asked)
+	// The child's own bash call is the child's to ask about: the
+	// parent's grant covers the parent's. The parent's call after it
+	// runs under the grant, unasked.
+	if len(asked) != 1 || !strings.Contains(asked[0], "echo from the child") {
+		t.Fatalf("asked %v; want only the child's call, the parent's grant of Bash(echo:*) covering the parent's alone", asked)
 	}
 	data := string(projected(t, o, s))
 	if strings.Contains(data, "revoked") || !strings.Contains(data, `"type":"link"`) {

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -338,4 +339,141 @@ func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testin
 	if _, err := os.Stat(probe); err == nil {
 		t.Fatal("the fsmonitor script ran")
 	}
+}
+
+// twoModels is a scripted parent and a scripted explore child, known by
+// its instructions.
+type twoModels struct {
+	parent, child scripted
+	// seen are the tool outputs the child was shown, by call ID.
+	mu   sync.Mutex
+	seen map[string]string
+}
+
+func (m *twoModels) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	if strings.Contains(req.Instructions, "read-only explorer") {
+		m.mu.Lock()
+		if m.seen == nil {
+			m.seen = map[string]string{}
+		}
+		for _, it := range req.Input {
+			if o, ok := it.(*openresponses.FunctionCallOutput); ok {
+				m.seen[o.CallID] = o.Output.Text
+			}
+		}
+		m.mu.Unlock()
+		return m.child.CreateStream(ctx, req, sink)
+	}
+	return m.parent.CreateStream(ctx, req, sink)
+}
+
+// outputs are the function-call outputs in a transcript, in order.
+func outputs(s *Session) []string {
+	var out []string
+	for _, it := range s.Agent.State().Transcript {
+		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
+			out = append(out, o.Output.Text)
+		}
+	}
+	return out
+}
+
+// R4-2 of the fourth review: the explore child read .env though the
+// user's policy denied it, because the policy was not applied to it.
+func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
+	ctx := context.Background()
+	var lastModel *twoModels
+	run := func(t *testing.T, rules config.Rules, childCalls [][2]string, approve func(c *openresponses.FunctionCall, reason string) bool) (o Options, s *Session, asked []string) {
+		model := &twoModels{
+			parent: scripted{calls: [][2]string{{"explore", `{"input":"look around"}`}}},
+			child:  scripted{calls: childCalls},
+		}
+		lastModel = model
+		o = options(t, model)
+		write(t, filepath.Join(o.Dir, ".env"), "SECRET_TOKEN=abc123\n")
+		write(t, filepath.Join(o.Dir, "main.go"), "package main\n")
+		o.Agents = true
+		p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask", User: rules})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Policy = &p
+		o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+			asked = append(asked, c.Name+" "+c.Arguments+" | "+reason)
+			return approve != nil && approve(c, reason)
+		}
+		var err2 error
+		s, err2 = New(ctx, o)
+		if err2 != nil {
+			t.Fatal(err2)
+		}
+		t.Cleanup(func() { s.Close() })
+		if _, err := s.Prompt(ctx, "go"); err != nil {
+			t.Fatal(err)
+		}
+		return o, s, asked
+	}
+	childSaw := func() []string {
+		var out []string
+		for _, v := range lastModel.seen {
+			out = append(out, v)
+		}
+		return out
+	}
+	leaked := func(s *Session) bool {
+		for _, out := range childSaw() {
+			if strings.Contains(out, "abc123") {
+				return true
+			}
+		}
+		// The child's own transcript is in its linked session.
+		return false
+	}
+
+	t.Run("a user deny holds for the child", func(t *testing.T) {
+		_, s, asked := run(t, config.Rules{Deny: []string{"read(.env)", "grep(.env)"}},
+			[][2]string{{"read", `{"path":".env"}`}, {"grep", `{"pattern":"SECRET","path":".env"}`}}, nil)
+		if len(asked) != 0 {
+			t.Errorf("a denied call was put to the user: %v", asked)
+		}
+		if leaked(s) {
+			t.Errorf("the child read .env: %q", outputs(s))
+		}
+		all := strings.Join(childSaw(), "\n")
+		if !strings.Contains(all, "denied by") {
+			t.Errorf("the child was not told it was denied: %q", all)
+		}
+	})
+	t.Run("a secret-path ask from the child reaches the user", func(t *testing.T) {
+		_, s, asked := run(t, config.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return false })
+		if len(asked) != 1 || !strings.HasPrefix(asked[0], `read {"path":".env"}`) || !strings.Contains(asked[0], "explore") {
+			t.Fatalf("questions: %q", asked)
+		}
+		if leaked(s) {
+			t.Error("the child read .env after the user said no")
+		}
+		// Said yes, it reads.
+		_, s2, asked2 := run(t, config.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return true })
+		if len(asked2) != 1 {
+			t.Fatalf("questions: %q", asked2)
+		}
+		if !strings.Contains(strings.Join(childSaw(), "\n"), "abc123") {
+			t.Errorf("after yes the child did not read: %q", childSaw())
+		}
+		_ = s2
+	})
+	t.Run("what the policy allows the child does unasked, and the rest asks", func(t *testing.T) {
+		_, _, asked := run(t, config.Rules{}, [][2]string{
+			{"read", `{"path":"main.go"}`}, {"ls", `{}`}, {"bash", `{"command":"pwd"}`}, {"bash", `{"command":"touch PWN"}`},
+		}, func(*openresponses.FunctionCall, string) bool { return false })
+		if len(asked) != 1 || !strings.Contains(asked[0], "touch PWN") {
+			t.Errorf("questions: %q", asked)
+		}
+	})
+	t.Run("a path rule applies to the child", func(t *testing.T) {
+		_, _, asked := run(t, config.Rules{Deny: []string{"Read(docs/**)"}}, [][2]string{{"read", `{"path":"docs/../docs/x.md"}`}}, nil)
+		if len(asked) != 0 || !strings.Contains(strings.Join(childSaw(), "\n"), "denied by") {
+			t.Errorf("asked %v, the child saw %q", asked, childSaw())
+		}
+	})
 }
