@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -87,6 +88,11 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 			cmd.Stdout = out
 			cmd.Stderr = out
 			runErr := cmd.Run()
+			if in.Stamp != "" {
+				// What an auto-allowed command printed goes to the model
+				// and its provider: a URL's user:token@ is taken out.
+				out.redact = true
+			}
 
 			var b strings.Builder
 			b.WriteString(out.String())
@@ -143,6 +149,7 @@ func command(ctx context.Context, an *Analyzer, in BashArgs, base []string) (*ex
 // capWriter keeps the first max bytes written to it and counts the
 // rest, so the output of a command is bounded in memory.
 type capWriter struct {
+	redact  bool
 	mu      sync.Mutex
 	max     int
 	buf     bytes.Buffer
@@ -166,8 +173,16 @@ func (c *capWriter) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.buf.String()
+	if c.redact {
+		s = redactUserinfo(s)
+	}
 	if c.dropped > 0 {
 		s += fmt.Sprintf("\n... [truncated, %d bytes omitted]", c.dropped)
 	}
 	return s
 }
+
+var userinfo = regexp.MustCompile(`(://)[^/@\s]+@`)
+
+// redactUserinfo replaces the user:password@ or token@ of a URL.
+func redactUserinfo(s string) string { return userinfo.ReplaceAllString(s, "${1}***@") }

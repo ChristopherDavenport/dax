@@ -327,37 +327,45 @@ func gitArgsOKNoPos(args []string, cwd, root string) (bool, string) {
 	return gitArgsOK("log", args, cwd, root)
 }
 
-var configFlags = set("--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin", "--show-scope",
-	"--local", "--global", "--system", "--worktree", "-z", "--null", "--name-only", "--includes", "--no-includes")
+var configFlags = set("--get", "--get-all", "--show-origin", "--show-scope", "--local", "--worktree",
+	"-z", "--null", "--includes", "--no-includes")
 
-// gitConfigArgs allows git config only to read: --get, --get-all,
-// --get-regexp with a key, or --list.
+// configKeys are the keys git config may read unasked: ones that name
+// no secret. http.*, credential.*, url.*.insteadOf, and anything
+// else, which can hold an Authorization header, a token or a program,
+// ask. The urls of remotes are here because the output of an
+// auto-allowed command has the userinfo of a URL taken out.
+var configKeys = regexp.MustCompile(`(?i)^(` +
+	`user\.(name|email)|core\.(autocrlf|filemode|ignorecase|bare|eol|safecrlf)|init\.defaultbranch` +
+	`|pull\.(rebase|ff)|push\.(default|autosetupremote)|merge\.(ff|conflictstyle)|diff\.(algorithm|renames)` +
+	`|commit\.gpgsign|tag\.gpgsign|fetch\.prune|branch\.autosetupmerge` +
+	`|branch\..+\.(remote|merge|rebase)|remote\..+\.(url|pushurl|fetch|push)` +
+	`)$`)
+
+// gitConfigArgs allows git config only to read one named key from the
+// allowlist: --get or --get-all and the key, nothing that lists, no
+// pattern, and no --global or --system, which reach outside the
+// repository.
 func gitConfigArgs(args []string) (bool, string) {
-	var reading, listing bool
+	var reading bool
 	var pos []string
 	for _, a := range args {
 		switch {
 		case strings.HasPrefix(a, "-"):
 			if !configFlags[a] {
-				return false, "git config " + a + " is not a read"
+				return false, "git config " + a + " is not a plain read of a named key"
 			}
-			switch a {
-			case "--get", "--get-all", "--get-regexp":
+			if a == "--get" || a == "--get-all" {
 				reading = true
-			case "--list", "-l":
-				listing = true
 			}
 		default:
 			pos = append(pos, a)
 		}
 	}
-	switch {
-	case listing && !reading && len(pos) == 0:
-		return true, ""
-	case reading && !listing && len(pos) >= 1 && len(pos) <= 2 && keyName.MatchString(pos[0]):
+	if reading && len(pos) == 1 && configKeys.MatchString(pos[0]) {
 		return true, ""
 	}
-	return false, "git config other than a plain read"
+	return false, "git config other than reading a key that names no secret"
 }
 
 var (

@@ -99,3 +99,58 @@ func TestOnlyDexCanStampACall(t *testing.T) {
 		t.Error("a stamp for pwd ran ls")
 	}
 }
+
+// R3-4: a URL's credentials never reach the model through an
+// auto-allowed command.
+func TestAnAutoAllowedCommandsOutputHasURLCredentialsTakenOut(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("remote", "add", "origin", "https://user:ghp_SECRETTOKEN@github.com/o/r.git")
+	run("remote", "add", "tok", "https://ghp_ONLYTOKEN@github.com/o/s.git")
+	run("remote", "add", "ssh", "git@github.com:o/t.git")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	b := Bash(dir)
+	for _, cmd := range []string{"git remote -v", "git config --get remote.origin.url", "git config --get remote.tok.url", "git config --get-all remote.origin.fetch"} {
+		out, err := call(context.Background(), b, stamped(t, dir, cmd))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "SECRETTOKEN") || strings.Contains(out, "ONLYTOKEN") || strings.Contains(out, "user:") {
+			t.Errorf("%s leaked a credential: %q", cmd, out)
+		}
+	}
+	out, _ := call(context.Background(), b, stamped(t, dir, "git remote -v"))
+	for _, want := range []string{"https://***@github.com/o/r.git", "https://***@github.com/o/s.git", "git@github.com:o/t.git"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q: %s", want, out)
+		}
+	}
+	// What a person approves runs as typed.
+	if out, _ := call(context.Background(), b, `{"command":"git remote -v; true"}`); !strings.Contains(out, "SECRETTOKEN") {
+		t.Errorf("an approved command's output was changed: %q", out)
+	}
+}
+
+func TestRedactUserinfo(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u:p@h/x": "https://***@h/x", "ssh://git@h/x": "ssh://***@h/x", "git@h:o/r": "git@h:o/r", "no urls": "no urls",
+		"a https://t@h/x b http://u:p@h2/y": "a https://***@h/x b http://***@h2/y", "https://h/x@y": "https://h/x@y",
+	} {
+		if got := redactUserinfo(in); got != want {
+			t.Errorf("redactUserinfo(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
