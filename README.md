@@ -252,7 +252,8 @@ again", and the original line is never run instead. Only dex can stamp a
 call; one the model stamps is refused. `ls` with a glob runs with the
 expansion after a `--`, so a file called `-n` is a name.
 
-*Secret-looking files ask*: reading `.env*`, `*.pem`, `*.key`, `id_*`,
+*Secret-looking files ask* (any case, and under any name: a link to one is
+decided under its target as well): reading `.env*`, `*.pem`, `*.key`, `id_*`,
 `*.p12`, `*.pfx`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`,
 `credentials*`, `*secret*`, `.aws/**`, `.ssh/**`, `.kube/config` or
 `.docker/config.json` (at the root or in any directory) asks, whether by
@@ -264,6 +265,13 @@ tool, `cat .env` included, and only that. A bare `"allow": ["read"]` does
 not open them: an ask beats an allow. This is a guard on naming a file, not
 a boundary: a search of the whole tree (`grep -r`, the `grep` tool with no
 path) can still read one, and so can anything you approve.
+
+*A line with git in it asks if the repository names a program, whatever
+else is on it*: when a line is not auto-allowed (a stage your own rule
+allowed, say `echo`, beside `git status`) it runs as typed, without the
+auto-allow environment, so the repository's `core.fsmonitor`, `hooksPath`,
+`sshCommand`, `pager` and gpg program count as well, and the question names
+the key.
 
 A command outside the subset is still cut into its parts, so a deny or ask
 rule for `rm` reaches `git status; rm x`, a redirect to a file is shown as
@@ -362,6 +370,12 @@ machine matters.
   model write `.git/hooks/pre-commit`; `bash(go test:*)` runs a hostile
   repository's tests with your privileges. Prefer narrow rules, and put
   deny or ask rules for the sensitive paths beside them.
+- **Committed secrets are not caught.** The secret-path asks fire when a
+  file is named. `git log -p`, `git show` and `git diff` without a path,
+  `grep` over the tree and `git show HEAD~5` print what a repository
+  holds, and a `.env` or key that was ever committed is in it. Keep
+  secrets out of history (and rotate one that got in); dex cannot tell
+  which lines of a diff are keys.
 - **`-trust-skills` trusts the skills in directories you named**
   (`~/.dex/skills` and your config's `skills_dirs`) and never the
   repository's: a skill in `.dex/skills` is text from the repository, and
@@ -370,6 +384,10 @@ machine matters.
   to the model's provider (OpenAI, Anthropic, Google, or your Ollama
   host). Choose the provider with that in mind; a path rule is not a read
   ACL for a search that includes the directory from above.
+- **The explore sub-agent (`-agents`) is governed like the parent**: its
+  read, grep, glob, ls and bash calls are decided by the same rules (your
+  denies, the secret-path asks, path rules, the auto-allow list), and one
+  that asks is put to you, from inside the sub-agent's run.
 - **Not covered:** programs the *user's own* git config names (it is
   trusted), a race between dex checking a path and the command using it,
   credential-file path variables such as `KUBECONFIG` (they pass through to
