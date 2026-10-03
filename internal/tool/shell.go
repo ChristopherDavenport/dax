@@ -56,6 +56,12 @@ func BashSubjects(dir string, maxFile int64) agentpolicy.Subjects {
 			var out []agentpolicy.Subject
 			for _, st := range c.Stages {
 				out = append(out, mk("", "command", st.Match, st.Text))
+				// What a stage reads is also a read of that path, so the
+				// rules for secret-looking files and the user's own path
+				// rules apply to cat, head, grep and git show as to read.
+				for _, r := range st.Reads {
+					out = append(out, mk("read", "path", r, st.Text+"  [reads "+r+"]"))
+				}
 				if st.Governed && !st.OK {
 					out = append(out, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
 				}

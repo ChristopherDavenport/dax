@@ -39,6 +39,9 @@ type StageCheck struct {
 	Governed bool
 	// OK is whether the arguments of a governed command are acceptable.
 	OK bool
+	// Reads are the files the stage reads, relative to the workspace,
+	// for the policy's path rules.
+	Reads []string
 	// Why says what was wrong, or, for a git stage, the key of the
 	// repository's configuration that names a program.
 	Why string
@@ -219,7 +222,8 @@ func init() {
 // gitArgsOK reports whether the arguments after a git subcommand are
 // read-only, as gitSpec describes, and every revision or path names
 // something inside the workspace.
-func gitArgsOK(sub string, args []string, cwd, root string) (bool, string) {
+func gitArgsOK(sub string, args []string, cwd, root string) (bool, string, []string) {
+	var paths []string
 	spec := gitSpecs[sub]
 	list := len(spec.listFlags) == 0
 	for _, a := range args {
@@ -235,13 +239,14 @@ func gitArgsOK(sub string, args []string, cwd, root string) (bool, string) {
 		switch {
 		case afterDD || !strings.HasPrefix(a, "-") || a == "-":
 			if !spec.positional || !list {
-				return false, "a name where " + sub + " takes none"
+				return false, "a name where " + sub + " takes none", nil
 			}
 			// rev:path, :path, :/path and :(magic) name what is in the
 			// repository, which may be above the workspace.
 			if strings.Contains(a, ":") || !inWorkspaceFrom(a, cwd, root) {
-				return false, "the argument " + a + " may reach outside the workspace"
+				return false, "the argument " + a + " may reach outside the workspace", nil
 			}
+			paths = append(paths, a)
 		case a == "--":
 			afterDD = true
 		case numFlag.MatchString(a) && (spec.spaced["-n"] || spec.spaced["-U"]):
@@ -255,22 +260,22 @@ func gitArgsOK(sub string, args []string, cwd, root string) (bool, string) {
 			case hasVal && spec.valued[name] && !strings.Contains(val, "%G"):
 			case takesNext:
 				if strings.Contains(args[i+1], "%G") {
-					return false, "the value of " + a + " asks git to run gpg"
+					return false, "the value of " + a + " asks git to run gpg", nil
 				}
 				i++
 			case !hasVal && spec.bare[name]:
 			case !hasVal && spec.spaced[name]:
 				if i+1 >= len(args) || strings.Contains(args[i+1], "%G") {
-					return false, "the flag " + a + " needs a value"
+					return false, "the flag " + a + " needs a value", nil
 				}
 				i++
 			case !hasVal && combined(a, spec.letters):
 			default:
-				return false, "the flag " + a + " is not known to be read-only"
+				return false, "the flag " + a + " is not known to be read-only", nil
 			}
 		}
 	}
-	return true, ""
+	return true, "", paths
 }
 
 // combined reports whether a is -xyz with every letter a short flag
@@ -288,32 +293,38 @@ func combined(a, letters string) bool {
 }
 
 // gitStage checks a git stage: the subcommand and its arguments.
-func gitStage(w []string, cwd, root string) (ok bool, why string) {
+func gitStage(w []string, cwd, root string) (ok bool, why string, paths []string) {
 	if len(w) == 1 {
-		return true, ""
+		return true, "", nil
 	}
 	sub := w[1]
 	if strings.HasPrefix(sub, "-") {
-		return false, "git " + sub + " before the subcommand (-c, -C, --git-dir ...)"
+		return false, "git " + sub + " before the subcommand (-c, -C, --git-dir ...)", nil
 	}
 	switch sub {
 	case "remote":
 		if len(w) == 2 || len(w) == 3 && (w[2] == "-v" || w[2] == "--verbose") {
-			return true, ""
+			return true, "", nil
 		}
-		return false, "git remote with more than -v"
+		return false, "git remote with more than -v", nil
 	case "stash":
 		if len(w) < 3 || w[2] != "list" {
-			return false, "git stash other than list"
+			return false, "git stash other than list", nil
 		}
-		return gitArgsOKNoPos(w[3:], cwd, root)
+		ok, why := gitArgsOKNoPos(w[3:], cwd, root)
+		return ok, why, nil
 	case "config":
-		return gitConfigArgs(w[2:])
+		ok, why := gitConfigArgs(w[2:])
+		return ok, why, nil
 	}
 	if _, known := gitSpecs[sub]; !known {
-		return true, "" // not a command this check governs
+		return true, "", nil // not a command this check governs
 	}
-	return gitArgsOK(sub, w[2:], cwd, root)
+	ok, why, paths = gitArgsOK(sub, w[2:], cwd, root)
+	if sub != "diff" && sub != "log" && sub != "show" && sub != "blame" {
+		paths = nil // names and not contents: ls-files, status, tag ...
+	}
+	return ok, why, paths
 }
 
 // gitArgsOKNoPos is the log flags with no revisions or paths, for
@@ -324,7 +335,8 @@ func gitArgsOKNoPos(args []string, cwd, root string) (bool, string) {
 	saved := gitSpecs["log"]
 	gitSpecs["log"] = spec
 	defer func() { gitSpecs["log"] = saved }()
-	return gitArgsOK("log", args, cwd, root)
+	ok, why, _ := gitArgsOK("log", args, cwd, root)
+	return ok, why
 }
 
 var configFlags = set("--get", "--get-all", "--show-origin", "--show-scope", "--local", "--worktree",
@@ -464,7 +476,7 @@ var dashNum = regexp.MustCompile(`^-\d+$`)
 // a short list, and every file an in-workspace regular file no larger
 // than max. With needFiles false (a later stage of a pipeline) there
 // must be no file at all.
-func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bool) (bool, string) {
+func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bool) (bool, string, []string) {
 	spec := fileCmds[name]
 	var pos []string
 	afterDD := false
@@ -473,12 +485,12 @@ func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bo
 	for i := 0; i < len(args); i++ {
 		a := args[i].text
 		if args[i].glob {
-			return false, name + " with a glob"
+			return false, name + " with a glob", nil
 		}
 		switch {
 		case afterDD || !strings.HasPrefix(a, "-") || a == "-":
 			if a == "-" {
-				return false, name + " reading standard input"
+				return false, name + " reading standard input", nil
 			}
 			pos = append(pos, a)
 		case a == "--":
@@ -487,46 +499,46 @@ func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bo
 		case dashNum.MatchString(a) && (name == "head" || name == "tail" || name == "grep"):
 		case spec.spaced[a] != nil:
 			if i+1 >= len(args) || !spec.spaced[a].MatchString(args[i+1].text) {
-				return false, "the flag " + a + " needs a number"
+				return false, "the flag " + a + " needs a number", nil
 			}
 			i++
 		case name == "grep" && a == "-e":
 			if i+1 >= len(args) {
-				return false, "-e needs a pattern"
+				return false, "-e needs a pattern", nil
 			}
 			haveE = true
 			i++
 		case strings.Contains(a, "="):
 			n, v, _ := strings.Cut(a, "=")
 			if re := spec.valuedLong[n]; re == nil || !re.MatchString(v) {
-				return false, "the flag " + a + " is not known to be read-only"
+				return false, "the flag " + a + " is not known to be read-only", nil
 			}
 		case combined(a, spec.letters):
 		default:
-			return false, "the flag " + a + " is not known to be read-only"
+			return false, "the flag " + a + " is not known to be read-only", nil
 		}
 	}
 	if spec.pattern && !haveE {
 		if len(pos) == 0 {
-			return false, "grep needs a pattern"
+			return false, "grep needs a pattern", nil
 		}
 		pos = pos[1:]
 	}
 	if !needFiles {
 		if len(pos) > 0 {
-			return false, name + " with a file in a pipeline"
+			return false, name + " with a file in a pipeline", nil
 		}
-		return true, ""
+		return true, "", nil
 	}
 	if len(pos) == 0 || len(pos) > 20 {
-		return false, name + " needs one to twenty files"
+		return false, name + " needs one to twenty files", nil
 	}
 	if max <= 0 {
 		max = DefaultMaxRead
 	}
 	for _, f := range pos {
 		if !inWorkspaceFrom(f, cwd, root) {
-			return false, "the file " + f + " is outside the workspace"
+			return false, "the file " + f + " is outside the workspace", nil
 		}
 		p := f
 		if !filepath.IsAbs(p) {
@@ -536,12 +548,12 @@ func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bo
 		switch {
 		case os.IsNotExist(err): // cat of nothing is an error, not a read
 		case err != nil || !fi.Mode().IsRegular():
-			return false, "the file " + f + " is not a regular file"
+			return false, "the file " + f + " is not a regular file", nil
 		case fi.Size() > max:
-			return false, "the file " + f + " is larger than the read limit"
+			return false, "the file " + f + " is larger than the read limit", nil
 		}
 	}
-	return true, ""
+	return true, "", pos
 }
 
 // filterCmds are the stages allowed after a pipe: they read standard
@@ -584,7 +596,8 @@ func filterStage(name string, ws []word, cwd, root string, max int64) (bool, str
 	}
 	switch name {
 	case "head", "tail", "wc", "grep":
-		return fileStage(name, ws, cwd, root, max, false)
+		ok, why, _ := fileStage(name, ws, cwd, root, max, false)
+		return ok, why
 	}
 	return false, name + " is not allowed after a pipe"
 }
@@ -593,7 +606,7 @@ var governedFirst = set("git", "ls", "pwd", "go", "cat", "head", "tail", "wc", "
 var governedLater = set("head", "tail", "wc", "grep", "sort", "uniq", "cut")
 
 // stageFirst checks the first stage of a pipeline.
-func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why string) {
+func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why string, reads []string) {
 	name := ws[0].text
 	w := make([]string, len(ws))
 	for i := range ws {
@@ -604,27 +617,44 @@ func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why str
 		hasGlob = hasGlob || x.glob
 	}
 	if hasGlob && name != "ls" {
-		return governedFirst[name] || governedLater[name], false, name + " with a glob"
+		return governedFirst[name] || governedLater[name], false, name + " with a glob", nil
 	}
 	switch name {
 	case "git":
-		ok, why := gitStage(w, cwd, a.Dir)
-		return true, ok, why
+		ok, why, paths := gitStage(w, cwd, a.Dir)
+		return true, ok, why, a.rels(cwd, paths)
 	case "ls":
 		ok, why := lsStage(ws, cwd, a.Dir)
-		return true, ok, why
+		return true, ok, why, nil
 	case "pwd":
-		return true, len(w) == 1, "pwd takes no arguments"
+		return true, len(w) == 1, "pwd takes no arguments", nil
 	case "go":
 		ok := goStage(w)
-		return true, ok, "go other than version and env NAME"
+		return true, ok, "go other than version and env NAME", nil
 	case "cat", "head", "tail", "wc", "grep":
-		ok, why := fileStage(name, ws, cwd, a.Dir, a.MaxFile, true)
-		return true, ok, why
+		ok, why, files := fileStage(name, ws, cwd, a.Dir, a.MaxFile, true)
+		return true, ok, why, a.rels(cwd, files)
 	case "sort", "uniq", "cut":
-		return true, false, name + " reads a file only after a pipe"
+		return true, false, name + " reads a file only after a pipe", nil
 	}
-	return false, true, ""
+	return false, true, "", nil
+}
+
+// rels turns the paths a stage reads into names relative to the
+// workspace root, for the policy's path rules; one that leaves is left
+// as it is, since the stage was refused for it already.
+func (a *Analyzer) rels(cwd string, paths []string) []string {
+	real, _ := filepath.EvalSymlinks(a.Dir)
+	var out []string
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(cwd, p)
+		}
+		if rel, ok := NormalizePath(a.Dir, real, p); ok {
+			out = append(out, rel)
+		}
+	}
+	return out
 }
 
 // goStage allows go version and go env with named variables.
@@ -722,7 +752,7 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 			case w[0] == "cd":
 				sc.Governed, sc.OK, sc.Why = true, false, "cd in a pipeline"
 			case si == 0:
-				sc.Governed, sc.OK, sc.Why = a.stageFirst(st.words, cwd)
+				sc.Governed, sc.OK, sc.Why, sc.Reads = a.stageFirst(st.words, cwd)
 				if sc.Governed && sc.OK && !autoFirst(w) {
 					auto = false // the rules decide, not the allow-list
 				}
@@ -784,7 +814,7 @@ func ReadOnlyArgs(words []string, dir string) bool {
 		ws[i] = word{text: w}
 	}
 	a := &Analyzer{Dir: dir}
-	governed, ok, _ := a.stageFirst(ws, dir)
+	governed, ok, _, _ := a.stageFirst(ws, dir)
 	return !governed || ok
 }
 
