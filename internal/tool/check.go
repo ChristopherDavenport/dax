@@ -67,7 +67,6 @@ var (
 	listArg  = regexp.MustCompile(`^[0-9,-]+$`)
 	numFlag  = regexp.MustCompile(`^-(\d+|[nUM]\d+)$`)
 	attached = regexp.MustCompile(`^-[SGL].+$`)
-	keyName  = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 )
 
 func set2(a map[string]bool, more ...string) map[string]bool {
