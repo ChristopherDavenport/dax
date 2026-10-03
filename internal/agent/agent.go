@@ -1,0 +1,782 @@
+// Package agent assembles one dex session with agentkit: dex's tools
+// and prompt, the AGENTS.md chain, skills, memory, a confirmation
+// policy, MCP servers, the explore child agent and compaction, recorded
+// into an agentsession content-addressed store (RFC 0002). What the kit cannot express is
+// wired here by hand beside it, each place saying why.
+package agent
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentmemory"
+	"github.com/ChristopherDavenport/agentmemory/filestore"
+	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
+	"github.com/ChristopherDavenport/agentskill"
+	"github.com/ChristopherDavenport/agentsmd"
+	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agenttool/mcpclient"
+	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/compact"
+	"github.com/ChristopherDavenport/agentturn/session"
+	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dex/internal/prompt"
+	"github.com/ChristopherDavenport/dex/internal/tool"
+)
+
+// Version is what the session header names as the harness version.
+const Version = "0.0.6-poc"
+
+// What the model sees for a call that will never get a real answer.
+// Each says what the loop's PendingReason says and no more: a call cut
+// off in flight may have taken effect, a deferred call never ran, and
+// a call found unanswered in a transcript the record says nothing
+// about is one nobody can account for.
+const (
+	abortedOutput  = "Error: this call was cut off while it was running; it may have taken effect."
+	deniedOutput   = "Error: the user denied this call."
+	unknownOutput  = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
+	neverRanOutput = "Error: this call was cut off before it reached its tool; it did not run."
+	heldOutput     = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
+)
+
+// Options configure a session.
+type Options struct {
+	BaseURL string
+	APIKey  string
+	Model   string
+	Think   bool
+	// Streamer, when set, is the model instead of a client for BaseURL.
+	Streamer openresponses.Streamer
+	// Dir is the working directory the tools and prompt are rooted at.
+	Dir string
+	// Root is the session store, a content-addressed store holding
+	// every project's sessions; empty disables recording.
+	Root string
+	// Sync is when an append to the store is durable before it
+	// returns: every append (the default), a response or a call's
+	// output and what came before it, or at Close.
+	Sync cas.SyncPolicy
+	// UserDir is the user's dex directory, ~/.dex: its AGENTS.md is
+	// read before the project's and its skills directory searched
+	// after the project's.
+	UserDir string
+
+	// AgentsMD reads UserDir/AGENTS.md and the AGENTS.md chain from the
+	// file system root down to Dir into the instructions.
+	AgentsMD bool
+	// Skills offers the skills under Dir/.dex/skills and
+	// UserDir/skills, through the skill tool.
+	Skills bool
+	// TrustSkills lets a skill's allowed-tools widen the confirmation
+	// policy while the model follows it, until the next user message.
+	TrustSkills bool
+	// MemoryDir is the memory store; empty disables memory. The model
+	// reads and writes a user scope and a scope for Dir.
+	MemoryDir string
+
+	// Compact, when positive, is the estimated token budget above which
+	// the transcript is folded before a call.
+	Compact int
+	// CompactServer folds through the server's compaction endpoint
+	// (compact.New) instead of a local summary (compact.NewLocal).
+	CompactServer bool
+	// Confirm asks before write, edit and bash calls run.
+	Confirm bool
+	// Approve decides a call the policy asked about; reason is the
+	// policy's. nil denies every call.
+	Approve func(call *openresponses.FunctionCall, reason string) bool
+	// Elicit answers a question a tool asks mid-call: an MCP server's
+	// elicitation, or a nested call the policy asked about. nil leaves
+	// every such question unasked, which the tool takes as a cancel.
+	Elicit agenttool.Elicitor
+	// MCP is a command line to start a stdio MCP server whose tools are
+	// offered under the prefix "mcp". Its stderr is dex's.
+	MCP string
+	// Agents adds the explore child agent as a tool.
+	Agents bool
+	// Log receives dex's own notes: compactions, denials, skill grants.
+	// nil discards them.
+	Log func(format string, args ...any)
+}
+
+// DefaultUserDir is ~/.dex.
+func DefaultUserDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".dex"
+	}
+	return filepath.Join(home, ".dex")
+}
+
+// DefaultRoot is ~/.dex/sessions.
+func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
+
+// Session is one dex conversation: the kit that assembled it, the
+// agent running it and, when recording, the store it is written to.
+type Session struct {
+	Agent *agentturn.Agent
+	Kit   *agentkit.Kit
+
+	opts   Options
+	store  *cas.Store
+	detach func()
+}
+
+// Describe is one line for the user: the call and why it is unanswered.
+func Describe(p agentturn.PendingCall) string {
+	s := fmt.Sprintf("%s(%s) %s", p.Call.Name, p.Call.Arguments, p.Reason)
+	if p.Reason == agentturn.PendingDeferred && p.Dispatched {
+		s += " after its dispatch"
+	}
+	return s
+}
+
+// Pending lists the calls awaiting outputs, in transcript order. The
+// next Prompt answers them ahead of the user's message. A resumed
+// session's calls carry what its record says of them, since the kit
+// seeds the agent with the pending calls at the leaf.
+func (s *Session) Pending() []agentturn.PendingCall { return s.Agent.State().Pending }
+
+// output is what the model is told about an unanswered call.
+func output(p agentturn.PendingCall) string {
+	switch p.Reason {
+	case agentturn.PendingDeferred:
+		if p.Dispatched {
+			return heldOutput
+		}
+		return deniedOutput
+	case agentturn.PendingAborted, agentturn.PendingAnswered:
+		return abortedOutput
+	case agentturn.PendingUndispatched:
+		return neverRanOutput
+	}
+	return unknownOutput
+}
+
+func (o Options) log(format string, args ...any) {
+	if o.Log != nil {
+		o.Log(format, args...)
+	}
+}
+
+func (o Options) model() openresponses.Streamer {
+	if o.Streamer != nil {
+		return o.Streamer
+	}
+	var copts []openresponses.ClientOption
+	if o.APIKey != "" {
+		copts = append(copts, openresponses.WithAPIKey(o.APIKey))
+	}
+	return openresponses.NewClient(o.BaseURL, copts...).AsAdapter()
+}
+
+func (o Options) reasoning() openresponses.ReasoningConfig {
+	if o.Think {
+		return openresponses.ReasoningConfig{
+			Effort:  openresponses.ReasoningEffortLow,
+			Summary: openresponses.ReasoningSummaryAuto,
+		}
+	}
+	return openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone}
+}
+
+// ProjectScope is the memory scope of a working directory. One store
+// holds every project's memory beside the user's, so each project gets
+// a scope of its own, named for its directory and a hash of its path.
+func ProjectScope(dir string) agentmemory.Scope {
+	var b strings.Builder
+	b.WriteString("project-")
+	for _, r := range strings.ToLower(filepath.Base(dir)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case b.Len() > 0 && !strings.HasSuffix(b.String(), "-"):
+			b.WriteByte('-')
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	if !strings.HasSuffix(b.String(), "-") {
+		b.WriteByte('-')
+	}
+	sum := sha256.Sum256([]byte(dir))
+	b.WriteString(hex.EncodeToString(sum[:4]))
+	return agentmemory.Scope(b.String())
+}
+
+// policy is -confirm: write, edit and bash ask, everything else runs.
+// Aliases let a skill's allowed-tools name the tools as the reference
+// does, Bash(git status:*), and a matcher gives bash its specifiers.
+func policy() (agentpolicy.Policy, map[string]agentpolicy.ToolMatcher, []agentpolicy.Option, error) {
+	ask, err := agentpolicy.ParseRules("write edit bash")
+	if err != nil {
+		return agentpolicy.Policy{}, nil, nil, err
+	}
+	p, err := agentpolicy.Merge(agentpolicy.RuleSet{
+		Source: agentpolicy.Source{Name: "dex:-confirm", Trusted: true},
+		Ask:    ask,
+	})
+	if err != nil {
+		return agentpolicy.Policy{}, nil, nil, err
+	}
+	p.Default = agentpolicy.Allow()
+	matchers := map[string]agentpolicy.ToolMatcher{
+		"bash":  {Match: agentpolicy.GlobMatcher("command")},
+		"read":  {Match: agentpolicy.GlobMatcher("path")},
+		"write": {Match: agentpolicy.GlobMatcher("path")},
+		"edit":  {Match: agentpolicy.GlobMatcher("path")},
+	}
+	aliases := agentpolicy.WithAliases(map[string][]string{
+		"Bash":  {"bash"},
+		"Read":  {"read"},
+		"Write": {"write"},
+		"Edit":  {"edit", "write"},
+	})
+	return p, matchers, []agentpolicy.Option{aliases}, nil
+}
+
+// explore is the child agent: a read-only investigator on a fresh
+// transcript whose final answer comes back to the parent as the tool
+// output.
+func (o Options) explore(model openresponses.Streamer) agentturn.Config {
+	cfg := agentturn.Config{
+		Name: "explore",
+		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
+			"Give it one clear question; it reads files and runs read-only commands and returns a written answer. " +
+			"Use it for broad searches so their output stays out of this conversation.",
+		Model:     model,
+		ModelName: o.Model,
+		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read and bash tools; " +
+			"never modify files. End with a concise written answer that stands on its own.",
+		Tools:     []agenttool.Tool{tool.Read(o.Dir), tool.Bash(o.Dir)},
+		Reasoning: o.reasoning(),
+		MaxTurns:  10,
+		Retry:     agentturn.Retry{MaxAttempts: 3},
+	}
+	if o.Confirm {
+		// The child has no one to ask: a deferred call ends its run and
+		// surfaces to the parent's model as an InputRequiredError. Its
+		// config is fixed before agentkit.New builds the engine, so the
+		// hook is its own rather than the kit's policy.
+		cfg.BeforeToolCall = func(_ context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+			if info.Call.Name == "bash" {
+				return &agentturn.ToolDecision{Action: agentturn.Defer}, nil
+			}
+			return nil, nil
+		}
+	}
+	return cfg
+}
+
+// open assembles the kit and the agent. resume, when not empty, is the
+// session to continue; the store is nil when nothing is recorded.
+func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Session, error) {
+	s := &Session{opts: o, store: store}
+	model := o.model()
+	kopts := []agentkit.Option{
+		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
+		agentkit.WithModel(model, o.Model),
+		agentkit.WithReasoning(o.reasoning()),
+		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
+		agentkit.WithInstructions(prompt.Build(o.Dir)),
+		agentkit.WithTools(tool.Builtins(o.Dir)...),
+	}
+	if o.AgentsMD {
+		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, agentsmd.Options{
+			Extra:  []string{filepath.Join(o.UserDir, "AGENTS.md")},
+			Budget: 32 << 10,
+		}))
+	}
+	if o.Skills {
+		// Neither directory is one the user configured, so either may
+		// be absent; the project's comes first and shadows the user's.
+		kopts = append(kopts, agentkit.WithOptionalSkills(filepath.Join(o.Dir, ".dex", "skills"), filepath.Join(o.UserDir, "skills")))
+		if o.TrustSkills {
+			kopts = append(kopts,
+				agentkit.WithSkillGrants(func(sk *agentskill.Skill) agentpolicy.Source {
+					return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: true}
+				}),
+				agentkit.WithSkillGrantScope(),
+				agentkit.WithSkillGrantReport(func(g agentkit.SkillGrant) {
+					o.log("[skill %s: granted %v, refused %d, err %v]", g.Skill, g.Granted, len(g.Refused), g.Err)
+				}))
+		}
+	}
+	if o.MemoryDir != "" {
+		mem, err := filestore.Open(o.MemoryDir)
+		if err != nil {
+			return nil, fmt.Errorf("memory: %w", err)
+		}
+		kopts = append(kopts, agentkit.WithMemory(mem, "user", ProjectScope(o.Dir)))
+	}
+	if o.Confirm {
+		p, matchers, popts, err := policy()
+		if err != nil {
+			return nil, err
+		}
+		kopts = append(kopts, agentkit.WithPolicy(p, matchers, popts...))
+	}
+	if o.Agents {
+		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model)))
+	}
+	if o.Elicit != nil {
+		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
+	}
+	// Set whether or not -mcp names a server, since /mcp may add one.
+	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
+	if o.MCP != "" {
+		kopts = append(kopts, agentkit.WithMCP(o.MCP, mcpclient.WithPrefix("mcp")))
+	}
+	if o.Compact > 0 {
+		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
+			switch {
+			case errors.Is(f.Err, compact.ErrSummaryTooLarge), errors.Is(f.Err, compact.ErrSummaryIncomplete), errors.Is(f.Err, compact.ErrSummaryNoText):
+				// The fold is given up and the transcript sent whole;
+				// compaction does not ask about this prefix again until
+				// it has grown.
+				o.log("[not compacted: %v; %d tokens sent unfolded]", f.Err, f.TokensBefore)
+			case f.Err != nil:
+				o.log("[compaction failed after %d call(s): %v]", f.Attempts, f.Err)
+			case f.Summary != nil:
+				o.log("[compacted: %d item(s) folded, %d tokens before]", f.Split, f.TokensBefore)
+			}
+		})
+		if o.CompactServer {
+			c, ok := model.(compact.Compactor)
+			if !ok {
+				return nil, errors.New("-compact-server: the model has no compaction endpoint")
+			}
+			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact), fold)
+		} else {
+			// The kit asks the summary under the agent's reasoning, which
+			// under -think is effort low. qwen3.5 then spends most of
+			// the summary's output cap reasoning: of three folds of one
+			// transcript, two were asked twice, the summaries were 106
+			// to 649 bytes against 858 to 1,313 at effort none, and they
+			// took 3.4 times as long. So the summary stays at none.
+			none := compact.WithRequest(func(r *openresponses.Request) {
+				r.Reasoning = openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone}
+			})
+			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none), fold)
+		}
+	}
+	if store != nil {
+		if resume != "" {
+			kopts = append(kopts, agentkit.WithResumedSession(store, resume, o.env()))
+		} else {
+			kopts = append(kopts, agentkit.WithSession(store, o.header(), o.env()))
+		}
+	}
+
+	kit, err := agentkit.New(ctx, kopts...)
+	if err != nil {
+		return nil, err
+	}
+	s.Kit = kit
+	s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
+	s.detach = kit.Attach(s.Agent)
+	return s, nil
+}
+
+func (o Options) header() agentsession.Header {
+	return agentsession.Header{
+		CWD:     o.Dir,
+		Harness: &agentsession.Harness{Name: "dex", Version: Version},
+	}
+}
+
+// env is the environment entry the recorder asks for once per run: the
+// directory the tools are rooted at, on this machine's file system. The
+// recorder writes it only when it differs from the last one on the
+// path, so a session that stays in one directory holds one entry and a
+// resume in another directory says so.
+func (o Options) env() session.Option {
+	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
+		e := agentsession.NewEnvEntry(o.Dir)
+		e.SetWorkspace(agentsession.WorkspaceLocal, "")
+		return e, nil
+	})
+}
+
+// New starts a fresh session.
+func New(ctx context.Context, o Options) (*Session, error) {
+	if o.Root == "" {
+		return open(ctx, o, nil, "")
+	}
+	store, err := cas.Open(o.Root, cas.WithSync(o.Sync))
+	if err != nil {
+		return nil, err
+	}
+	s, err := open(ctx, o, store, "")
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Resume reopens a recorded session and continues it from its leaf.
+// Calls an earlier run left unanswered become pending on the agent,
+// each with the reason the file's dispatch records give it, and are
+// answered by the next Prompt.
+func Resume(ctx context.Context, o Options, id string) (*Session, error) {
+	if o.Root == "" {
+		return nil, errors.New("resume needs a session store")
+	}
+	store, err := cas.Open(o.Root, cas.WithSync(o.Sync))
+	if err != nil {
+		return nil, err
+	}
+	s, err := open(ctx, o, store, id)
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+	sess := s.Kit.Session()
+	if t := sess.Truncated(); t != nil {
+		fmt.Fprintf(os.Stderr, "dex: session %s: %v (dropped)\n", id, t)
+	}
+	if f := sess.DeclaredFormat(); f != agentsession.Format {
+		// The recorder raises the header before its first append, after
+		// which no reader older than agentsession v0.0.18 opens it.
+		fmt.Fprintf(os.Stderr, "dex: session %s was written as %s; this dex writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
+	}
+	if cwd := sess.Header().CWD; cwd != "" && cwd != o.Dir {
+		fmt.Fprintf(os.Stderr, "dex: session was recorded in %s, continuing in %s\n", cwd, o.Dir)
+	}
+	return s, nil
+}
+
+// ID is the session ID, empty when not recording.
+func (s *Session) ID() string { return s.Kit.SessionID() }
+
+// Path is the session's directory in the store, its header, log and
+// head, empty when not recording.
+func (s *Session) Path() string {
+	if s.store == nil {
+		return ""
+	}
+	return filepath.Join(s.store.Root(), "sessions", s.ID())
+}
+
+// Omitted is what the instruction layers considered and left out.
+func (s *Session) Omitted() []agentkit.Omission { return s.Kit.Omitted() }
+
+// Tools lists the tools the kit assembled, each with its source.
+func (s *Session) Tools() []agentkit.ToolOrigin { return s.Kit.Tools() }
+
+// Prompt sends one user message and runs until the agent is idle. Calls
+// an abort left pending are answered ahead of the message, in the same
+// model call; a call a resumed session left held for approval is put to
+// Approve first. Calls the policy asked about are put to Approve, the
+// calls it held beside them are released by the engine, and the run is
+// resumed until it ends for another reason.
+func (s *Session) Prompt(ctx context.Context, text string) (*agentturn.RunEnd, error) {
+	// Memory written during the run names this session; the kit cannot
+	// put the ID on a context that is the host's.
+	ctx = agentmemory.WithSession(ctx, s.ID())
+	var end *agentturn.RunEnd
+	var err error
+	if pending := s.Pending(); s.opts.Approve != nil && slices.ContainsFunc(pending, held) {
+		// A call held for approval when the last process stopped never
+		// ran and was never answered, so the user is asked about it
+		// again, and the message follows its answer in the same run.
+		s.Agent.Steer(openresponses.UserText(text))
+		end, err = s.Agent.Resume(ctx, s.reanswer(pending)...)
+	} else {
+		var items openresponses.Items
+		for _, p := range pending {
+			items = append(items, openresponses.NewFunctionCallOutput(p.Call.CallID, output(p)))
+		}
+		items = append(items, openresponses.UserText(text))
+		end, err = s.Agent.Prompt(ctx, items...)
+	}
+	for err == nil && end.Reason == agentturn.ReasonInputRequired {
+		var answers []agentturn.Answer
+		if answers, err = s.answer(ctx, end); err != nil {
+			break
+		}
+		end, err = s.Agent.Resume(ctx, answers...)
+	}
+	return end, err
+}
+
+// held reports a call held for approval before its dispatch: it never
+// ran, and a person may still allow it.
+func held(p agentturn.PendingCall) bool {
+	return p.Reason == agentturn.PendingDeferred && !p.Dispatched
+}
+
+// reanswer answers the calls a resumed session left pending: each held
+// one as the user decides now, the rest with what the model is told of
+// them.
+func (s *Session) reanswer(pending []agentturn.PendingCall) []agentturn.Answer {
+	answers := make([]agentturn.Answer, 0, len(pending))
+	for _, p := range pending {
+		switch {
+		case !held(p):
+			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))))
+		case s.opts.Approve(p.Call, "held for approval when the session stopped"):
+			answers = append(answers, agentturn.Approve(p.Call.CallID).WithBy(agentpolicy.ByHuman))
+		default:
+			s.opts.log("  ✗ %s denied", p.Call.Name)
+			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
+		}
+	}
+	return answers
+}
+
+// answer asks the user about each call the policy asked about and lets
+// the engine release the ones it only held. Every answer the user gave
+// is recorded as a person's.
+func (s *Session) answer(ctx context.Context, end *agentturn.RunEnd) ([]agentturn.Answer, error) {
+	eng := s.Kit.Engine()
+	answers := make([]agentturn.Answer, 0, len(end.Pending))
+	for _, p := range end.Pending {
+		reason := ""
+		if eng != nil {
+			v, ok := eng.Deferred(end.RunID, p.Call.CallID)
+			if ok && v.Held {
+				continue
+			}
+			reason = v.Reason
+		}
+		if s.opts.Approve != nil && s.opts.Approve(p.Call, reason) {
+			answers = append(answers, agentturn.Approve(p.Call.CallID).WithBy(agentpolicy.ByHuman))
+			continue
+		}
+		s.opts.log("  ✗ %s denied", p.Call.Name)
+		answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
+	}
+	if eng == nil {
+		return answers, nil
+	}
+	return eng.Release(ctx, end, answers...)
+}
+
+// Steer queues a user message for the next model call of the run in
+// flight; idle, it is queued for the next run.
+func (s *Session) Steer(text string) { s.Agent.Steer(openresponses.UserText(text)) }
+
+// FollowUp queues a user message the run picks up when it would
+// otherwise end.
+func (s *Session) FollowUp(text string) { s.Agent.FollowUp(openresponses.UserText(text)) }
+
+// SetModel changes the model name for later runs. The loop leaves the
+// reasoning items another model produced out of the new model's
+// requests, so a switch under -think sends no signature the new model
+// refuses; the recorder writes those requests' responses unhashed.
+func (s *Session) SetModel(name string) error {
+	cfg := s.Agent.Config()
+	cfg.ModelName = name
+	return s.Agent.SetConfig(cfg)
+}
+
+// AddMCP starts a stdio MCP server mid-session and offers its tools
+// from the next run under prefix. It returns the label RemoveMCP takes.
+func (s *Session) AddMCP(ctx context.Context, prefix, command string) (string, error) {
+	return s.Kit.AddMCP(ctx, command, mcpclient.WithPrefix(prefix))
+}
+
+// RemoveMCP closes a server AddMCP started; its tools are not offered
+// from the next run.
+func (s *Session) RemoveMCP(label string) error { return s.Kit.RemoveMCP(label) }
+
+// SetThink turns reasoning on or off for later runs.
+func (s *Session) SetThink(on bool) error {
+	o := s.opts
+	o.Think = on
+	cfg := s.Agent.Config()
+	cfg.Reasoning = o.reasoning()
+	return s.Agent.SetConfig(cfg)
+}
+
+// Close detaches the recorder and releases the MCP server and the
+// store.
+func (s *Session) Close() error {
+	if s.detach != nil {
+		s.detach()
+	}
+	err := s.Kit.Close()
+	if s.store != nil {
+		if cerr := s.store.Close(); err == nil {
+			err = cerr
+		}
+	}
+	return err
+}
+
+// readOnly opens the store for reading, without the session locks, so
+// a session a running dex holds can be listed, verified and projected.
+func readOnly(root string) (*cas.Store, error) { return cas.Open(root, cas.WithReadOnly()) }
+
+// List returns the recorded sessions under root, newest first, for cwd
+// when it is not empty.
+func List(ctx context.Context, root, cwd string) ([]agentsession.Summary, error) {
+	if !cas.IsStore(root) {
+		return nil, nil
+	}
+	store, err := readOnly(root)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	var out []agentsession.Summary
+	for sum, err := range store.List(ctx, agentsession.ListFilter{CWD: cwd}) {
+		if err != nil {
+			return out, err
+		}
+		out = append(out, sum)
+	}
+	return out, nil
+}
+
+// Verify rebuilds every model call recorded in a session and checks it
+// against the stored request hash, then holds the path to the leaf to
+// RFC 0001's records rules. It returns the number of responses checked
+// and what failed.
+func Verify(ctx context.Context, root, id string) (int, []error, error) {
+	store, err := readOnly(root)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer store.Close()
+	sess, err := store.Open(ctx, id)
+	if err != nil {
+		return 0, nil, err
+	}
+	n := 0
+	var failed []error
+	for _, e := range sess.Entries() {
+		if _, ok := e.(*agentsession.ResponseEntry); !ok {
+			continue
+		}
+		n++
+		if err := sess.Verify(e.Base().ID); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if err := sess.VerifyRecords(sess.Leaf()); err != nil {
+		failed = append(failed, err)
+	}
+	return n, failed, nil
+}
+
+// UnhashedCause is a reason the recorder wrote for leaving requests
+// unhashed, and how many responses after it went without a hash.
+type UnhashedCause struct {
+	Entry string
+	session.Unhashed
+	Responses int
+}
+
+// Unhashed lists the causes the recorder gave, in the session's order,
+// for the responses it wrote with no request hash. A response with no
+// hash before any cause was written by a recorder that gave none.
+func Unhashed(ctx context.Context, root, id string) ([]UnhashedCause, error) {
+	store, err := readOnly(root)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	sess, err := store.Open(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var causes []UnhashedCause
+	for _, e := range sess.Entries() {
+		switch e := e.(type) {
+		case *agentsession.CustomEntry:
+			if e.NS != session.UnhashedNS {
+				continue
+			}
+			c := UnhashedCause{Entry: e.ID}
+			if err := json.Unmarshal(e.Data, &c.Unhashed); err != nil {
+				return causes, fmt.Errorf("%s entry %s: %w", session.UnhashedNS, e.ID, err)
+			}
+			causes = append(causes, c)
+		case *agentsession.ResponseEntry:
+			if e.RequestHash == "" && len(causes) > 0 {
+				causes[len(causes)-1].Responses++
+			}
+		}
+	}
+	return causes, nil
+}
+
+// Project writes a recorded session as an RFC 0001 JSONL file into dir,
+// <id>.jsonl, for tools that read files rather than the store, such as
+// agentsession show and verify. It returns the file's path.
+func Project(ctx context.Context, root, id, dir string) (string, error) {
+	store, err := readOnly(root)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	return store.ProjectDir(ctx, dir, id)
+}
+
+// Import reads an RFC 0001 JSONL session, one an earlier dex wrote,
+// into the store as the session's record, so -list, -resume and -verify
+// reach it. It returns the session's ID.
+func Import(ctx context.Context, root, path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	store, err := cas.Open(root)
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	sess, err := store.Import(ctx, f, true)
+	if err != nil {
+		return "", err
+	}
+	return sess.Header().ID, nil
+}
+
+// GC packs the store's loose objects, or with sweep repacks everything
+// into one pack and drops what no session needs, sparing objects
+// younger than grace. It returns the number of objects packed or
+// removed. A dex holding a session may keep writing meanwhile.
+func GC(ctx context.Context, root string, sweep bool, grace time.Duration) (int, error) {
+	store, err := cas.Open(root)
+	if err != nil {
+		return 0, err
+	}
+	defer store.Close()
+	if sweep {
+		return store.Sweep(ctx, grace)
+	}
+	return store.Pack(ctx)
+}
+
+// Repair rewrites a session whose log a crash or the disk damaged, so
+// it opens again and the store can be swept: every record that still
+// reads is kept, with the entries whose objects are whole, and the
+// damaged log is kept beside it.
+func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
+	store, err := cas.Open(root)
+	if err != nil {
+		return cas.RepairReport{}, err
+	}
+	defer store.Close()
+	return store.Repair(ctx, id, cas.RepairOptions{})
+}
