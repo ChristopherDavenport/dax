@@ -64,6 +64,18 @@ versions may break flags and the config file.
   `wc`, `sort`, `uniq`, `cut`, `grep`; `&&` sequences and `cd` into the
   workspace; `cat`, `head`, `tail`, `wc`, `grep` on named files; `ls` with
   globs. Bash output is capped at 50 KiB in memory.
+- Security: a glob word with a quoted part is not in the safe subset (it was
+  rendered bare, so `ls ';touch /x;'*` ran touch); a differential test runs
+  every auto-allowed line through real bash with each stage's command
+  replaced by a probe and compares argv. An auto-allowed bash call is
+  stamped with the plan the policy approved and runs only that plan; if the
+  line no longer analyses to it the call fails instead of running verbatim.
+  git config reads only a named key that holds no secret; URL credentials are
+  taken out of auto-allowed output. git asks when `.git` is a file or link,
+  git's repository is not the workspace's, `core.worktree`, `core.bare`,
+  `extensions.*` are set, or a submodule's config names a program. Reading a
+  secret-looking path asks (`read(.env)` in the user config opens one). `ls`
+  glob expansions follow a `--`.
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
   `DEX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the

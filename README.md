@@ -202,7 +202,9 @@ file arguments):
 - `git status`, `diff`, `log`, `show`, `branch` (listing forms only, a name
   only with `--list`), `rev-parse`, `ls-files`, `remote` (`-v` only), `blame`,
   `stash list`, `tag` (listing forms only), `describe`, `shortlog` and
-  `config` (`--get`, `--get-all`, `--get-regexp`, `--list`), with read-only
+  `config --get` of one key that holds no secret (`user.name`, `user.email`,
+  `core.autocrlf`, `branch.*.remote`, `remote.*.url`, ...; not `--list`,
+  `--get-regexp`, `--global`, `--system`, `http.*` or `credential.*`), with read-only
   flags from an allowlist, including combined short flags (`-sb`) and
   space-separated values (`-n 5`, `--author x`, `-S foo`). Not
   `--output`, `-o`, `--ext-diff`, `--textconv`, `-c`, `-C`, `--git-dir`,
@@ -228,12 +230,40 @@ config, or anything it includes, names a program (`filter.*.clean`,
 `smudge` or `process`, `diff.*.textconv` or `command`, `core.askPass`,
 `editor`, `gitProxy`, `attributesFile`, `remote.*.uploadpack` or
 `receivepack`, `credential.helper`, `merge.*.driver`, `pager.*`,
-`protocol.*.allow = always`, ...) the call asks and the question names the
-key. Your own global and system config are trusted. The auto-allowed run
-switches off the rest: no fsmonitor, pager, ssh command or hooks, the gpg
-programs are `/bin/false`, `--no-ext-diff --no-textconv` are added to
-`diff`, `log` and `show`, and `go` runs with `GOTOOLCHAIN=local`. A command
-you approve runs as you would run it, hooks and `GIT_CONFIG_*` included.
+`protocol.*.allow = always`, ...), moves the work tree (`core.worktree`),
+is bare, sets an extension, or runs a submodule update command, or if a
+submodule's own config names a program, the call asks and the question
+names the key. It also asks when `.git` is a file or a link, or when git's
+own answer for the repository (`rev-parse`) is not the workspace's
+ancestor chain: a hand-built `.git` can point git at another repository or
+at your home directory. Your own global and system config are trusted. The
+auto-allowed run switches off the rest: no fsmonitor, pager, ssh command or
+hooks, the gpg programs are `/bin/false`, `--no-ext-diff --no-textconv`
+are added to `diff`, `log` and `show`, and `go` runs with
+`GOTOOLCHAIN=local`. What an auto-allowed command prints has the
+`user:token@` of any URL replaced by `***@`. A command you approve runs as
+you would run it, hooks and `GIT_CONFIG_*` included.
+
+*What was decided is what runs*: the policy stamps an auto-allowed call with
+the plan it approved, and the bash tool runs a stamped call only if the line
+still analyses to that plan. If a file or the repository's config changed in
+between, the call fails with "the command changed since it was allowed; ask
+again", and the original line is never run instead. Only dex can stamp a
+call; one the model stamps is refused. `ls` with a glob runs with the
+expansion after a `--`, so a file called `-n` is a name.
+
+*Secret-looking files ask*: reading `.env*`, `*.pem`, `*.key`, `id_*`,
+`*.p12`, `*.pfx`, `.npmrc`, `.netrc`, `.pgpass`, `.git-credentials`,
+`credentials*`, `*secret*`, `.aws/**`, `.ssh/**`, `.kube/config` or
+`.docker/config.json` (at the root or in any directory) asks, whether by
+`read`, `grep`, `glob` or `ls` or by `cat`, `head`, `tail`, `wc`, `grep`
+and `git show`, `log`, `diff` or `blame` of the path: the stage is decided
+as a read of it. Name the path to open one, in your own config:
+`"allow": ["read(.env)"]` (or `Read(config/*.pem)`) allows it for every
+tool, `cat .env` included, and only that. A bare `"allow": ["read"]` does
+not open them: an ask beats an allow. This is a guard on naming a file, not
+a boundary: a search of the whole tree (`grep -r`, the `grep` tool with no
+path) can still read one, and so can anything you approve.
 
 A command outside the subset is still cut into its parts, so a deny or ask
 rule for `rm` reaches `git status; rm x`, a redirect to a file is shown as
