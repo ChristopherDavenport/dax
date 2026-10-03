@@ -98,7 +98,7 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 //
 // A command the policy would auto-allow (one simple read-only command
 // of the safe subset, whose git configuration names no program) runs
-// with GitEnv added, and a git diff, log or show of it runs git
+// with AutoEnv added, and a git diff, log or show of it runs git
 // directly with --no-ext-diff and --no-textconv after the subcommand,
 // since the repository's own diff.external and textconv drivers are
 // programs and no configuration switches them off. Everything else,
@@ -107,7 +107,7 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 // GIT_CONFIG_* are theirs.
 func command(ctx context.Context, dir, command string, base []string) *exec.Cmd {
 	if words, ok := SafeWords(strings.TrimSpace(command)); ok && Allowlisted(words) && ReadOnlyArgs(words, dir) && gitConfigClean(ctx, words, dir) {
-		env := append(append([]string(nil), base...), GitEnv()...)
+		env := append(append([]string(nil), base...), AutoEnv()...)
 		var cmd *exec.Cmd
 		if ReadOnlyGit(words, dir) {
 			args := append([]string{words[1], "--no-ext-diff", "--no-textconv"}, words[2:]...)

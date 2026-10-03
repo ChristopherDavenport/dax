@@ -347,3 +347,31 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 		}
 	}
 }
+
+// R2-4 of the second review: go version and go env NAME could download
+// and run the toolchain a go.mod names.
+func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n\ngo 1.99.0\n"), 0o644)
+	t.Setenv("GOTOOLCHAIN", "auto")
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOFLAGS", "")
+	b := Bash(dir)
+	for _, cmd := range []string{"go version", "go env GOFLAGS", "go env GOROOT"} {
+		out, err := call(context.Background(), b, `{"command":"`+cmd+`"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "downloading") || strings.Contains(out, "toolchain") || !strings.Contains(out, "[exit 0]") {
+			t.Errorf("%s: %q", cmd, out)
+		}
+	}
+	// An approved go command runs as the user has it set up.
+	out, _ := call(context.Background(), b, `{"command":"go env GOTOOLCHAIN && true"}`)
+	if !strings.Contains(out, "auto") {
+		t.Errorf("an approved go command's GOTOOLCHAIN was changed: %q", out)
+	}
+}

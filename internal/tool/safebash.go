@@ -204,11 +204,17 @@ func ReadOnlyArgs(words []string, dir string) bool {
 		case "version":
 			return len(words) == 2
 		case "env":
+			names := 0
 			for _, a := range words[2:] {
-				if a != "-json" && !upperName.MatchString(a) {
+				switch {
+				case a == "-json":
+				case upperName.MatchString(a):
+					names++
+				default:
 					return false // -w, -u, -changed, a NAME=value
 				}
 			}
+			return names > 0 // bare go env dumps the whole environment
 		}
 		return true
 	}
@@ -323,6 +329,11 @@ func GitEnv() []string {
 		"GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "PAGER=cat", "GIT_OPTIONAL_LOCKS=0",
 	}
 }
+
+// AutoEnv is what an auto-allowed command is added to the environment:
+// GitEnv, and GOTOOLCHAIN=local so that go version and go env cannot
+// download and run the toolchain a go.mod names.
+func AutoEnv() []string { return append(GitEnv(), "GOTOOLCHAIN=local") }
 
 // ReadOnlyGit reports whether words is a read-only git diff, log or
 // show in the safe subset, the commands whose output the bash tool

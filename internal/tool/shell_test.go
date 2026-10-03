@@ -162,7 +162,7 @@ func TestReadOnlyArgs(t *testing.T) {
 		"git status", "git status -s -b", "git status --porcelain=v2", "git diff", "git diff --cached --stat", "git diff HEAD~1 -- internal/tool",
 		"git diff --no-ext-diff --name-only", "git log --oneline -n5 -5", "git log --since=2.days --author=me --grep=fix",
 		"git log --format=%h -- cmd", "git show HEAD", "git show --stat HEAD~2", "git diff main..HEAD", "git log -U3 -p",
-		"ls", "ls -la", "ls -l ./internal", "ls --all .", "ls -- x", "pwd", "go version", "go env", "go env GOPATH GOFLAGS", "go env -json",
+		"ls", "ls -la", "ls -l ./internal", "ls --all .", "ls -- x", "pwd", "go version", "go env GOPATH GOFLAGS", "go env -json GOROOT",
 		"make check", "git commit -m x", "git",
 	}
 	bad := []string{
@@ -173,7 +173,7 @@ func TestReadOnlyArgs(t *testing.T) {
 		"git diff -C", "git log --unknown", "git status -x", "git diff /etc/passwd", "git log -- /etc", "git show ../x", "git diff -- ../x",
 		"git log -- '~/x'", "git diff HEAD:../../x ../..",
 		"ls /etc", "ls ..", "ls ../x", "ls -la /", "ls -I x", "ls --color=always", "ls -z", "ls ./../..",
-		"pwd -P", "pwd x", "go version -m x", "go env -w GOFLAGS=-x", "go env -u GOFLAGS", "go env GOFLAGS=-x", "go env -changed",
+		"pwd -P", "pwd x", "go env", "go env -json", "go version -m x", "go env -w GOFLAGS=-x", "go env -u GOFLAGS", "go env GOFLAGS=-x", "go env -changed",
 	}
 	for _, cmd := range good {
 		w, ok := SafeWords(cmd)
