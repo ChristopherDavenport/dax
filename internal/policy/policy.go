@@ -44,6 +44,37 @@ const BuiltinAllow = "read glob grep ls skill explore memory_search " +
 	"bash(cat:*) bash(head:*) bash(tail:*) bash(wc:*) bash(grep:*) bash(sort:*) bash(uniq:*) bash(cut:*) bash(cd:*) " +
 	"bash(ls:*) bash(pwd)"
 
+// secretPaths are names that look like they hold a credential or a
+// key. Reading one asks, whichever tool reads it: Read(...) names read,
+// grep, glob and ls, and cat, head, tail, wc, grep and git show of a
+// path are decided as a read of it. A pattern here has a form for the
+// workspace root and one for any directory below it, since a rule's *
+// runs across slashes but does not match nothing before a dot.
+var secretPaths = []string{
+	".env*", ".npmrc", ".netrc", ".pgpass", ".git-credentials", "id_*", "credentials*", "*.pem", "*.key", "*.p12", "*.pfx",
+	"*secret*", ".kube/config", ".docker/config.json", ".aws/**", ".ssh/**", ".aws", ".ssh",
+}
+
+// BuiltinAsk is the ask list dex ships: reads of the paths above. It
+// ranks with the built-in allow list, so an ask beats the bare read
+// allow; a user's allow rule for a path (read(.env), Read(config/.env))
+// opens it, because Build gives each such rule a carve-out from this
+// list.
+func BuiltinAsk() string {
+	var b strings.Builder
+	for _, s := range secretPaths {
+		b.WriteString("Read(" + s + ") ")
+		if !strings.HasPrefix(s, "*") && !strings.Contains(s, "/") {
+			b.WriteString("Read(*/" + s + ") ")
+		} else if strings.Contains(s, "/") && !strings.HasPrefix(s, "*") {
+			b.WriteString("Read(*/" + s + ") ")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+var fileTools = map[string]bool{"read": true, "grep": true, "glob": true, "ls": true}
+
 // Matchers are the per-tool specifier matchers: bash by its command,
 // the file tools by their path, normalised against the workspace dir
 // (a search by the directory it looks in). Rules for a path are written
@@ -101,7 +132,11 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		if err != nil {
 			return agentpolicy.Policy{}, err
 		}
-		sets = append(sets, agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBuiltin, Trusted: true, Rank: 1}, Allow: allow})
+		ask, err := agentpolicy.ParseRules(BuiltinAsk())
+		if err != nil {
+			return agentpolicy.Policy{}, err
+		}
+		sets = append(sets, agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBuiltin, Trusted: true, Rank: 1}, Allow: allow, Ask: ask})
 	}
 	for _, l := range []struct {
 		src   agentpolicy.Source
@@ -121,6 +156,16 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		}
 		if set.Deny, err = parse("deny", l.rules.Deny); err != nil {
 			return agentpolicy.Policy{}, err
+		}
+		if l.src.Trusted {
+			// Allowing a path is meant: an allow rule with a specifier
+			// for a file tool cancels the built-in ask for it, which
+			// precedence alone would not.
+			for _, r := range set.Allow {
+				if r.Spec != "" && !strings.HasPrefix(r.Spec, "!") && fileTools[strings.ToLower(r.Tool)] {
+					set.Ask = append(set.Ask, agentpolicy.Rule{Tool: r.Tool, Spec: "!" + r.Spec})
+				}
+			}
 		}
 		sets = append(sets, set)
 	}
