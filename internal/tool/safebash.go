@@ -172,7 +172,10 @@ func ReadOnlyArgs(words []string, dir string) bool {
 				}
 				continue
 			}
-			if !inWorkspace(a, dir) {
+			// rev:path, :path and the :/ and :(magic) pathspecs name
+			// what is in the repository, which may be above the
+			// workspace; they ask.
+			if strings.Contains(a, ":") || !inWorkspace(a, dir) {
 				return false
 			}
 		}
