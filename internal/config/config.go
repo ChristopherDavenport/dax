@@ -56,6 +56,10 @@ type Config struct {
 	// MCPServers are stdio MCP servers, by name; the name is the
 	// prefix of their tools, mcp__<name>__<tool>.
 	MCPServers map[string]MCPServer `json:"mcp_servers,omitempty"`
+	// PassEnv names environment variables that look like credentials
+	// (*_API_KEY, *_TOKEN, *_SECRET) which bash commands and MCP
+	// servers are nevertheless given. By default they get none.
+	PassEnv []string `json:"pass_env,omitempty"`
 	// Policy decides which tool calls run, ask or are refused.
 	Policy *Policy `json:"policy,omitempty"`
 }
@@ -136,12 +140,19 @@ func Parse(data []byte, path string, project bool) (Layer, error) {
 	return l, nil
 }
 
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 func (l *Layer) validate() error {
 	c := &l.Config
 	if c.Provider != "" && !slices.Contains(Providers, c.Provider) {
 		return fmt.Errorf(`provider %q: want one of %s`, c.Provider, strings.Join(Providers, ", "))
+	}
+	for _, v := range c.PassEnv {
+		if !envName.MatchString(v) {
+			return fmt.Errorf("pass_env: %q is not a variable name", v)
+		}
 	}
 	if c.BaseURL != "" {
 		if err := checkBaseURL(c.BaseURL); err != nil {
@@ -157,6 +168,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
+			{"pass_env", len(c.PassEnv) > 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -260,6 +272,7 @@ type Settings struct {
 	SkillsDirs       []string
 	MemoryDir        string // empty: off; Resolve fills the default in
 	MCP              []MCP
+	PassEnv          []string
 	Policy           PolicySettings
 	// Sources says which layer set each of provider, model, base_url:
 	// "default", the file's path, or "flag".
@@ -315,6 +328,11 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MemoryDir != nil {
 			s.MemoryDir = *l.MemoryDir
+		}
+		for _, v := range l.PassEnv {
+			if !slices.Contains(s.PassEnv, v) {
+				s.PassEnv = append(s.PassEnv, v)
+			}
 		}
 		for n, m := range l.MCPServers {
 			servers[n] = MCP{Name: n, Command: m.Command}

@@ -17,6 +17,7 @@ require (
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.14
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.14
 	github.com/anthropics/anthropic-sdk-go v1.74.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	google.golang.org/genai v1.71.0
 )
 
@@ -37,7 +38,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.8.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

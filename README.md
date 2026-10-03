@@ -89,6 +89,7 @@ names the file and the field.
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
+| `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `policy` | see below |
 
 A project's `.dex/config.json` comes from a repository, not from you, so
@@ -136,6 +137,17 @@ reach); the policy is what stands in front of it. `glob` and `grep` skip
 `.git`, `node_modules`, `vendor`, `.venv`, `__pycache__` and similar trees
 by name; there is no `.gitignore` support. Search a skipped directory by
 naming it as `path`.
+
+## Environment of commands and servers
+
+Commands the `bash` tool runs and the MCP servers dex starts do not get
+your credentials: every variable whose name ends in `_API_KEY`, `_TOKEN`,
+`_SECRET`, `_PASSWORD`, `_SECRET_ACCESS_KEY` or `_ACCESS_KEY_ID`, and the
+provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+`GOOGLE_API_KEY`, `GITHUB_TOKEN`, ...), is removed from their environment,
+so a test, a build script or a server cannot read them. A command that
+needs one (`gh`, a private module proxy) gets it by name from your config:
+`"pass_env": ["GITHUB_TOKEN"]`. Only your own config can say that.
 
 ## Policy
 
