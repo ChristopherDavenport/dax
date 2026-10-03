@@ -442,8 +442,85 @@ func globInside(pattern, cwd, root string) (bool, string) {
 	return true, ""
 }
 
+// globFS expands pattern in fsys both ways bash might: by character,
+// as in a UTF-8 locale, and by byte, as in the C locale, where ? is
+// one byte of a multibyte name. The result is the union, so every
+// file bash could match is one that gets checked.
 func globFS(fsys fs.FS, pattern string) ([]string, error) {
-	return fs.Glob(fsys, path.Clean(pattern))
+	pattern = path.Clean(pattern)
+	byRune, err := fs.Glob(fsys, pattern)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, m := range byRune {
+		seen[m] = true
+	}
+	out := byRune
+	for _, m := range globBytes(fsys, strings.Split(pattern, "/"), ".") {
+		if !seen[m] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// globBytes matches path components against a pattern in which * is
+// any run of bytes and ? is one byte.
+func globBytes(fsys fs.FS, comps []string, dir string) []string {
+	if len(comps) == 0 {
+		return nil
+	}
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if !byteMatch(comps[0], e.Name()) {
+			continue
+		}
+		p := e.Name()
+		if dir != "." {
+			p = dir + "/" + p
+		}
+		if len(comps) == 1 {
+			out = append(out, p)
+		} else if e.IsDir() {
+			out = append(out, globBytes(fsys, comps[1:], p)...)
+		}
+	}
+	return out
+}
+
+func byteMatch(pat, name string) bool {
+	for len(pat) > 0 {
+		switch pat[0] {
+		case '*':
+			for len(pat) > 0 && pat[0] == '*' {
+				pat = pat[1:]
+			}
+			if pat == "" {
+				return true
+			}
+			for i := 0; i <= len(name); i++ {
+				if byteMatch(pat, name[i:]) {
+					return true
+				}
+			}
+			return false
+		case '?':
+			if name == "" {
+				return false
+			}
+		default:
+			if name == "" || name[0] != pat[0] {
+				return false
+			}
+		}
+		pat, name = pat[1:], name[1:]
+	}
+	return name == ""
 }
 
 // fileCmd describes cat, head, tail, wc and grep run on files.

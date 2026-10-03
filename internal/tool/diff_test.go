@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"io/fs"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -160,7 +159,7 @@ func (e *diffEnv) compare(em []word, cwd string, words, got []string) string {
 		}
 		pat := strings.TrimSuffix(w, "/")
 		dirOnly := pat != w
-		matches, _ := fs.Glob(os.DirFS(cwd), pat)
+		matches, _ := globFS(os.DirFS(cwd), pat)
 		allowed := map[string]bool{}
 		for _, m := range matches {
 			fi, err := os.Stat(filepath.Join(cwd, m))
