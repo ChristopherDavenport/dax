@@ -107,11 +107,16 @@ func jsonString(s string) string {
 func TestRenderQuotesEveryWordButGlobs(t *testing.T) {
 	an := &Analyzer{Dir: t.TempDir()}
 	for cmd, want := range map[string]string{
-		"git log --format='%h %s' -n 1":     "'git' 'log' --no-ext-diff --no-textconv '--format=%h %s' '-n' '1'",
-		`git log --grep="it's" -n 1`:        `'git' 'log' --no-ext-diff --no-textconv '--grep=it'\''s' '-n' '1'`,
+		"ls -la *.go sub":                   "'ls' '-la' 'sub' '--' *.go",
+		"ls -d */ x? -l":                    "'ls' '-d' '-l' '--' */ x?",
+		"ls -- *.go":                        "'ls' '--' *.go",
+		"ls -l -- -n *.go":                  "'ls' '-l' '--' '-n' *.go",
+		"ls -la sub":                        "'ls' '-la' 'sub'",
+		"git log --format='%h %s' -n 1":     "'git' 'log' '--no-ext-diff' '--no-textconv' '--format=%h %s' '-n' '1'",
+		`git log --grep="it's" -n 1`:        `'git' 'log' '--no-ext-diff' '--no-textconv' '--grep=it'\''s' '-n' '1'`,
 		"git status 2>&1 | head -n 3":       "'git' 'status' 2>&1 | 'head' '-n' '3'",
-		"cd . && ls *.go":                   "'cd' '.' && 'ls' *.go",
-		"git status && git diff >/dev/null": "'git' 'status' && 'git' 'diff' --no-ext-diff --no-textconv >/dev/null",
+		"cd . && ls *.go":                   "'cd' '.' && 'ls' '--' *.go",
+		"git status && git diff >/dev/null": "'git' 'status' && 'git' 'diff' '--no-ext-diff' '--no-textconv' >/dev/null",
 	} {
 		c := an.Check(context.Background(), cmd)
 		if !c.Parsed {
@@ -151,5 +156,33 @@ func TestParsePlanShapes(t *testing.T) {
 		if _, ok := parsePlan(cmd); ok {
 			t.Errorf("%q should not parse", cmd)
 		}
+	}
+}
+
+// R3-6 of the third review: an ls glob that expanded to -n or
+// --output=x passed it to ls as an option.
+func TestAnLsGlobExpandsAfterDoubleDash(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"-n", "--output=x", "-la", "a.go", "b.go"} {
+		os.WriteFile(filepath.Join(dir, n), []byte("x\n"), 0o644)
+	}
+	b := Bash(dir)
+	for _, cmd := range []string{"ls *", "ls -1 *", "ls -d *", "ls -l -- *", "ls *.go -l", "ls -- *"} {
+		c := (&Analyzer{Dir: dir}).Check(context.Background(), cmd)
+		if !c.Auto {
+			t.Errorf("%q is not auto-allowed: %+v", cmd, c.Stages)
+			continue
+		}
+		out, err := call(context.Background(), b, stamped(t, dir, cmd))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "unrecognized") || strings.Contains(out, "invalid option") || !strings.Contains(out, "[exit 0]") {
+			t.Errorf("%q: %q", cmd, out)
+		}
+	}
+	out, _ := call(context.Background(), b, stamped(t, dir, "ls -1 *"))
+	if !strings.Contains(out, "--output=x\n") || !strings.Contains(out, "-n\n") || !strings.Contains(out, "-la\n") {
+		t.Errorf("the odd names are not listed as names: %q", out)
 	}
 }

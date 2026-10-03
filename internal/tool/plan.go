@@ -174,28 +174,72 @@ func (s stage) texts() []string {
 // shellQuote quotes a word so bash reads it back as the same text.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// emitted is the words a stage is run with: its own, with the flags
+// that switch off a repository's programs added to git diff, log and
+// show (--no-ext-diff --no-textconv), and, for ls, the words that
+// expand moved after a -- so that a file the expansion finds called -n
+// or --output=x is a name and not an option.
+func (st stage) emitted() []word {
+	out := make([]word, 0, len(st.words)+3)
+	switch st.words[0].text {
+	case "git":
+		for i, w := range st.words {
+			out = append(out, w)
+			if i == 1 {
+				switch w.text {
+				case "diff", "log", "show":
+					out = append(out, word{text: "--no-ext-diff"}, word{text: "--no-textconv"})
+				}
+			}
+		}
+	case "ls":
+		hasGlob := false
+		for _, w := range st.words {
+			hasGlob = hasGlob || w.glob
+		}
+		if !hasGlob {
+			return st.words
+		}
+		// Flags and plain names first, then --, then what came after the
+		// user's own --, then the words that expand.
+		var head, after, globs []word
+		dd := false
+		for _, w := range st.words {
+			switch {
+			case !dd && !w.glob && w.text == "--":
+				dd = true
+			case dd:
+				after = append(after, w)
+			case w.glob:
+				globs = append(globs, w)
+			default:
+				head = append(head, w)
+			}
+		}
+		out = append(out, head...)
+		out = append(out, word{text: "--"})
+		out = append(out, after...)
+		out = append(out, globs...)
+	default:
+		return st.words
+	}
+	return out
+}
+
 // render writes the plan as the command bash is given. Every word is
-// quoted but the ones that are globs, and the commands that take a
-// flag to switch off a program the repository's configuration names
-// get it: git diff, log and show with --no-ext-diff --no-textconv.
+// quoted but the ones that are globs, which hold nothing but name
+// characters and the * and ? that expand.
 func (p *plan) render() string {
 	var pipes []string
 	for _, pl := range p.pipelines {
 		var stages []string
 		for _, st := range pl {
 			var parts []string
-			for i, w := range st.words {
-				switch {
-				case w.glob:
+			for _, w := range st.emitted() {
+				if w.glob {
 					parts = append(parts, w.text)
-				default:
+				} else {
 					parts = append(parts, shellQuote(w.text))
-				}
-				if i == 1 && st.words[0].text == "git" {
-					switch w.text {
-					case "diff", "log", "show":
-						parts = append(parts, "--no-ext-diff", "--no-textconv")
-					}
 				}
 			}
 			parts = append(parts, st.redirects...)
