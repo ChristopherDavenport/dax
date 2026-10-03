@@ -58,9 +58,8 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			cmd := command(ctx, dir, in.Command)
+			cmd := command(ctx, dir, in.Command, base)
 			cmd.Dir = dir
-			cmd.Env = append(append([]string(nil), base...), GitEnv()...)
 			// Run in its own process group so cancellation reaches children too.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
@@ -95,15 +94,41 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 		}, agenttool.WithSequential())
 }
 
-// command is what runs a bash call. A read-only git diff, log or show
-// of the safe subset runs git directly, with --no-ext-diff and
-// --no-textconv after the subcommand, since the repository's own
-// diff.external and textconv drivers are programs and no configuration
-// switches them off. Everything else is bash -c.
-func command(ctx context.Context, dir, command string) *exec.Cmd {
-	if words, ok := SafeWords(strings.TrimSpace(command)); ok && ReadOnlyGit(words, dir) {
-		args := append([]string{words[1], "--no-ext-diff", "--no-textconv"}, words[2:]...)
-		return exec.CommandContext(ctx, "git", args...)
+// command is what runs a bash call, and in which environment.
+//
+// A command the policy would auto-allow (one simple read-only command
+// of the safe subset, whose git configuration names no program) runs
+// with GitEnv added, and a git diff, log or show of it runs git
+// directly with --no-ext-diff and --no-textconv after the subcommand,
+// since the repository's own diff.external and textconv drivers are
+// programs and no configuration switches them off. Everything else,
+// every command a person approved, is bash -c in the environment the
+// user has, minus credentials: their hooks, their sshCommand and their
+// GIT_CONFIG_* are theirs.
+func command(ctx context.Context, dir, command string, base []string) *exec.Cmd {
+	if words, ok := SafeWords(strings.TrimSpace(command)); ok && Allowlisted(words) && ReadOnlyArgs(words, dir) && gitConfigClean(ctx, words, dir) {
+		env := append(append([]string(nil), base...), GitEnv()...)
+		var cmd *exec.Cmd
+		if ReadOnlyGit(words, dir) {
+			args := append([]string{words[1], "--no-ext-diff", "--no-textconv"}, words[2:]...)
+			cmd = exec.CommandContext(ctx, "git", args...)
+		} else {
+			cmd = exec.CommandContext(ctx, "bash", "-c", command)
+		}
+		cmd.Env = env
+		return cmd
 	}
-	return exec.CommandContext(ctx, "bash", "-c", command)
+	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd.Env = append([]string(nil), base...)
+	return cmd
+}
+
+// gitConfigClean is true for a command that is not git, or whose
+// configuration names no program.
+func gitConfigClean(ctx context.Context, words []string, dir string) bool {
+	if words[0] != "git" {
+		return true
+	}
+	key, err := ExecConfigKey(ctx, dir)
+	return err == nil && key == ""
 }
