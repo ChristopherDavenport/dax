@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -25,10 +24,28 @@ type BashArgs struct {
 	Timeout int    `json:"timeout_seconds,omitempty" desc:"Kill the command after this many seconds (default 120)"`
 }
 
+// BashOption configures the bash tool.
+type BashOption func(*bashConfig)
+
+type bashConfig struct{ env []string }
+
+// WithEnv sets the environment commands start with, before GitEnv is
+// added. The default is the current one without its credentials; see
+// ChildEnv.
+func WithEnv(env []string) BashOption { return func(c *bashConfig) { c.env = env } }
+
 // Bash returns a tool that runs a shell command in dir. It is
 // sequential: a batch that contains a shell command runs one call at a
 // time, so a command never races a concurrent edit of the same file.
-func Bash(dir string) agenttool.Tool {
+func Bash(dir string, opts ...BashOption) agenttool.Tool {
+	var cfg bashConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	base := cfg.env
+	if base == nil {
+		base = DefaultEnv(nil)
+	}
 	return agenttool.New("bash", "Run a bash command in the working directory and return its combined output and exit code.",
 		func(ctx context.Context, in BashArgs) (string, error) {
 			if strings.TrimSpace(in.Command) == "" {
@@ -43,7 +60,7 @@ func Bash(dir string) agenttool.Tool {
 
 			cmd := command(ctx, dir, in.Command)
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), GitEnv()...)
+			cmd.Env = append(append([]string(nil), base...), GitEnv()...)
 			// Run in its own process group so cancellation reaches children too.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

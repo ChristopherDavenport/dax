@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/prompt"
@@ -115,6 +117,10 @@ type Options struct {
 	// MCP are stdio MCP servers started with the session, each offering
 	// its tools as mcp__<Name>__<tool>. Their stderr is dex's.
 	MCP []MCPServer
+	// PassEnv names credential-looking variables bash commands and MCP
+	// servers may still inherit; every other credential is removed from
+	// their environment.
+	PassEnv []string
 	// Agents adds the explore child agent as a tool.
 	Agents bool
 	// Log receives dex's own notes: compactions, denials, skill grants.
@@ -149,6 +155,7 @@ type Session struct {
 	Kit   *agentkit.Kit
 
 	opts    Options
+	env     []string            // what bash and MCP servers start with
 	refused []agentkit.Omission // repository files screened out before the kit
 	ws      *tool.Workspace
 	store   *cas.Store
@@ -230,7 +237,7 @@ func ProjectScope(dir string) agentmemory.Scope {
 // explore is the child agent: a read-only investigator on a fresh
 // transcript whose final answer comes back to the parent as the tool
 // output.
-func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace) agentturn.Config {
+func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env []string) agentturn.Config {
 	cfg := agentturn.Config{
 		Name: "explore",
 		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
@@ -240,7 +247,7 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace) agent
 		ModelName: o.Model,
 		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read, glob, grep, ls and bash tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
-		Tools:     append(tool.ReadOnly(ws), tool.Bash(ws.Dir())),
+		Tools:     append(tool.ReadOnly(ws), tool.Bash(ws.Dir(), tool.WithEnv(env))),
 		Reasoning: o.reasoning(),
 		MaxTurns:  10,
 		Retry:     agentturn.Retry{MaxAttempts: 3},
@@ -278,13 +285,15 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		}
 	}()
 	model := o.Streamer
+	env := tool.DefaultEnv(o.PassEnv)
+	s.env = env
 	kopts := []agentkit.Option{
 		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
 		agentkit.WithModel(model, o.Model),
 		agentkit.WithReasoning(o.reasoning()),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions)),
-		agentkit.WithTools(tool.Builtins(ws)...),
+		agentkit.WithTools(tool.Builtins(ws, tool.WithEnv(env))...),
 	}
 	if o.AgentsMD {
 		// The walk is done here, so that a file that is a link out of
@@ -333,7 +342,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(o.Dir), policy.Options()...))
 	}
 	if o.Agents {
-		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws)))
+		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
@@ -341,7 +350,11 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
 	for _, m := range o.MCP {
-		kopts = append(kopts, agentkit.WithMCP(m.Command, mcpclient.WithPrefix("mcp__"+m.Name)))
+		t, err := mcpTransport(m.Command, env)
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
+		}
+		kopts = append(kopts, agentkit.WithMCPTransport(t, mcpclient.WithPrefix("mcp__"+m.Name)))
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
@@ -594,7 +607,11 @@ func (s *Session) SetModel(name string) error {
 // AddMCP starts a stdio MCP server mid-session and offers its tools
 // from the next run under prefix. It returns the label RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, prefix, command string) (string, error) {
-	return s.Kit.AddMCP(ctx, command, mcpclient.WithPrefix(prefix))
+	t, err := mcpTransport(command, s.env)
+	if err != nil {
+		return "", err
+	}
+	return s.Kit.AddMCPTransport(ctx, t, mcpclient.WithPrefix(prefix))
 }
 
 // RemoveMCP closes a server AddMCP started; its tools are not offered
@@ -784,4 +801,19 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 	}
 	defer store.Close()
 	return store.Repair(ctx, id, cas.RepairOptions{})
+}
+
+// mcpTransport starts an MCP server from a command line, split on
+// spaces, with env as its whole environment and its diagnostics on
+// dex's stderr. The kit's own command transport would hand the server
+// dex's environment, keys included.
+func mcpTransport(command string, env []string) (mcp.Transport, error) {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return nil, errors.New("empty command")
+	}
+	cmd := exec.Command(fields[0], fields[1:]...)
+	cmd.Env = env
+	cmd.Stderr = os.Stderr
+	return &mcp.CommandTransport{Command: cmd}, nil
 }

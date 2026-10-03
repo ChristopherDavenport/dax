@@ -186,6 +186,7 @@ func run() error {
 		AgentsMD:      *agentsMD,
 		Skills:        *skills,
 		SkillsDirs:    settings.SkillsDirs,
+		PassEnv:       settings.PassEnv,
 		TrustSkills:   *trustSkills,
 		MemoryDir:     settings.MemoryDir,
 		Compact:       *compactAt,

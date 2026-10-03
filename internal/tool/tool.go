@@ -16,8 +16,8 @@ import (
 // Builtins returns read, write, edit, glob, grep, ls and bash, in the
 // order the system prompt lists them. The file tools are confined to
 // ws; bash runs in its directory but is not confined.
-func Builtins(ws *Workspace) []agenttool.Tool {
-	return []agenttool.Tool{Read(ws), Write(ws), Edit(ws), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir())}
+func Builtins(ws *Workspace, bash ...BashOption) []agenttool.Tool {
+	return []agenttool.Tool{Read(ws), Write(ws), Edit(ws), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir(), bash...)}
 }
 
 // ReadOnly returns the tools that only look: read, glob, grep and ls.

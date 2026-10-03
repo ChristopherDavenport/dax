@@ -245,3 +245,17 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("ProjectPath = %s", ProjectPath("/p"))
 	}
 }
+
+func TestPassEnv(t *testing.T) {
+	user := parse(t, `{"pass_env":["GITHUB_TOKEN","NPM_TOKEN"]}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	if err != nil || strings.Join(s.PassEnv, ",") != "GITHUB_TOKEN,NPM_TOKEN" {
+		t.Fatalf("%v %v", s.PassEnv, err)
+	}
+	if _, err := Parse([]byte(`{"pass_env":["A=B"]}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "not a variable name") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := Parse([]byte(`{"pass_env":["OPENAI_API_KEY"]}`), "/p/.dex/config.json", true); err == nil || !strings.Contains(err.Error(), "pass_env: a project file may only tighten") {
+		t.Errorf("a project may not pass credentials on: %v", err)
+	}
+}

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,5 +107,23 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMCPServersGetAScrubbedEnvironment(t *testing.T) {
+	env := tool.ChildEnv([]string{"PATH=/bin", "OPENAI_API_KEY=sk-1", "X_TOKEN=t"}, []string{"X_TOKEN"})
+	tr, err := mcpTransport("server --flag  arg", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := tr.(*mcp.CommandTransport)
+	if strings.Join(ct.Command.Args, "|") != "server|--flag|arg" {
+		t.Errorf("args: %v", ct.Command.Args)
+	}
+	if strings.Join(ct.Command.Env, " ") != "PATH=/bin X_TOKEN=t" {
+		t.Errorf("env: %v", ct.Command.Env)
+	}
+	if _, err := mcpTransport("  ", env); err == nil {
+		t.Error("an empty command should be an error")
 	}
 }
