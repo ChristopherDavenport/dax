@@ -109,15 +109,6 @@ func wrap(path string, err error) error {
 	return err
 }
 
-func (w *Workspace) readFile(path string) ([]byte, string, error) {
-	rel, err := w.Rel(path)
-	if err != nil {
-		return nil, "", err
-	}
-	data, err := w.root.ReadFile(rel)
-	return data, rel, wrap(path, err)
-}
-
 // openRegular opens a file for reading and says how big it is. A
 // directory, a FIFO or a device is an error: opening a FIFO blocks, and
 // nothing a file tool does with one is useful.
