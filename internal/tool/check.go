@@ -729,6 +729,10 @@ func (a *Analyzer) rels(cwd string, paths []string) []string {
 		}
 		if rel, ok := NormalizePath(a.Dir, real, p); ok {
 			out = append(out, rel)
+			// And what a link on the way leads to.
+			if target := resolvedRel(a.Dir, real, rel); target != "" && target != rel {
+				out = append(out, target)
+			}
 		}
 	}
 	return out

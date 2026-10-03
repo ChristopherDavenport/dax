@@ -315,6 +315,27 @@ func PathSubjects(dir, field, def string) agentpolicy.Subjects {
 			rel = sentinel + raw
 		}
 		a, _ := json.Marshal(map[string]string{"path": rel})
-		return []agentpolicy.Subject{{Args: a, Text: raw}}, nil
+		subjects := []agentpolicy.Subject{{Args: a, Text: raw}}
+		// What a link leads to is decided as well: a file called notes.txt
+		// that is a link to .env is .env to the rules.
+		if ok {
+			if target := resolvedRel(dir, real, rel); target != "" && target != rel {
+				ta, _ := json.Marshal(map[string]string{"path": target})
+				subjects = append(subjects, agentpolicy.Subject{Args: ta, Text: raw + " -> " + target})
+			}
+		}
+		return subjects, nil
 	}
+}
+
+// resolvedRel is the workspace-relative name of what rel is once the
+// links on its way are followed, as far as it exists; "" when that is
+// outside the workspace or cannot be told (the tool's own confinement
+// refuses what leaves).
+func resolvedRel(dir, real, rel string) string {
+	p := resolveExisting(filepath.Join(dir, rel))
+	if r, ok := NormalizePath(dir, real, p); ok {
+		return r
+	}
+	return ""
 }
