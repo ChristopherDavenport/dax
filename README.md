@@ -142,13 +142,25 @@ naming it as `path`.
 ## Environment of commands and servers
 
 Commands the `bash` tool runs and the MCP servers dex starts do not get
-your credentials: every variable whose name ends in `_API_KEY`, `_TOKEN`,
-`_SECRET`, `_PASSWORD`, `_SECRET_ACCESS_KEY` or `_ACCESS_KEY_ID`, and the
-provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
-`GOOGLE_API_KEY`, `GITHUB_TOKEN`, ...), is removed from their environment,
-so a test, a build script or a server cannot read them. A command that
-needs one (`gh`, a private module proxy) gets it by name from your config:
-`"pass_env": ["GITHUB_TOKEN"]`. Only your own config can say that.
+your credentials. A variable is removed from their environment if its
+name ends in `_KEY`, `_KEY_ID`, `_PAT`, `_PWD`, `_JWT`, `_CREDENTIALS`,
+`_AUTH`, `_TOKEN`, `_SECRET`, `_PASSWORD` or `_API_KEY`, contains
+`PASSWORD` or `SECRET`, is one of `PASSWORD`, `TOKEN`, `API_KEY`,
+`SECRET_KEY`, `DATABASE_URL`, `SSH_AUTH_SOCK`, `PGPASSWORD`, `MYSQL_PWD` or
+a provider or CI token by name (`OPENAI_API_KEY`, `GITHUB_TOKEN`, ...), or
+holds a URL with `user:password@` in it. So a test, a build script or a
+server cannot read them, and cannot use your ssh agent.
+
+Variables that hold the **path of a credential file** pass through, since
+a program that needs its file needs them: `GOOGLE_APPLICATION_CREDENTIALS`,
+`KUBECONFIG`, `DOCKER_CONFIG`, `NETRC`, `AWS_SHARED_CREDENTIALS_FILE`,
+`AWS_CONFIG_FILE`, `CLOUDSDK_CONFIG`, `PGPASSFILE`. The files are as
+readable to a command as they are to you. dex has no setting to withhold
+them; unset one before starting dex to keep it from commands.
+
+A command that needs a scrubbed variable (`gh`, a private module proxy)
+gets it by name from your config: `"pass_env": ["GITHUB_TOKEN"]`. Only
+your own config can say that.
 
 ## Policy
 

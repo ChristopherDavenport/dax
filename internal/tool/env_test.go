@@ -12,14 +12,25 @@ func TestChildEnvRemovesCredentials(t *testing.T) {
 		"OPENAI_API_KEY=sk-1", "ANTHROPIC_API_KEY=sk-2", "GEMINI_API_KEY=g", "GOOGLE_API_KEY=g2",
 		"GITHUB_TOKEN=t", "FOO_TOKEN=t", "MY_SECRET=s", "DB_PASSWORD=p", "AWS_SECRET_ACCESS_KEY=a", "AWS_ACCESS_KEY_ID=a",
 		"lower_api_key=x", "KEYBOARD=us", "TOKENIZERS_PARALLELISM=false", "PATH_TOKEN_FILE=/x",
+		// The second review's list.
+		"GITHUB_PAT=pat1", "SSH_AUTH_SOCK=/tmp/agent.1", "PGPASSWORD=pg1", "MYSQL_PWD=my1", "DATABASE_URL=postgres://db1",
+		"STRIPE_KEY=sk_live_1", "SECRET_KEY=sec1", "CI_JOB_JWT=jwt1", "PASSWORD=pw1", "TOKEN=tk1", "API_KEY=ak1",
+		"MY_CREDENTIALS=cr1", "SERVICE_AUTH=au1", "DB_PASSWORD_PROD=p2", "APP_SECRET_KEY_BASE=s2",
+		"CACHE_URL=redis://user:hunter2@host:6379/0", "PLAIN_URL=https://example.com/x", "REGISTRY=https://user@host/x",
+		// Paths to credential files pass through.
+		"GOOGLE_APPLICATION_CREDENTIALS=/home/u/gcp.json", "KUBECONFIG=/home/u/.kube/config", "DOCKER_CONFIG=/home/u/.docker",
+		"NETRC=/home/u/.netrc", "AWS_SHARED_CREDENTIALS_FILE=/home/u/.aws/credentials",
 	}
 	got := strings.Join(ChildEnv(base, nil), " ")
-	for _, want := range []string{"PATH=/bin", "HOME=/h", "LANG=C", "KEYBOARD=us", "TOKENIZERS_PARALLELISM=false", "PATH_TOKEN_FILE=/x"} {
+	for _, want := range []string{"PATH=/bin", "HOME=/h", "LANG=C", "KEYBOARD=us", "TOKENIZERS_PARALLELISM=false", "PATH_TOKEN_FILE=/x",
+		"PLAIN_URL=https://example.com/x", "REGISTRY=https://user@host/x",
+		"GOOGLE_APPLICATION_CREDENTIALS=", "KUBECONFIG=", "DOCKER_CONFIG=", "NETRC=", "AWS_SHARED_CREDENTIALS_FILE="} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lost %s: %s", want, got)
 		}
 	}
-	for _, bad := range []string{"sk-1", "sk-2", "GEMINI", "GOOGLE_API", "GITHUB_TOKEN", "FOO_TOKEN", "MY_SECRET", "DB_PASSWORD", "AWS_", "lower_api_key"} {
+	for _, bad := range []string{"sk-1", "sk-2", "GEMINI", "GOOGLE_API", "GITHUB_TOKEN", "FOO_TOKEN", "MY_SECRET", "DB_PASSWORD", "AWS_ACCESS", "AWS_SECRET", "lower_api_key",
+		"pat1", "agent.1", "pg1", "my1", "db1", "sk_live_1", "sec1", "jwt1", "pw1", "tk1", "ak1", "cr1", "au1", "p2", "s2", "hunter2"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("kept %s: %s", bad, got)
 		}
