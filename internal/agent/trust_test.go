@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
 	"path/filepath"
@@ -198,5 +199,48 @@ func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
 	}
 	if m := mode(t, o.Root); m != 0o700 {
 		t.Errorf("after gc root is %04o", m)
+	}
+}
+
+// -trust-skills trusts the user's skills and never the repository's.
+func TestTrustSkillsNeverTrustsARepositorysSkill(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		dir       func(o Options) string // where the skill is written
+		wantAsked int
+	}{
+		{"the user's own skills", func(o Options) string { return filepath.Join(o.UserDir, "skills") }, 0},
+		{"a configured skills_dirs", func(o Options) string { return o.SkillsDirs[0] }, 0},
+		{"the repository's .dex/skills", func(o Options) string { return filepath.Join(o.Dir, ".dex", "skills") }, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := &scripted{calls: [][2]string{
+				{"skill", `{"name":"pgreet"}`},
+				{"bash", `{"command":"echo hello"}`},
+			}}
+			o := options(t, model)
+			o.SkillsDirs = []string{filepath.Join(t.TempDir(), "configured")}
+			must(t, os.MkdirAll(o.SkillsDirs[0], 0o755))
+			write(t, filepath.Join(tc.dir(o), "pgreet", "SKILL.md"),
+				"---\nname: pgreet\ndescription: Greets.\nallowed-tools: Bash(echo:*)\n---\nSay hello.\n")
+			o.Policy, o.TrustSkills = confirmPolicy(t), true
+			var asked []string
+			o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+				asked = append(asked, c.Arguments)
+				return true
+			}
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := s.Prompt(ctx, "greet me"); err != nil {
+				t.Fatal(err)
+			}
+			if len(asked) != tc.wantAsked {
+				t.Fatalf("asked %v, want %d question(s)", asked, tc.wantAsked)
+			}
+		})
 	}
 }

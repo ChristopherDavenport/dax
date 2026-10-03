@@ -328,7 +328,11 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		if o.TrustSkills {
 			kopts = append(kopts,
 				agentkit.WithSkillGrants(func(sk *agentskill.Skill) agentpolicy.Source {
-					return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: true}
+					// Only a skill from a directory the user named is
+					// trusted: ~/.dex/skills and the config's skills_dirs.
+					// A repository's skill is text from the repository; its
+					// allowed-tools are withheld like any untrusted rule.
+					return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: userSkill(o, sk.Location)}
 				}),
 				agentkit.WithSkillGrantScope(),
 				agentkit.WithSkillGrantReport(func(g agentkit.SkillGrant) {
@@ -851,4 +855,24 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 	// chosen; they get the same cleaning as its output.
 	cmd.Stderr = render.CleanWriter(stderr)
 	return &mcp.CommandTransport{Command: cmd}, nil
+}
+
+// userSkill reports whether a skill's location is under a directory
+// the user chose: UserDir/skills or one of Options.SkillsDirs. The
+// project's .dex/skills is not, nor is anything else.
+func userSkill(o Options, location string) bool {
+	roots := append([]string{filepath.Join(o.UserDir, "skills")}, o.SkillsDirs...)
+	loc := filepath.Clean(location)
+	if real, err := filepath.EvalSymlinks(loc); err == nil {
+		loc = real
+	}
+	for _, r := range roots {
+		if real, err := filepath.EvalSymlinks(r); err == nil {
+			r = real
+		}
+		if rel, err := filepath.Rel(r, loc); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return true
+		}
+	}
+	return false
 }
