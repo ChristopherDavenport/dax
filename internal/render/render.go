@@ -54,7 +54,7 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		if e.Turn > 1 {
 			for _, it := range e.Inputs {
 				if m, ok := it.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
-					fmt.Fprintf(p.W, "  ↳ picked up: %s\n", firstLine(m.Text()))
+					fmt.Fprintf(p.w(), "  ↳ picked up: %s\n", firstLine(m.Text()))
 				}
 			}
 		}
@@ -73,7 +73,7 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		}
 	case *agentturn.ModelRetry:
 		p.close()
-		fmt.Fprintf(p.W, "[model call failed (attempt %d): %v; retrying in %s]\n", e.Attempt, e.Err, e.Delay.Round(time.Millisecond))
+		fmt.Fprintf(p.w(), "[model call failed (attempt %d): %v; retrying in %s]\n", e.Attempt, e.Err, e.Delay.Round(time.Millisecond))
 	case *agentturn.ResponseEnd:
 		p.close()
 		p.turns++
@@ -86,15 +86,15 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		p.calls++
 		label := e.Name + " " + compactArgs(e.Args)
 		p.started[e.CallID] = label
-		fmt.Fprintf(p.W, "▶ %s\n", label)
+		fmt.Fprintf(p.w(), "▶ %s\n", label)
 	case *agentturn.ToolUpdate:
 		// A child agent reports each assistant message it produces.
 		if txt := tool.Text(e.Partial); txt != "" {
-			fmt.Fprintf(p.W, "  ↳ %s: %s\n", e.Name, firstLine(txt))
+			fmt.Fprintf(p.w(), "  ↳ %s: %s\n", e.Name, firstLine(txt))
 		}
 	case *agentturn.ToolEnd:
 		if e.Deferred {
-			fmt.Fprintf(p.W, "  ⏸ %s deferred\n", e.Name)
+			fmt.Fprintf(p.w(), "  ⏸ %s deferred\n", e.Name)
 			return nil
 		}
 		shown := tool.Text(e.Result)
@@ -106,10 +106,10 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 			mark = "✗"
 		}
 		if len(p.started) > 1 {
-			fmt.Fprintf(p.W, "  %s [%s]\n", mark, p.started[e.CallID])
+			fmt.Fprintf(p.w(), "  %s [%s]\n", mark, p.started[e.CallID])
 		}
 		for line := range strings.SplitSeq(strings.TrimRight(shown, "\n"), "\n") {
-			fmt.Fprintf(p.W, "  %s %s\n", mark, line)
+			fmt.Fprintf(p.w(), "  %s %s\n", mark, line)
 		}
 	case *agentturn.RunEnd:
 		p.close()
@@ -119,9 +119,9 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		if e.Cause != "" {
 			reason += ": " + string(e.Cause)
 		}
-		fmt.Fprintf(p.W, "[%s · %d model call(s) · %d tool call(s) · %d in / %d out tokens]\n", reason, p.turns, p.calls, p.in, p.out)
+		fmt.Fprintf(p.w(), "[%s · %d model call(s) · %d tool call(s) · %d in / %d out tokens]\n", reason, p.turns, p.calls, p.in, p.out)
 		if e.Err != nil && e.Reason != agentturn.ReasonAborted {
-			fmt.Fprintf(p.W, "[error: %v]\n", e.Err)
+			fmt.Fprintf(p.w(), "[error: %v]\n", e.Err)
 		}
 	}
 	return nil
@@ -162,19 +162,75 @@ func compactArgs(raw json.RawMessage) string {
 func (p *Printer) write(kind, delta string) {
 	if !p.open || p.kind != kind {
 		if p.open {
-			fmt.Fprintln(p.W)
+			fmt.Fprintln(p.w())
 		}
 		if kind != "" {
-			fmt.Fprintf(p.W, "[%s]\n", kind)
+			fmt.Fprintf(p.w(), "[%s]\n", kind)
 		}
 		p.kind, p.open = kind, true
 	}
-	io.WriteString(p.W, delta)
+	io.WriteString(p.w(), delta)
 }
 
 func (p *Printer) close() {
 	if p.open {
-		fmt.Fprintln(p.W)
+		fmt.Fprintln(p.w())
 		p.open = false
 	}
+}
+
+// w is the writer everything goes through: W, with control sequences
+// taken out. Tool output is a file's contents and a command's output,
+// and model text is whatever the model was shown; either can carry an
+// escape sequence that redraws what the user has already read, such
+// as the line that said what an approved call was.
+func (p *Printer) w() io.Writer { return cleanWriter{p.W} }
+
+type cleanWriter struct{ w io.Writer }
+
+func (c cleanWriter) Write(b []byte) (int, error) {
+	if _, err := io.WriteString(c.w, Clean(string(b))); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// Clean removes what would act on a terminal rather than show on it:
+// the C0 controls other than newline and tab (ESC, carriage return,
+// backspace, bell, ...), DEL, the C1 controls, and the bidirectional
+// overrides that make text read as something else. An escape sequence
+// loses its ESC and shows as the harmless text it would have been;
+// removing the one byte, rather than parsing the sequence, is what
+// keeps a sequence cut in two by streaming deltas from working.
+func Clean(s string) string {
+	clean := true
+	for _, r := range s {
+		if bad(r) {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if !bad(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func bad(r rune) bool {
+	switch {
+	case r == '\n' || r == '\t':
+		return false
+	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+		return true
+	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e, r == 0x200f, r == 0x061c:
+		return true
+	}
+	return false
 }

@@ -215,7 +215,7 @@ func question(c *openresponses.FunctionCall, reason string) string {
 	if reason != "" {
 		reason = " (" + reason + ")"
 	}
-	return fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason)
+	return render.Clean(fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason))
 }
 
 // elicitor puts a tool's mid-call question to the user as a yes or no.
@@ -228,14 +228,14 @@ func elicitor(confirm func(q string) bool) agenttool.Elicitor {
 		mu.Lock()
 		defer mu.Unlock()
 		if q.URL != "" {
-			fmt.Printf("[a tool asks you to visit %s: %s]\n", q.URL, q.Message)
+			fmt.Printf("[a tool asks you to visit %s: %s]\n", render.Clean(q.URL), render.Clean(q.Message))
 			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 		}
 		if hasFields(q.Schema) {
-			fmt.Printf("[a tool asks for a form dex cannot show: %s]\n", q.Message)
+			fmt.Printf("[a tool asks for a form dex cannot show: %s]\n", render.Clean(q.Message))
 			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 		}
-		if confirm("? " + q.Message + " [y/N] ") {
+		if confirm("? " + render.Clean(q.Message) + " [y/N] ") {
 			return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{}`)}, nil
 		}
 		return agenttool.Answer{Action: agenttool.ActionDecline}, nil
@@ -333,7 +333,7 @@ func turn(ctx context.Context, sess *agent.Session, text string) error {
 		showPending(sess, "aborted")
 	case agentturn.ReasonInputRequired:
 		for _, p := range end.Pending {
-			fmt.Printf("[input required: %s %s]\n", p.Call.Name, p.Call.Arguments)
+			fmt.Printf("[input required: %s %s]\n", render.Clean(p.Call.Name), render.Clean(p.Call.Arguments))
 		}
 	case agentturn.ReasonStopped:
 		fmt.Printf("[stopped: %s]\n", end.Cause)
@@ -371,6 +371,6 @@ func showPending(sess *agent.Session, why string) {
 	}
 	fmt.Printf("[%s; %d tool call(s) unanswered, answered on the next prompt]\n", why, len(pending))
 	for _, p := range pending {
-		fmt.Printf("  ⏸ %s\n", agent.Describe(p))
+		fmt.Printf("  ⏸ %s\n", render.Clean(agent.Describe(p)))
 	}
 }
