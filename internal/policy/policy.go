@@ -13,6 +13,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -63,11 +64,12 @@ var secretPaths = []string{
 func BuiltinAsk() string {
 	var b strings.Builder
 	for _, s := range secretPaths {
-		b.WriteString("Read(" + s + ") ")
-		if !strings.HasPrefix(s, "*") && !strings.Contains(s, "/") {
-			b.WriteString("Read(*/" + s + ") ")
-		} else if strings.Contains(s, "/") && !strings.HasPrefix(s, "*") {
-			b.WriteString("Read(*/" + s + ") ")
+		// ci: marks a pattern matched without regard to case: .ENV and
+		// ID_RSA are the same names on a case-folding file system and
+		// plausible ones on any other.
+		b.WriteString("Read(ci:" + s + ") ")
+		if !strings.HasPrefix(s, "*") {
+			b.WriteString("Read(ci:*/" + s + ") ")
 		}
 	}
 	return strings.TrimSpace(b.String())
@@ -81,7 +83,7 @@ var fileTools = map[string]bool{"read": true, "grep": true, "glob": true, "ls": 
 // relative to the workspace: write(docs/**), read(.env).
 func Matchers(dir string, maxFile int64) map[string]agentpolicy.ToolMatcher {
 	file := func(def string) agentpolicy.ToolMatcher {
-		return agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path"), Subjects: tool.PathSubjects(dir, "path", def)}
+		return agentpolicy.ToolMatcher{Match: pathMatcher, Subjects: tool.PathSubjects(dir, "path", def)}
 	}
 	return map[string]agentpolicy.ToolMatcher{
 		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir, maxFile)},
@@ -182,4 +184,27 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		p.Default = agentpolicy.Ask()
 	}
 	return p, nil
+}
+
+var pathGlob = agentpolicy.GlobMatcher("path")
+
+// pathMatcher is the glob matcher over a call's path, with one
+// addition: a specifier that starts with ci: is matched without regard
+// to case, the way the built-in secret-path asks are.
+func pathMatcher(spec string, args json.RawMessage) bool {
+	rest, ci := strings.CutPrefix(spec, "ci:")
+	if !ci {
+		return pathGlob(spec, args)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(args, &m); err != nil {
+		return false
+	}
+	var path string
+	if err := json.Unmarshal(m["path"], &path); err != nil {
+		return false
+	}
+	m["path"], _ = json.Marshal(strings.ToLower(path))
+	lower, _ := json.Marshal(m)
+	return pathGlob(strings.ToLower(rest), lower)
 }
