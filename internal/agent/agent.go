@@ -38,6 +38,7 @@ import (
 	"github.com/ChristopherDavenport/dex/internal/config"
 	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/prompt"
+	"github.com/ChristopherDavenport/dex/internal/render"
 	"github.com/ChristopherDavenport/dex/internal/tool"
 )
 
@@ -846,6 +847,8 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 	}
 	cmd := exec.Command(fields[0], fields[1:]...)
 	cmd.Env = env
-	cmd.Stderr = os.Stderr
+	// A server's diagnostics are text from a program the model may have
+	// chosen; they get the same cleaning as its output.
+	cmd.Stderr = render.CleanWriter(stderr)
 	return &mcp.CommandTransport{Command: cmd}, nil
 }

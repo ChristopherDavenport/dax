@@ -186,6 +186,9 @@ func (p *Printer) close() {
 // as the line that said what an approved call was.
 func (p *Printer) w() io.Writer { return cleanWriter{p.W} }
 
+// CleanWriter is w with Clean applied to everything written to it.
+func CleanWriter(w io.Writer) io.Writer { return cleanWriter{w} }
+
 type cleanWriter struct{ w io.Writer }
 
 func (c cleanWriter) Write(b []byte) (int, error) {
