@@ -82,6 +82,8 @@ func TestDefaultPolicy(t *testing.T) {
 		{"bash", bash("git log --oneline -5"), agentturn.Allow},
 		{"bash", bash("go version"), agentturn.Allow},
 		{"bash", bash("go env GOPATH"), agentturn.Allow},
+		{"bash", bash("go env"), agentturn.Defer},
+		{"bash", bash("go env -json"), agentturn.Defer},
 		// go test, build, vet and list run the repository's code.
 		{"bash", bash("go test ./..."), agentturn.Defer},
 		{"bash", bash("go build ./..."), agentturn.Defer},
