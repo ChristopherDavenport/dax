@@ -89,6 +89,7 @@ names the file and the field.
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
+| `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `policy` | see below |
 
