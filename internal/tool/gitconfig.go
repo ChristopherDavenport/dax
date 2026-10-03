@@ -48,9 +48,13 @@ var boolish = map[string]bool{"true": true, "false": true, "yes": true, "no": tr
 //     (core.worktree), makes it bare, sets any extension, or runs a
 //     submodule update command.
 //
+// strict adds the keys that the auto-allow environment switches off
+// (core.fsmonitor, hooksPath, sshCommand, pager and the gpg programs),
+// for a line that will not run with it.
+//
 // The user's own system and global configuration is trusted: it is
 // theirs, and a git-lfs filter there is no hostile repository's.
-func ExecConfigKey(ctx context.Context, dir string) (key string, err error) {
+func ExecConfigKey(ctx context.Context, dir string, strict bool) (key string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if why := gitDirRedirected(dir); why != "" {
@@ -80,7 +84,7 @@ func ExecConfigKey(ctx context.Context, dir string) (key string, err error) {
 			continue
 		}
 		k, v, _ := strings.Cut(kv, "\n")
-		if why := badKey(k, v); why != "" {
+		if why := badKey(k, v, strict); why != "" {
 			return fmt.Sprintf("%s (set in %s)", why, strings.TrimPrefix(origin, "file:")), nil
 		}
 	}
@@ -104,8 +108,11 @@ func ExecConfigKey(ctx context.Context, dir string) (key string, err error) {
 
 // badKey says why a repository-scope config entry stops an unasked git
 // command, or returns "".
-func badKey(k, v string) string {
+func badKey(k, v string, strict bool) string {
 	lk := strings.ToLower(k)
+	if strict && (strictKeys.MatchString(k) && !boolish[strings.ToLower(v)] || strings.HasPrefix(lk, "core.hookspath") || strings.HasPrefix(lk, "core.sshcommand") || strings.HasPrefix(lk, "core.pager")) {
+		return k
+	}
 	switch {
 	case execKeys.MatchString(k) && !(strings.HasPrefix(lk, "pager.") && boolish[strings.ToLower(v)]):
 		return k
@@ -122,6 +129,11 @@ func badKey(k, v string) string {
 	}
 	return ""
 }
+
+// strictKeys are the keys the auto-allow environment switches off, which
+// matter when a line runs without it: core.fsmonitor (unless it is only
+// on or off) and the gpg programs.
+var strictKeys = regexp.MustCompile(`(?i)^(core\.fsmonitor|gpg\.program|gpg\..+\.program)$`)
 
 var (
 	protocolAllow   = regexp.MustCompile(`(?i)^protocol\..*allow$`)
@@ -192,7 +204,7 @@ func submoduleConfigs(ctx context.Context, gitDir string, run func(...string) ([
 		}
 		for _, kv := range bytes.Split(out, []byte{0}) {
 			k, v, _ := strings.Cut(string(kv), "\n")
-			if why := badKey(k, v); why != "" && !strings.HasPrefix(strings.ToLower(k), "core.bare") && strings.ToLower(k) != "core.worktree" {
+			if why := badKey(k, v, true); why != "" && !strings.HasPrefix(strings.ToLower(k), "core.bare") && strings.ToLower(k) != "core.worktree" {
 				return fmt.Sprintf("%s (set in %s)", why, f)
 			}
 		}

@@ -169,3 +169,56 @@ func TestGitAsksWhenTheRepositoryIsSomewhereElse(t *testing.T) {
 		table(t, dir, agentturn.Allow, cmds...)
 	})
 }
+
+// R4-1 of the fourth review: a line with a git stage and a stage the
+// user's own rule allowed was not auto-allowed, so it ran as typed,
+// with the repository's fsmonitor.
+func TestAMixedLineAsksWhenTheRepositoryNamesAProgram(t *testing.T) {
+	probe := filepath.Join(t.TempDir(), "PROBE")
+	script := filepath.Join(t.TempDir(), "fsmon")
+	os.WriteFile(script, []byte("#!/bin/sh\ntouch "+probe+"\n"), 0o755)
+	user := defaults
+	user.User.Allow = []string{"bash(echo:*)", "bash(make:*)", "bash(git commit:*)"}
+	for name, cfg := range map[string]string{
+		"core.fsmonitor":  "[core]\n\tfsmonitor = " + script + "\n",
+		"core.hooksPath":  "[core]\n\thooksPath = /tmp/evil\n",
+		"core.sshCommand": "[core]\n\tsshCommand = evil\n",
+		"core.pager":      "[core]\n\tpager = evil\n",
+		"gpg.program":     "[gpg]\n\tprogram = evil\n",
+		"gpg.openpgp":     "[gpg \"openpgp\"]\n\tprogram = evil\n",
+		"gpg.ssh":         "[gpg \"ssh\"]\n\tprogram = evil\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := hostileRepo(t, cfg)
+			for _, cmd := range []string{
+				"git status && echo hi", "echo hi && git status -s", "git log -n 1 && make", "git diff | head && echo done", "echo a && git show HEAD && echo b",
+				"git commit -m x", "git commit --allow-empty -m x && echo done",
+			} {
+				got, reason := decideIn(t, dir, user, "bash", bash(cmd))
+				if got != agentturn.Defer {
+					t.Errorf("%q = %v (%s), want Defer", cmd, got, reason)
+				}
+				if !strings.Contains(strings.ToLower(reason), strings.ToLower(strings.SplitN(name, ".", 2)[0])) {
+					t.Errorf("%q: the question does not name %s: %s", cmd, name, reason)
+				}
+			}
+			// git alone is auto-allowed and run neutralised, so it does not ask.
+			if got, reason := decideIn(t, dir, user, "bash", bash("git status")); got != agentturn.Allow {
+				t.Errorf("git status alone = %v (%s), want Allow", got, reason)
+			}
+			if _, err := os.Stat(probe); err == nil {
+				t.Fatal("the fsmonitor script ran")
+			}
+		})
+	}
+	// With a clean repository the user's rules decide, as they should.
+	dir := hostileRepo(t, "[core]\n\tfsmonitor = true\n")
+	table2 := func(want agentturn.ToolAction, cmds ...string) {
+		for _, cmd := range cmds {
+			if got, reason := decideIn(t, dir, user, "bash", bash(cmd)); got != want {
+				t.Errorf("%q = %v (%s), want %v", cmd, got, reason, want)
+			}
+		}
+	}
+	table2(agentturn.Allow, "git status && echo hi", "echo hi && git status -s", "git commit -m x", "git log -n 1 && make")
+}
