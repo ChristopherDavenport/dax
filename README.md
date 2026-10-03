@@ -107,7 +107,7 @@ policy are ignored: it can make dex ask or refuse more, never less.
 | `-front repl` | the front end (only `repl`) |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
-| `-mcp "cmd"` | one more stdio MCP server, as `mcp__mcp__<tool>` |
+| `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
 | `-agents` | offer the read-only `explore` sub-agent |
 | `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
 

@@ -79,7 +79,7 @@ func run() error {
 	gc := fs.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; 0 disables")
-	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__mcp__<tool>")
+	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
 	agents := fs.Bool("agents", false, "offer the explore sub-agent as a tool")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
 	agentsMD := fs.Bool("agents-md", true, "put ~/.dex/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
@@ -204,7 +204,7 @@ func run() error {
 		opts.MCP = append(opts.MCP, agent.MCPServer{Name: s.Name, Command: s.Command})
 	}
 	if *mcp != "" {
-		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "mcp", Command: *mcp})
+		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "cli", Command: *mcp})
 	}
 	if !settings.Policy.Off {
 		p, err := policy.Build(settings.Policy)
