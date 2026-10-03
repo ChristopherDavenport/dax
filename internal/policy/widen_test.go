@@ -52,7 +52,7 @@ func TestTheUsualReadOnlyCommandsRunWithoutAsking(t *testing.T) {
 		"git rev-parse --show-toplevel", "git ls-files", "git ls-files -m", "git ls-files -o --exclude-standard", "git ls-files sub", "git remote", "git remote -v",
 		"git blame main.go", "git blame -L 1,5 main.go", "git blame -w -M main.go", "git stash list", "git stash list --oneline", "git tag", "git tag -l", "git tag --list 'v1*'",
 		"git tag --sort=-creatordate", "git tag --contains HEAD", "git describe", "git describe --tags --always", "git shortlog -sn", "git shortlog -sn HEAD",
-		"git config --get user.name", "git config --get-all remote.origin.fetch", "git config --list", "git config --local --get core.bare", "git config -l --show-origin",
+		"git config --get user.name", "git config --get-all remote.origin.fetch", "git config --local --get core.bare", "git config --get remote.origin.url", "git config --get branch.main.remote", "git config --show-origin --get user.email",
 		// (e) reading files
 		"cat main.go", "cat -n main.go util.go", "head main.go", "head -n 5 main.go", "head -5 main.go", "head -c 100 main.go", "tail -n 3 README.md", "wc -l main.go util.go",
 		"wc main.go", "grep package main.go", "grep -n package main.go util.go", "grep -i hello README.md", "grep -c package sub/a.go", "grep -e package main.go",
