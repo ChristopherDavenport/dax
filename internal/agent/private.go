@@ -11,6 +11,16 @@ import (
 // stderr is where dex warns; a variable so tests can read it.
 var stderr io.Writer = os.Stderr
 
+// CaptureWarnings sends the warnings dex writes while it opens a store
+// and a session to w instead of standard error, and returns what
+// undoes it. A front that is about to take the screen (the terminal
+// client) collects them to show before it does.
+func CaptureWarnings(w io.Writer) (restore func()) {
+	old := stderr
+	stderr = w
+	return func() { stderr = old }
+}
+
 // secureDir makes sure path exists and only its owner can enter it.
 // What dex keeps there is transcripts, with the contents of every file
 // the model read and every command's output, and memory. A missing

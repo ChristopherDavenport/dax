@@ -21,8 +21,11 @@ sibling libraries; the design and who owns what is in
 
 - `cmd/dex/main.go`: flags, the admin modes (`-list`, `-verify`, `-project`,
   `-import`, `-gc`, `-repair`), settings, then one front.
-  `cmd/dex/front.go`: the `front` interface, `selectFront` (the seam
-  where a terminal UI plugs in), the REPL and print fronts.
+  `cmd/dex/front.go`: the `front` interface, `selectFront`, the REPL and
+  print fronts. `cmd/dex/tui.go`: the terminal client, `console.Run` over a
+  `kitbackend` on the session's kit; the default front on a terminal. The
+  session for it is built with `Options.NoAgent` (the client builds its
+  own agent over the kit).
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/provider`: provider setting to `openresponses.Streamer`.
 - `internal/policy`: the default rules, matchers, merge of the user's and
@@ -44,10 +47,18 @@ an `Unreleased` changelog line:
   the tool contract.
 - `../agentpolicy`, `../agentsession`, `../agentskill`, `../agentsmd`,
   `../agentmemory`.
-- `../agentconsole`: the terminal UI client, to become a front here.
+- `../agentconsole`: the terminal client, a dependency (private module).
 
 ## Conventions
 
+- CI is manual (`workflow_dispatch` only) until the repository has a
+  `DEX_DEPS_TOKEN` secret: agentconsole is private, and a runner needs a
+  fine-grained personal access token with read access to it to fetch it
+  (the workflow sets `GOPRIVATE` and rewrites github.com URLs with the
+  token, and fails with a clear message when the secret is empty). Do not
+  create the secret without the owner; `GOFLAGS=-mod=readonly make check`
+  locally is the gate. release.yml only publishes a GitHub release from a
+  tag and fetches no module, so it needs no token.
 - `make check` (fmt, tidy-check, vet, staticcheck, govulncheck, race
   tests) must pass before any commit. In a workspace with a go.work,
   run `GOWORK=off GOFLAGS=-mod=readonly make check`.

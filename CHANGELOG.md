@@ -83,6 +83,16 @@ versions may break flags and the config file.
   the user. Secret-path asks apply to what a link leads to and ignore case.
   The Security model says committed secrets and tree-wide searches are not
   caught.
+- Added: the terminal client (agentconsole v0.0.1) is the default front on
+  a terminal, over the session's kit through kitbackend: permissions answered
+  with y/n on screen with the policy's reason and what it asks about; start
+  lines and warnings printed before the client takes the screen and notes
+  after it. `-front tui|repl`; `-p` unchanged. The explore sub-agent's asks,
+  which cannot be a permission, are refused with a reason telling the model
+  to make the call itself; tool elicitation is declined. The slash commands
+  stay in the REPL.
+- Changed: CI runs on `workflow_dispatch` only until a `DEX_DEPS_TOKEN`
+  secret exists (agentconsole is private).
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
   `DEX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the

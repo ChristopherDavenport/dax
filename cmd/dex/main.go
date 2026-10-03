@@ -66,7 +66,7 @@ func run() error {
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
-	frontName := fs.String("front", "repl", "front end: repl")
+	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
@@ -221,11 +221,13 @@ func run() error {
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
 		Provider: settings.Provider, Model: m.Name, Dir: dir, Think: settings.Think, Prompt: *once,
+		Policy: policySummary(settings.Policy),
 	})
 	if err != nil {
 		return err
 	}
 	opts.Approve, opts.Elicit = f.Hooks()
+	f.Prepare(&opts)
 	sess, err := openSession(ctx, opts, *resume)
 	if err != nil {
 		return err
@@ -299,4 +301,24 @@ func describeUnhashed(c agent.UnhashedCause) string {
 		return strings.TrimSpace(strings.Join([]string{i.Type, i.ID, i.CallID}, " "))
 	}
 	return fmt.Sprintf("%s; at input %d sent %s, recorded %s", c.Reason, c.Index, item(c.Sent), item(c.Recorded))
+}
+
+// policySummary says in a line what policy is in force.
+func policySummary(p config.PolicySettings) string {
+	if p.Off {
+		return "off (-no-policy): every call runs"
+	}
+	var parts []string
+	if p.Builtin {
+		parts = append(parts, "built-in allow list and secret-path asks")
+	} else {
+		parts = append(parts, "no built-in allow list")
+	}
+	if n := len(p.User.Allow) + len(p.User.Ask) + len(p.User.Deny); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d rule(s) of yours", n))
+	}
+	if n := len(p.Project.Ask) + len(p.Project.Deny); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d rule(s) from the project", n))
+	}
+	return strings.Join(parts, ", ") + "; anything else: " + p.Fallback
 }
