@@ -187,6 +187,7 @@ func run() error {
 		Skills:        *skills,
 		SkillsDirs:    settings.SkillsDirs,
 		PassEnv:       settings.PassEnv,
+		MaxReadBytes:  settings.MaxReadBytes,
 		TrustSkills:   *trustSkills,
 		MemoryDir:     settings.MemoryDir,
 		Compact:       *compactAt,

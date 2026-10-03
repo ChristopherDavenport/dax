@@ -47,6 +47,9 @@ func (w *Workspace) walk(ctx context.Context, base string, visit func(rel string
 		return wrap(base, err)
 	}
 	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return nil // a FIFO or a device is not searched; opening one can block
+		}
 		_, err := visit(base)
 		return err
 	}
@@ -68,8 +71,8 @@ func (w *Workspace) walk(ctx context.Context, base string, visit func(rel string
 			typ := e.Type()
 			if typ&fs.ModeSymlink != 0 {
 				fi, err := w.stat(rel)
-				if err != nil || fi.IsDir() {
-					continue
+				if err != nil || !fi.Mode().IsRegular() {
+					continue // a link to a directory, a FIFO or a device
 				}
 				typ = 0
 			}
@@ -82,6 +85,9 @@ func (w *Workspace) walk(ctx context.Context, base string, visit func(rel string
 					return stop, err
 				}
 			case typ.IsRegular():
+				if err := ctx.Err(); err != nil {
+					return true, err
+				}
 				if stop, err := visit(rel); stop || err != nil {
 					return stop, err
 				}
@@ -174,36 +180,45 @@ func Glob(ws *Workspace) agenttool.Tool {
 
 // matchGlob matches a slash-separated name against a pattern whose
 // segments are path.Match patterns, with a segment of ** standing for
-// any number of segments, none included.
+// any number of segments, none included. Each (pattern, name) position
+// is tried once, so a pattern with many ** against a deep path costs
+// their product, not their power.
 func matchGlob(pattern, name string) bool {
-	return matchSegs(strings.Split(pattern, "/"), strings.Split(name, "/"))
-}
-
-func matchSegs(pat, name []string) bool {
-	for len(pat) > 0 {
-		if pat[0] == "**" {
-			for len(pat) > 1 && pat[1] == "**" {
-				pat = pat[1:]
-			}
-			if len(pat) == 1 {
-				return true
-			}
-			for i := 0; i <= len(name); i++ {
-				if matchSegs(pat[1:], name[i:]) {
+	pat, segs := strings.Split(pattern, "/"), strings.Split(name, "/")
+	failed := make(map[[2]int]bool)
+	var match func(p, n int) bool
+	match = func(p, n int) bool {
+		for p < len(pat) {
+			if pat[p] == "**" {
+				for p+1 < len(pat) && pat[p+1] == "**" {
+					p++
+				}
+				if p+1 == len(pat) {
 					return true
 				}
+				for i := n; i <= len(segs); i++ {
+					key := [2]int{p + 1, i}
+					if failed[key] {
+						continue
+					}
+					if match(p+1, i) {
+						return true
+					}
+					failed[key] = true
+				}
+				return false
 			}
-			return false
+			if n >= len(segs) {
+				return false
+			}
+			if ok, err := path.Match(pat[p], segs[n]); err != nil || !ok {
+				return false
+			}
+			p, n = p+1, n+1
 		}
-		if len(name) == 0 {
-			return false
-		}
-		if ok, err := path.Match(pat[0], name[0]); err != nil || !ok {
-			return false
-		}
-		pat, name = pat[1:], name[1:]
+		return n == len(segs)
 	}
-	return len(name) == 0
+	return match(0, 0)
 }
 
 // expandBraces expands {a,b} alternations, which path.Match lacks.
@@ -343,7 +358,7 @@ func (w *Workspace) grepFile(rel string, re *regexp.Regexp, emit func(line int, 
 		return false
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); err != nil || fi.Size() > maxGrepFileBytes {
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() || fi.Size() > maxGrepFileBytes {
 		return false
 	}
 	br := bufio.NewReaderSize(f, 64<<10)

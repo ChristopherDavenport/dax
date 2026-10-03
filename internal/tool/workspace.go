@@ -3,10 +3,12 @@ package tool
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // ErrOutside is what a path that leaves the workspace gets, whether it
@@ -116,6 +118,43 @@ func (w *Workspace) readFile(path string) ([]byte, string, error) {
 	return data, rel, wrap(path, err)
 }
 
+// openRegular opens a file for reading and says how big it is. A
+// directory, a FIFO or a device is an error: opening a FIFO blocks, and
+// nothing a file tool does with one is useful.
+func (w *Workspace) openRegular(path string) (f fs.File, rel string, size int64, err error) {
+	rel, err = w.Rel(path)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	file, err := w.open(rel)
+	if err != nil {
+		return nil, "", 0, wrap(path, err)
+	}
+	fi, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, "", 0, err
+	}
+	if !fi.Mode().IsRegular() {
+		file.Close()
+		return nil, "", 0, fmt.Errorf("%s is not a regular file", rel)
+	}
+	return file, rel, fi.Size(), nil
+}
+
+// readFileMax reads a whole file no larger than max bytes.
+func (w *Workspace) readFileMax(path string, max int64) ([]byte, error) {
+	f, _, size, err := w.openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if size > max {
+		return nil, fmt.Errorf("%s is %d bytes, over the %d-byte limit for this tool", path, size, max)
+	}
+	return io.ReadAll(io.LimitReader(f, max+1))
+}
+
 func (w *Workspace) writeFile(path string, data []byte, mkdirs bool) (string, error) {
 	rel, err := w.Rel(path)
 	if err != nil {
@@ -146,4 +185,9 @@ func (w *Workspace) readDir(rel string) ([]fs.DirEntry, error) {
 	return f.ReadDir(-1)
 }
 
-func (w *Workspace) open(rel string) (fs.File, error) { return w.root.Open(rel) }
+// open opens a name for reading without blocking: a FIFO would
+// otherwise wait for a writer that never comes. The caller checks what
+// it opened is a regular file.
+func (w *Workspace) open(rel string) (fs.File, error) {
+	return w.root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+}

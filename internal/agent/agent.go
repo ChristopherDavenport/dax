@@ -117,6 +117,9 @@ type Options struct {
 	// MCP are stdio MCP servers started with the session, each offering
 	// its tools as mcp__<Name>__<tool>. Their stderr is dex's.
 	MCP []MCPServer
+	// MaxReadBytes is the most bytes of a file the read tool scans and
+	// the edit tool will rewrite; zero is tool.DefaultMaxRead.
+	MaxReadBytes int64
 	// PassEnv names credential-looking variables bash commands and MCP
 	// servers may still inherit; every other credential is removed from
 	// their environment.
@@ -247,7 +250,7 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env [
 		ModelName: o.Model,
 		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read, glob, grep, ls and bash tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
-		Tools:     append(tool.ReadOnly(ws), tool.Bash(ws.Dir(), tool.WithEnv(env))),
+		Tools:     append(tool.ReadOnly(ws, o.MaxReadBytes), tool.Bash(ws.Dir(), tool.WithEnv(env))),
 		Reasoning: o.reasoning(),
 		MaxTurns:  10,
 		Retry:     agentturn.Retry{MaxAttempts: 3},
@@ -293,7 +296,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		agentkit.WithReasoning(o.reasoning()),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions)),
-		agentkit.WithTools(tool.Builtins(ws, tool.WithEnv(env))...),
+		agentkit.WithTools(tool.Builtins(ws, o.MaxReadBytes, tool.WithEnv(env))...),
 	}
 	if o.AgentsMD {
 		// The walk is done here, so that a file that is a link out of

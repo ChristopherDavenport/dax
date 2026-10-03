@@ -259,3 +259,16 @@ func TestPassEnv(t *testing.T) {
 		t.Errorf("a project may not pass credentials on: %v", err)
 	}
 }
+
+func TestMaxReadBytes(t *testing.T) {
+	user := parse(t, `{"max_read_bytes":4096}`, false)
+	if s, err := Resolve([]Layer{user}, Flags{}, ""); err != nil || s.MaxReadBytes != 4096 {
+		t.Fatalf("%v %v", s.MaxReadBytes, err)
+	}
+	if _, err := Parse([]byte(`{"max_read_bytes":-1}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_read_bytes") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := Parse([]byte(`{"max_read_bytes":1}`), "/p/.dex/config.json", true); err == nil || !strings.Contains(err.Error(), "max_read_bytes: a project file may only tighten") {
+		t.Errorf("err = %v", err)
+	}
+}

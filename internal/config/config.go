@@ -56,6 +56,9 @@ type Config struct {
 	// MCPServers are stdio MCP servers, by name; the name is the
 	// prefix of their tools, mcp__<name>__<tool>.
 	MCPServers map[string]MCPServer `json:"mcp_servers,omitempty"`
+	// MaxReadBytes is the most bytes of a file the read tool scans and
+	// the edit tool will rewrite; default 2 MiB.
+	MaxReadBytes int64 `json:"max_read_bytes,omitempty"`
 	// PassEnv names environment variables that look like credentials
 	// (*_API_KEY, *_TOKEN, *_SECRET) which bash commands and MCP
 	// servers are nevertheless given. By default they get none.
@@ -154,6 +157,9 @@ func (l *Layer) validate() error {
 			return fmt.Errorf("pass_env: %q is not a variable name", v)
 		}
 	}
+	if c.MaxReadBytes < 0 {
+		return errors.New("max_read_bytes: want a positive number of bytes")
+	}
 	if c.BaseURL != "" {
 		if err := checkBaseURL(c.BaseURL); err != nil {
 			return err
@@ -168,7 +174,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
-			{"pass_env", len(c.PassEnv) > 0},
+			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -273,6 +279,7 @@ type Settings struct {
 	MemoryDir        string // empty: off; Resolve fills the default in
 	MCP              []MCP
 	PassEnv          []string
+	MaxReadBytes     int64
 	Policy           PolicySettings
 	// Sources says which layer set each of provider, model, base_url:
 	// "default", the file's path, or "flag".
@@ -328,6 +335,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MemoryDir != nil {
 			s.MemoryDir = *l.MemoryDir
+		}
+		if l.MaxReadBytes != 0 {
+			s.MaxReadBytes = l.MaxReadBytes
 		}
 		for _, v := range l.PassEnv {
 			if !slices.Contains(s.PassEnv, v) {
