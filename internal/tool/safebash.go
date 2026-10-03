@@ -226,20 +226,27 @@ func merge(sets ...map[string]bool) map[string]bool {
 }
 
 // inWorkspace reports whether a path argument, absolute or relative
-// to dir, stays inside dir after cleaning and, where it exists, after
-// its symbolic links are resolved. ~ is never a path here: bash would
-// have expanded it, but a quoted one is a file named ~ and either way
-// it is not the workspace.
+// to dir, stays inside dir. A path with a .. component is refused
+// outright: the kernel resolves link/.. through the link, where a
+// cleaned name would not, so no reading of the name is safe. Without
+// .., the path is resolved link by link, as far as it exists, and
+// every link on the way must lead back inside. ~ is never a path
+// here: bash would have expanded it, but a quoted one is a file named
+// ~ and either way it is not the workspace.
 func inWorkspace(arg, dir string) bool {
 	if strings.HasPrefix(arg, "~") {
 		return false
+	}
+	for _, c := range strings.Split(arg, "/") {
+		if c == ".." {
+			return false
+		}
 	}
 	p := arg
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(dir, p)
 	}
-	p = filepath.Clean(p)
-	roots := []string{dir}
+	roots := []string{filepath.Clean(dir)}
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		roots = append(roots, r)
 	}
@@ -251,13 +258,27 @@ func inWorkspace(arg, dir string) bool {
 		}
 		return false
 	}
+	p = filepath.Clean(p)
 	if !within(p) {
 		return false
 	}
-	if real, err := filepath.EvalSymlinks(p); err == nil && !within(real) {
-		return false
+	return within(resolveExisting(p))
+}
+
+// resolveExisting resolves the links of the longest prefix of p that
+// exists and puts the rest back, so a name that does not exist yet is
+// judged by where its directory really is.
+func resolveExisting(p string) string {
+	rest := ""
+	for q := p; ; q = filepath.Dir(q) {
+		if real, err := filepath.EvalSymlinks(q); err == nil {
+			return filepath.Join(real, rest)
+		}
+		if filepath.Dir(q) == q {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(q), rest)
 	}
-	return true
 }
 
 // GitEnv is the environment the bash tool adds to every command so that
