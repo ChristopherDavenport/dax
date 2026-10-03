@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
@@ -16,34 +14,18 @@ const (
 	maxReadBytes     = 200 << 10
 )
 
-// resolve makes path absolute against dir. It does not sandbox; the
-// model may read anywhere the user can.
-func resolve(dir, path string) (string, error) {
-	if path == "" {
-		return "", errors.New("path is required")
-	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
-	}
-	return filepath.Join(dir, path), nil
-}
-
 // ReadArgs are the arguments of the read tool.
 type ReadArgs struct {
-	Path   string `json:"path" desc:"File path, absolute or relative to the working directory"`
+	Path   string `json:"path" desc:"File path, relative to the workspace or absolute inside it"`
 	Offset int    `json:"offset,omitempty" desc:"1-based line to start at (default 1)"`
 	Limit  int    `json:"limit,omitempty" desc:"Maximum lines to return (default 2000)"`
 }
 
 // Read returns a tool that reads a file with line numbers.
-func Read(dir string) agenttool.Tool {
+func Read(ws *Workspace) agenttool.Tool {
 	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files.",
 		func(_ context.Context, in ReadArgs) (string, error) {
-			p, err := resolve(dir, in.Path)
-			if err != nil {
-				return "", err
-			}
-			data, err := os.ReadFile(p)
+			data, _, err := ws.readFile(in.Path)
 			if err != nil {
 				return "", err
 			}
@@ -78,20 +60,14 @@ type WriteArgs struct {
 }
 
 // Write returns a tool that creates or replaces a file.
-func Write(dir string) agenttool.Tool {
+func Write(ws *Workspace) agenttool.Tool {
 	return agenttool.New("write", "Create or overwrite a file with the given content. Parent directories are created.",
 		func(_ context.Context, in WriteArgs) (string, error) {
-			p, err := resolve(dir, in.Path)
+			rel, err := ws.writeFile(in.Path, []byte(in.Content), true)
 			if err != nil {
 				return "", err
 			}
-			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-				return "", err
-			}
-			if err := os.WriteFile(p, []byte(in.Content), 0o644); err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), p), nil
+			return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), rel), nil
 		})
 }
 
@@ -103,17 +79,13 @@ type EditArgs struct {
 }
 
 // Edit returns a tool that replaces one exact occurrence of a string.
-func Edit(dir string) agenttool.Tool {
+func Edit(ws *Workspace) agenttool.Tool {
 	return agenttool.New("edit", "Replace old_string with new_string in a file. old_string must appear exactly once; include enough surrounding lines to make it unique.",
 		func(_ context.Context, in EditArgs) (string, error) {
 			if in.Old == "" {
 				return "", errors.New("old_string must not be empty")
 			}
-			p, err := resolve(dir, in.Path)
-			if err != nil {
-				return "", err
-			}
-			data, err := os.ReadFile(p)
+			data, _, err := ws.readFile(in.Path)
 			if err != nil {
 				return "", err
 			}
@@ -126,9 +98,10 @@ func Edit(dir string) agenttool.Tool {
 				return "", fmt.Errorf("old_string matches %d times; add context to make it unique", n)
 			}
 			out := strings.Replace(src, in.Old, in.New, 1)
-			if err := os.WriteFile(p, []byte(out), 0o644); err != nil {
+			rel, err := ws.writeFile(in.Path, []byte(out), false)
+			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("edited %s", p), nil
+			return fmt.Sprintf("edited %s", rel), nil
 		})
 }
