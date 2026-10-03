@@ -1,0 +1,172 @@
+package tool
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ChristopherDavenport/agenttool"
+)
+
+// call runs one tool with raw arguments and returns the text the model
+// would see.
+func call(ctx context.Context, t agenttool.Tool, args string) (string, error) {
+	res, err := t.Execute(ctx, agenttool.Call{ID: "call_1", Args: json.RawMessage(args)})
+	if err != nil {
+		return "", err
+	}
+	return Text(res), nil
+}
+
+func TestEdit(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		args    string
+		want    string // file content after, when no error
+		wantErr string
+	}{
+		{"replaces one", "a\nb\nc\n", `{"path":"f","old_string":"b","new_string":"B"}`, "a\nB\nc\n", ""},
+		{"not found", "a\nb\n", `{"path":"f","old_string":"z","new_string":"Z"}`, "", "not found"},
+		{"ambiguous", "a\na\n", `{"path":"f","old_string":"a","new_string":"A"}`, "", "matches 2 times"},
+		{"empty old", "a\n", `{"path":"f","old_string":"","new_string":"A"}`, "", "must not be empty"},
+		{"missing file", "", `{"path":"nope","old_string":"a","new_string":"b"}`, "", "no such file"},
+		{"missing property", "a\n", `{"path":"f","old_string":"a"}`, "", "new_string"},
+		{"wrong type", "a\n", `{"path":"f","old_string":"a","new_string":3}`, "", "new_string"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.src != "" {
+				if err := os.WriteFile(filepath.Join(dir, "f"), []byte(tc.src), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := call(context.Background(), Edit(dir), tc.args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := os.ReadFile(filepath.Join(dir, "f"))
+			if string(got) != tc.want {
+				t.Fatalf("file = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadOffsetLimit(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "f"), []byte("one\ntwo\nthree\nfour\n"), 0o644)
+	out, err := call(context.Background(), Read(dir), `{"path":"f","offset":2,"limit":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"2\ttwo", "3\tthree", "1 more lines; use offset=4"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "one") || strings.Contains(out, "four") {
+		t.Errorf("output has lines outside the window:\n%s", out)
+	}
+}
+
+func TestSchemas(t *testing.T) {
+	// The reflected schemas name the optional fields as optional and the
+	// rest as required, so a model that omits a required one is told so
+	// before the function runs.
+	for _, tc := range []struct {
+		tool     agenttool.Tool
+		required []string
+		optional []string
+	}{
+		{Read(t.TempDir()), []string{"path"}, []string{"offset", "limit"}},
+		{Write(t.TempDir()), []string{"path", "content"}, nil},
+		{Edit(t.TempDir()), []string{"path", "old_string", "new_string"}, nil},
+		{Bash(t.TempDir()), []string{"command"}, []string{"timeout_seconds"}},
+	} {
+		var s struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		}
+		if err := json.Unmarshal(tc.tool.Parameters(), &s); err != nil {
+			t.Fatalf("%s: %v", tc.tool.Name(), err)
+		}
+		req := strings.Join(s.Required, ",")
+		if req != strings.Join(tc.required, ",") {
+			t.Errorf("%s: required = %q, want %q", tc.tool.Name(), req, tc.required)
+		}
+		for _, p := range append(tc.required, tc.optional...) {
+			if _, ok := s.Properties[p]; !ok {
+				t.Errorf("%s: schema lacks property %q:\n%s", tc.tool.Name(), p, tc.tool.Parameters())
+			}
+		}
+	}
+	if !agenttool.IsSequential(Bash(t.TempDir())) {
+		t.Error("bash should be sequential")
+	}
+}
+
+func TestWriteCreatesDirs(t *testing.T) {
+	dir := t.TempDir()
+	_, err := call(context.Background(), Write(dir), `{"path":"a/b/c.txt","content":"hi"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "a", "b", "c.txt"))
+	if err != nil || string(got) != "hi" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestBash(t *testing.T) {
+	b := Bash(t.TempDir())
+	run := func(ctx context.Context, args string) (string, error) {
+		return call(ctx, b, args)
+	}
+
+	t.Run("exit code and output", func(t *testing.T) {
+		out, err := run(context.Background(), `{"command":"echo hi; echo err >&2; exit 3"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"hi\n", "err\n", "[exit 3]"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q in %q", want, out)
+			}
+		}
+	})
+
+	t.Run("timeout kills children", func(t *testing.T) {
+		start := time.Now()
+		out, err := run(context.Background(), `{"command":"sleep 30 & wait","timeout_seconds":1}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "[killed after 1s]") {
+			t.Errorf("want kill note, got %q", out)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("took %s; process group was not killed", d)
+		}
+	})
+
+	t.Run("cancel returns ctx error", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+		_, err := run(ctx, `{"command":"sleep 30"}`)
+		if err != context.Canceled {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	})
+}
