@@ -72,8 +72,10 @@ const (
 )
 
 // Build merges the built-in allow list with the user's and the
-// project's rules. The project's source is untrusted, so its allow
-// rules are withheld while its ask and deny rules apply.
+// project's rules. The project's source is untrusted and ranks below
+// the user's and the built-in list, so its allow rules are withheld,
+// its ask and deny rules apply, and a carve-out in it cannot cancel a
+// rule of theirs.
 func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 	parse := func(what string, rules []string) ([]agentpolicy.Rule, error) {
 		out, err := agentpolicy.ParseRules(strings.Join(rules, " "))
@@ -88,13 +90,13 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		if err != nil {
 			return agentpolicy.Policy{}, err
 		}
-		sets = append(sets, agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBuiltin, Trusted: true}, Allow: allow})
+		sets = append(sets, agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBuiltin, Trusted: true, Rank: 1}, Allow: allow})
 	}
 	for _, l := range []struct {
 		src   agentpolicy.Source
 		rules config.Rules
 	}{
-		{agentpolicy.Source{Name: SourceUser, Trusted: true}, s.User},
+		{agentpolicy.Source{Name: SourceUser, Trusted: true, Rank: 2}, s.User},
 		{agentpolicy.Source{Name: SourceProject}, s.Project},
 	} {
 		var set agentpolicy.RuleSet

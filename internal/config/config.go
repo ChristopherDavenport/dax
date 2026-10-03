@@ -6,10 +6,10 @@
 // naming the file, so a typo is not a silently ignored setting.
 //
 // The project's file comes from a repository, which is not the user,
-// so it is held to less: it may not start programs (mcp_servers), may
-// not point an API key at another host (base_url, except for the
-// local Ollama, which takes no key), and the rules in its policy can
-// ask or deny but not allow.
+// so it can only tighten: it may add ask and deny rules, drop the
+// built-in allow list and make the fallback stricter, and nothing
+// else. Where the model runs, what it is told, what it remembers and
+// what programs it starts are the user's to say.
 package config
 
 import (
@@ -148,8 +148,20 @@ func (l *Layer) validate() error {
 			return err
 		}
 	}
-	if l.Project && len(c.MCPServers) > 0 {
-		return errors.New("mcp_servers: a project file may not start programs; put the server in your own config")
+	if l.Project {
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{
+			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"base_url", c.BaseURL != ""},
+			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
+			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
+			{"mcp_servers", len(c.MCPServers) > 0},
+		} {
+			if f.set {
+				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
+			}
+		}
 	}
 	for name, s := range c.MCPServers {
 		if !mcpName.MatchString(name) {
@@ -166,15 +178,21 @@ func (l *Layer) validate() error {
 			return fmt.Errorf(`policy.fallback %q: want ask, allow or deny`, p.Fallback)
 		}
 		if l.Project && p.Fallback == "allow" {
-			return errors.New(`policy.fallback "allow": a project file may not allow everything`)
+			return errors.New(`policy.fallback "allow": a project file may only make the fallback stricter`)
 		}
-		if l.Project && p.Builtin != nil && !*p.Builtin {
-			return errors.New("policy.builtin: a project file may not drop the built-in rules")
+		if l.Project && len(p.Allow) > 0 {
+			return fmt.Errorf("policy.allow: a project file may not allow anything; put allow rules in your own config (%s)", Path())
 		}
 		for list, rules := range map[string][]string{"allow": p.Allow, "ask": p.Ask, "deny": p.Deny} {
 			for _, r := range rules {
-				if _, err := agentpolicy.ParseRules(r); err != nil {
+				parsed, err := agentpolicy.ParseRules(r)
+				if err != nil {
 					return fmt.Errorf("policy.%s: %w", list, err)
+				}
+				for _, pr := range parsed {
+					if l.Project && strings.HasPrefix(pr.Spec, "!") {
+						return fmt.Errorf("policy.%s: %q: a project file may not carve an exception out of a rule", list, r)
+					}
 				}
 			}
 		}
@@ -274,7 +292,6 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		Sources: map[string]string{"provider": "default", "model": "default", "base_url": "default"},
 	}
 	servers := map[string]MCP{}
-	baseFrom := Layer{}
 	for _, l := range layers {
 		if l.Provider != "" {
 			s.Provider, s.Sources["provider"] = l.Provider, l.Path
@@ -283,7 +300,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.Model, s.Sources["model"] = l.Model, l.Path
 		}
 		if l.BaseURL != "" {
-			s.BaseURL, s.Sources["base_url"], baseFrom = l.BaseURL, l.Path, l
+			s.BaseURL, s.Sources["base_url"] = l.BaseURL, l.Path
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -304,10 +321,18 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if p := l.Policy; p != nil {
 			if p.Builtin != nil {
-				s.Policy.Builtin = *p.Builtin
+				if l.Project {
+					// Tighten only: a project can drop the allow list,
+					// never bring back what the user dropped.
+					s.Policy.Builtin = s.Policy.Builtin && *p.Builtin
+				} else {
+					s.Policy.Builtin = *p.Builtin
+				}
 			}
 			if p.Fallback != "" {
-				s.Policy.Fallback = p.Fallback
+				if !l.Project || strictness[p.Fallback] > strictness[s.Policy.Fallback] {
+					s.Policy.Fallback = p.Fallback
+				}
 			}
 			dst := &s.Policy.User
 			if l.Project {
@@ -325,7 +350,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		s.Model, s.Sources["model"] = *f.Model, "flag"
 	}
 	if f.BaseURL != nil {
-		s.BaseURL, s.Sources["base_url"], baseFrom = *f.BaseURL, "flag", Layer{}
+		s.BaseURL, s.Sources["base_url"] = *f.BaseURL, "flag"
 	}
 	if f.Think != nil {
 		s.Think = *f.Think
@@ -347,12 +372,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if s.Provider != "ollama" && s.Provider != "openai" {
 			return s, fmt.Errorf("base_url is for the ollama and openai providers, not %s", s.Provider)
 		}
-		if baseFrom.Project && s.Provider != "ollama" {
-			return s, fmt.Errorf("config %s: base_url would receive your %s API key; a project file may set it only for ollama", baseFrom.Path, s.Provider)
-		}
 	}
 	return s, nil
 }
+
+// strictness orders the fallbacks; a project's may only raise it.
+var strictness = map[string]int{"allow": 0, "ask": 1, "deny": 2}
 
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
