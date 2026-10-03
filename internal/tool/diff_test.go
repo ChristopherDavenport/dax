@@ -76,6 +76,7 @@ func (e *diffEnv) run(cmd string) (exercised bool) {
 	// the analyzer thought they would.
 	p := *c.plan
 	var want [][]string // per stage, the words after the command
+	var emittedStages [][]word
 	var wantCwd []string
 	cwd := e.dir
 	idx := 0
@@ -88,11 +89,16 @@ func (e *diffEnv) run(cmd string) (exercised bool) {
 				cwd = filepath.Join(cwd, st.words[1].text)
 				continue
 			}
+			// What bash is given is the stage's emitted words: its own with
+			// the flags and -- the analyzer adds. The probe stands for the
+			// command.
+			em := st.emitted()
 			ns := stage{redirects: st.redirects}
 			ns.words = append(ns.words, word{text: e.probe}, word{text: strconv.Itoa(idx)})
-			ns.words = append(ns.words, st.words[1:]...)
+			ns.words = append(ns.words, em[1:]...)
 			stages = append(stages, ns)
-			want = append(want, st.texts()[1:])
+			emittedStages = append(emittedStages, em)
+			want = append(want, stage{words: em}.texts()[1:])
 			wantCwd = append(wantCwd, cwd)
 			idx++
 		}
@@ -125,7 +131,7 @@ func (e *diffEnv) run(cmd string) (exercised bool) {
 		if len(raw) > 0 {
 			got = strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
 		}
-		if err := e.compare(c, i, wantCwd[i], w, got); err != "" {
+		if err := e.compare(emittedStages[i], wantCwd[i], w, got); err != "" {
 			t.Fatalf("%q\nrendered as\n%s\nstage %d: %s\n  bash ran it with %q\n  the analyzer parsed %q", cmd, line, i, err, got, w)
 		}
 	}
@@ -138,21 +144,10 @@ func (e *diffEnv) run(cmd string) (exercised bool) {
 // and, in the C locale, multibyte matches for ?, so the analyzer's set
 // is the larger one), in order, or the pattern itself when bash found
 // none; a directory-only pattern (ending /) is matched by directories.
-func (e *diffEnv) compare(c *Check, stageIdx int, cwd string, words, got []string) string {
-	n := 0
+func (e *diffEnv) compare(em []word, cwd string, words, got []string) string {
 	var globs []bool
-	for _, pl := range c.plan.pipelines {
-		for _, st := range pl {
-			if len(pl) == 1 && st.words[0].text == "cd" {
-				continue
-			}
-			if n == stageIdx {
-				for _, w := range st.words[1:] {
-					globs = append(globs, w.glob)
-				}
-			}
-			n++
-		}
+	for _, w := range em[1:] {
+		globs = append(globs, w.glob)
 	}
 	pos := 0
 	for i, w := range words {

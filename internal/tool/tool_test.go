@@ -242,9 +242,9 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 	// The flags that switch off an external diff and textconv are added
 	// to the commands that take them.
 	for cmd, want := range map[string]string{
-		"git diff":       "'git' 'diff' --no-ext-diff --no-textconv",
-		"git log -p -n1": "'git' 'log' --no-ext-diff --no-textconv '-p' '-n1'",
-		"git show HEAD":  "'git' 'show' --no-ext-diff --no-textconv 'HEAD'",
+		"git diff":       "'git' 'diff' '--no-ext-diff' '--no-textconv'",
+		"git log -p -n1": "'git' 'log' '--no-ext-diff' '--no-textconv' '-p' '-n1'",
+		"git show HEAD":  "'git' 'show' '--no-ext-diff' '--no-textconv' 'HEAD'",
 		"git status":     "'git' 'status'",
 	} {
 		c := (&Analyzer{Dir: dir}).Check(context.Background(), cmd)
