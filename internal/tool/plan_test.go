@@ -100,10 +100,6 @@ func TestAutoAllowedLinesRunAsBashWouldRunThem(t *testing.T) {
 	}
 }
 
-func jsonString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
-}
-
 func TestRenderQuotesEveryWordButGlobs(t *testing.T) {
 	an := &Analyzer{Dir: t.TempDir()}
 	for cmd, want := range map[string]string{
