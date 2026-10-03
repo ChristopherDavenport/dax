@@ -272,3 +272,19 @@ func TestMaxReadBytes(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestMCPNames(t *testing.T) {
+	for _, name := range []string{"a", "fs", "my-server", "my_server", "A1", "a_b-c"} {
+		if err := CheckMCPName(name); err != nil {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "a__b", "a b", "_a", "é", "a/b", "a*"} {
+		if err := CheckMCPName(name); err == nil {
+			t.Errorf("%q should be refused", name)
+		}
+	}
+	if _, err := Parse([]byte(`{"mcp_servers":{"a__b":{"command":"x"}}}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "double underscore") {
+		t.Errorf("err = %v", err)
+	}
+}

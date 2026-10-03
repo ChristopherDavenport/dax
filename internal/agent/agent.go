@@ -35,6 +35,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/ChristopherDavenport/dex/internal/config"
 	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/prompt"
 	"github.com/ChristopherDavenport/dex/internal/tool"
@@ -356,11 +357,15 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
 	for _, m := range o.MCP {
+		prefix, err := mcpPrefix(m.Name)
+		if err != nil {
+			return nil, err
+		}
 		t, err := mcpTransport(m.Command, env)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
-		kopts = append(kopts, agentkit.WithMCPTransport(t, mcpclient.WithPrefix("mcp__"+m.Name)))
+		kopts = append(kopts, agentkit.WithMCPTransport(t, mcpclient.WithPrefix(prefix)))
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
@@ -610,9 +615,25 @@ func (s *Session) SetModel(name string) error {
 	return s.Agent.SetConfig(cfg)
 }
 
+// mcpPrefix is the prefix of a server's tools, mcp__<name>__<tool>
+// once the client adds its separator; the policy's mcp__* rules and
+// aliases name servers this way, whether the server came from the
+// config or from /mcp add.
+func mcpPrefix(name string) (string, error) {
+	if err := config.CheckMCPName(name); err != nil {
+		return "", err
+	}
+	return "mcp__" + name, nil
+}
+
 // AddMCP starts a stdio MCP server mid-session and offers its tools
-// from the next run under prefix. It returns the label RemoveMCP takes.
-func (s *Session) AddMCP(ctx context.Context, prefix, command string) (string, error) {
+// from the next run as mcp__<name>__<tool>. It returns the label
+// RemoveMCP takes.
+func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
+	prefix, err := mcpPrefix(name)
+	if err != nil {
+		return "", err
+	}
 	t, err := mcpTransport(command, s.env)
 	if err != nil {
 		return "", err

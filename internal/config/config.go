@@ -147,6 +147,21 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
+// CheckMCPName reports whether name can name an MCP server: letters,
+// digits, - and _, starting with a letter or digit, and no double
+// underscore, which is what joins the server's name to a tool's in
+// mcp__<server>__<tool>: a server a__b would otherwise be
+// indistinguishable from server a with a tool b__x.
+func CheckMCPName(name string) error {
+	switch {
+	case !mcpName.MatchString(name):
+		return fmt.Errorf("MCP server name %q: use letters, digits, - and _", name)
+	case strings.Contains(name, "__"):
+		return fmt.Errorf("MCP server name %q: a double underscore separates the server from the tool", name)
+	}
+	return nil
+}
+
 func (l *Layer) validate() error {
 	c := &l.Config
 	if c.Provider != "" && !slices.Contains(Providers, c.Provider) {
@@ -182,8 +197,8 @@ func (l *Layer) validate() error {
 		}
 	}
 	for name, s := range c.MCPServers {
-		if !mcpName.MatchString(name) {
-			return fmt.Errorf("mcp_servers: name %q: use letters, digits, - and _", name)
+		if err := CheckMCPName(name); err != nil {
+			return fmt.Errorf("mcp_servers: %w", err)
 		}
 		if strings.TrimSpace(s.Command) == "" {
 			return fmt.Errorf("mcp_servers.%s: command is required", name)

@@ -231,7 +231,7 @@ Your answer is recorded in the session as a person's.
 A line typed while a run is in flight steers it and lands before the next
 model call; `/follow text` queues a follow-up that runs once the model
 would have stopped; `/abort` aborts. Between runs: `/model name`,
-`/think on|off`, `/tools`, `/session`, `/mcp add <prefix> <command>`,
+`/think on|off`, `/tools`, `/session`, `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has letters, digits, `-` and `_`, and no `__`),
 `/mcp remove <label>`, `/quit`.
 
 ## Sessions
