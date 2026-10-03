@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -17,6 +18,9 @@ type stage struct {
 	words     []word
 	redirects []string
 }
+
+// globWord is what a word the shell expands may be made of.
+var globWord = regexp.MustCompile(`^[A-Za-z0-9._/*?-]+$`)
 
 // redirectForms are the only redirects in the safe subset: standard
 // error to standard output, and either stream to /dev/null.
@@ -44,18 +48,28 @@ func parsePlan(cmd string) (*plan, bool) {
 		st     stage
 		w      strings.Builder
 		glob   bool
+		quoted bool // the current word has a quoted part
 		inWord bool
+		bad    bool
 	)
 	endWord := func() {
 		if inWord {
+			// A word the shell will expand is emitted bare, so it may hold
+			// nothing but plain name characters and the * and ? that
+			// expand, and no quoted part: a quoted part would be emitted
+			// raw, and quotes are how a word hides ;, $( and > from the
+			// reader.
+			if glob && (quoted || !globWord.MatchString(w.String())) {
+				bad = true
+			}
 			st.words = append(st.words, word{w.String(), glob})
 			w.Reset()
-			glob, inWord = false, false
+			glob, quoted, inWord = false, false, false
 		}
 	}
 	endStage := func() bool {
 		endWord()
-		if len(st.words) == 0 || strings.Contains(st.words[0].text, "=") || st.words[0].glob {
+		if bad || len(st.words) == 0 || strings.Contains(st.words[0].text, "=") || st.words[0].glob {
 			return false
 		}
 		cur = append(cur, st)
@@ -80,7 +94,7 @@ func parsePlan(cmd string) (*plan, bool) {
 				return nil, false
 			}
 			w.WriteString(body)
-			inWord = true
+			inWord, quoted = true, true
 			i += j + 1
 		case c == '"':
 			j := strings.IndexByte(cmd[i+1:], '"')
@@ -92,7 +106,7 @@ func parsePlan(cmd string) (*plan, bool) {
 				return nil, false
 			}
 			w.WriteString(body)
-			inWord = true
+			inWord, quoted = true, true
 			i += j + 1
 		case c == '&':
 			if i+1 >= len(cmd) || cmd[i+1] != '&' || !endStage() {
@@ -141,7 +155,7 @@ func parsePlan(cmd string) (*plan, bool) {
 			return nil, false
 		}
 	}
-	if !endStage() {
+	if !endStage() || bad {
 		return nil, false
 	}
 	p.pipelines = append(p.pipelines, cur)
