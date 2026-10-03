@@ -25,8 +25,9 @@ type Analyzer struct {
 	// given; zero is DefaultMaxRead.
 	MaxFile int64
 	// ConfigKey reads the exec-bearing key a repository's git
-	// configuration names in dir; nil is ExecConfigKey.
-	ConfigKey func(ctx context.Context, dir string) (string, error)
+	// configuration names in dir; nil is ExecConfigKey. strict is set for
+	// a line that will run as typed, without the auto-allow environment.
+	ConfigKey func(ctx context.Context, dir string, strict bool) (string, error)
 }
 
 // StageCheck is the verdict on one stage of a command line.
@@ -853,13 +854,18 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 			c.Stages = append(c.Stages, sc)
 		}
 	}
-	if auto && len(gitDirs) > 0 {
+	if len(gitDirs) > 0 {
+		// A line that is not auto-allowed runs as typed, which neutralises
+		// nothing, so the keys the auto-allow environment switches off
+		// count too: whatever the rules say about the other stages, git
+		// in a repository whose config names a program asks.
+		strict := !auto
 		keyFn := a.ConfigKey
 		if keyFn == nil {
 			keyFn = ExecConfigKey
 		}
 		for dir := range gitDirs {
-			key, err := keyFn(ctx, dir)
+			key, err := keyFn(ctx, dir, strict)
 			if err != nil {
 				key = "git's configuration could not be read: " + err.Error()
 			}

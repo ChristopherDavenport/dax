@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"github.com/ChristopherDavenport/dex/internal/config"
+	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/tool"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -282,5 +285,57 @@ func TestAnAutoAllowedBashCallRunsStampedThroughASession(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(o.Dir, "PWN")); err == nil {
 		t.Error("touch ran")
+	}
+}
+
+// R4-1 through a session: git status && echo hi in a repository whose
+// fsmonitor is a script asks, and the script does not run.
+func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	ctx := context.Background()
+	model := &scripted{calls: [][2]string{
+		{"bash", `{"command":"git status && echo hi"}`},
+		{"bash", `{"command":"echo hi && git status -s"}`},
+	}}
+	o := options(t, model)
+	probe := filepath.Join(t.TempDir(), "PROBE")
+	script := filepath.Join(t.TempDir(), "fsmon")
+	must(t, os.WriteFile(script, []byte("#!/bin/sh\ntouch "+probe+"\n"), 0o755))
+	must(t, os.MkdirAll(o.Dir, 0o755))
+	for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", script}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = o.Dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask", User: config.Rules{Allow: []string{"bash(echo:*)"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Policy = &p
+	var asked []string
+	o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+		asked = append(asked, reason)
+		return false
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Prompt(ctx, "go"); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 2 || !strings.Contains(asked[0], "core.fsmonitor") {
+		t.Fatalf("questions: %q", asked)
+	}
+	if _, err := os.Stat(probe); err == nil {
+		t.Fatal("the fsmonitor script ran")
 	}
 }
