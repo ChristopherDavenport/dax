@@ -7,11 +7,12 @@ package main
 // recording, is the agent package's and does not know which front is
 // attached.
 //
-// Today there are two: the REPL, and print, which is -p. The terminal
-// UI (agentconsole) is to become a third: implement front, add a case
-// to selectFront, and nothing else in dex changes. The renderer for
-// events, internal/render, is the REPL's and print's; a UI renders
-// the same agentturn events itself.
+// There are three: the terminal client (tui.go, agentconsole over the
+// kit), the default when standard input and output are a terminal; the
+// REPL, which has the slash commands; and print, which is -p. A new
+// front implements front and gets a case in selectFront. The renderer
+// for events, internal/render, is the REPL's and print's; the terminal
+// client renders the session's record itself.
 
 import (
 	"bufio"
@@ -40,6 +41,8 @@ type frontInfo struct {
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
+	// Policy is a line saying what policy is in force.
+	Policy string
 }
 
 // front is a way to talk to a session.
@@ -48,23 +51,47 @@ type front interface {
 	// call the policy asked about is put to the user, and how a tool's
 	// question mid-call is.
 	Hooks() (approve func(call *openresponses.FunctionCall, reason string) bool, elicit agenttool.Elicitor)
+	// Prepare adjusts the options the session is built with: a front
+	// that drives the kit through its own backend asks for no agent, and
+	// one that takes the screen collects what would be printed.
+	Prepare(o *agent.Options)
 	// Run drives the session until the user is done.
 	Run(ctx context.Context, sess *agent.Session) error
 }
 
-// selectFront picks the front: print for -p, otherwise the named one.
+// selectFront picks the front: print for -p; otherwise the named one,
+// and with no name the terminal client when standard input and output
+// are a terminal, and the REPL when they are not.
 func selectFront(name, prompt string, info frontInfo) (front, error) {
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 1<<20), 1<<20)
 	if prompt != "" {
 		return &printFront{info: info, in: in}, nil
 	}
+	if name == "" {
+		name = "repl"
+		if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+			name = "tui"
+		}
+	}
 	switch name {
 	case "repl":
 		return &replFront{info: info, in: in, asks: make(chan *ask)}, nil
+	case "tui":
+		return &tuiFront{info: info, pause: isTerminal(os.Stdin)}, nil
 	}
-	return nil, fmt.Errorf("-front %q: want repl", name)
+	return nil, fmt.Errorf("-front %q: want tui or repl", name)
 }
+
+// isTerminal reports whether f is a character device, which a terminal
+// is and a pipe or a file is not.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func (f *printFront) Prepare(*agent.Options) {}
+func (f *replFront) Prepare(*agent.Options)  {}
 
 // printFront runs one prompt: approvals read stdin directly.
 type printFront struct {
@@ -344,10 +371,10 @@ func turn(ctx context.Context, sess *agent.Session, text string) error {
 	return nil
 }
 
-// showAssembly prints the tools the kit assembled, with the source of
+// assemblyLines are the tools the kit assembled, with the source of
 // each one that is not dex's own, and what the instruction layers left
 // out, so the user knows what the model was not given.
-func showAssembly(sess *agent.Session) {
+func assemblyLines(sess *agent.Session) []string {
 	var names []string
 	for _, t := range sess.Tools() {
 		if t.Source == "WithTools" {
@@ -356,9 +383,16 @@ func showAssembly(sess *agent.Session) {
 			names = append(names, t.Name+" ["+t.Source+"]")
 		}
 	}
-	fmt.Printf("tools: %s\n", strings.Join(names, ", "))
+	lines := []string{"tools: " + strings.Join(names, ", ")}
 	for _, o := range sess.Omitted() {
-		fmt.Printf("omitted: %s\n", o)
+		lines = append(lines, fmt.Sprintf("omitted: %s", o))
+	}
+	return lines
+}
+
+func showAssembly(sess *agent.Session) {
+	for _, l := range assemblyLines(sess) {
+		fmt.Println(render.Clean(l))
 	}
 }
 

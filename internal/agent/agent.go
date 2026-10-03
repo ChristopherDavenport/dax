@@ -127,6 +127,12 @@ type Options struct {
 	// servers may still inherit; every other credential is removed from
 	// their environment.
 	PassEnv []string
+	// NoAgent builds the kit and no agent over it: a front that drives
+	// the kit through its own backend (the terminal client) builds the
+	// agent itself, and two agents on one recorder would both write
+	// the session. Session.Agent is nil, and Prompt, Steer and the
+	// other methods that drive it must not be called.
+	NoAgent bool
 	// Agents adds the explore child agent as a tool.
 	Agents bool
 	// Log receives dex's own notes: compactions, denials, skill grants.
@@ -175,6 +181,31 @@ func Describe(p agentturn.PendingCall) string {
 		s += " after its dispatch"
 	}
 	return s
+}
+
+// TUIConfig is the adjustment a terminal client makes to the kit's
+// agent configuration (kitbackend.WithConfig): a call the policy defers
+// has what the policy was asking about added to its reason, since the
+// reason is what the permission panel shows. The kit's engine says it
+// in the verdict's subject: the part of a command line, the file a
+// link leads to, the git config key.
+func (s *Session) TUIConfig(cfg agentturn.Config) agentturn.Config {
+	inner := cfg.BeforeToolCall
+	eng := s.Kit.Engine()
+	if inner == nil || eng == nil {
+		return cfg
+	}
+	cfg.BeforeToolCall = func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+		d, err := inner(ctx, info)
+		if err != nil || d == nil || d.Action != agentturn.Defer || info.Call == nil {
+			return d, err
+		}
+		if v, ok := eng.Deferred(info.RunID, info.Call.CallID); ok && v.Subject != "" && !strings.Contains(d.Reason, v.Subject) {
+			d.Reason += "; about: " + v.Subject
+		}
+		return d, nil
+	}
+	return cfg
 }
 
 // Pending lists the calls awaiting outputs, in transcript order. The
@@ -424,8 +455,10 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	if e := kit.Engine(); e != nil {
 		engine.Store(e)
 	}
-	s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
-	s.detach = kit.Attach(s.Agent)
+	if !o.NoAgent {
+		s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
+		s.detach = kit.Attach(s.Agent)
+	}
 	ok = true
 	return s, nil
 }
@@ -486,15 +519,15 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	}
 	sess := s.Kit.Session()
 	if t := sess.Truncated(); t != nil {
-		fmt.Fprintf(os.Stderr, "dex: session %s: %v (dropped)\n", id, t)
+		fmt.Fprintf(stderr, "dex: session %s: %v (dropped)\n", id, t)
 	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
 		// which no reader older than agentsession v0.0.18 opens it.
-		fmt.Fprintf(os.Stderr, "dex: session %s was written as %s; this dex writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
+		fmt.Fprintf(stderr, "dex: session %s was written as %s; this dex writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
 	}
 	if cwd := sess.Header().CWD; cwd != "" && cwd != o.Dir {
-		fmt.Fprintf(os.Stderr, "dex: session was recorded in %s, continuing in %s\n", cwd, o.Dir)
+		fmt.Fprintf(stderr, "dex: session was recorded in %s, continuing in %s\n", cwd, o.Dir)
 	}
 	return s, nil
 }
@@ -922,7 +955,15 @@ func (o Options) childPolicy(eng *atomic.Pointer[agentpolicy.Engine], an *tool.A
 			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
 				reason += "; about: " + v.Subject
 			}
-			if o.Approve == nil || !o.Approve(info.Call, reason) {
+			if o.Approve == nil {
+				// A front with no way to put a question from inside a
+				// sub-agent's run (the terminal client answers the
+				// calls a run leaves pending, and a sub-agent's run is
+				// not the parent's) refuses, and says what to do: make
+				// the call from the main agent, where it can be asked.
+				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the explore sub-agent cannot ask you (" + v.Reason + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}, nil
+			}
+			if !o.Approve(info.Call, reason) {
 				o.log("  ✗ %s denied (explore)", info.Call.Name)
 				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: deniedOutput, By: agentpolicy.ByHuman}, nil
 			}

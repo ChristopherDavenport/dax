@@ -108,7 +108,25 @@ func TestFronts(t *testing.T) {
 	} else if _, ok := f.(*printFront); !ok {
 		t.Fatalf("front is %T", f)
 	}
-	if _, err := selectFront("tui", "", frontInfo{}); err == nil || !strings.Contains(err.Error(), "want repl") {
+	if f, err := selectFront("tui", "", frontInfo{}); err != nil {
+		t.Fatal(err)
+	} else if _, ok := f.(*tuiFront); !ok {
+		t.Fatalf("front is %T", f)
+	}
+	// -p wins over the name.
+	if f, _ := selectFront("tui", "hello", frontInfo{Prompt: "hello"}); f == nil {
+		t.Fatal("-p selects print")
+	} else if _, ok := f.(*printFront); !ok {
+		t.Fatalf("front is %T", f)
+	}
+	if _, err := selectFront("gui", "", frontInfo{}); err == nil || !strings.Contains(err.Error(), "want tui or repl") {
 		t.Fatalf("err = %v", err)
+	}
+	// With no name, standard input and output decide; under go test they
+	// are not a terminal, so it is the REPL.
+	if f, err := selectFront("", "", frontInfo{}); err != nil {
+		t.Fatal(err)
+	} else if _, ok := f.(*replFront); !ok {
+		t.Fatalf("with no terminal the default front is %T", f)
 	}
 }

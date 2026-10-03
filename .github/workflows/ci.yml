@@ -1,12 +1,21 @@
 name: CI
 
+# Manual until the repository has a DEX_DEPS_TOKEN secret. dex depends on
+# agentconsole, which is private, so `go` cannot fetch it on a runner
+# without a token that can read it: a fine-grained personal access token
+# with read access to the agentconsole repository (and the sibling
+# modules, if they are private too), stored as the DEX_DEPS_TOKEN secret.
+# Until then the gate is local: GOWORK=off GOFLAGS=-mod=readonly make check.
+# Once the secret exists, add `push: {branches: [main]}` and `pull_request:`
+# beside workflow_dispatch.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  GOPRIVATE: github.com/ChristopherDavenport/*
 
 jobs:
   test:
@@ -22,6 +31,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
+      - name: Let git fetch the private modules
+        env:
+          DEX_DEPS_TOKEN: ${{ secrets.DEX_DEPS_TOKEN }}
+        run: |
+          test -n "$DEX_DEPS_TOKEN" || { echo "the DEX_DEPS_TOKEN secret is not set; see the comment at the top of this file"; exit 1; }
+          git config --global url."https://x-access-token:${DEX_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
       - name: Build
         run: make build
       - name: Vet
@@ -37,6 +52,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+      - name: Let git fetch the private modules
+        env:
+          DEX_DEPS_TOKEN: ${{ secrets.DEX_DEPS_TOKEN }}
+        run: |
+          test -n "$DEX_DEPS_TOKEN" || { echo "the DEX_DEPS_TOKEN secret is not set; see the comment at the top of this file"; exit 1; }
+          git config --global url."https://x-access-token:${DEX_DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
       - name: Check formatting
         run: make fmt
       - name: Check go.mod and go.sum are tidy

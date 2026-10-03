@@ -112,7 +112,7 @@ keys somewhere; a repository does not get to make them.)
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
-| `-front repl` | the front end (only `repl`) |
+| `-front tui\|repl` | the front end; default `tui` when standard input and output are a terminal, `repl` otherwise; `-p` always prints |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
@@ -393,13 +393,59 @@ machine matters.
   credential-file path variables such as `KUBECONFIG` (they pass through to
   commands), and denial of service by a model that loops (use `Ctrl-C`).
 
+## The terminal client
+
+On a terminal, `dex` opens the terminal client
+([agentconsole](https://github.com/ChristopherDavenport/agentconsole)) over
+the same session: the conversation rendered from the session's record, with
+the run's live deltas on top. Before it takes the screen dex prints its start
+lines (provider and model, the session, the policy in force, the tools, any
+`omitted:` line and any warning such as a store whose permissions were fixed)
+and, if there are warnings or omissions, waits for Enter, since the client
+uses the alternate screen; what dex noted during the run is printed when it
+exits.
+
+| key | |
+|---|---|
+| Enter | send a prompt, or steer the run in flight |
+| Ctrl-C | abort the run; quit when idle (a second one quits at once) |
+| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
+| PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
+| Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full |
+| Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
+| Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
+
+A call the policy asks about is a permission: the panel shows the call and
+the reason, which is the policy's with what it is asking about added: the
+rule that fired, the secret-looking path, the git config key that names a
+program, the part of a command line. Everything that can ask is answered on
+screen; nothing reads standard input once the client has the terminal. Two
+things cannot be a permission and are handled as follows:
+
+- A call the **explore sub-agent** makes that the policy asks about: the
+  client answers the calls its own agent's run left pending, and the
+  sub-agent's run is not that run. The call is refused with a reason that
+  tells the model to make it from the main agent, where it is asked.
+- A **question a tool asks mid-call** (MCP elicitation): the client has no
+  screen for it yet, so it is declined.
+
+A call stamped as auto-allowed that changed before it ran fails with "the
+command changed since it was allowed ... ask again", which shows in the
+transcript.
+
 ## In the REPL
 
-A line typed while a run is in flight steers it and lands before the next
-model call; `/follow text` queues a follow-up that runs once the model
-would have stopped; `/abort` aborts. Between runs: `/model name`,
-`/think on|off`, `/tools`, `/session`, `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has letters, digits, `-` and `_`, and no `__`),
-`/mcp remove <label>`, `/quit`.
+`dex -front repl` (the default when not on a terminal) is a line REPL with
+slash commands the terminal client does not have yet, since the client
+takes the input line itself. A line typed while a run is in flight steers
+it and lands before the next model call; `/follow text` queues a follow-up
+that runs once the model would have stopped; `/abort` aborts. Between runs:
+`/model name`, `/think on|off`, `/tools`, `/session`, `/mcp add <name>
+<command>` (tools are `mcp__<name>__<tool>`; a name has letters, digits,
+`-` and `_`, and no `__`), `/mcp remove <label>`, `/quit`. In the terminal
+client use the flags and the config for the model, thinking and MCP servers
+(`-model`, `-think`, `mcp_servers`), and Ctrl-C to quit; `/compact` does not
+exist in either (use `-compact N`).
 
 ## Sessions
 
@@ -427,6 +473,10 @@ are read too.
 
 ```sh
 make check    # gofmt, go mod tidy -diff, go vet, staticcheck, govulncheck, go test -race
+
+# CI is manual (workflow_dispatch) until the repository has a DEX_DEPS_TOKEN secret:
+# agentconsole is private, so a runner needs a fine-grained token with read
+# access to it. The gate is `GOWORK=off GOFLAGS=-mod=readonly make check` locally.
 make build    # ./dex
 ```
 
