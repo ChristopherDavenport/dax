@@ -113,7 +113,7 @@ type Options struct {
 	// every such question unasked, which the tool takes as a cancel.
 	Elicit agenttool.Elicitor
 	// MCP are stdio MCP servers started with the session, each offering
-	// its tools under its name as the prefix. Their stderr is dex's.
+	// its tools as mcp__<Name>__<tool>. Their stderr is dex's.
 	MCP []MCPServer
 	// Agents adds the explore child agent as a tool.
 	Agents bool
@@ -328,7 +328,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
 	for _, m := range o.MCP {
-		kopts = append(kopts, agentkit.WithMCP(m.Command, mcpclient.WithPrefix(m.Name)))
+		kopts = append(kopts, agentkit.WithMCP(m.Command, mcpclient.WithPrefix("mcp__"+m.Name)))
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
