@@ -222,7 +222,7 @@ func run() error {
 	f, err := selectFront(*frontName, *once, frontInfo{
 		Provider: settings.Provider, Model: m.Name, Dir: dir, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy),
-	})
+	}, processEnv(*root != ""))
 	if err != nil {
 		return err
 	}
@@ -230,6 +230,11 @@ func run() error {
 	f.Prepare(&opts)
 	sess, err := openSession(ctx, opts, *resume)
 	if err != nil {
+		// What the front held back, a warning about the store say, is
+		// shown before the error.
+		if a, ok := f.(interface{ Abandon() }); ok {
+			a.Abandon()
+		}
 		return err
 	}
 	defer sess.Close()

@@ -19,6 +19,7 @@ require (
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.14
 	github.com/anthropics/anthropic-sdk-go v1.74.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	golang.org/x/term v0.45.0
 	google.golang.org/genai v1.71.0
 )
 

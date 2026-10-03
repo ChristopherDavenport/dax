@@ -98,35 +98,87 @@ func TestSelectedProviderWithoutItsKeyFailsBeforeAnyRequest(t *testing.T) {
 }
 
 func TestFronts(t *testing.T) {
-	if f, err := selectFront("repl", "", frontInfo{}); err != nil {
-		t.Fatal(err)
-	} else if _, ok := f.(*replFront); !ok {
-		t.Fatalf("front is %T", f)
+	none := frontEnv{recording: true}
+	both := frontEnv{stdinTTY: true, stdoutTTY: true, recording: true}
+	kind := func(f front) string {
+		switch f.(type) {
+		case *replFront:
+			return "repl"
+		case *printFront:
+			return "print"
+		case *tuiFront:
+			return "tui"
+		}
+		return "?"
 	}
-	if f, _ := selectFront("repl", "hello", frontInfo{Prompt: "hello"}); f == nil {
-		t.Fatal("-p selects print")
-	} else if _, ok := f.(*printFront); !ok {
-		t.Fatalf("front is %T", f)
+	for _, tc := range []struct {
+		name, prompt string
+		env          frontEnv
+		want         string
+		wantErr      string
+	}{
+		{"repl", "", none, "repl", ""},
+		{"repl", "", both, "repl", ""},
+		{"tui", "", both, "tui", ""},
+		{"", "", both, "tui", ""},
+		{"", "", none, "repl", ""},
+		{"", "", frontEnv{stdinTTY: true, recording: true}, "repl", ""},
+		{"", "", frontEnv{stdoutTTY: true, recording: true}, "repl", ""},
+		// -p wins over everything.
+		{"repl", "hello", none, "print", ""},
+		{"tui", "hello", both, "print", ""},
+		{"", "hello", both, "print", ""},
+		// No session store: the default is the REPL, and asking for the
+		// terminal client by name is refused plainly.
+		{"", "", frontEnv{stdinTTY: true, stdoutTTY: true}, "repl", ""},
+		{"tui", "", frontEnv{stdinTTY: true, stdoutTTY: true}, "", `the terminal client needs a session store; drop -sessions "" or use -front repl`},
+		{"repl", "", frontEnv{stdinTTY: true, stdoutTTY: true}, "repl", ""},
+		// The terminal client needs a terminal at both ends.
+		{"tui", "", none, "", "needs a terminal"},
+		{"tui", "", frontEnv{stdinTTY: true, recording: true}, "", "needs a terminal"},
+		{"tui", "", frontEnv{stdoutTTY: true, recording: true}, "", "needs a terminal"},
+		{"gui", "", both, "", "want tui or repl"},
+	} {
+		f, err := selectFront(tc.name, tc.prompt, frontInfo{Prompt: tc.prompt}, tc.env)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("selectFront(%q, %q, %+v) err = %v, want containing %q", tc.name, tc.prompt, tc.env, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || kind(f) != tc.want {
+			t.Errorf("selectFront(%q, %q, %+v) = %T, %v; want %s", tc.name, tc.prompt, tc.env, f, err, tc.want)
+		}
 	}
-	if f, err := selectFront("tui", "", frontInfo{}); err != nil {
-		t.Fatal(err)
-	} else if _, ok := f.(*tuiFront); !ok {
-		t.Fatalf("front is %T", f)
+	// The pause waits on the input for a prompt written to the output, so
+	// it exists only when both are terminals.
+	f, _ := selectFront("tui", "", frontInfo{}, both)
+	if !f.(*tuiFront).pause {
+		t.Error("the terminal client does not pause with both ends a terminal")
 	}
-	// -p wins over the name.
-	if f, _ := selectFront("tui", "hello", frontInfo{Prompt: "hello"}); f == nil {
-		t.Fatal("-p selects print")
-	} else if _, ok := f.(*printFront); !ok {
-		t.Fatalf("front is %T", f)
+}
+
+// A character device is not a terminal: /dev/null has the mode and
+// not the line discipline.
+func TestIsTerminalIsNotJustACharacterDevice(t *testing.T) {
+	null, err := os.Open("/dev/null")
+	if err != nil {
+		t.Skip("no /dev/null")
 	}
-	if _, err := selectFront("gui", "", frontInfo{}); err == nil || !strings.Contains(err.Error(), "want tui or repl") {
-		t.Fatalf("err = %v", err)
+	defer null.Close()
+	if fi, _ := null.Stat(); fi.Mode()&os.ModeCharDevice == 0 {
+		t.Skip("/dev/null is not a character device here")
 	}
-	// With no name, standard input and output decide; under go test they
-	// are not a terminal, so it is the REPL.
-	if f, err := selectFront("", "", frontInfo{}); err != nil {
-		t.Fatal(err)
-	} else if _, ok := f.(*replFront); !ok {
-		t.Fatalf("with no terminal the default front is %T", f)
+	if isTerminal(null) {
+		t.Error("/dev/null is a terminal")
+	}
+	r, w, _ := os.Pipe()
+	defer r.Close()
+	defer w.Close()
+	if isTerminal(r) || isTerminal(w) {
+		t.Error("a pipe is a terminal")
+	}
+	if got := processEnv(true); got.stdinTTY && got.stdoutTTY && !isTerminal(os.Stdin) {
+		t.Error("processEnv disagrees with isTerminal")
 	}
 }
