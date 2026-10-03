@@ -2,78 +2,27 @@ package tool
 
 import (
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
-// SafeWords reads a command line that is inside the safe subset and
-// returns its words, or reports that it is not.
-//
-// The subset is one simple command: words of letters, digits and
-// _ . / : @ % + , = - (and ^ or ~ after the first byte of a word, for
-// HEAD~1 and HEAD^), single-quoted strings, and double-quoted strings
-// with no $, backtick or backslash inside, separated by spaces and
-// tabs. No separators, no operators, no comments, no expansions, no
-// globs, no braces, no escapes, no newline, no non-ASCII bytes. The
-// first word may not contain =, which would make it an assignment.
-//
-// A command inside the subset means to bash exactly what these words
-// say, which is why the policy can decide it from them. Everything
-// outside it is not wrong, only not decided here: it asks.
+// SafeWords reads a command line that is one simple command inside
+// the safe subset and returns its words, or reports that it is not:
+// no operators, no redirects, no globs. See parsePlan for the subset.
 func SafeWords(cmd string) ([]string, bool) {
-	var words []string
-	var cur strings.Builder
-	inWord := false
-	flush := func() {
-		if inWord {
-			words = append(words, cur.String())
-			cur.Reset()
-			inWord = false
-		}
+	p, ok := parsePlan(strings.Trim(cmd, " \t"))
+	if !ok || len(p.pipelines) != 1 || len(p.pipelines[0]) != 1 {
+		return nil, false
 	}
-	for i := 0; i < len(cmd); i++ {
-		c := cmd[i]
-		switch {
-		case c == ' ' || c == '\t':
-			flush()
-		case c == '\'':
-			j := strings.IndexByte(cmd[i+1:], '\'')
-			if j < 0 {
-				return nil, false
-			}
-			body := cmd[i+1 : i+1+j]
-			if !plain(body) {
-				return nil, false
-			}
-			cur.WriteString(body)
-			inWord = true
-			i += j + 1
-		case c == '"':
-			j := strings.IndexByte(cmd[i+1:], '"')
-			if j < 0 {
-				return nil, false
-			}
-			body := cmd[i+1 : i+1+j]
-			if !plain(body) || strings.ContainsAny(body, "$`\\") {
-				return nil, false
-			}
-			cur.WriteString(body)
-			inWord = true
-			i += j + 1
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			strings.IndexByte("_./:@%+,=-", c) >= 0,
-			(c == '^' || c == '~') && inWord:
-			cur.WriteByte(c)
-			inWord = true
-		default:
+	st := p.pipelines[0][0]
+	if len(st.redirects) > 0 {
+		return nil, false
+	}
+	for _, w := range st.words {
+		if w.glob {
 			return nil, false
 		}
 	}
-	flush()
-	if len(words) == 0 || strings.Contains(words[0], "=") {
-		return nil, false
-	}
-	return words, true
+	return st.texts(), true
 }
 
 // plain reports a quoted string of printable ASCII, tab included.
@@ -86,173 +35,12 @@ func plain(s string) bool {
 	return true
 }
 
-// gitFlags are the flags the read-only git commands take. A flag in
-// bare takes no value; one in valued may carry one after =. Anything
-// else, --output, --ext-diff, --textconv, -c, -C, --git-dir,
-// --work-tree, --exec-path, --no-index, is not read-only, as far as
-// this check can tell, and makes the call ask.
-var (
-	diffBare = set("--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--summary",
-		"--patch", "-p", "-u", "--no-patch", "-s", "--minimal", "--patience", "--histogram", "--no-renames",
-		"-M", "--ignore-space-change", "-b", "--ignore-all-space", "-w", "--ignore-space-at-eol",
-		"--ignore-blank-lines", "--function-context", "-W", "--full-index", "--binary", "--exit-code",
-		"--quiet", "--check", "--compact-summary", "--raw", "-z", "--no-ext-diff", "--no-textconv",
-		"--no-color", "-R", "--text", "-a", "--dirstat", "--word-diff", "--find-renames", "--abbrev",
-		"--color", "--stat-count")
-	diffValued = set("--stat", "--unified", "--color", "--word-diff", "--abbrev", "--find-renames",
-		"--diff-filter", "--dirstat", "--stat-width", "--stat-count", "--color-words", "--inter-hunk-context")
-	statusBare = set("-s", "--short", "-b", "--branch", "--porcelain", "--long", "--ignored", "-u", "-uno",
-		"-unormal", "-uall", "--untracked-files", "--no-renames", "--renames", "-z", "--show-stash",
-		"--ahead-behind", "--no-ahead-behind", "-v", "--verbose")
-	statusValued = set("--porcelain", "--ignored", "--untracked-files")
-	logBare      = set("--oneline", "--graph", "--decorate", "--no-decorate", "--all", "--branches", "--tags",
-		"--remotes", "-i", "--regexp-ignore-case", "-E", "--extended-regexp", "-F", "--fixed-strings",
-		"--all-match", "--invert-grep", "--abbrev-commit", "--no-abbrev-commit", "--relative-date",
-		"--reverse", "--merges", "--no-merges", "--first-parent", "--follow", "--topo-order", "--date-order",
-		"--author-date-order", "--left-right", "--cherry-pick", "--cherry", "--no-walk", "--parents",
-		"--children", "--source", "-m", "--stat", "--cached")
-	logValued = set("--decorate", "--max-count", "--skip", "--since", "--until", "--after", "--before",
-		"--author", "--committer", "--grep", "--pretty", "--format", "--date", "--abbrev-commit")
-	numFlag = regexp.MustCompile(`^-(\d+|[nUM]\d+)$`)
-)
-
 func set(names ...string) map[string]bool {
 	m := make(map[string]bool, len(names))
 	for _, n := range names {
 		m[n] = true
 	}
 	return m
-}
-
-var lsFlags = regexp.MustCompile(`^-[aAlh1dFtrSsiRkp]+$`)
-var lsLong = set("--all", "--almost-all", "--human-readable", "--classify", "--directory", "--recursive",
-	"--reverse", "--size", "--inode")
-
-var upperName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
-
-// ReadOnlyArgs reports whether a command of the safe subset is one of the
-// read-only invocations dex allows without asking, or is not one of
-// the commands this check governs at all (and so is for the rules to
-// decide). It returns false for a governed command with an argument it
-// cannot show is read-only: a flag outside the allowlist, a path that
-// leaves dir, or a global option before the git subcommand.
-func ReadOnlyArgs(words []string, dir string) bool {
-	switch words[0] {
-	case "git":
-		if len(words) == 1 {
-			return true
-		}
-		if strings.HasPrefix(words[1], "-") {
-			return false // -c, -C, --git-dir, --exec-path ...
-		}
-		var bare, valued map[string]bool
-		switch words[1] {
-		case "status":
-			bare, valued = statusBare, statusValued
-		case "diff":
-			bare, valued = merge(diffBare), diffValued
-			bare["--cached"], bare["--staged"], bare["--merge-base"] = true, true, true
-		case "log", "show":
-			bare, valued = merge(diffBare, logBare), merge(diffValued, logValued)
-		default:
-			return true
-		}
-		for _, a := range words[2:] {
-			if a == "--" {
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				name, val, hasVal := strings.Cut(a, "=")
-				switch {
-				case numFlag.MatchString(a):
-				case hasVal && valued[name] && !strings.Contains(val, "%G"):
-				case !hasVal && bare[name]:
-				default:
-					return false
-				}
-				continue
-			}
-			// rev:path, :path and the :/ and :(magic) pathspecs name
-			// what is in the repository, which may be above the
-			// workspace; they ask.
-			if strings.Contains(a, ":") || !inWorkspace(a, dir) {
-				return false
-			}
-		}
-		return true
-	case "ls":
-		for _, a := range words[1:] {
-			switch {
-			case a == "--":
-			case strings.HasPrefix(a, "--"):
-				if !lsLong[a] {
-					return false
-				}
-			case strings.HasPrefix(a, "-"):
-				if !lsFlags.MatchString(a) {
-					return false
-				}
-			case !inWorkspace(a, dir):
-				return false
-			}
-		}
-		return true
-	case "pwd":
-		return len(words) == 1
-	case "go":
-		if len(words) == 1 {
-			return true
-		}
-		switch words[1] {
-		case "version":
-			return len(words) == 2
-		case "env":
-			names := 0
-			for _, a := range words[2:] {
-				switch {
-				case a == "-json":
-				case upperName.MatchString(a):
-					names++
-				default:
-					return false // -w, -u, -changed, a NAME=value
-				}
-			}
-			return names > 0 // bare go env dumps the whole environment
-		}
-		return true
-	}
-	return true
-}
-
-// Allowlisted reports whether the command is one dex runs without
-// asking when ReadOnlyArgs agrees, as opposed to one the user's rules
-// decide: git status, diff, log and show, ls, pwd, go version and go
-// env.
-func Allowlisted(words []string) bool {
-	switch words[0] {
-	case "ls", "pwd":
-		return true
-	case "git":
-		if len(words) > 1 {
-			switch words[1] {
-			case "status", "diff", "log", "show":
-				return true
-			}
-		}
-	case "go":
-		return len(words) > 1 && (words[1] == "version" || words[1] == "env")
-	}
-	return false
-}
-
-func merge(sets ...map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for _, s := range sets {
-		for k := range s {
-			out[k] = true
-		}
-	}
-	return out
 }
 
 // inWorkspace reports whether a path argument, absolute or relative
@@ -263,7 +51,11 @@ func merge(sets ...map[string]bool) map[string]bool {
 // every link on the way must lead back inside. ~ is never a path
 // here: bash would have expanded it, but a quoted one is a file named
 // ~ and either way it is not the workspace.
-func inWorkspace(arg, dir string) bool {
+func inWorkspace(arg, dir string) bool { return inWorkspaceFrom(arg, dir, dir) }
+
+// inWorkspaceFrom is inWorkspace for an argument of a command run in
+// cwd, which is dir or below it after a cd.
+func inWorkspaceFrom(arg, cwd, dir string) bool {
 	if strings.HasPrefix(arg, "~") {
 		return false
 	}
@@ -274,7 +66,7 @@ func inWorkspace(arg, dir string) bool {
 	}
 	p := arg
 	if !filepath.IsAbs(p) {
-		p = filepath.Join(dir, p)
+		p = filepath.Join(cwd, p)
 	}
 	roots := []string{filepath.Clean(dir)}
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
@@ -337,17 +129,3 @@ func GitEnv() []string {
 // GitEnv, and GOTOOLCHAIN=local so that go version and go env cannot
 // download and run the toolchain a go.mod names.
 func AutoEnv() []string { return append(GitEnv(), "GOTOOLCHAIN=local") }
-
-// ReadOnlyGit reports whether words is a read-only git diff, log or
-// show in the safe subset, the commands whose output the bash tool
-// runs with --no-ext-diff --no-textconv added.
-func ReadOnlyGit(words []string, dir string) bool {
-	if len(words) < 2 || words[0] != "git" || !ReadOnlyArgs(words, dir) {
-		return false
-	}
-	switch words[1] {
-	case "diff", "log", "show":
-		return true
-	}
-	return false
-}

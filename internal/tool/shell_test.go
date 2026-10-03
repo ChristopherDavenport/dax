@@ -20,7 +20,7 @@ var wd = func() string {
 func subjects(t *testing.T, cmd string) ([]subj, error) {
 	t.Helper()
 	args, _ := json.Marshal(map[string]string{"command": cmd})
-	got, err := BashSubjects(wd)(args)
+	got, err := BashSubjects(wd, 0)(args)
 	var have []subj
 	for _, s := range got {
 		var m map[string]string
@@ -46,15 +46,21 @@ func TestBashSubjects(t *testing.T) {
 	}{
 		// Inside the safe subset: one subject, words normalised.
 		{"git status", []subj{{"", "git status", "git status"}}, ""},
-		{"  git   status   -s ", []subj{{"", "git status -s", "git   status   -s"}}, ""},
-		{`ls "a b"`, []subj{{"", "ls a b", `ls "a b"`}}, ""},
+		{"  git   status   -s ", []subj{{"", "git status -s", "git status -s"}}, ""},
+		{`ls "a b"`, []subj{{"", "ls a b", "ls a b"}}, ""},
 		// Governed but not read-only: the command, then a sentinel.
-		{"git log --output=/x", []subj{{"", "git log --output=/x", "git log --output=/x"}, {"", s + "git log --output=/x", "git log --output=/x"}}, ""},
+		{"git log --output=/x", []subj{{"", "git log --output=/x", "git log --output=/x"}, {"", s + "git log --output=/x", "git log --output=/x  [the flag --output=/x is not known to be read-only]"}}, ""},
 		// Outside the subset: the parts a rule can name, then a sentinel.
-		{"git status && rm -rf /", []subj{{"", "git status", "git status"}, {"", "rm -rf /", "rm -rf /"}, {"", s + "git status && rm -rf /", "git status && rm -rf /"}}, ""},
+		// A line in the subset is one subject per stage; rm is not a
+		// command the check governs, so the rules decide it.
+		{"git status && rm -rf /", []subj{{"", "git status", "git status"}, {"", "rm -rf /", "rm -rf /"}}, ""},
+		{"git status && git log --output=/x", []subj{{"", "git status", "git status"}, {"", "git log --output=/x", "git log --output=/x"}, {"", s + "git log --output=/x", "git log --output=/x  [the flag --output=/x is not known to be read-only]"}}, ""},
+		{"git log | head -n 5 2>&1", []subj{{"", "git log", "git log"}, {"", "head -n 5", "head -n 5"}}, ""},
+		// Outside the subset: the parts, then a sentinel.
+		{"git status; rm -rf /", []subj{{"", "git status", "git status"}, {"", "rm -rf /", "rm -rf /"}, {"", s + "git status; rm -rf /", "git status; rm -rf /"}}, ""},
 		{"a; b || c | d & e\nf", []subj{{"", "a", "a"}, {"", "b", "b"}, {"", "c", "c"}, {"", "d", "d"}, {"", "e", "e"}, {"", "f", "f"}, {"", s + "a; b || c | d & e\nf", "a; b || c | d & e\nf"}}, ""},
 		{"git log > out.txt", []subj{{"", "git log", "git log"}, {"write", "out.txt", "out.txt"}, {"", s + "git log > out.txt", "git log > out.txt"}}, ""},
-		{"go test 2>&1", []subj{{"", "go test 2>&1", "go test 2>&1"}, {"", s + "go test 2>&1", "go test 2>&1"}}, ""},
+		{"go test 2>&1", []subj{{"", "go test", "go test"}}, ""},
 		{"echo 'unterminated", nil, "unterminated quote"},
 		{"   ", nil, "empty"},
 	}
@@ -99,7 +105,6 @@ func TestTheSubjectsOfAnAskedCommandAreWhatBashRuns(t *testing.T) {
 		{">&$HOME/x", "git status >&$HOME/x", []string{"git status", "write:$HOME/x"}},
 		{">&2foo is a file named 2foo", "git status >&2foo", []string{"git status", "write:2foo"}},
 		{">&2 is a descriptor", "git status >&2", []string{"git status >&2"}},
-		{"2>&1 is a descriptor", "git status 2>&1", []string{"git status 2>&1"}},
 		{">&- closes", "git status >&-", []string{"git status >&-"}},
 		{"&>> appends", "git status &>>/x", []string{"git status", "write:/x"}},
 	}
@@ -162,7 +167,7 @@ func TestReadOnlyArgs(t *testing.T) {
 		"git status", "git status -s -b", "git status --porcelain=v2", "git diff", "git diff --cached --stat", "git diff HEAD~1 -- internal/tool",
 		"git diff --no-ext-diff --name-only", "git log --oneline -n5 -5", "git log --since=2.days --author=me --grep=fix",
 		"git log --format=%h -- cmd", "git show HEAD", "git show --stat HEAD~2", "git diff main..HEAD", "git log -U3 -p",
-		"ls", "ls -la", "ls -l ./internal", "ls --all .", "ls -- x", "pwd", "go version", "go env GOPATH GOFLAGS", "go env -json GOROOT",
+		"ls", "ls -la", "ls --color=always", "ls -l ./internal", "ls --all .", "ls -- x", "pwd", "go version", "go env GOPATH GOFLAGS", "go env -json GOROOT",
 		"make check", "git commit -m x", "git",
 	}
 	bad := []string{
@@ -172,7 +177,7 @@ func TestReadOnlyArgs(t *testing.T) {
 		"git diff --no-index /dev/null /etc/passwd", "git diff --no-index a b", "git log --exec-path", "git status --git-dir=x",
 		"git diff -C", "git log --unknown", "git status -x", "git diff /etc/passwd", "git log -- /etc", "git show ../x", "git diff -- ../x",
 		"git log -- '~/x'", "git diff HEAD:../../x ../..",
-		"ls /etc", "ls ..", "ls ../x", "ls -la /", "ls -I x", "ls --color=always", "ls -z", "ls ./../..",
+		"ls /etc", "ls ..", "ls ../x", "ls -la /", "ls -I x", "ls -z", "ls ./../..",
 		"pwd -P", "pwd x", "go env", "go env -json", "go version -m x", "go env -w GOFLAGS=-x", "go env -u GOFLAGS", "go env GOFLAGS=-x", "go env -changed",
 	}
 	for _, cmd := range good {

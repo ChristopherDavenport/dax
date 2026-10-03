@@ -351,7 +351,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		kopts = append(kopts, agentkit.WithMemory(mem, "user", ProjectScope(o.Dir)))
 	}
 	if o.Policy != nil {
-		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(o.Dir), policy.Options()...))
+		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(o.Dir, o.MaxReadBytes), policy.Options()...))
 	}
 	if o.Agents {
 		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env)))

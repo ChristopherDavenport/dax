@@ -175,41 +175,74 @@ not `go testing`.
 dex ships this default:
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls`, `skill`,
-  `memory_search`, and the commands `git status`, `git diff`, `git log`,
-  `git show`, `go version`, `go env NAME`, `ls` and `pwd`, as far as they
-  are in the safe subset below. `go test`, `go build`, `go vet` and `go list`
-  are not on the list: they run the repository's code (a `TestMain`, cgo,
-  a vet tool, a toolchain named in `go.mod`), so a hostile repository
-  would run code as you on the model's say-so;
+  `memory_search`, and the read-only bash commands listed below;
 - **asks**: `write`, `edit`, every other command, memory writes, and every
-  MCP tool.
+  MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
+  repository's code (a `TestMain`, cgo, a vet tool), so a hostile
+  repository would run code as you on the model's say-so.
 
 **What runs without asking is a safe subset, not a blacklist.** A `bash`
-call is auto-allowed only when both hold:
+call is auto-allowed only when it parses in a strict subset of the syntax
+and every part of it is a command dex knows to be read-only, with
+arguments that are.
 
-1. It is one simple command made of plain words and simple quotes:
-   letters, digits and `_ . / : @ % + , = -` (and `~` or `^` inside a word,
-   as in `HEAD~1`), single-quoted strings, and double-quoted strings with
-   no `$`, backtick or backslash. No `;`, `&`, `|`, `<`, `>`, `#`, `$`,
-   backtick, backslash, newline, glob (`* ? [`), `{`, a word-initial `~`,
-   `=` in the command word, or non-ASCII byte. Anything else asks, whatever
-   the rules say; it is never denied for that.
-2. Its arguments pass a per-command check: `git status|diff|log|show` with
-   read-only flags from an allowlist only (not `--output`, `-o`,
-   `--ext-diff`, `--textconv`, `-c`, `-C`, `--git-dir`, `--work-tree`,
-   `--exec-path`, `--no-index`), `ls` with listing flags, `pwd`, `go version`
-   and `go env NAME`; and every path argument stays inside the working
-   directory after cleaning and resolving links. Git runs with the
-   repository's fsmonitor, pager, ssh command and hooks configuration
-   neutralised, and `git diff|log|show` run with `--no-ext-diff
-   --no-textconv`.
+*The syntax*: words of letters, digits and `_ . / : @ % + , = -` (and `~`
+or `^` inside a word, as in `HEAD~1`), single-quoted strings, and
+double-quoted strings with no `$`, backtick or backslash; the operators
+`&&` and `|`; at the end of a command `2>&1`, `2>/dev/null` or
+`>/dev/null` as a separate word; and `*` or `?` in the arguments of `ls`.
+Anything else, `;`, `&`, `||`, `<`, any other `>`, `#`, `$`, backtick,
+backslash, parentheses, braces, `[`, a newline, `=` in the command word, a
+non-ASCII byte, asks. It is never denied for that.
 
-A command that is not in the subset is still cut into its subcommands, so
-a deny or ask rule for `rm` reaches `git status && rm x`, a redirect to a
-file is shown as a write to its target, and the question names the part it
-is asking about. The cut is for the question and for deny and ask rules.
-Nothing is allowed because of it: a command outside the subset is allowed
-only by a bare `bash` allow rule or `"fallback": "allow"`.
+*The commands* (`&&` joins any of them; after a `|` only `head`, `tail`,
+`wc`, `sort`, `uniq`, `cut` and `grep`, with flags from a short list and no
+file arguments):
+
+- `git status`, `diff`, `log`, `show`, `branch` (listing forms only, a name
+  only with `--list`), `rev-parse`, `ls-files`, `remote` (`-v` only), `blame`,
+  `stash list`, `tag` (listing forms only), `describe`, `shortlog` and
+  `config` (`--get`, `--get-all`, `--get-regexp`, `--list`), with read-only
+  flags from an allowlist, including combined short flags (`-sb`) and
+  space-separated values (`-n 5`, `--author x`, `-S foo`). Not
+  `--output`, `-o`, `--ext-diff`, `--textconv`, `-c`, `-C`, `--git-dir`,
+  `--no-index`, or `%G` in a format.
+- `ls` (listing flags; a glob is expanded and checked), `pwd`, `go version`,
+  `go env NAME`.
+- `cat`, `head`, `tail`, `wc` and `grep` (not recursive) on named files.
+  Each file must be a regular file inside the working directory no larger
+  than `max_read_bytes` (default 2 MiB), checked when the call is decided,
+  and what bash returns is capped at 50 KiB however big it is; `grep -r`
+  asks, use the `grep` tool.
+- `cd <directory inside the workspace> && ...`: the directory is checked,
+  and what follows is checked relative to it.
+
+*The arguments*: every path stays inside the working directory with links
+resolved and no `..` component at all, and no git revision or pathspec
+contains a `:` (`HEAD:file` and `:/file` name what is in the repository,
+which may be above the working directory).
+
+*git*: before a git command runs unasked, dex asks git for the config it
+would use (`git config --list --show-scope`). If the repository's own
+config, or anything it includes, names a program (`filter.*.clean`,
+`smudge` or `process`, `diff.*.textconv` or `command`, `core.askPass`,
+`editor`, `gitProxy`, `attributesFile`, `remote.*.uploadpack` or
+`receivepack`, `credential.helper`, `merge.*.driver`, `pager.*`,
+`protocol.*.allow = always`, ...) the call asks and the question names the
+key. Your own global and system config are trusted. The auto-allowed run
+switches off the rest: no fsmonitor, pager, ssh command or hooks, the gpg
+programs are `/bin/false`, `--no-ext-diff --no-textconv` are added to
+`diff`, `log` and `show`, and `go` runs with `GOTOOLCHAIN=local`. A command
+you approve runs as you would run it, hooks and `GIT_CONFIG_*` included.
+
+A command outside the subset is still cut into its parts, so a deny or ask
+rule for `rm` reaches `git status; rm x`, a redirect to a file is shown as
+a write to its target, and the question names the part it is asking about.
+The cut is for the question and for deny and ask rules. Nothing is allowed
+because of it: a command outside the subset is allowed only by a bare
+`bash` allow rule or `"fallback": "allow"`. Inside the subset a command
+the list above does not govern (`make`, `rm`) is for your rules, one stage
+at a time.
 
 **Trusting `go test` for your own repositories.** Put the rule in your
 **user** config, `~/.config/dex/config.json`, never a repository's (a

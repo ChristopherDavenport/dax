@@ -229,10 +229,15 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 	}
 	// The flags that switch off an external diff and textconv are added
 	// to the commands that take them.
-	for cmd, want := range map[string]string{"git diff": "git diff --no-ext-diff --no-textconv", "git log -p -n1": "git log --no-ext-diff --no-textconv -p -n1", "git show HEAD": "git show --no-ext-diff --no-textconv HEAD"} {
-		c := command(context.Background(), dir, cmd, DefaultEnv(nil))
-		if got := strings.Join(c.Args, " "); got != want {
-			t.Errorf("%s runs as %q, want %q", cmd, got, want)
+	for cmd, want := range map[string]string{
+		"git diff":       "'git' 'diff' --no-ext-diff --no-textconv",
+		"git log -p -n1": "'git' 'log' --no-ext-diff --no-textconv '-p' '-n1'",
+		"git show HEAD":  "'git' 'show' --no-ext-diff --no-textconv 'HEAD'",
+		"git status":     "'git' 'status'",
+	} {
+		c := (&Analyzer{Dir: dir}).Check(context.Background(), cmd)
+		if !c.Auto || c.Render() != want {
+			t.Errorf("%s runs as %q (auto %v), want %q", cmd, c.Render(), c.Auto, want)
 		}
 	}
 	// The diff is still a diff.
@@ -334,7 +339,7 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 	}
 	// The auto-allowed path is neutralised, and only it.
 	hasGitEnv := func(cmd string) bool {
-		for _, kv := range command(ctx, dir, cmd, DefaultEnv(nil)).Env {
+		for _, kv := range command(ctx, &Analyzer{Dir: dir}, cmd, DefaultEnv(nil)).Env {
 			if kv == "GIT_CONFIG_COUNT=8" {
 				return true
 			}
@@ -373,5 +378,15 @@ func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
 	out, _ := call(context.Background(), b, `{"command":"go env GOTOOLCHAIN && true"}`)
 	if !strings.Contains(out, "auto") {
 		t.Errorf("an approved go command's GOTOOLCHAIN was changed: %q", out)
+	}
+}
+
+func TestBashOutputIsBoundedInMemory(t *testing.T) {
+	out, err := call(context.Background(), Bash(t.TempDir()), `{"command":"head -c 5000000 /dev/zero | tr '\\0' x"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) > maxBashBytes+200 || !strings.Contains(out, "truncated, 4948800 bytes omitted") || !strings.Contains(out, "[exit 0]") {
+		t.Errorf("output of %d bytes, tail %q", len(out), out[max(0, len(out)-80):])
 	}
 }
