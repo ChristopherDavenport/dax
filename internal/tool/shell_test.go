@@ -2,12 +2,20 @@ package tool
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-const wd = "/work/proj"
+// wd is a real directory: deciding a git command reads its config.
+var wd = func() string {
+	d, err := os.MkdirTemp("", "dex-tool-")
+	if err != nil {
+		panic(err)
+	}
+	return d
+}()
 
 func subjects(t *testing.T, cmd string) ([]subj, error) {
 	t.Helper()

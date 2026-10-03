@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -50,8 +51,19 @@ func BashSubjects(dir string) agentpolicy.Subjects {
 		}
 		if words, ok := SafeWords(cmd); ok {
 			out := []agentpolicy.Subject{mk("", "command", strings.Join(words, " "), cmd)}
-			if !ReadOnlyArgs(words, dir) {
+			switch {
+			case !ReadOnlyArgs(words, dir):
 				out = append(out, mk("", "command", sentinel+cmd, cmd))
+			case words[0] == "git":
+				// A repository's own config can name programs git runs
+				// under status, diff, log and show. Ask, and say which.
+				key, err := ExecConfigKey(context.Background(), dir)
+				if err != nil {
+					key = "git's configuration could not be read: " + err.Error()
+				}
+				if key != "" {
+					out = append(out, mk("", "command", sentinel+cmd, cmd+"  [git config runs a program: "+key+"]"))
+				}
 			}
 			return out, nil
 		}
