@@ -335,6 +335,9 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		}
 	}
 	if o.MemoryDir != "" {
+		if err := secureDir(o.MemoryDir); err != nil {
+			return nil, fmt.Errorf("memory: %w", err)
+		}
 		mem, err := filestore.Open(o.MemoryDir)
 		if err != nil {
 			return nil, fmt.Errorf("memory: %w", err)
@@ -436,7 +439,7 @@ func New(ctx context.Context, o Options) (*Session, error) {
 	if o.Root == "" {
 		return open(ctx, o, nil, "")
 	}
-	store, err := cas.Open(o.Root, cas.WithSync(o.Sync))
+	store, err := openStore(o.Root, cas.WithSync(o.Sync))
 	if err != nil {
 		return nil, err
 	}
@@ -456,7 +459,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	if o.Root == "" {
 		return nil, errors.New("resume needs a session store")
 	}
-	store, err := cas.Open(o.Root, cas.WithSync(o.Sync))
+	store, err := openStore(o.Root, cas.WithSync(o.Sync))
 	if err != nil {
 		return nil, err
 	}
@@ -765,7 +768,7 @@ func Import(ctx context.Context, root, path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	store, err := cas.Open(root)
+	store, err := openStore(root)
 	if err != nil {
 		return "", err
 	}
@@ -782,7 +785,7 @@ func Import(ctx context.Context, root, path string) (string, error) {
 // younger than grace. It returns the number of objects packed or
 // removed. A dex holding a session may keep writing meanwhile.
 func GC(ctx context.Context, root string, sweep bool, grace time.Duration) (int, error) {
-	store, err := cas.Open(root)
+	store, err := openStore(root)
 	if err != nil {
 		return 0, err
 	}
@@ -798,7 +801,7 @@ func GC(ctx context.Context, root string, sweep bool, grace time.Duration) (int,
 // reads is kept, with the entries whose objects are whole, and the
 // damaged log is kept beside it.
 func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
-	store, err := cas.Open(root)
+	store, err := openStore(root)
 	if err != nil {
 		return cas.RepairReport{}, err
 	}
