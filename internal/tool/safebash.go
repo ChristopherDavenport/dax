@@ -165,12 +165,11 @@ func ReadOnlyArgs(words []string, dir string) bool {
 				name, val, hasVal := strings.Cut(a, "=")
 				switch {
 				case numFlag.MatchString(a):
-				case hasVal && valued[name]:
+				case hasVal && valued[name] && !strings.Contains(val, "%G"):
 				case !hasVal && bare[name]:
 				default:
 					return false
 				}
-				_ = val
 				continue
 			}
 			if !inWorkspace(a, dir) {
@@ -270,11 +269,15 @@ func inWorkspace(arg, dir string) bool {
 // to a read-only git diff, log or show itself; see ReadOnlyGit.
 func GitEnv() []string {
 	return []string{
-		"GIT_CONFIG_COUNT=4",
+		"GIT_CONFIG_COUNT=8",
 		"GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=false",
 		"GIT_CONFIG_KEY_1=core.pager", "GIT_CONFIG_VALUE_1=cat",
 		"GIT_CONFIG_KEY_2=core.sshCommand", "GIT_CONFIG_VALUE_2=ssh",
 		"GIT_CONFIG_KEY_3=core.hooksPath", "GIT_CONFIG_VALUE_3=/dev/null",
+		"GIT_CONFIG_KEY_4=gpg.program", "GIT_CONFIG_VALUE_4=/bin/false",
+		"GIT_CONFIG_KEY_5=gpg.openpgp.program", "GIT_CONFIG_VALUE_5=/bin/false",
+		"GIT_CONFIG_KEY_6=gpg.x509.program", "GIT_CONFIG_VALUE_6=/bin/false",
+		"GIT_CONFIG_KEY_7=gpg.ssh.program", "GIT_CONFIG_VALUE_7=/bin/false",
 		"GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "PAGER=cat", "GIT_OPTIONAL_LOCKS=0",
 	}
 }

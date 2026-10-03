@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -17,11 +18,17 @@ import (
 // call.
 func decide(t *testing.T, s config.PolicySettings, tool, args string) (agentturn.ToolAction, string) {
 	t.Helper()
+	return decideIn(t, testDir, s, tool, args)
+}
+
+// decideIn is decide in a workspace of its own.
+func decideIn(t *testing.T, dir string, s config.PolicySettings, tool, args string) (agentturn.ToolAction, string) {
+	t.Helper()
 	p, err := Build(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng, err := agentpolicy.Build(p, Matchers(testDir), Options()...)
+	eng, err := agentpolicy.Build(p, Matchers(dir), Options()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +39,7 @@ func decide(t *testing.T, s config.PolicySettings, tool, args string) (agentturn
 	if err != nil {
 		t.Fatal(err)
 	}
-	return v.Action, v.Reason
+	return v.Action, v.Reason + " [" + v.Subject + "]"
 }
 
 func bash(cmd string) string {
@@ -41,7 +48,13 @@ func bash(cmd string) string {
 }
 
 // testDir is the workspace the decisions are made in.
-var testDir = "/work/proj"
+var testDir = func() string {
+	d, err := os.MkdirTemp("", "dex-policy-")
+	if err != nil {
+		panic(err)
+	}
+	return d
+}()
 
 var defaults = config.PolicySettings{Builtin: true, Fallback: "ask"}
 

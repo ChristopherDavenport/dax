@@ -242,3 +242,44 @@ func TestACommandOutsideTheSubsetStillRunsInBash(t *testing.T) {
 		t.Fatalf("%q, %v", out, err)
 	}
 }
+
+// A signed commit's %GG runs gpg.program. The auto-allow environment
+// replaces it, so a program a hostile .git/config names does not run.
+func TestGitEnvSwitchesOffTheGPGPrograms(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	probe := filepath.Join(t.TempDir(), "gpg-ran")
+	script := filepath.Join(t.TempDir(), "evilgpg")
+	os.WriteFile(script, []byte("#!/bin/sh\ntouch "+probe+"\n"), 0o755)
+	git := func(env []string, stdin string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null"), env...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(nil, "", "init", "-q")
+	tree := git(nil, "", "write-tree")
+	commit := "tree " + tree + "\nauthor n <e@x> 1 +0000\ncommitter n <e@x> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nmsg\n"
+	id := git(nil, commit, "hash-object", "-t", "commit", "-w", "--stdin")
+	git(nil, "", "update-ref", "HEAD", id)
+	git(nil, "", "config", "gpg.program", script)
+	git(nil, "", "config", "gpg.openpgp.program", script)
+
+	git(nil, "", "log", "--format=%GG", "-1")
+	if _, err := os.Stat(probe); err != nil {
+		t.Skip("this git does not run gpg.program for the signature placeholders; nothing to prove")
+	}
+	os.Remove(probe)
+	git(GitEnv(), "", "log", "--format=%GG", "-1")
+	if _, err := os.Stat(probe); err == nil {
+		t.Fatal("gpg.program ran under GitEnv")
+	}
+}

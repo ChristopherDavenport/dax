@@ -583,6 +583,11 @@ func (s *Session) answer(ctx context.Context, end *agentturn.RunEnd) ([]agenttur
 				continue
 			}
 			reason = v.Reason
+			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
+				// A compound command's question names the part it is
+				// about, which is also where the policy says why.
+				reason += "; about: " + v.Subject
+			}
 		}
 		if s.opts.Approve != nil && s.opts.Approve(p.Call, reason) {
 			answers = append(answers, agentturn.Approve(p.Call.CallID).WithBy(agentpolicy.ByHuman))
