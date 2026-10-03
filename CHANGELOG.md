@@ -76,6 +76,13 @@ versions may break flags and the config file.
   `extensions.*` are set, or a submodule's config names a program. Reading a
   secret-looking path asks (`read(.env)` in the user config opens one). `ls`
   glob expansions follow a `--`.
+- Security: a line with a git stage that is not auto-allowed asks when the
+  repository's config names core.fsmonitor, hooksPath, sshCommand, pager or a
+  gpg program (it runs without the neutralising environment). The explore
+  sub-agent is decided by the parent's policy for every tool, with asks put to
+  the user. Secret-path asks apply to what a link leads to and ignore case.
+  The Security model says committed secrets and tree-wide searches are not
+  caught.
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
   `DEX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the
