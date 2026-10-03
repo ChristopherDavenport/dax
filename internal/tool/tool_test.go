@@ -22,6 +22,17 @@ func call(ctx context.Context, t agenttool.Tool, args string) (string, error) {
 	return Text(res), nil
 }
 
+// newWS opens dir as a workspace for the test.
+func newWS(t testing.TB, dir string) *Workspace {
+	t.Helper()
+	ws, err := NewWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ws.Close() })
+	return ws
+}
+
 func TestEdit(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -46,7 +57,7 @@ func TestEdit(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			_, err := call(context.Background(), Edit(dir), tc.args)
+			_, err := call(context.Background(), Edit(newWS(t, dir)), tc.args)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
@@ -67,7 +78,7 @@ func TestEdit(t *testing.T) {
 func TestReadOffsetLimit(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "f"), []byte("one\ntwo\nthree\nfour\n"), 0o644)
-	out, err := call(context.Background(), Read(dir), `{"path":"f","offset":2,"limit":2}`)
+	out, err := call(context.Background(), Read(newWS(t, dir)), `{"path":"f","offset":2,"limit":2}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,9 +101,12 @@ func TestSchemas(t *testing.T) {
 		required []string
 		optional []string
 	}{
-		{Read(t.TempDir()), []string{"path"}, []string{"offset", "limit"}},
-		{Write(t.TempDir()), []string{"path", "content"}, nil},
-		{Edit(t.TempDir()), []string{"path", "old_string", "new_string"}, nil},
+		{Read(newWS(t, t.TempDir())), []string{"path"}, []string{"offset", "limit"}},
+		{Write(newWS(t, t.TempDir())), []string{"path", "content"}, nil},
+		{Edit(newWS(t, t.TempDir())), []string{"path", "old_string", "new_string"}, nil},
+		{Glob(newWS(t, t.TempDir())), []string{"pattern"}, []string{"path", "max_results"}},
+		{Grep(newWS(t, t.TempDir())), []string{"pattern"}, []string{"path", "include", "ignore_case", "max_results"}},
+		{LS(newWS(t, t.TempDir())), nil, []string{"path"}},
 		{Bash(t.TempDir()), []string{"command"}, []string{"timeout_seconds"}},
 	} {
 		var s struct {
@@ -119,7 +133,7 @@ func TestSchemas(t *testing.T) {
 
 func TestWriteCreatesDirs(t *testing.T) {
 	dir := t.TempDir()
-	_, err := call(context.Background(), Write(dir), `{"path":"a/b/c.txt","content":"hi"}`)
+	_, err := call(context.Background(), Write(newWS(t, dir)), `{"path":"a/b/c.txt","content":"hi"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

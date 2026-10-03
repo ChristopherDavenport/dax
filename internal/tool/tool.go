@@ -1,4 +1,4 @@
-// Package tool holds dex's built-in tools: read, write, edit and bash.
+// Package tool holds dex's built-in tools: read, write, edit, glob, grep, ls and bash.
 // They are written against the agenttool contract, so the same values
 // run under agentturn, under any other Open Responses loop, or behind
 // an MCP server.
@@ -13,10 +13,16 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 )
 
-// Builtins returns read, write, edit and bash rooted at dir, in the
-// order the system prompt lists them.
-func Builtins(dir string) []agenttool.Tool {
-	return []agenttool.Tool{Read(dir), Write(dir), Edit(dir), Bash(dir)}
+// Builtins returns read, write, edit, glob, grep, ls and bash, in the
+// order the system prompt lists them. The file tools are confined to
+// ws; bash runs in its directory but is not confined.
+func Builtins(ws *Workspace) []agenttool.Tool {
+	return []agenttool.Tool{Read(ws), Write(ws), Edit(ws), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir())}
+}
+
+// ReadOnly returns the tools that only look: read, glob, grep and ls.
+func ReadOnly(ws *Workspace) []agenttool.Tool {
+	return []agenttool.Tool{Read(ws), Glob(ws), Grep(ws), LS(ws)}
 }
 
 // Text returns the text a tool produced, for tests and renderers. Text
