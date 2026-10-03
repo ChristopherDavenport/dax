@@ -1,6 +1,6 @@
 module github.com/ChristopherDavenport/dex
 
-go 1.25.12
+go 1.25.0
 
 require (
 	github.com/ChristopherDavenport/agentkit v0.0.7
