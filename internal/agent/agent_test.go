@@ -13,12 +13,16 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentmemory/filestore"
+	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
+
+	"github.com/ChristopherDavenport/dex/internal/config"
+	"github.com/ChristopherDavenport/dex/internal/policy"
 )
 
 // forced is the echo model made to call one tool by name, then answer
@@ -105,6 +109,17 @@ func options(t *testing.T, model openresponses.Streamer) Options {
 	write(t, filepath.Join(o.UserDir, "skills", "greet", "SKILL.md"),
 		"---\nname: greet\ndescription: How to greet the user.\nallowed-tools: Bash(echo:*)\n---\nSay hello.\n")
 	return o
+}
+
+// confirmPolicy is dex's shipped policy: reads run, writes and
+// commands ask.
+func confirmPolicy(t *testing.T) *agentpolicy.Policy {
+	t.Helper()
+	p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &p
 }
 
 // projected closes the session, which releases it in the store, and
@@ -217,7 +232,7 @@ func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
 		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
 			ctx := context.Background()
 			o := options(t, &forced{name: "bash"})
-			o.Confirm = true
+			o.Policy = confirmPolicy(t)
 			var asked []string
 			o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
 				asked = append(asked, c.Name+": "+reason)
@@ -266,7 +281,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 		{"bash", `{"command":"echo hello"}`},
 	}}
 	o := options(t, model)
-	o.Confirm, o.TrustSkills = true, true
+	o.Policy, o.TrustSkills = confirmPolicy(t), true
 	var asked []string
 	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Arguments)
@@ -284,32 +299,25 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	if len(asked) != 0 {
 		t.Fatalf("asked about %v after the skill granted Bash(echo:*)", asked)
 	}
-	// The next message ends the grant, and bash without the skill read
-	// first is refused with a reason naming the skill (agentkit v0.0.7,
-	// #76), where it used to ask.
+	// The next message ends the grant, so bash without the skill read
+	// first falls back to the policy's default and asks. (Under an
+	// explicit ask rule on bash, agentkit v0.0.7 refuses with a reason
+	// naming the skill instead; dex leaves bash to the default so that
+	// a user's allow rule can override it.)
 	model.calls = model.calls[1:]
 	if _, err := s.Prompt(ctx, "again"); err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 0 {
-		t.Fatalf("asked about %v on the second message, want a refusal", asked)
-	}
-	var last string
-	for _, it := range s.Agent.State().Transcript {
-		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
-			last = o.Output.Text
-		}
-	}
-	if !strings.Contains(last, "skill greet") || !strings.Contains(last, "read the skill again") {
-		t.Fatalf("second message's bash output %q, want a refusal naming the skill", last)
+	if len(asked) != 1 || asked[0] != `{"command":"echo hello"}` {
+		t.Fatalf("asked %v on the second message, want one question", asked)
 	}
 	// Reading the skill again grants again.
 	model.calls = [][2]string{{"skill", `{"name":"greet"}`}, {"bash", `{"command":"echo again"}`}}
 	if _, err := s.Prompt(ctx, "greet me again"); err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 0 {
-		t.Fatalf("asked %d time(s) after the skill was read again, want none", len(asked))
+	if len(asked) != 1 {
+		t.Fatalf("asked %d time(s) in all, want the one from the second message", len(asked))
 	}
 }
 
@@ -699,7 +707,7 @@ func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
 			ctx := context.Background()
 			model := &scripted{calls: [][2]string{{"bash", `{"command":"echo ran"}`}}}
 			o := options(t, model)
-			o.Confirm = true
+			o.Policy = confirmPolicy(t)
 			s, err := New(ctx, o)
 			if err != nil {
 				t.Fatal(err)
@@ -783,7 +791,7 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 		{"bash", `{"command":"echo hello"}`},
 	}}}
 	o := options(t, model)
-	o.Confirm, o.TrustSkills, o.Agents = true, true, true
+	o.Policy, o.TrustSkills, o.Agents = confirmPolicy(t), true, true
 	var asked []string
 	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Name+" "+c.Arguments)
