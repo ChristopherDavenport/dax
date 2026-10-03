@@ -165,3 +165,21 @@ func TestReadOnlyArgsFollowsLinksOutOfTheWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizePath(t *testing.T) {
+	for in, want := range map[string]string{
+		"x": "x", "./x": "x", "a/../x": "x", "/w/x": "x", "/w/./a//b/../x": "a/x", ".": ".", "/w": ".", "a/..": ".",
+	} {
+		if got, ok := NormalizePath("/w", "", in); !ok || got != want {
+			t.Errorf("NormalizePath(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "..", "../x", "a/../../x", "/etc/passwd", "/wx/y", "/w/../x"} {
+		if got, ok := NormalizePath("/w", "", in); ok {
+			t.Errorf("NormalizePath(%q) = %q, want outside", in, got)
+		}
+	}
+	if got, ok := NormalizePath("/via", "/real", "/real/x"); !ok || got != "x" {
+		t.Errorf("real name: %q %v", got, ok)
+	}
+}

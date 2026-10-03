@@ -208,6 +208,8 @@ and ask or deny what it allows. `"builtin": false` drops the shipped allow
 list, so only your rules allow anything; `"fallback": "allow"` or `"deny"`
 changes what a call no rule names does.
 
+Path rules (`read(.env)`, `write(docs/**)`, `Read(secrets/**)`) are written relative to the working directory and match the path after cleaning, so `./.env`, `a/../.env` and the absolute path all meet the rule for `.env`, and `docs/../.git/x` is `.git/x`. Links are not followed for matching; the tools' own confinement still refuses one that leaves. `glob`, `grep` and `ls` are matched on the directory they search (default `.`), not on their pattern, and a rule for a directory should name `dir` and `dir/**`. A path rule is not a read ACL for a search that includes the directory from above.
+
 An asked call prints `? allow bash {"command":"..."} (reason) [y/N]`.
 Your answer is recorded in the session as a person's.
 
