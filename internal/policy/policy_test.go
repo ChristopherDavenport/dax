@@ -28,7 +28,7 @@ func decideIn(t *testing.T, dir string, s config.PolicySettings, tool, args stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng, err := agentpolicy.Build(p, Matchers(dir), Options()...)
+	eng, err := agentpolicy.Build(p, Matchers(dir, 0), Options()...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestBadRulesAreErrorsNotSilence(t *testing.T) {
 	s.User = config.Rules{Allow: []string{"mcp__x(foo:*)"}}
 	p, err := Build(s)
 	if err == nil {
-		_, err = agentpolicy.Build(p, Matchers(testDir), Options()...)
+		_, err = agentpolicy.Build(p, Matchers(testDir, 0), Options()...)
 	}
 	if err == nil {
 		t.Error("a specifier on a tool with no matcher should not build")

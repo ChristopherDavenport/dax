@@ -17,7 +17,7 @@ import (
 // order the system prompt lists them. The file tools are confined to
 // ws; bash runs in its directory but is not confined.
 func Builtins(ws *Workspace, maxRead int64, bash ...BashOption) []agenttool.Tool {
-	return []agenttool.Tool{Read(ws, WithMaxRead(maxRead)), Write(ws), Edit(ws, WithMaxRead(maxRead)), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir(), bash...)}
+	return []agenttool.Tool{Read(ws, WithMaxRead(maxRead)), Write(ws), Edit(ws, WithMaxRead(maxRead)), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir(), append([]BashOption{WithMaxFile(maxRead)}, bash...)...)}
 }
 
 // ReadOnly returns the tools that only look: read, glob, grep and ls.

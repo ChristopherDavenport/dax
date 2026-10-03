@@ -18,22 +18,25 @@ const sentinel = "$(...) "
 // BashSubjects returns the subjects splitter of the bash tool for a
 // workspace rooted at dir. What it decides is who may auto-run:
 //
-//   - A command inside the safe subset (see SafeWords: one simple command
-//     of plain words and simple quotes, no operators, expansions, globs
-//     or comments) is one subject, its words joined by single spaces, so
-//     an allow rule for that command can match it. For git, ls, pwd and
-//     go the subject also has to pass the read-only argument check
-//     (ReadOnlyArgs); when it does not, a sentinel subject is added.
-//   - Any other command is cut into the parts a rule can still name, so
-//     a deny or ask rule for `rm` reaches `git status && rm x`, and a
-//     sentinel subject is added, so no allow rule for a command ever
-//     covers it. The cut is for the question the user is asked and for
-//     deny and ask rules; it is a best-effort reading of bash, not a
-//     parser, and nothing is allowed because of it.
+//   - A command line inside the safe subset (see Analyzer) is one
+//     subject per stage, each its words joined by single spaces, so an
+//     allow rule for a command can match its stage. A stage of a command
+//     the check governs (git, ls, cat ...) whose arguments are not
+//     acceptable also gets a sentinel subject, which no rule matches,
+//     so `git log --output=x` is not covered by a rule for `git log`.
+//     So does a git stage in a repository whose configuration names a
+//     program, and the question says which.
+//   - Any other command line is cut into the parts a rule can still
+//     name, so a deny or ask rule for rm reaches `git status; rm x`,
+//     and a sentinel subject is added, so no allow rule for a command
+//     ever covers it. The cut is for the question the user is asked and
+//     for deny and ask rules; it is a best-effort reading of bash, not
+//     a parser, and nothing is allowed because of it.
 //
 // A command with an unterminated quote is an error, which blocks the
 // call.
-func BashSubjects(dir string) agentpolicy.Subjects {
+func BashSubjects(dir string, maxFile int64) agentpolicy.Subjects {
+	an := &Analyzer{Dir: dir, MaxFile: maxFile}
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
 		var in struct {
 			Command string `json:"command"`
@@ -49,20 +52,12 @@ func BashSubjects(dir string) agentpolicy.Subjects {
 		if cmd == "" {
 			return nil, errors.New("command is empty")
 		}
-		if words, ok := SafeWords(cmd); ok {
-			out := []agentpolicy.Subject{mk("", "command", strings.Join(words, " "), cmd)}
-			switch {
-			case !ReadOnlyArgs(words, dir):
-				out = append(out, mk("", "command", sentinel+cmd, cmd))
-			case words[0] == "git":
-				// A repository's own config can name programs git runs
-				// under status, diff, log and show. Ask, and say which.
-				key, err := ExecConfigKey(context.Background(), dir)
-				if err != nil {
-					key = "git's configuration could not be read: " + err.Error()
-				}
-				if key != "" {
-					out = append(out, mk("", "command", sentinel+cmd, cmd+"  [git config runs a program: "+key+"]"))
+		if c := an.Check(context.Background(), cmd); c.Parsed {
+			var out []agentpolicy.Subject
+			for _, st := range c.Stages {
+				out = append(out, mk("", "command", st.Match, st.Text))
+				if st.Governed && !st.OK {
+					out = append(out, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
 				}
 			}
 			return out, nil

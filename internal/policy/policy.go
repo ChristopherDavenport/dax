@@ -25,28 +25,35 @@ import (
 // BuiltinAllow is the allow list dex ships. go test, build, vet and
 // list are not on it: they run the repository's code (TestMain, cgo,
 // a vet tool, a toolchain the go.mod names). A user who trusts a
-// repository allows them in the user config; see the README. Writes and bash in general
-// are not on it: they fall to the default, which asks.
+// repository allows them in the user config; see the README. Writes
+// and bash in general are not on it: they fall to the default, which
+// asks.
 //
-// A bash rule is matched against each subcommand of the command line
-// on its own (see tool.BashSubjects), at a word boundary, so
-// "git status" allows `git status -s` and not `git statusx`, and
-// `git status && rm -rf x` asks about the rm.
+// A bash rule is matched against each stage of the command line on its
+// own (see tool.BashSubjects), at a word boundary, so "git status"
+// allows `git status -s` and not `git statusx`, and `git status && rm
+// -rf x` asks about the rm. For the commands tool.Analyzer governs the
+// rule only names them: whether this call's arguments are read-only,
+// inside the workspace and free of programs is the analyzer's, and a
+// call that fails it asks whatever the rule says.
 const BuiltinAllow = "read glob grep ls skill explore memory_search " +
 	"bash(git status:*) bash(git diff:*) bash(git log:*) bash(git show:*) " +
 	"bash(go version) bash(go env:*) " +
-	"bash(ls:*) bash(pwd) bash(cd:*)"
+	"bash(git branch:*) bash(git rev-parse:*) bash(git ls-files:*) bash(git remote:*) bash(git blame:*) " +
+	"bash(git stash list:*) bash(git tag:*) bash(git describe:*) bash(git shortlog:*) bash(git config:*) " +
+	"bash(cat:*) bash(head:*) bash(tail:*) bash(wc:*) bash(grep:*) bash(sort:*) bash(uniq:*) bash(cut:*) bash(cd:*) " +
+	"bash(ls:*) bash(pwd)"
 
 // Matchers are the per-tool specifier matchers: bash by its command,
 // the file tools by their path, normalised against the workspace dir
 // (a search by the directory it looks in). Rules for a path are written
 // relative to the workspace: write(docs/**), read(.env).
-func Matchers(dir string) map[string]agentpolicy.ToolMatcher {
+func Matchers(dir string, maxFile int64) map[string]agentpolicy.ToolMatcher {
 	file := func(def string) agentpolicy.ToolMatcher {
 		return agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path"), Subjects: tool.PathSubjects(dir, "path", def)}
 	}
 	return map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir)},
+		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir, maxFile)},
 		"read":  file(""),
 		"write": file(""),
 		"edit":  file(""),
