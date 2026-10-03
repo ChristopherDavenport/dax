@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/openresponses/echo"
 )
@@ -125,5 +126,77 @@ func TestMCPServersGetAScrubbedEnvironment(t *testing.T) {
 	}
 	if _, err := mcpTransport("  ", env); err == nil {
 		t.Error("an empty command should be an error")
+	}
+}
+
+func mode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
+}
+
+// #13 of the review: the store root was created 0755.
+func TestTheStoreAndMemoryAreCreatedPrivate(t *testing.T) {
+	var warned strings.Builder
+	stderr = &warned
+	defer func() { stderr = os.Stderr }()
+	o := options(t, &echo.Adapter{})
+	s, err := New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	for _, d := range []string{o.Root, o.MemoryDir} {
+		if m := mode(t, d); m != 0o700 {
+			t.Errorf("%s is %04o, want 0700", d, m)
+		}
+	}
+	if warned.Len() != 0 {
+		t.Errorf("a fresh directory is not warned about: %q", warned.String())
+	}
+}
+
+func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
+	var warned strings.Builder
+	stderr = &warned
+	defer func() { stderr = os.Stderr }()
+	o := options(t, &echo.Adapter{})
+	must(t, os.MkdirAll(o.Root, 0o755))
+	must(t, os.Chmod(o.Root, 0o755))
+	must(t, os.MkdirAll(o.MemoryDir, 0o750))
+	must(t, os.Chmod(o.MemoryDir, 0o750))
+	s, err := New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if m := mode(t, o.Root); m != 0o700 {
+		t.Errorf("root is %04o", m)
+	}
+	if m := mode(t, o.MemoryDir); m != 0o700 {
+		t.Errorf("memory is %04o", m)
+	}
+	for _, want := range []string{o.Root + " was readable by other users (mode 0755)", o.MemoryDir + " was readable by other users (mode 0750)"} {
+		if !strings.Contains(warned.String(), want) {
+			t.Errorf("warning lacks %q:\n%s", want, warned.String())
+		}
+	}
+	// Opened again, it is quiet.
+	warned.Reset()
+	s, _ = New(context.Background(), o)
+	s.Close()
+	if warned.Len() != 0 {
+		t.Errorf("second open warned: %q", warned.String())
+	}
+	// Import and GC go through the same door.
+	must(t, os.Chmod(o.Root, 0o755))
+	if _, err := GC(context.Background(), o.Root, false, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m := mode(t, o.Root); m != 0o700 {
+		t.Errorf("after gc root is %04o", m)
 	}
 }
