@@ -284,10 +284,10 @@ func abortOnInterrupt(sess *agent.Session) {
 func command(ctx context.Context, sess *agent.Session, line string) (handled bool, err error) {
 	switch {
 	case strings.HasPrefix(line, "/mcp add "):
-		// /mcp add <prefix> <command line>
+		// /mcp add <name> <command line>
 		prefix, cmd, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "/mcp add ")), " ")
 		if !ok {
-			return true, errors.New("usage: /mcp add <prefix> <command line>")
+			return true, errors.New("usage: /mcp add <name> <command line>")
 		}
 		label, err := sess.AddMCP(ctx, prefix, strings.TrimSpace(cmd))
 		if err == nil {
