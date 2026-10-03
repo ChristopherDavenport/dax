@@ -88,7 +88,7 @@ func TestAutoAllowedLinesRunAsBashWouldRunThem(t *testing.T) {
 			t.Errorf("%q is not auto-allowed: %+v", cmd, c.Stages)
 			continue
 		}
-		out, err := call(context.Background(), b, `{"command":`+jsonString(cmd)+`}`)
+		out, err := call(context.Background(), b, stamped(t, dir, cmd))
 		if err != nil {
 			t.Fatal(err)
 		}

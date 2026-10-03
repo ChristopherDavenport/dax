@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -23,6 +24,9 @@ const (
 type BashArgs struct {
 	Command string `json:"command" desc:"The command to run"`
 	Timeout int    `json:"timeout_seconds,omitempty" desc:"Kill the command after this many seconds (default 120)"`
+	// Stamp is set by dex when the policy allowed the command without
+	// asking; a value that dex did not set makes the call fail.
+	Stamp string `json:"dex_stamp,omitempty" desc:"Set by dex; leave it out"`
 }
 
 // BashOption configures the bash tool.
@@ -66,7 +70,10 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 			ctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			cmd := command(ctx, &Analyzer{Dir: dir, MaxFile: cfg.maxFile}, in.Command, base)
+			cmd, err := command(ctx, &Analyzer{Dir: dir, MaxFile: cfg.maxFile}, in, base)
+			if err != nil {
+				return "", err
+			}
 			cmd.Dir = dir
 			// Run in its own process group so cancellation reaches children too.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -107,23 +114,30 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 
 // command is what runs a bash call, and in which environment.
 //
-// A command line the policy would auto-allow (Analyzer.Auto: the safe
-// subset, read-only commands, a git configuration that names no
-// program) runs as the plan it parsed to, rendered with every word
-// quoted and --no-ext-diff --no-textconv added to git diff, log and
-// show, in an environment with AutoEnv added. Everything else, every
-// command a person approved, is bash -c exactly as given, in the
-// environment the user has minus credentials: their hooks, their
-// sshCommand and their GIT_CONFIG_* are theirs.
-func command(ctx context.Context, an *Analyzer, command string, base []string) *exec.Cmd {
-	if c := an.Check(ctx, command); c.Auto {
+// A call the policy allowed without asking carries the stamp of the plan
+// it approved (StampArgs). It runs only if the line still analyses to
+// that plan: as the plan rendered, every word quoted and --no-ext-diff
+// --no-textconv added to git diff, log and show, in an environment with
+// AutoEnv added. If the line has changed since, because a file is
+// different or the repository's git config now names a program, the
+// call fails with ErrChanged, and the original line is never run
+// instead. A call without a stamp, one a person approved or one run with
+// no policy, is bash -c exactly as given, in the environment the user
+// has minus credentials: their hooks, their sshCommand and their
+// GIT_CONFIG_* are theirs.
+func command(ctx context.Context, an *Analyzer, in BashArgs, base []string) (*exec.Cmd, error) {
+	if in.Stamp != "" {
+		c := an.Check(ctx, in.Command)
+		if !c.Auto || !hmac.Equal([]byte(stampOf(c.Render())), []byte(in.Stamp)) {
+			return nil, ErrChanged
+		}
 		cmd := exec.CommandContext(ctx, "bash", "-c", c.Render())
 		cmd.Env = append(append([]string(nil), base...), AutoEnv()...)
-		return cmd
+		return cmd, nil
 	}
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
 	cmd.Env = append([]string(nil), base...)
-	return cmd
+	return cmd, nil
 }
 
 // capWriter keeps the first max bytes written to it and counts the
