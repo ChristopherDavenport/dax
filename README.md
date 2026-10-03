@@ -226,6 +226,79 @@ Path rules (`read(.env)`, `write(docs/**)`, `Read(secrets/**)`) are written rela
 An asked call prints `? allow bash {"command":"..."} (reason) [y/N]`.
 Your answer is recorded in the session as a person's.
 
+## Security model
+
+dex gives a model the ability to read your files, change them and run
+commands, so what it does and does not stand between the model and your
+machine matters.
+
+**What dex does**
+
+- **Asks by default.** Every call that is not on a short allow list asks
+  you first: writes, edits, every command that is not one simple read-only
+  command, memory writes and every MCP tool. Your answer is recorded.
+- **Auto-allows a small, checked set.** The read-only tools (`read`,
+  `glob`, `grep`, `ls`, confined to the working directory) and a bash
+  command only if it is one simple command in a safe subset of the
+  syntax (no operators, expansions, globs, comments or escapes) whose
+  arguments pass a per-command read-only check: `git status|diff|log|show`
+  with read-only flags, `ls`, `pwd`, `go version`, `go env NAME`, paths
+  inside the working directory. It is an allow-list of what is safe, not a
+  list of what is dangerous: anything dex does not recognise asks.
+  `go test`, `go build` and `go vet` run the repository's code and are not
+  on it.
+- **Confines the file tools.** Paths outside the working directory,
+  `..`, and symbolic links that lead out are refused, by the operating
+  system's rooted open rather than by string checks.
+- **Treats the repository as untrusted.** Its `.dex/config.json` can only
+  tighten the policy; it cannot choose the provider, model or endpoint,
+  add instructions, skills, memory or MCP servers, or allow anything.
+  `AGENTS.md` files and `.dex/skills` that are symbolic links out of the
+  workspace are not read into the prompt. Path rules match the path
+  after normalisation, so `docs/../.git/x` is not under `docs/**`.
+- **Keeps credentials away from what it starts.** Bash commands and MCP
+  servers get your environment without `*_API_KEY`, `*_TOKEN`,
+  `*_SECRET` and the like unless your config names a variable. Keys are
+  read from the environment only and never printed.
+- **Bounds resource use.** `read` scans at most 2 MiB a call, `grep`
+  skips big and non-regular files, search patterns cannot run away, and
+  git runs with the repository's fsmonitor, pager and diff programs
+  switched off.
+- **Keeps its records private.** The session store and memory are
+  created `0700`; terminal control sequences in tool output and model text
+  are stripped.
+
+**What dex does not do**
+
+- **There is no sandbox.** A command you approve runs with all your
+  privileges, and a command that is auto-allowed is only as safe as the
+  checks above. `bash` reaches files outside the working directory
+  (approved commands are not confined, and the read-only allow list
+  checks paths but cannot see what a program does with them). If you
+  need a boundary, run dex in a container or VM.
+- **A prompt injection can still ask.** A file, a web page, an MCP
+  tool's output or an `AGENTS.md` can tell the model what to do. dex
+  makes the dangerous steps ask; it cannot make you read the question.
+  Read what you approve, especially a compound command, a write to
+  `.git/hooks`, `.dex/`, `AGENTS.md` or `.github/`, and anything that
+  sends data out.
+- **Your own `allow` rules are yours.** `"allow": ["write"]` lets a
+  model write `.git/hooks/pre-commit`; `bash(go test:*)` runs a hostile
+  repository's tests with your privileges. Prefer narrow rules, and put
+  deny or ask rules for the sensitive paths beside them.
+- **`-trust-skills` trusts every skill it can load**, the project's
+  included; leave it off for repositories you do not trust.
+- **The provider sees what the model reads.** Files and command output go
+  to the model's provider (OpenAI, Anthropic, Google, or your Ollama
+  host). Choose the provider with that in mind; a path rule is not a read
+  ACL for a search that includes the directory from above.
+- **Not covered:** a hostile `.git/config` in a directory you did not
+  clone (git is run with its program hooks switched off, but a textconv or
+  filter driver the repository names under `.gitattributes` is git's
+  to run for commands dex does not rewrite), the Go toolchain download a
+  `go.mod` can trigger, and denial of service by a model that loops (use
+  `Ctrl-C`).
+
 ## In the REPL
 
 A line typed while a run is in flight steers it and lands before the next

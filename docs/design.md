@@ -112,6 +112,32 @@ the write tool on the target, and command or process substitution adds a
 subject no rule matches. Every subject must be allowed for the call to
 be. This is a splitter, not a shell parser, and it errs toward asking.
 
+## Security model
+
+The model is untrusted input to a machine that can run commands, and so
+is the repository it works in. dex's defences are layered and none is a
+sandbox:
+
+1. Ask by default; auto-allow only what is checked, as a safe subset
+   rather than a list of bad syntax. A bash command is allowed only if
+   it is one simple command in a strict subset of the syntax whose
+   argv passes a per-command read-only check; the splitter that reads
+   anything else is for the question and for deny and ask rules, and never
+   allows.
+2. File tools go through an `os.Root`; a name that leaves is refused by
+   the system, not by a string test.
+3. A project config can only tighten; its source ranks below the user's,
+   so it cannot cancel a user's rule, and the fields that send data or
+   start programs are refused.
+4. Files from the repository that go into the prompt are screened for
+   links out of the workspace.
+5. Children get a scrubbed environment; resource use is bounded; the
+   store is private; terminal output is cleaned.
+
+What it does not protect against (no OS sandbox, approved commands run
+unconfined, prompt injection can still ask, the user's own allow rules,
+`-trust-skills`) is in the README's Security model section.
+
 ## Settings
 
 Three layers, each overriding the one below: the user's
