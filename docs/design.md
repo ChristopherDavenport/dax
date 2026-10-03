@@ -102,9 +102,9 @@ as the search root is searched even if it is one of those.
 Rules are agentpolicy's: a tool name or `tool(specifier)`. Precedence is
 deny, then ask, then allow, then the default. The shipped allow list is
 the read-only tools and a few commands that only look; the default asks.
-Rules in the user's config add to it; rules in a project's config are
-from an untrusted source, so its allow rules are withheld and its ask and
-deny rules apply.
+Rules in the user's config add to it. A project's config is tighten-only:
+it may add ask and deny rules (no allow, no carve-outs), and its source
+ranks below the user's so it cannot cancel their rules.
 
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
@@ -117,9 +117,9 @@ be. This is a splitter, not a shell parser, and it errs toward asking.
 Three layers, each overriding the one below: the user's
 `~/.config/dex/config.json`, the project's `.dex/config.json`, the
 flags. The files are strict JSON: an unknown field is an error naming
-the file. A project file comes from a repository, so it may not start
-programs, point an API key at another host, or allow anything. See the
-README for the schema.
+the file. A project file comes from a repository, so it may only tighten
+the policy: it may not set the provider, model, endpoint, instructions,
+skills, memory or MCP servers. See the README for the schema.
 
 ## Fronts
 

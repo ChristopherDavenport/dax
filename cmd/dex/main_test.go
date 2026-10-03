@@ -45,8 +45,13 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 		t.Fatalf("user file: %+v", s)
 	}
 
+	// A project file tightens the policy and cannot set the model.
 	write(t, filepath.Join(proj, ".dex", "config.json"), `{"model":"from-project"}`)
-	if s, err = loadSettings(proj, "", config.Flags{}); err != nil || s.Model != "from-project" || s.Provider != "anthropic" {
+	if _, err = loadSettings(proj, "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
+		t.Fatalf("project model: %v", err)
+	}
+	write(t, filepath.Join(proj, ".dex", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
+	if s, err = loadSettings(proj, "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("project over user: %+v, %v", s, err)
 	}
 

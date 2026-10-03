@@ -53,7 +53,7 @@ asks for low reasoning effort with summaries and shows the reasoning;
 Settings come from three layers, each overriding the one before:
 
 1. `~/.config/dex/config.json` (`$XDG_CONFIG_HOME/dex/config.json`; `-config path` names another)
-2. `.dex/config.json` in the working directory
+2. `.dex/config.json` in the working directory, which can only tighten the policy
 3. flags
 
 ```json
@@ -91,12 +91,18 @@ names the file and the field.
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `policy` | see below |
 
-A project's `.dex/config.json` comes from a repository, not from you, so it
-is held to less. It may not set `mcp_servers` (that starts programs), may
-not set `base_url` unless the provider is `ollama` (which takes no key;
-anything else would send your key to the repository's host), may not set
-`"fallback": "allow"` or `"builtin": false`, and the `allow` rules in its
-policy are ignored: it can make dex ask or refuse more, never less.
+A project's `.dex/config.json` comes from a repository, not from you, so
+it can only **tighten**. It may add `ask` and `deny` rules to `policy`
+(no `allow`, and no `!` carve-out of any rule), set `"builtin": false` to
+drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
+that is stricter than yours. It cannot bring back what you dropped or
+loosen what you set, and its rules rank below yours so they cannot cancel
+one of yours. It may **not** set `provider`, `model`, `base_url`, `think`,
+`instructions_file`, `skills_dirs`, `memory_dir` or `mcp_servers`: dex
+refuses the file with an error naming the field and saying to put it in
+your own config. (Where the model runs, what it is told and remembers, and
+what programs start are decisions that send your code, your files and your
+keys somewhere; a repository does not get to make them.)
 
 | flag | |
 |---|---|
