@@ -45,6 +45,25 @@ versions may break flags and the config file.
   exponential; the session store and memory are `0700`; `/mcp add` uses the
   `mcp__<name>__` prefix and names may not contain `__`; terminal control
   sequences are stripped from output.
+- Security: git commands run unasked only if the repository's own git config
+  names no program (filters, textconv, askpass, editor, proxies,
+  credential helpers, drivers ...), the question names the key; the gpg
+  programs are `/bin/false` and `%G` in a format asks. The git
+  neutralisation environment and `GOTOOLCHAIN=local` apply only to
+  auto-allowed commands, not to ones you approve. `..` in an `ls` or git
+  path asks and links are resolved segment by segment; a `:` in a git
+  revision or pathspec asks; bare `go env` asks. The credential scrub covers
+  `_KEY`, `_PAT`, `_PWD`, `_JWT`, `_CREDENTIALS`, `_AUTH`, PASSWORD, SECRET,
+  DATABASE_URL, SSH_AUTH_SOCK and URLs with passwords; credential-file paths
+  pass through. MCP stderr is cleaned. `-trust-skills` trusts only skills in
+  directories you named.
+- Added: more read-only commands run unasked: git combined short flags and
+  space-separated values, `branch`, `rev-parse`, `ls-files`, `remote -v`,
+  `blame`, `stash list`, `tag`, `describe`, `shortlog`, `config` reads;
+  trailing `2>&1`, `2>/dev/null`, `>/dev/null`; pipes into `head`, `tail`,
+  `wc`, `sort`, `uniq`, `cut`, `grep`; `&&` sequences and `cd` into the
+  workspace; `cat`, `head`, `tail`, `wc`, `grep` on named files; `ls` with
+  globs. Bash output is capped at 50 KiB in memory.
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
   `DEX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the

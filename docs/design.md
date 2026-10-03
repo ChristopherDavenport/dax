@@ -119,9 +119,10 @@ is the repository it works in. dex's defences are layered and none is a
 sandbox:
 
 1. Ask by default; auto-allow only what is checked, as a safe subset
-   rather than a list of bad syntax. A bash command is allowed only if
-   it is one simple command in a strict subset of the syntax whose
-   argv passes a per-command read-only check; the splitter that reads
+   rather than a list of bad syntax. A bash line is allowed only if it
+   parses into stages joined by `&&` and `|` in a strict subset of the
+   syntax and every stage passes a per-command read-only check (tool.Analyzer),
+   with git's effective config read first; the splitter that reads
    anything else is for the question and for deny and ask rules, and never
    allows.
 2. File tools go through an `os.Root`; a name that leaves is refused by

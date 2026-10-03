@@ -283,15 +283,16 @@ machine matters.
   you first: writes, edits, every command that is not one simple read-only
   command, memory writes and every MCP tool. Your answer is recorded.
 - **Auto-allows a small, checked set.** The read-only tools (`read`,
-  `glob`, `grep`, `ls`, confined to the working directory) and a bash
-  command only if it is one simple command in a safe subset of the
-  syntax (no operators, expansions, globs, comments or escapes) whose
-  arguments pass a per-command read-only check: `git status|diff|log|show`
-  with read-only flags, `ls`, `pwd`, `go version`, `go env NAME`, paths
-  inside the working directory. It is an allow-list of what is safe, not a
-  list of what is dangerous: anything dex does not recognise asks.
-  `go test`, `go build` and `go vet` run the repository's code and are not
-  on it.
+  `glob`, `grep`, `ls`, confined to the working directory) and bash lines
+  that parse in a safe subset of the syntax (simple commands joined by
+  `&&` and `|`, with a few trailing redirects) and whose every part is a
+  read-only git, `ls`, `cat`/`head`/`tail`/`wc`/`grep` on named files, `pwd`,
+  `go version`/`go env NAME` or `cd` into the workspace, with arguments
+  that pass a per-command check and paths that stay inside the working
+  directory (no `..`, links resolved). It is an allow-list of what is safe,
+  not a list of what is dangerous: anything dex does not recognise asks.
+  git is asked what its config would run first. `go test`, `go build` and
+  `go vet` run the repository's code and are not on it.
 - **Confines the file tools.** Paths outside the working directory,
   `..`, and symbolic links that lead out are refused, by the operating
   system's rooted open rather than by string checks.
@@ -339,12 +340,10 @@ machine matters.
   to the model's provider (OpenAI, Anthropic, Google, or your Ollama
   host). Choose the provider with that in mind; a path rule is not a read
   ACL for a search that includes the directory from above.
-- **Not covered:** a hostile `.git/config` in a directory you did not
-  clone (git is run with its program hooks switched off, but a textconv or
-  filter driver the repository names under `.gitattributes` is git's
-  to run for commands dex does not rewrite), the Go toolchain download a
-  `go.mod` can trigger, and denial of service by a model that loops (use
-  `Ctrl-C`).
+- **Not covered:** programs the *user's own* git config names (it is
+  trusted), a race between dex checking a path and the command using it,
+  credential-file path variables such as `KUBECONFIG` (they pass through to
+  commands), and denial of service by a model that loops (use `Ctrl-C`).
 
 ## In the REPL
 
