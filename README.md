@@ -113,7 +113,7 @@ keys somewhere; a repository does not get to make them.)
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front repl` | the front end (only `repl`) |
-| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message |
+| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
 | `-agents` | offer the read-only `explore` sub-agent |
@@ -298,8 +298,10 @@ machine matters.
   model write `.git/hooks/pre-commit`; `bash(go test:*)` runs a hostile
   repository's tests with your privileges. Prefer narrow rules, and put
   deny or ask rules for the sensitive paths beside them.
-- **`-trust-skills` trusts every skill it can load**, the project's
-  included; leave it off for repositories you do not trust.
+- **`-trust-skills` trusts the skills in directories you named**
+  (`~/.dex/skills` and your config's `skills_dirs`) and never the
+  repository's: a skill in `.dex/skills` is text from the repository, and
+  its `allowed-tools` are withheld, so it cannot run anything unasked.
 - **The provider sees what the model reads.** Files and command output go
   to the model's provider (OpenAI, Anthropic, Google, or your Ollama
   host). Choose the provider with that in mind; a path rule is not a read
