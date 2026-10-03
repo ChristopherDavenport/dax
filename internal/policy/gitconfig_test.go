@@ -113,3 +113,59 @@ func TestPercentGInAFormatAsks(t *testing.T) {
 		t.Errorf("a harmless format = %v", got)
 	}
 }
+
+// R3-2 of the third review: core.worktree and a .git file sent
+// auto-allowed git commands to files and repositories outside the
+// workspace.
+func TestGitAsksWhenTheRepositoryIsSomewhereElse(t *testing.T) {
+	cmds := []string{"git status", "git diff", "git log -p", "git show HEAD", "git log --oneline -n 3"}
+	other := hostileRepo(t, "")
+	secretHome := t.TempDir()
+	os.WriteFile(filepath.Join(secretHome, "id_rsa"), []byte("REAL-PRIVATE-KEY\n"), 0o644)
+
+	t.Run(".git file", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(other, ".git")+"\n"), 0o644)
+		table(t, dir, agentturn.Defer, cmds...)
+	})
+	t.Run(".git symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		os.Symlink(filepath.Join(other, ".git"), filepath.Join(dir, ".git"))
+		table(t, dir, agentturn.Defer, cmds...)
+	})
+	t.Run(".git file in an ancestor", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(other, ".git")+"\n"), 0o644)
+		os.MkdirAll(filepath.Join(dir, "sub", "deep"), 0o755)
+		table(t, filepath.Join(dir, "sub", "deep"), agentturn.Defer, cmds...)
+	})
+	for name, cfg := range map[string]string{
+		"core.worktree":       "[core]\n\tworktree = " + secretHome + "\n",
+		"core.bare":           "[core]\n\tbare = true\n",
+		"extensions.worktree": "[extensions]\n\tworktreeConfig = true\n",
+		"submodule update":    "[submodule \"x\"]\n\tupdate = !touch PROBE\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := hostileRepo(t, cfg)
+			table(t, dir, agentturn.Defer, cmds...)
+		})
+	}
+	t.Run("a submodule's own config", func(t *testing.T) {
+		dir := hostileRepo(t, "")
+		mod := filepath.Join(dir, ".git", "modules", "sub", "nested", "deeper")
+		os.MkdirAll(mod, 0o755)
+		os.WriteFile(filepath.Join(dir, ".git", "modules", "sub", "config"), []byte("[core]\n\tbare = false\n\tworktree = ../../../sub\n"), 0o644)
+		table(t, dir, agentturn.Allow, "git status", "git log -n 1") // what git writes for a submodule
+		os.WriteFile(filepath.Join(mod, "config"), []byte("[filter \"x\"]\n\tclean = touch PROBE; cat\n"), 0o644)
+		table(t, dir, agentturn.Defer, cmds...)
+	})
+	t.Run("a workspace below the repository root is fine", func(t *testing.T) {
+		dir := hostileRepo(t, "")
+		os.MkdirAll(filepath.Join(dir, "pkg", "x"), 0o755)
+		table(t, filepath.Join(dir, "pkg", "x"), agentturn.Allow, "git status", "git log -n 2", "git diff")
+	})
+	t.Run("a repository with core.bare = false and nothing odd", func(t *testing.T) {
+		dir := hostileRepo(t, "[core]\n\tbare = false\n")
+		table(t, dir, agentturn.Allow, cmds...)
+	})
+}
