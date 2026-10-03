@@ -33,12 +33,13 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 
+	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/prompt"
 	"github.com/ChristopherDavenport/dex/internal/tool"
 )
 
 // Version is what the session header names as the harness version.
-const Version = "0.0.6-poc"
+const Version = "0.1.0-dev"
 
 // What the model sees for a call that will never get a real answer.
 // Each says what the loop's PendingReason says and no more: a call cut
@@ -55,12 +56,12 @@ const (
 
 // Options configure a session.
 type Options struct {
-	BaseURL string
-	APIKey  string
-	Model   string
-	Think   bool
-	// Streamer, when set, is the model instead of a client for BaseURL.
+	// Streamer is the model; internal/provider builds one from the
+	// configuration.
 	Streamer openresponses.Streamer
+	// Model is the model name the requests carry.
+	Model string
+	Think bool
 	// Dir is the working directory the tools and prompt are rooted at.
 	Dir string
 	// Root is the session store, a content-addressed store holding
@@ -74,13 +75,20 @@ type Options struct {
 	// read before the project's and its skills directory searched
 	// after the project's.
 	UserDir string
+	// Instructions is text of the user's own, from the config's
+	// instructions_file, added to dex's part of the system prompt.
+	Instructions string
 
 	// AgentsMD reads UserDir/AGENTS.md and the AGENTS.md chain from the
 	// file system root down to Dir into the instructions.
 	AgentsMD bool
 	// Skills offers the skills under Dir/.dex/skills and
-	// UserDir/skills, through the skill tool.
+	// UserDir/skills, through the skill tool, and those under
+	// SkillsDirs.
 	Skills bool
+	// SkillsDirs are configured skill directories. One that does not
+	// exist is an error, unlike the two default ones.
+	SkillsDirs []string
 	// TrustSkills lets a skill's allowed-tools widen the confirmation
 	// policy while the model follows it, until the next user message.
 	TrustSkills bool
@@ -94,8 +102,9 @@ type Options struct {
 	// CompactServer folds through the server's compaction endpoint
 	// (compact.New) instead of a local summary (compact.NewLocal).
 	CompactServer bool
-	// Confirm asks before write, edit and bash calls run.
-	Confirm bool
+	// Policy decides which calls run, ask or are refused; nil lets
+	// every call run. internal/policy builds dex's.
+	Policy *agentpolicy.Policy
 	// Approve decides a call the policy asked about; reason is the
 	// policy's. nil denies every call.
 	Approve func(call *openresponses.FunctionCall, reason string) bool
@@ -103,14 +112,22 @@ type Options struct {
 	// elicitation, or a nested call the policy asked about. nil leaves
 	// every such question unasked, which the tool takes as a cancel.
 	Elicit agenttool.Elicitor
-	// MCP is a command line to start a stdio MCP server whose tools are
-	// offered under the prefix "mcp". Its stderr is dex's.
-	MCP string
+	// MCP are stdio MCP servers started with the session, each offering
+	// its tools under its name as the prefix. Their stderr is dex's.
+	MCP []MCPServer
 	// Agents adds the explore child agent as a tool.
 	Agents bool
 	// Log receives dex's own notes: compactions, denials, skill grants.
 	// nil discards them.
 	Log func(format string, args ...any)
+}
+
+// MCPServer is a stdio MCP server to start.
+type MCPServer struct {
+	// Name is the prefix of the server's tools.
+	Name string
+	// Command is the command line.
+	Command string
 }
 
 // DefaultUserDir is ~/.dex.
@@ -132,6 +149,7 @@ type Session struct {
 	Kit   *agentkit.Kit
 
 	opts   Options
+	ws     *tool.Workspace
 	store  *cas.Store
 	detach func()
 }
@@ -173,17 +191,6 @@ func (o Options) log(format string, args ...any) {
 	}
 }
 
-func (o Options) model() openresponses.Streamer {
-	if o.Streamer != nil {
-		return o.Streamer
-	}
-	var copts []openresponses.ClientOption
-	if o.APIKey != "" {
-		copts = append(copts, openresponses.WithAPIKey(o.APIKey))
-	}
-	return openresponses.NewClient(o.BaseURL, copts...).AsAdapter()
-}
-
 func (o Options) reasoning() openresponses.ReasoningConfig {
 	if o.Think {
 		return openresponses.ReasoningConfig{
@@ -219,41 +226,10 @@ func ProjectScope(dir string) agentmemory.Scope {
 	return agentmemory.Scope(b.String())
 }
 
-// policy is -confirm: write, edit and bash ask, everything else runs.
-// Aliases let a skill's allowed-tools name the tools as the reference
-// does, Bash(git status:*), and a matcher gives bash its specifiers.
-func policy() (agentpolicy.Policy, map[string]agentpolicy.ToolMatcher, []agentpolicy.Option, error) {
-	ask, err := agentpolicy.ParseRules("write edit bash")
-	if err != nil {
-		return agentpolicy.Policy{}, nil, nil, err
-	}
-	p, err := agentpolicy.Merge(agentpolicy.RuleSet{
-		Source: agentpolicy.Source{Name: "dex:-confirm", Trusted: true},
-		Ask:    ask,
-	})
-	if err != nil {
-		return agentpolicy.Policy{}, nil, nil, err
-	}
-	p.Default = agentpolicy.Allow()
-	matchers := map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command")},
-		"read":  {Match: agentpolicy.GlobMatcher("path")},
-		"write": {Match: agentpolicy.GlobMatcher("path")},
-		"edit":  {Match: agentpolicy.GlobMatcher("path")},
-	}
-	aliases := agentpolicy.WithAliases(map[string][]string{
-		"Bash":  {"bash"},
-		"Read":  {"read"},
-		"Write": {"write"},
-		"Edit":  {"edit", "write"},
-	})
-	return p, matchers, []agentpolicy.Option{aliases}, nil
-}
-
 // explore is the child agent: a read-only investigator on a fresh
 // transcript whose final answer comes back to the parent as the tool
 // output.
-func (o Options) explore(model openresponses.Streamer) agentturn.Config {
+func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace) agentturn.Config {
 	cfg := agentturn.Config{
 		Name: "explore",
 		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
@@ -261,14 +237,14 @@ func (o Options) explore(model openresponses.Streamer) agentturn.Config {
 			"Use it for broad searches so their output stays out of this conversation.",
 		Model:     model,
 		ModelName: o.Model,
-		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read and bash tools; " +
+		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read, glob, grep, ls and bash tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
-		Tools:     []agenttool.Tool{tool.Read(o.Dir), tool.Bash(o.Dir)},
+		Tools:     append(tool.ReadOnly(ws), tool.Bash(ws.Dir())),
 		Reasoning: o.reasoning(),
 		MaxTurns:  10,
 		Retry:     agentturn.Retry{MaxAttempts: 3},
 	}
-	if o.Confirm {
+	if o.Policy != nil {
 		// The child has no one to ask: a deferred call ends its run and
 		// surfaces to the parent's model as an InputRequiredError. Its
 		// config is fixed before agentkit.New builds the engine, so the
@@ -286,15 +262,28 @@ func (o Options) explore(model openresponses.Streamer) agentturn.Config {
 // open assembles the kit and the agent. resume, when not empty, is the
 // session to continue; the store is nil when nothing is recorded.
 func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Session, error) {
-	s := &Session{opts: o, store: store}
-	model := o.model()
+	if o.Streamer == nil {
+		return nil, errors.New("no model")
+	}
+	ws, err := tool.NewWorkspace(o.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: %w", err)
+	}
+	s := &Session{opts: o, store: store, ws: ws}
+	ok := false
+	defer func() {
+		if !ok {
+			ws.Close()
+		}
+	}()
+	model := o.Streamer
 	kopts := []agentkit.Option{
 		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
 		agentkit.WithModel(model, o.Model),
 		agentkit.WithReasoning(o.reasoning()),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
-		agentkit.WithInstructions(prompt.Build(o.Dir)),
-		agentkit.WithTools(tool.Builtins(o.Dir)...),
+		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions)),
+		agentkit.WithTools(tool.Builtins(ws)...),
 	}
 	if o.AgentsMD {
 		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, agentsmd.Options{
@@ -306,6 +295,9 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		// Neither directory is one the user configured, so either may
 		// be absent; the project's comes first and shadows the user's.
 		kopts = append(kopts, agentkit.WithOptionalSkills(filepath.Join(o.Dir, ".dex", "skills"), filepath.Join(o.UserDir, "skills")))
+		if len(o.SkillsDirs) > 0 {
+			kopts = append(kopts, agentkit.WithSkills(o.SkillsDirs...))
+		}
 		if o.TrustSkills {
 			kopts = append(kopts,
 				agentkit.WithSkillGrants(func(sk *agentskill.Skill) agentpolicy.Source {
@@ -324,23 +316,19 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		}
 		kopts = append(kopts, agentkit.WithMemory(mem, "user", ProjectScope(o.Dir)))
 	}
-	if o.Confirm {
-		p, matchers, popts, err := policy()
-		if err != nil {
-			return nil, err
-		}
-		kopts = append(kopts, agentkit.WithPolicy(p, matchers, popts...))
+	if o.Policy != nil {
+		kopts = append(kopts, agentkit.WithPolicy(*o.Policy, policy.Matchers(), policy.Options()...))
 	}
 	if o.Agents {
-		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model)))
+		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
 	}
-	// Set whether or not -mcp names a server, since /mcp may add one.
+	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
-	if o.MCP != "" {
-		kopts = append(kopts, agentkit.WithMCP(o.MCP, mcpclient.WithPrefix("mcp")))
+	for _, m := range o.MCP {
+		kopts = append(kopts, agentkit.WithMCP(m.Command, mcpclient.WithPrefix(m.Name)))
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
@@ -359,7 +347,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		if o.CompactServer {
 			c, ok := model.(compact.Compactor)
 			if !ok {
-				return nil, errors.New("-compact-server: the model has no compaction endpoint")
+				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
 			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact), fold)
 		} else {
@@ -390,6 +378,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	s.Kit = kit
 	s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
 	s.detach = kit.Attach(s.Agent)
+	ok = true
 	return s, nil
 }
 
@@ -613,6 +602,7 @@ func (s *Session) Close() error {
 		s.detach()
 	}
 	err := s.Kit.Close()
+	s.ws.Close()
 	if s.store != nil {
 		if cerr := s.store.Close(); err == nil {
 			err = cerr

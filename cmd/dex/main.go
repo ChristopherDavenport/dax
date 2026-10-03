@@ -1,31 +1,26 @@
-// Command dex is a minimal coding agent: a REPL over an Open Responses
-// model with read, write, edit and bash tools, recording every session.
+// Command dex is a coding agent: a REPL, or one prompt with -p, over
+// an Open Responses model, with read, write, edit, glob, grep, ls and
+// bash tools under a policy, recording every session.
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
-	"github.com/ChristopherDavenport/agenttool"
-	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
-	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/render"
+	"github.com/ChristopherDavenport/dex/internal/config"
+	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dex/internal/provider"
 )
 
 func main() {
@@ -60,38 +55,51 @@ func hint(err error) string {
 }
 
 func run() error {
-	base := flag.String("base", "http://localhost:11434/v1", "Open Responses base URL")
-	key := flag.String("key", os.Getenv("DEX_API_KEY"), "API key, if the server needs one")
-	model := flag.String("model", "qwen3.5:9b", "model name")
-	think := flag.Bool("think", true, "request and show reasoning")
-	once := flag.String("p", "", "run one prompt and exit")
-	root := flag.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
-	resume := flag.String("resume", "", "continue the session with this ID")
-	list := flag.Bool("list", false, "list recorded sessions for this directory and exit")
-	verify := flag.String("verify", "", "verify the request hashes of the session with this ID and exit")
-	project := flag.String("project", "", "write the session with this ID as a JSONL file into -out and exit")
-	out := flag.String("out", ".", "directory -project writes into")
-	importFile := flag.String("import", "", "read a JSONL session file an earlier dex wrote into the store and exit")
-	repair := flag.String("repair", "", "rewrite the damaged log of the session with this ID from what still reads, and exit")
-	gc := flag.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
-	sync := flag.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
-	compactAt := flag.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; 0 disables")
-	confirm := flag.Bool("confirm", false, "ask before write, edit and bash calls run")
-	mcp := flag.String("mcp", "", "command line of a stdio MCP server whose tools are offered as mcp__<name>")
-	agents := flag.Bool("agents", false, "offer the explore sub-agent as a tool")
-	compactServer := flag.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
-	agentsMD := flag.Bool("agents-md", true, "put ~/.dex/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
-	skills := flag.Bool("skills", true, "offer the skills in .dex/skills and ~/.dex/skills through the skill tool")
-	trustSkills := flag.Bool("trust-skills", false, "with -confirm, let a skill's allowed-tools run unasked until the next message")
-	memory := flag.String("memory", filepath.Join(agent.DefaultUserDir(), "memory"), "memory store directory, with a user scope and one for this directory; empty disables memory")
-	flag.Parse()
+	fs := flag.NewFlagSet("dex", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: dex [flags]   (REPL)\n       dex -p \"prompt\" [flags]\n\nflags override ~/.config/dex/config.json and .dex/config.json; see the README.")
+		fs.PrintDefaults()
+	}
+	prov := fs.String("provider", "", "model provider: ollama (default), openai, anthropic or gemini")
+	model := fs.String("model", "", "model name; empty takes the provider's default")
+	base := fs.String("base-url", "", "endpoint of an OpenAI-compatible server (ollama and openai providers)")
+	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
+	think := fs.Bool("think", true, "request and show reasoning")
+	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
+	frontName := fs.String("front", "repl", "front end: repl")
+	once := fs.String("p", "", "run one prompt and exit")
+	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
+	resume := fs.String("resume", "", "continue the session with this ID")
+	list := fs.Bool("list", false, "list recorded sessions for this directory and exit")
+	verify := fs.String("verify", "", "verify the request hashes of the session with this ID and exit")
+	project := fs.String("project", "", "write the session with this ID as a JSONL file into -out and exit")
+	out := fs.String("out", ".", "directory -project writes into")
+	importFile := fs.String("import", "", "read a JSONL session file an earlier dex wrote into the store and exit")
+	repair := fs.String("repair", "", "rewrite the damaged log of the session with this ID from what still reads, and exit")
+	gc := fs.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
+	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
+	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; 0 disables")
+	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__mcp__<tool>")
+	agents := fs.Bool("agents", false, "offer the explore sub-agent as a tool")
+	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
+	agentsMD := fs.Bool("agents-md", true, "put ~/.dex/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
+	skills := fs.Bool("skills", true, "offer the skills in .dex/skills, ~/.dex/skills and the config's skills_dirs through the skill tool")
+	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
+	memory := fs.String("memory", "", "memory store directory (default ~/.dex/memory, or the config's); off or empty disables memory")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
-
 	switch {
 	case *list:
 		sums, err := agent.List(ctx, *root, dir)
@@ -134,238 +142,149 @@ func run() error {
 		}
 		return err
 	case *verify != "":
-		n, failed, err := agent.Verify(ctx, *root, *verify)
-		if err != nil {
-			return err
-		}
-		// A response recorded with no request hash is one the recorder
-		// could not stand behind, not one that failed its check.
-		unhashed, bad := 0, 0
-		for _, f := range failed {
-			if errors.Is(f, agentsession.ErrNoHash) {
-				unhashed++
-				continue
-			}
-			fmt.Println(f)
-			bad++
-		}
-		fmt.Printf("%d response(s), %d failed, %d without a request hash\n", n, bad, unhashed)
-		if unhashed > 0 {
-			causes, err := agent.Unhashed(ctx, *root, *verify)
-			if err != nil {
-				return err
-			}
-			told := 0
-			for _, c := range causes {
-				fmt.Printf("  %d unhashed from %s: %s\n", c.Responses, c.Entry, describeUnhashed(c))
-				told += c.Responses
-			}
-			if told < unhashed {
-				fmt.Printf("  %d unhashed with no cause recorded (a recorder before agentturn v0.0.15 wrote none)\n", unhashed-told)
-			}
-		}
-		if bad > 0 {
-			os.Exit(1)
+		return runVerify(ctx, *root, *verify)
+	}
+
+	policyMode, ok := map[string]cas.SyncPolicy{"append": cas.SyncEveryAppend, "response": cas.SyncOnResponse, "never": cas.SyncNever}[*syncMode]
+	if !ok {
+		return fmt.Errorf("-sync %q: want append, response or never", *syncMode)
+	}
+
+	// Settings: the user's file, the project's, then the flags.
+	var flags config.Flags
+	str := func(name string, v *string) *string {
+		if given[name] {
+			return v
 		}
 		return nil
 	}
-
-	policy, ok := map[string]cas.SyncPolicy{"append": cas.SyncEveryAppend, "response": cas.SyncOnResponse, "never": cas.SyncNever}[*sync]
-	if !ok {
-		return fmt.Errorf("-sync %q: want append, response or never", *sync)
+	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
+	if given["think"] {
+		flags.Think = think
 	}
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 1<<20), 1<<20)
+	if given["memory"] {
+		m := *memory
+		if m == "off" {
+			m = ""
+		}
+		flags.MemoryDir = &m
+	}
+	flags.NoPolicy = *noPolicy
+	settings, err := loadSettings(dir, *cfgPath, flags)
+	if err != nil {
+		return err
+	}
+
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, BaseURL: settings.BaseURL})
+	if err != nil {
+		return err
+	}
 	opts := agent.Options{
-		BaseURL: *base, APIKey: *key, Model: *model, Think: *think, Dir: dir, Root: *root, Sync: policy,
+		Streamer: m.Streamer, Model: m.Name, Think: settings.Think,
+		Dir: dir, Root: *root, Sync: policyMode,
 		UserDir:       agent.DefaultUserDir(),
 		AgentsMD:      *agentsMD,
 		Skills:        *skills,
+		SkillsDirs:    settings.SkillsDirs,
 		TrustSkills:   *trustSkills,
-		MemoryDir:     *memory,
-		MCP:           *mcp,
+		MemoryDir:     settings.MemoryDir,
 		Compact:       *compactAt,
 		CompactServer: *compactServer,
-		Confirm:       *confirm,
 		Agents:        *agents,
 		Log:           func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
-
-	if *once != "" {
-		// One prompt: approvals read stdin directly.
-		opts.Approve = func(c *openresponses.FunctionCall, reason string) bool {
-			fmt.Print(question(c, reason))
-			if !in.Scan() {
-				fmt.Println()
-				return false
-			}
-			return yes(in.Text())
+	if settings.InstructionsFile != "" {
+		data, err := os.ReadFile(settings.InstructionsFile)
+		if err != nil {
+			return fmt.Errorf("instructions_file: %w", err)
 		}
-		opts.Elicit = elicitor(func(q string) bool {
-			fmt.Print(q)
-			return in.Scan() && yes(in.Text())
-		})
-		sess, err := openSession(ctx, opts, *resume)
+		opts.Instructions = string(data)
+	}
+	for _, s := range settings.MCP {
+		opts.MCP = append(opts.MCP, agent.MCPServer{Name: s.Name, Command: s.Command})
+	}
+	if *mcp != "" {
+		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "mcp", Command: *mcp})
+	}
+	if !settings.Policy.Off {
+		p, err := policy.Build(settings.Policy)
 		if err != nil {
 			return err
 		}
-		defer sess.Close()
-		sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: *think}).Handle)
-		abortOnInterrupt(sess)
-		showAssembly(sess)
-		showPending(sess, "resumed")
-		return turn(ctx, sess, *once)
+		opts.Policy = &p
 	}
 
-	// REPL: one goroutine reads stdin so a line typed during a run can
-	// steer it, follow it up, or answer an approval.
-	asks := make(chan *ask)
-	opts.Approve = func(c *openresponses.FunctionCall, reason string) bool {
-		a := &ask{q: question(c, reason), reply: make(chan bool, 1)}
-		asks <- a
-		return <-a.reply
-	}
-	opts.Elicit = elicitor(func(q string) bool {
-		a := &ask{q: q, reply: make(chan bool, 1)}
-		asks <- a
-		return <-a.reply
+	// The front is chosen here: -p prints one answer, otherwise -front
+	// names the interactive one. A new front implements the front
+	// interface in front.go and gets a case in selectFront.
+	f, err := selectFront(*frontName, *once, frontInfo{
+		Provider: settings.Provider, Model: m.Name, Dir: dir, Think: settings.Think, Prompt: *once,
 	})
+	if err != nil {
+		return err
+	}
+	opts.Approve, opts.Elicit = f.Hooks()
 	sess, err := openSession(ctx, opts, *resume)
 	if err != nil {
 		return err
 	}
 	defer sess.Close()
-	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: *think}).Handle)
-	abortOnInterrupt(sess)
-
-	fmt.Printf("dex · %s · %s\n", *model, dir)
-	if id := sess.ID(); id != "" {
-		fmt.Printf("session %s\n", id)
-	}
-	showAssembly(sess)
-	showPending(sess, "resumed")
-	lines := make(chan string)
-	go func() {
-		defer close(lines)
-		for in.Scan() {
-			lines <- in.Text()
-		}
-	}()
-	done := make(chan error, 1)
-	running := false
-	var cur *ask
-	prompt := func() {
-		if !running {
-			fmt.Print("\n> ")
-		}
-	}
-	prompt()
-	for {
-		select {
-		case a := <-asks:
-			cur = a
-			fmt.Print(a.q)
-		case err := <-done:
-			running = false
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "\nerror:", err)
-				if h := hint(err); h != "" {
-					fmt.Fprintln(os.Stderr, h)
-				}
-			}
-			prompt()
-		case line, ok := <-lines:
-			if !ok {
-				if running {
-					sess.Agent.Abort()
-					<-done
-				}
-				fmt.Println()
-				return nil
-			}
-			line = strings.TrimSpace(line)
-			if cur != nil {
-				cur.reply <- yes(line)
-				cur = nil
-				continue
-			}
-			if line == "" {
-				prompt()
-				continue
-			}
-			if running {
-				switch {
-				case strings.HasPrefix(line, "/follow "):
-					sess.FollowUp(strings.TrimPrefix(line, "/follow "))
-					fmt.Println("[queued as follow-up]")
-				case line == "/abort":
-					sess.Agent.Abort()
-				default:
-					sess.Steer(line)
-					fmt.Println("[queued as steering]")
-				}
-				continue
-			}
-			if handled, err := command(ctx, sess, line); handled {
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "error:", err)
-				}
-				if line == "/quit" || line == "/exit" {
-					return nil
-				}
-				prompt()
-				continue
-			}
-			running = true
-			go func(text string) { done <- turn(ctx, sess, text) }(line)
-		}
-	}
+	return f.Run(ctx, sess)
 }
 
-type ask struct {
-	q     string
-	reply chan bool
+// loadSettings reads the user's and the project's files and folds
+// them with the flags.
+func loadSettings(dir, userPath string, flags config.Flags) (config.Settings, error) {
+	explicit := userPath != ""
+	if !explicit {
+		userPath = config.Path()
+	}
+	user, err := config.Load(userPath, false, explicit)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	proj, err := config.Load(config.ProjectPath(dir), true, false)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	return config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
 }
 
-// question is what the user is asked about a call the policy asked
-// about.
-func question(c *openresponses.FunctionCall, reason string) string {
-	if reason != "" {
-		reason = " (" + reason + ")"
+func runVerify(ctx context.Context, root, id string) error {
+	n, failed, err := agent.Verify(ctx, root, id)
+	if err != nil {
+		return err
 	}
-	return fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason)
-}
-
-// elicitor puts a tool's mid-call question to the user as a yes or no.
-// dex has no form to fill in, so a question asking for one is
-// cancelled, as is one answered out of band at a URL, which is shown.
-// Questions asked together are put one at a time.
-func elicitor(confirm func(q string) bool) agenttool.Elicitor {
-	var mu sync.Mutex
-	return func(_ context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if q.URL != "" {
-			fmt.Printf("[a tool asks you to visit %s: %s]\n", q.URL, q.Message)
-			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
+	// A response recorded with no request hash is one the recorder
+	// could not stand behind, not one that failed its check.
+	unhashed, bad := 0, 0
+	for _, f := range failed {
+		if errors.Is(f, agentsession.ErrNoHash) {
+			unhashed++
+			continue
 		}
-		if hasFields(q.Schema) {
-			fmt.Printf("[a tool asks for a form dex cannot show: %s]\n", q.Message)
-			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
-		}
-		if confirm("? " + q.Message + " [y/N] ") {
-			return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{}`)}, nil
-		}
-		return agenttool.Answer{Action: agenttool.ActionDecline}, nil
+		fmt.Println(f)
+		bad++
 	}
-}
-
-// hasFields reports whether a form's schema asks for any property.
-func hasFields(schema json.RawMessage) bool {
-	var s struct {
-		Properties map[string]json.RawMessage `json:"properties"`
+	fmt.Printf("%d response(s), %d failed, %d without a request hash\n", n, bad, unhashed)
+	if unhashed > 0 {
+		causes, err := agent.Unhashed(ctx, root, id)
+		if err != nil {
+			return err
+		}
+		told := 0
+		for _, c := range causes {
+			fmt.Printf("  %d unhashed from %s: %s\n", c.Responses, c.Entry, describeUnhashed(c))
+			told += c.Responses
+		}
+		if told < unhashed {
+			fmt.Printf("  %d unhashed with no cause recorded (a recorder before agentturn v0.0.15 wrote none)\n", unhashed-told)
+		}
 	}
-	return len(schema) > 0 && json.Unmarshal(schema, &s) == nil && len(s.Properties) > 0
+	if bad > 0 {
+		os.Exit(1)
+	}
+	return nil
 }
 
 // describeUnhashed says where a request's input and the recorded path
@@ -378,129 +297,4 @@ func describeUnhashed(c agent.UnhashedCause) string {
 		return strings.TrimSpace(strings.Join([]string{i.Type, i.ID, i.CallID}, " "))
 	}
 	return fmt.Sprintf("%s; at input %d sent %s, recorded %s", c.Reason, c.Index, item(c.Sent), item(c.Recorded))
-}
-
-func yes(s string) bool {
-	a := strings.ToLower(strings.TrimSpace(s))
-	return a == "y" || a == "yes"
-}
-
-func openSession(ctx context.Context, opts agent.Options, resume string) (*agent.Session, error) {
-	if resume != "" {
-		return agent.Resume(ctx, opts, resume)
-	}
-	return agent.New(ctx, opts)
-}
-
-// abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
-// or one while idle, exits.
-func abortOnInterrupt(sess *agent.Session) {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		for range sigs {
-			if !sess.Agent.State().Running {
-				fmt.Println()
-				sess.Close()
-				os.Exit(130)
-			}
-			sess.Agent.Abort()
-		}
-	}()
-}
-
-// command handles a slash command while idle; handled is false for a
-// prompt.
-func command(ctx context.Context, sess *agent.Session, line string) (handled bool, err error) {
-	switch {
-	case strings.HasPrefix(line, "/mcp add "):
-		// /mcp add <prefix> <command line>
-		prefix, cmd, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "/mcp add ")), " ")
-		if !ok {
-			return true, errors.New("usage: /mcp add <prefix> <command line>")
-		}
-		label, err := sess.AddMCP(ctx, prefix, strings.TrimSpace(cmd))
-		if err == nil {
-			fmt.Printf("[%s added; its tools are offered from the next prompt]\n", label)
-			showAssembly(sess)
-		}
-		return true, err
-	case strings.HasPrefix(line, "/mcp remove "):
-		err := sess.RemoveMCP(strings.TrimSpace(strings.TrimPrefix(line, "/mcp remove ")))
-		if err == nil {
-			showAssembly(sess)
-		}
-		return true, err
-	case line == "/tools":
-		showAssembly(sess)
-		return true, nil
-	case line == "/quit", line == "/exit":
-		return true, nil
-	case line == "/session":
-		fmt.Println(sess.ID(), sess.Path())
-		return true, nil
-	case strings.HasPrefix(line, "/model "):
-		return true, sess.SetModel(strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
-	case line == "/think on":
-		return true, sess.SetThink(true)
-	case line == "/think off":
-		return true, sess.SetThink(false)
-	case strings.HasPrefix(line, "/follow "):
-		sess.FollowUp(strings.TrimPrefix(line, "/follow "))
-		fmt.Println("[queued as follow-up for the next run]")
-		return true, nil
-	}
-	return false, nil
-}
-
-func turn(ctx context.Context, sess *agent.Session, text string) error {
-	end, err := sess.Prompt(ctx, text)
-	if err != nil {
-		return err
-	}
-	switch end.Reason {
-	case agentturn.ReasonAborted:
-		showPending(sess, "aborted")
-	case agentturn.ReasonInputRequired:
-		for _, p := range end.Pending {
-			fmt.Printf("[input required: %s %s]\n", p.Call.Name, p.Call.Arguments)
-		}
-	case agentturn.ReasonStopped:
-		fmt.Printf("[stopped: %s]\n", end.Cause)
-	}
-	if h := hint(end.Err); end.Err != nil && h != "" {
-		fmt.Printf("[%s]\n", h)
-	}
-	return nil
-}
-
-// showAssembly prints the tools the kit assembled, with the source of
-// each one that is not dex's own, and what the instruction layers left
-// out, so the user knows what the model was not given.
-func showAssembly(sess *agent.Session) {
-	var names []string
-	for _, t := range sess.Tools() {
-		if t.Source == "WithTools" {
-			names = append(names, t.Name)
-		} else {
-			names = append(names, t.Name+" ["+t.Source+"]")
-		}
-	}
-	fmt.Printf("tools: %s\n", strings.Join(names, ", "))
-	for _, o := range sess.Omitted() {
-		fmt.Printf("omitted: %s\n", o)
-	}
-}
-
-// showPending tells the user which calls are unanswered and why, since
-// the next prompt answers them in those terms.
-func showPending(sess *agent.Session, why string) {
-	pending := sess.Pending()
-	if len(pending) == 0 {
-		return
-	}
-	fmt.Printf("[%s; %d tool call(s) unanswered, answered on the next prompt]\n", why, len(pending))
-	for _, p := range pending {
-		fmt.Printf("  ⏸ %s\n", agent.Describe(p))
-	}
 }

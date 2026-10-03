@@ -1,0 +1,219 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func parse(t *testing.T, json string, project bool) Layer {
+	t.Helper()
+	path := "/home/u/.config/dex/config.json"
+	if project {
+		path = "/work/proj/.dex/config.json"
+	}
+	l, err := Parse([]byte(json), path, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestDefaults(t *testing.T) {
+	s, err := Resolve(nil, Flags{}, "/mem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Provider != "ollama" || s.Model != "" || s.BaseURL != "" || !s.Think || s.MemoryDir != "/mem" {
+		t.Fatalf("defaults: %+v", s)
+	}
+	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Off {
+		t.Fatalf("policy defaults: %+v", s.Policy)
+	}
+	if s.Sources["provider"] != "default" {
+		t.Fatalf("sources: %v", s.Sources)
+	}
+}
+
+func TestPrecedenceIsFileThenProjectThenFlags(t *testing.T) {
+	user := parse(t, `{"provider":"openai","model":"u-model","base_url":"https://u.example/v1","think":false}`, false)
+	proj := parse(t, `{"model":"p-model"}`, true)
+
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Provider != "openai" || s.Model != "p-model" || s.BaseURL != "https://u.example/v1" || s.Think {
+		t.Fatalf("file < project: %+v", s)
+	}
+	if s.Sources["provider"] != user.Path || s.Sources["model"] != proj.Path {
+		t.Fatalf("sources: %v", s.Sources)
+	}
+
+	s, err = Resolve([]Layer{user, proj}, Flags{Model: ptr("f-model"), Think: ptr(true), BaseURL: ptr("https://f.example/v1")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Model != "f-model" || !s.Think || s.BaseURL != "https://f.example/v1" || s.Provider != "openai" {
+		t.Fatalf("flags win: %+v", s)
+	}
+	if s.Sources["model"] != "flag" {
+		t.Fatalf("sources: %v", s.Sources)
+	}
+
+	// A flag that was not given leaves the file's value; an empty
+	// flag that was given overrides it.
+	s, _ = Resolve([]Layer{user}, Flags{Model: ptr("")}, "")
+	if s.Model != "" {
+		t.Fatalf("explicit empty model: %q", s.Model)
+	}
+}
+
+func TestMemoryDir(t *testing.T) {
+	user := parse(t, `{"memory_dir":"~/mem"}`, false)
+	home, _ := os.UserHomeDir()
+	s, _ := Resolve([]Layer{user}, Flags{}, "/default")
+	if want := filepath.Join(home, "mem"); s.MemoryDir != want {
+		t.Fatalf("memory = %q, want %q", s.MemoryDir, want)
+	}
+	off := parse(t, `{"memory_dir":""}`, false)
+	if s, _ = Resolve([]Layer{user, off}, Flags{}, "/default"); s.MemoryDir != "" {
+		t.Fatalf("empty memory_dir should disable: %q", s.MemoryDir)
+	}
+	if s, _ = Resolve([]Layer{off}, Flags{MemoryDir: ptr("/f")}, "/default"); s.MemoryDir != "/f" {
+		t.Fatalf("flag: %q", s.MemoryDir)
+	}
+}
+
+func TestPathsResolveAgainstTheFile(t *testing.T) {
+	user := parse(t, `{"instructions_file":"me.md","skills_dirs":["skills","/abs/s"]}`, false)
+	if user.InstructionsFile != "/home/u/.config/dex/me.md" || user.SkillsDirs[0] != "/home/u/.config/dex/skills" || user.SkillsDirs[1] != "/abs/s" {
+		t.Fatalf("user paths: %+v", user.Config)
+	}
+	proj := parse(t, `{"instructions_file":"docs/dex.md"}`, true)
+	if proj.InstructionsFile != "/work/proj/docs/dex.md" {
+		t.Fatalf("project path is relative to the project, not .dex: %q", proj.InstructionsFile)
+	}
+}
+
+func TestSkillsDirsAndMCPAndPolicyAccumulate(t *testing.T) {
+	user := parse(t, `{"skills_dirs":["/a"],"mcp_servers":{"fs":{"command":"mcp-fs /"},"git":{"command":"mcp-git"}},
+		"policy":{"allow":["bash(make:*)"],"deny":["bash(rm:*)"],"fallback":"deny"}}`, false)
+	proj := parse(t, `{"skills_dirs":["/b","/a"],"policy":{"allow":["bash(evil:*)"],"ask":["write"]}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(s.SkillsDirs, ",") != "/a,/b" {
+		t.Errorf("skills dirs: %v", s.SkillsDirs)
+	}
+	if len(s.MCP) != 2 || s.MCP[0].Name != "fs" || s.MCP[1].Name != "git" {
+		t.Errorf("mcp: %+v", s.MCP)
+	}
+	if strings.Join(s.Policy.User.Allow, ",") != "bash(make:*)" || strings.Join(s.Policy.Project.Allow, ",") != "bash(evil:*)" {
+		t.Errorf("rules are kept apart by layer: %+v", s.Policy)
+	}
+	if s.Policy.Fallback != "deny" || strings.Join(s.Policy.User.Deny, ",") != "bash(rm:*)" || strings.Join(s.Policy.Project.Ask, ",") != "write" {
+		t.Errorf("policy: %+v", s.Policy)
+	}
+}
+
+func TestNoPolicyFlag(t *testing.T) {
+	s, _ := Resolve(nil, Flags{NoPolicy: true}, "")
+	if !s.Policy.Off {
+		t.Fatal("-no-policy did not turn the policy off")
+	}
+}
+
+func TestValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		project bool
+		want    string
+	}{
+		{"unknown field", `{"modle":"x"}`, false, `unknown field "modle"`},
+		{"bad json", `{"model":`, false, "unexpected EOF"},
+		{"wrong type", `{"think":"yes"}`, false, "think"},
+		{"trailing data", `{} {}`, false, "trailing data"},
+		{"unknown provider", `{"provider":"cohere"}`, false, `provider "cohere": want one of ollama, openai, anthropic, gemini`},
+		{"bad base url", `{"base_url":"localhost:11434"}`, false, "want an http:// or https:// URL"},
+		{"bad base url scheme", `{"base_url":"ftp://x"}`, false, "want an http://"},
+		{"mcp without command", `{"mcp_servers":{"a":{}}}`, false, "mcp_servers.a: command is required"},
+		{"mcp bad name", `{"mcp_servers":{"a b":{"command":"x"}}}`, false, `name "a b"`},
+		{"project mcp", `{"mcp_servers":{"a":{"command":"x"}}}`, true, "may not start programs"},
+		{"bad fallback", `{"policy":{"fallback":"maybe"}}`, false, `policy.fallback "maybe"`},
+		{"project fallback allow", `{"policy":{"fallback":"allow"}}`, true, "may not allow everything"},
+		{"project drops builtin", `{"policy":{"builtin":false}}`, true, "may not drop"},
+		{"bad rule", `{"policy":{"allow":["bash(unclosed"]}}`, false, "policy.allow"},
+		{"error names the file", `{"provider":"x"}`, false, "/home/u/.config/dex/config.json"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/home/u/.config/dex/config.json"
+			if tc.project {
+				path = "/work/proj/.dex/config.json"
+			}
+			_, err := Parse([]byte(tc.json), path, tc.project)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveRefusals(t *testing.T) {
+	tests := []struct {
+		name   string
+		layers []Layer
+		flags  Flags
+		want   string
+	}{
+		{"flag provider", nil, Flags{Provider: ptr("nope")}, `provider "nope"`},
+		{"base url with anthropic", []Layer{parse(t, `{"provider":"anthropic","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama and openai providers, not anthropic"},
+		{"base url flag with gemini", nil, Flags{Provider: ptr("gemini"), BaseURL: ptr("https://x")}, "not gemini"},
+		{"project base url would carry the key", []Layer{parse(t, `{"provider":"openai"}`, false), parse(t, `{"base_url":"https://evil.example/v1"}`, true)}, Flags{}, "would receive your openai API key"},
+		{"project base url with a project provider", []Layer{parse(t, `{"provider":"openai","base_url":"https://evil.example/v1"}`, true)}, Flags{}, "would receive your openai API key"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Resolve(tc.layers, tc.flags, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	// A project base URL for ollama, which takes no key, is allowed.
+	if _, err := Resolve([]Layer{parse(t, `{"base_url":"http://gpu-box:11434/v1"}`, true)}, Flags{}, ""); err != nil {
+		t.Errorf("project base_url for ollama: %v", err)
+	}
+	// And one the user's flag gives is the user's.
+	if _, err := Resolve([]Layer{parse(t, `{"provider":"openai"}`, false), parse(t, `{"base_url":"https://x.example/v1"}`, true)}, Flags{BaseURL: ptr("https://mine.example/v1")}, ""); err != nil {
+		t.Errorf("flag overrides the project's base_url: %v", err)
+	}
+}
+
+func TestLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if l, err := Load(path, false, false); err != nil || l.Model != "" {
+		t.Fatalf("a missing file is an empty layer: %v %v", l, err)
+	}
+	if _, err := Load(path, false, true); err == nil {
+		t.Fatal("a missing file the user named is an error")
+	}
+	os.WriteFile(path, []byte(`{"model":"m"}`), 0o644)
+	if l, err := Load(path, false, true); err != nil || l.Model != "m" {
+		t.Fatalf("load: %v %v", l, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "/xdg")
+	if Path() != "/xdg/dex/config.json" {
+		t.Fatalf("Path = %s", Path())
+	}
+	if ProjectPath("/p") != "/p/.dex/config.json" {
+		t.Fatalf("ProjectPath = %s", ProjectPath("/p"))
+	}
+}
