@@ -91,6 +91,12 @@ versions may break flags and the config file.
   which cannot be a permission, are refused with a reason telling the model
   to make the call itself; tool elicitation is declined. The slash commands
   stay in the REPL.
+- Fixed: the terminal client is the default only with a terminal at both ends
+  (a real isatty, so /dev/null is not one) and a session store; `-front tui`
+  without them fails before a store is opened or a banner printed; the
+  pre-client pause needs both ends a terminal; dex's buffered notes and the
+  session ID are flushed however the client ends, and warnings held back for
+  the screen are shown before an error opening the session.
 - Changed: CI runs on `workflow_dispatch` only until a `DEX_DEPS_TOKEN`
   secret exists (agentconsole is private).
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and

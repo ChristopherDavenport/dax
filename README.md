@@ -112,7 +112,7 @@ keys somewhere; a repository does not get to make them.)
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
-| `-front tui\|repl` | the front end; default `tui` when standard input and output are a terminal, `repl` otherwise; `-p` always prints |
+| `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |

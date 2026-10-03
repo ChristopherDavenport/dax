@@ -29,6 +29,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
+	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dex/internal/agent"
 	"github.com/ChristopherDavenport/dex/internal/render"
@@ -59,10 +60,26 @@ type front interface {
 	Run(ctx context.Context, sess *agent.Session) error
 }
 
+// frontEnv is what selectFront needs to know of the process: whether
+// standard input and output are terminals, and whether a session store
+// is in use.
+type frontEnv struct {
+	stdinTTY, stdoutTTY, recording bool
+}
+
+// processEnv reads it. recording is false when -sessions is empty.
+func processEnv(recording bool) frontEnv {
+	return frontEnv{stdinTTY: isTerminal(os.Stdin), stdoutTTY: isTerminal(os.Stdout), recording: recording}
+}
+
 // selectFront picks the front: print for -p; otherwise the named one,
 // and with no name the terminal client when standard input and output
-// are a terminal, and the REPL when they are not.
-func selectFront(name, prompt string, info frontInfo) (front, error) {
+// are terminals and a session is recorded, and the REPL when they are
+// not or it is not. The terminal client renders the session's record,
+// so it cannot run with recording off, and it needs a terminal; asked
+// for by name without either, it fails here, before a store is opened
+// or a banner printed.
+func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, error) {
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 1<<20), 1<<20)
 	if prompt != "" {
@@ -70,7 +87,7 @@ func selectFront(name, prompt string, info frontInfo) (front, error) {
 	}
 	if name == "" {
 		name = "repl"
-		if isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+		if env.stdinTTY && env.stdoutTTY && env.recording {
 			name = "tui"
 		}
 	}
@@ -78,17 +95,20 @@ func selectFront(name, prompt string, info frontInfo) (front, error) {
 	case "repl":
 		return &replFront{info: info, in: in, asks: make(chan *ask)}, nil
 	case "tui":
-		return &tuiFront{info: info, pause: isTerminal(os.Stdin)}, nil
+		if !env.recording {
+			return nil, errors.New("the terminal client needs a session store; drop -sessions \"\" or use -front repl")
+		}
+		if !env.stdinTTY || !env.stdoutTTY {
+			return nil, errors.New("the terminal client needs a terminal for standard input and output; use -front repl or -p")
+		}
+		return &tuiFront{info: info, pause: true}, nil
 	}
 	return nil, fmt.Errorf("-front %q: want tui or repl", name)
 }
 
-// isTerminal reports whether f is a character device, which a terminal
-// is and a pipe or a file is not.
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
+// isTerminal reports whether f is a terminal, by asking the system:
+// /dev/null and other character devices are not.
+func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 
 func (f *printFront) Prepare(*agent.Options) {}
 func (f *replFront) Prepare(*agent.Options)  {}

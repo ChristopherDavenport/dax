@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -113,6 +114,7 @@ func (m *steps) sawInChild() string {
 
 // tuiRig is dex's terminal client over a scripted model, on a pipe.
 type tuiRig struct {
+	f    *tuiFront
 	t    *testing.T
 	dir  string
 	in   *io.PipeWriter
@@ -123,6 +125,15 @@ type tuiRig struct {
 }
 
 func startTUI(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Options)) *tuiRig {
+	return startRig(t, m, rules, tweak, nil, true)
+}
+
+// startFront builds the front and its session without running it.
+func startFront(t *testing.T, m *steps, tweak func(*tuiFront)) *tuiRig {
+	return startRig(t, m, config.Rules{}, nil, tweak, false)
+}
+
+func startRig(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Options), tweakFront func(*tuiFront), run bool) *tuiRig {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -152,6 +163,10 @@ func startTUI(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Opti
 		out:     r.pre,
 		console: []console.Option{console.WithInput(pr), console.WithOutput(r.out), console.WithoutSignalHandler(), console.WithWindowSize(220, 50)},
 	}
+	r.f = f
+	if tweakFront != nil {
+		tweakFront(f)
+	}
 	if a, e := f.Hooks(); a != nil || e != nil {
 		t.Fatal("the terminal client answers on its screen, not through callbacks")
 	}
@@ -165,7 +180,9 @@ func startTUI(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Opti
 	}
 	r.sess = sess
 	t.Cleanup(func() { sess.Close() })
-	go func() { r.done <- f.Run(ctx, sess) }()
+	if run {
+		go func() { r.done <- f.Run(ctx, sess) }()
+	}
 	return r
 }
 
@@ -334,4 +351,62 @@ func gitIn(dir string, args ...string) error {
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	return cmd.Run()
+}
+
+// A panic in the client does not lose what dex noted, nor the session's
+// ID, and the panic goes on.
+func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
+	var out syncBuf
+	for _, panics := range []bool{false, true} {
+		out = syncBuf{}
+		r := startFront(t, &steps{}, func(f *tuiFront) {
+			f.out = &out
+			f.run = func(context.Context, client.Backend, ...console.Option) error {
+				f.log = append(f.log, "[compaction failed after 2 call(s): boom]")
+				if panics {
+					panic("the client fell over")
+				}
+				return nil
+			}
+		})
+		func() {
+			defer func() {
+				got := recover()
+				if panics != (got != nil) {
+					t.Errorf("panics=%v but recovered %v", panics, got)
+				}
+			}()
+			r.f.Run(context.Background(), r.sess)
+		}()
+		if !strings.Contains(out.String(), "compaction failed after 2 call(s): boom") || !strings.Contains(out.String(), "session "+r.sess.ID()) {
+			t.Errorf("panics=%v: the notes were not flushed:\n%s", panics, out.String())
+		}
+	}
+}
+
+// If the session cannot be opened after the front held warnings back, they
+// are shown before the error.
+func TestWarningsHeldBackAreShownWhenTheSessionCannotOpen(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "sessions")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(root, 0o755)
+	var errOut syncBuf
+	f := &tuiFront{errOut: &errOut}
+	o := agent.Options{Model: "x", Streamer: &steps{}, Dir: filepath.Join(base, "does-not-exist"), Root: root, UserDir: base}
+	f.Prepare(&o)
+	_, err := agent.New(context.Background(), o)
+	if err == nil {
+		t.Fatal("opening a session in a missing directory should fail")
+	}
+	f.Abandon()
+	if !strings.Contains(errOut.String(), "was readable by other users") {
+		t.Errorf("the held-back warning was dropped: %q", errOut.String())
+	}
+	// The capture is undone: later warnings go to standard error again.
+	var w syncBuf
+	undo := agent.CaptureWarnings(&w)
+	undo()
 }

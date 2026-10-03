@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/client/kitbackend"
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/agenttool"
@@ -49,9 +50,16 @@ type tuiFront struct {
 	// out is where the start lines and the notes after the run go.
 	out io.Writer
 	// pause waits for Enter after start lines that carry warnings or
-	// omissions, which the alternate screen would otherwise hide.
+	// omissions, which the alternate screen would otherwise hide. It is
+	// set only when both standard input and output are terminals, since
+	// the prompt goes to the output and the answer comes from the input.
 	pause bool
 	in    io.Reader
+	// errOut is where held-back warnings go if the session cannot be
+	// opened; nil is standard error.
+	errOut io.Writer
+	// run is console.Run; tests replace it.
+	run func(context.Context, client.Backend, ...console.Option) error
 
 	mu       sync.Mutex
 	warnings bytes.Buffer
@@ -116,16 +124,32 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 		bufio.NewReader(in).ReadString('\n')
 	}
+	// What dex noted while the client had the screen, and the session ID,
+	// are printed however the client ends, a panic in it included.
+	defer func() {
+		r := recover()
+		f.flush(out, sess)
+		if r != nil {
+			panic(r)
+		}
+	}()
 	be, err := kitbackend.New(sess.Kit, kitbackend.WithConfig(sess.TUIConfig))
 	if err != nil {
 		return err
 	}
 	defer be.Close()
-	err = console.Run(ctx, be, f.console...)
+	run := f.run
+	if run == nil {
+		run = console.Run
+	}
+	return run(ctx, be, f.console...)
+}
 
-	// What dex noted while the client had the screen.
+// flush prints the notes dex buffered and the session's ID.
+func (f *tuiFront) flush(out io.Writer, sess *agent.Session) {
 	f.mu.Lock()
 	notes := f.log
+	f.log = nil
 	f.mu.Unlock()
 	for _, l := range notes {
 		fmt.Fprintln(out, render.Clean(l))
@@ -133,5 +157,23 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if id := sess.ID(); id != "" {
 		fmt.Fprintln(out, "session", id)
 	}
-	return err
+}
+
+// Abandon is for a session that could not be opened after Prepare: the
+// warnings held back for the screen are printed, since the screen is
+// not coming.
+func (f *tuiFront) Abandon() {
+	if f.restore != nil {
+		f.restore()
+	}
+	w := f.errOut
+	if w == nil {
+		w = os.Stderr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fmt.Fprint(w, render.Clean(f.warnings.String()))
+	for _, l := range f.log {
+		fmt.Fprintln(w, render.Clean(l))
+	}
 }
