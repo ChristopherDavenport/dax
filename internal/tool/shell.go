@@ -8,53 +8,71 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 )
 
-// BashSubjects splits a bash call into the subjects a policy decides,
-// so that `git status && rm -rf /` is two subcommands and a rule that
-// allows the first does not allow the second. It is a splitter, not a
-// shell parser, and it fails toward asking:
+// sentinel prefixes a subject no rule names, so a call that carries it
+// is decided by a bare rule, the fallback or the user, and never by an
+// allow rule for a command. See BashSubjects.
+const sentinel = "$(...) "
+
+// BashSubjects returns the subjects splitter of the bash tool for a
+// workspace rooted at dir. What it decides is who may auto-run:
 //
-//   - the command is cut at unquoted ; & | && || and newlines;
-//   - a redirect to a file adds a subject for the write tool on its
-//     target, so `git log > ~/.bashrc` is decided by the write rules;
-//   - command substitution, process substitution, backticks, a
-//     here-document and a trailing backslash add a subject no
-//     command rule matches, so the call is asked about whatever the
-//     rest of it says;
-//   - an unterminated quote is an error, which blocks the call.
-func BashSubjects(args json.RawMessage) ([]agentpolicy.Subject, error) {
-	var in struct {
-		Command string `json:"command"`
+//   - A command inside the safe subset (see SafeWords: one simple command
+//     of plain words and simple quotes, no operators, expansions, globs
+//     or comments) is one subject, its words joined by single spaces, so
+//     an allow rule for that command can match it. For git, ls, pwd and
+//     go the subject also has to pass the read-only argument check
+//     (ReadOnlyArgs); when it does not, a sentinel subject is added.
+//   - Any other command is cut into the parts a rule can still name, so
+//     a deny or ask rule for `rm` reaches `git status && rm x`, and a
+//     sentinel subject is added, so no allow rule for a command ever
+//     covers it. The cut is for the question the user is asked and for
+//     deny and ask rules; it is a best-effort reading of bash, not a
+//     parser, and nothing is allowed because of it.
+//
+// A command with an unterminated quote is an error, which blocks the
+// call.
+func BashSubjects(dir string) agentpolicy.Subjects {
+	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
+		var in struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		mk := func(tool, field, match, text string) agentpolicy.Subject {
+			a, _ := json.Marshal(map[string]string{field: match})
+			return agentpolicy.Subject{Args: a, Tool: tool, Text: text}
+		}
+		cmd := strings.TrimSpace(in.Command)
+		if cmd == "" {
+			return nil, errors.New("command is empty")
+		}
+		if words, ok := SafeWords(cmd); ok {
+			out := []agentpolicy.Subject{mk("", "command", strings.Join(words, " "), cmd)}
+			if !ReadOnlyArgs(words, dir) {
+				out = append(out, mk("", "command", sentinel+cmd, cmd))
+			}
+			return out, nil
+		}
+		parts, targets, _, err := splitShell(cmd)
+		if err != nil {
+			return nil, err
+		}
+		var out []agentpolicy.Subject
+		for _, p := range parts {
+			out = append(out, mk("", "command", p, p))
+		}
+		for _, t := range targets {
+			out = append(out, mk("write", "path", t, t))
+		}
+		return append(out, mk("", "command", sentinel+cmd, cmd)), nil
 	}
-	if err := json.Unmarshal(args, &in); err != nil {
-		return nil, err
-	}
-	parts, targets, opaque, err := splitShell(in.Command)
-	if err != nil {
-		return nil, err
-	}
-	mk := func(tool, field, text string) agentpolicy.Subject {
-		a, _ := json.Marshal(map[string]string{field: text})
-		return agentpolicy.Subject{Args: a, Tool: tool, Text: text}
-	}
-	var out []agentpolicy.Subject
-	for _, p := range parts {
-		out = append(out, mk("", "command", p))
-	}
-	for _, t := range targets {
-		out = append(out, mk("write", "path", t))
-	}
-	if opaque {
-		// Nothing a rule names starts with this, so only a bare ask,
-		// the default or a bare allow decides it.
-		out = append(out, mk("", "command", "$(...) "+strings.TrimSpace(in.Command)))
-	}
-	if len(out) == 0 {
-		return nil, errors.New("command is empty")
-	}
-	return out, nil
 }
 
-// splitShell cuts a command line. See BashSubjects.
+// splitShell cuts a command line the way a reader would, for the
+// subjects of a command that is asked about. It follows quotes,
+// $'...' strings, comments and the redirect forms, and reports
+// whether anything it cannot follow (substitution) was there.
 func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 	var cur strings.Builder
 	flush := func() {
@@ -63,6 +81,7 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 		}
 		cur.Reset()
 	}
+	wordStart := true // the next byte begins a word
 	var quote byte
 	for i := 0; i < len(s); i++ {
 		c := s[i]
@@ -79,6 +98,8 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 			}
 			continue
 		}
+		start := wordStart
+		wordStart = false
 		switch c {
 		case '\'', '"':
 			quote = c
@@ -95,19 +116,66 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 			opaque = true
 			cur.WriteByte(c)
 		case '$':
-			if i+1 < len(s) && s[i+1] == '(' {
+			cur.WriteByte(c)
+			if i+1 >= len(s) {
+				break
+			}
+			switch s[i+1] {
+			case '(':
 				opaque = true
+			case '\'':
+				// $'...': backslash escapes, \' does not close it.
+				opaque = true
+				i++
+				cur.WriteByte('\'')
+				for i+1 < len(s) {
+					i++
+					cur.WriteByte(s[i])
+					if s[i] == '\\' && i+1 < len(s) {
+						i++
+						cur.WriteByte(s[i])
+						continue
+					}
+					if s[i] == '\'' {
+						break
+					}
+					if i+1 >= len(s) {
+						return nil, nil, false, errors.New("unterminated quote in command")
+					}
+				}
+			case '"':
+				// $"...": a double-quoted string.
+				opaque = true
+				i++
+				quote = '"'
+				cur.WriteByte('"')
+			}
+		case '#':
+			if start {
+				// A comment runs to the end of the line.
+				for i+1 < len(s) && s[i+1] != '\n' {
+					i++
+				}
+				break
 			}
 			cur.WriteByte(c)
+		case ' ', '\t':
+			cur.WriteByte(c)
+			wordStart = true
 		case ';', '\n', '|':
 			flush()
+			wordStart = true
 		case '&':
-			if i+1 < len(s) && s[i+1] == '>' { // &> file
+			if i+1 < len(s) && s[i+1] == '>' { // &> file, &>> file
 				i++
+				if i+1 < len(s) && s[i+1] == '>' {
+					i++
+				}
 				i, redirects = readTarget(s, i+1, redirects, &opaque)
 				break
 			}
 			flush()
+			wordStart = true
 		case '<':
 			if i+1 < len(s) && (s[i+1] == '(' || s[i+1] == '<') {
 				opaque = true
@@ -120,15 +188,24 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 			if i+1 < len(s) && (s[i+1] == '>' || s[i+1] == '|') {
 				i++
 			}
-			if i+1 < len(s) && s[i+1] == '&' { // 2>&1: a descriptor, not a file
-				cur.WriteByte(c)
-				i++
-				cur.WriteByte('&')
-				for i+1 < len(s) && (s[i+1] >= '0' && s[i+1] <= '9' || s[i+1] == '-') {
-					i++
-					cur.WriteByte(s[i])
+			if i+1 < len(s) && s[i+1] == '&' {
+				// >&N and >&- duplicate or close a descriptor; >&word is
+				// bash's spelling of > word 2>&1.
+				j := i + 2
+				for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+					j++
 				}
-				break
+				if j > i+2 && (j == len(s) || strings.IndexByte(" \t\n;&|<>()", s[j]) >= 0) || (j == i+2 && j < len(s) && s[j] == '-') {
+					cur.WriteByte(c)
+					cur.WriteString(s[i+1 : j])
+					if j < len(s) && s[j] == '-' {
+						cur.WriteByte('-')
+						j++
+					}
+					i = j - 1
+					break
+				}
+				i++
 			}
 			dropFD(&cur)
 			i, redirects = readTarget(s, i+1, redirects, &opaque)

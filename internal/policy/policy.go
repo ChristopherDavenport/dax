@@ -35,12 +35,12 @@ const BuiltinAllow = "read glob grep ls skill explore memory_search " +
 	"bash(ls:*) bash(pwd) bash(cd:*)"
 
 // Matchers are the per-tool specifier matchers: bash by its command,
-// the file tools by their path. A bash command is split into
-// subcommands first.
-func Matchers() map[string]agentpolicy.ToolMatcher {
+// the file tools by their path. dir is the workspace; bash decisions
+// read paths against it.
+func Matchers(dir string) map[string]agentpolicy.ToolMatcher {
 	path := agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path")}
 	return map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects},
+		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir)},
 		"read":  path,
 		"write": path,
 		"edit":  path,
