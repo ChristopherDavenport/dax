@@ -3,6 +3,7 @@ package tool
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -269,4 +270,38 @@ func readTarget(s string, i int, redirects []string, opaque *bool) (int, []strin
 		redirects = append(redirects, target)
 	}
 	return i - 1, redirects
+}
+
+// PathSubjects returns the subjects splitter of a file tool: its one
+// subject is the path in field, normalised against the workspace dir
+// (see NormalizePath), so a rule written for docs/** meets
+// docs/../.git/x as .git/x, ./.env and a/../.env as .env and the
+// absolute path of a file as the same name. Links are not followed:
+// the rule matches the name the model used, and the tool's own
+// confinement refuses a link that leaves. A path that leaves the
+// workspace gets a subject no rule names, so it asks. When the field is
+// absent the subject is def, which is the directory a search defaults to.
+func PathSubjects(dir, field, def string) agentpolicy.Subjects {
+	real, _ := filepath.EvalSymlinks(dir)
+	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(args, &m); err != nil {
+			return nil, err
+		}
+		var raw string
+		if v, ok := m[field]; ok {
+			if err := json.Unmarshal(v, &raw); err != nil {
+				return nil, err
+			}
+		}
+		if raw == "" {
+			raw = def
+		}
+		rel, ok := NormalizePath(dir, real, raw)
+		if !ok {
+			rel = sentinel + raw
+		}
+		a, _ := json.Marshal(map[string]string{"path": rel})
+		return []agentpolicy.Subject{{Args: a, Text: raw}}, nil
+	}
 }

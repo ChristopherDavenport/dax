@@ -38,18 +38,22 @@ const BuiltinAllow = "read glob grep ls skill explore memory_search " +
 	"bash(ls:*) bash(pwd) bash(cd:*)"
 
 // Matchers are the per-tool specifier matchers: bash by its command,
-// the file tools by their path. dir is the workspace; bash decisions
-// read paths against it.
+// the file tools by their path, normalised against the workspace dir
+// (a search by the directory it looks in). Rules for a path are written
+// relative to the workspace: write(docs/**), read(.env).
 func Matchers(dir string) map[string]agentpolicy.ToolMatcher {
-	path := agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path")}
+	file := func(def string) agentpolicy.ToolMatcher {
+		return agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path"), Subjects: tool.PathSubjects(dir, "path", def)}
+	}
 	return map[string]agentpolicy.ToolMatcher{
 		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir)},
-		"read":  path,
-		"write": path,
-		"edit":  path,
-		"glob":  {Match: agentpolicy.GlobMatcher("pattern")},
-		"grep":  {Match: agentpolicy.GlobMatcher("pattern")},
-		"ls":    path,
+		"read":  file(""),
+		"write": file(""),
+		"edit":  file(""),
+		// A search is matched on where it looks, not on its pattern.
+		"glob": file("."),
+		"grep": file("."),
+		"ls":   file("."),
 	}
 }
 

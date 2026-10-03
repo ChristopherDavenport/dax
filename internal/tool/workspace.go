@@ -52,23 +52,43 @@ func (w *Workspace) Dir() string { return w.dir }
 func (w *Workspace) Close() error { return w.root.Close() }
 
 // Rel turns a path the model gave, absolute or relative to the
-// workspace, into a slash-free-of-".." name relative to its root. A
-// path that names somewhere else is ErrOutside. It checks the name
-// alone; the Root's own checks catch a link that leaves.
+// workspace, into a name relative to its root, cleaned. A path that
+// names somewhere else is ErrOutside. It checks the name alone; the
+// Root's own checks catch a link that leaves.
 func (w *Workspace) Rel(path string) (string, error) {
+	rel, ok := NormalizePath(w.dir, w.real, path)
 	if path == "" {
 		return "", errors.New("path is required")
 	}
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrOutside, path)
+	}
+	return rel, nil
+}
+
+// NormalizePath turns path, absolute or relative to dir, into a cleaned
+// name relative to dir ("." for dir itself), without touching the file
+// system: ./x, a/../x and the absolute path of x all come out as x. ok
+// is false for a path that is empty or names somewhere outside dir.
+// real, when not empty, is dir with its links resolved, which an
+// absolute path may be spelled in.
+func NormalizePath(dir, real, path string) (rel string, ok bool) {
+	if path == "" {
+		return "", false
+	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(w.dir, path)
+		path = filepath.Join(dir, path)
 	}
 	path = filepath.Clean(path)
-	for _, base := range []string{w.dir, w.real} {
-		if rel, err := filepath.Rel(base, path); err == nil && local(rel) {
-			return rel, nil
+	for _, base := range []string{dir, real} {
+		if base == "" {
+			continue
+		}
+		if r, err := filepath.Rel(base, path); err == nil && local(r) {
+			return r, true
 		}
 	}
-	return "", fmt.Errorf("%w: %s", ErrOutside, path)
+	return "", false
 }
 
 func local(rel string) bool {
