@@ -72,13 +72,17 @@ their model endpoints, OpenRouter through its public catalogue (fetched
 once, without the key) and Ollama through `/api/show`; OpenAI and an
 `openresponses` server publish nothing, and nothing is shown.
 
-Every request's reasoning effort is then fitted to the answer: an effort
-the model does not take becomes the nearest one it does, and dex says so
-once, `[qwen3-coder:30b: reasoning effort low is not accepted; sent none
-(ollama)]`. So `-think` on a model that cannot reason turns reasoning off
-instead of failing, and `-think=false` on one that always reasons sends
-its least effort. When the vendor cannot be asked, or does not know the
-model, requests go out as asked. `-think` (default on)
+The reasoning effort dex asks for is then fitted to the answer: an
+effort the model does not take becomes the nearest one it does, and dex
+says so once, `[qwen3-coder:30b: reasoning effort low is not accepted;
+asking for none (ollama)]`. So `-think` on a model that cannot reason
+turns reasoning off instead of failing, and `-think=false` on one that
+always reasons asks for its least effort. The fitting is done where each
+configuration is made (the main agent's, the sub-agents', a fold's
+summary, `/think` and `/model`), never to a request on its way out, so
+the session records the effort that was sent. When the vendor cannot be
+asked, or does not know the model, the effort is asked for as
+configured. `-think` (default on)
 asks for low reasoning effort with summaries and shows the reasoning;
 `-think=false` turns reasoning off.
 

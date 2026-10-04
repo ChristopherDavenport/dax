@@ -5,9 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
-	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -34,13 +32,16 @@ const taskTurns = 40
 // fresh transcript, recorded as a child session; several calls in one
 // batch run at once.
 //
-// Its instructions are the main agent's own parts, dex's prompt with
-// the user's instructions and the AGENTS.md chain, read from the kit
-// at each request, since the kit that assembles them is built after
-// this configuration is fixed. Skills and memory are left out: the
-// sub-agent has neither tool.
-func (o Options) task(model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine], kit *atomic.Pointer[agentkit.Kit]) agentturn.Config {
-	fallback := prompt.Build(o.Dir, o.Instructions)
+// Its instructions are fixed here, in the configuration, so the child
+// session records what the child is told: the preamble, dex's prompt
+// with the user's instructions, and agentsText, the AGENTS.md chain as
+// the kit renders it for the main agent. Skills and memory are left
+// out: the sub-agent has neither tool.
+func (o Options) task(ctx context.Context, model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine], agentsText string) agentturn.Config {
+	parts := []string{taskPreamble, prompt.Build(o.Dir, o.Instructions)}
+	if agentsText != "" {
+		parts = append(parts, agentsText)
+	}
 	cfg := agentturn.Config{
 		Name: "task",
 		Description: "Start a sub-agent that carries out a self-contained coding task in this project: it reads, " +
@@ -48,13 +49,11 @@ func (o Options) task(model openresponses.Streamer, ws *tool.Workspace, env []st
 			"see this conversation, so give it everything it needs: the goal, the files involved, the conventions to " +
 			"follow and how to check the result. Several task calls in one turn run in parallel; give parallel tasks " +
 			"separate files. Review what a task reports before relying on it.",
-		Model: &taskInstructions{Streamer: model, instructions: func() string {
-			return taskPrompt(kit.Load(), fallback)
-		}},
+		Model:        model,
 		ModelName:    o.subagentModel(),
-		Instructions: taskPreamble + "\n\n" + fallback,
+		Instructions: strings.Join(parts, "\n\n"),
 		Tools:        tool.Builtins(ws, o.MaxReadBytes, tool.WithEnv(env)),
-		Reasoning:    o.reasoning(),
+		Reasoning:    o.reasoningFor(ctx, o.subagentModel()),
 		MaxTurns:     taskTurns,
 		Retry:        agentturn.Retry{MaxAttempts: 3},
 	}
@@ -62,36 +61,4 @@ func (o Options) task(model openresponses.Streamer, ws *tool.Workspace, env []st
 		cfg.BeforeToolCall = o.childPolicy("task", eng, &tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})
 	}
 	return cfg
-}
-
-// taskPrompt is the preamble and the main agent's product and
-// AGENTS.md parts, or the preamble and fallback before there is a kit.
-func taskPrompt(k *agentkit.Kit, fallback string) string {
-	parts := []string{taskPreamble}
-	found := false
-	if k != nil {
-		for _, p := range k.Parts() {
-			if p.ID == agentkit.PartProduct || p.ID == agentsmd.PartID {
-				parts = append(parts, p.Text)
-				found = found || p.ID == agentkit.PartProduct
-			}
-		}
-	}
-	if !found {
-		parts = append(parts, fallback)
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// taskInstructions sets the instructions of every request it sends.
-// It offers only CreateStream: the sub-agent's loop is given no
-// compaction, so nothing asks it for Compact.
-type taskInstructions struct {
-	openresponses.Streamer
-	instructions func() string
-}
-
-func (t *taskInstructions) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	req.Instructions = t.instructions()
-	return t.Streamer.CreateStream(ctx, req, sink)
 }
