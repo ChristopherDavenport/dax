@@ -35,6 +35,15 @@ func TestChildEnvRemovesCredentials(t *testing.T) {
 			t.Errorf("kept %s: %s", bad, got)
 		}
 	}
+	// A key variable the user named, whatever it is called, is removed
+	// too; pass_env still wins.
+	named := strings.Join(ChildEnv(append(base, "LITELLM_MASTER=lm1", "OPENROUTER_API_KEY=or1"), nil, "LITELLM_MASTER"), " ")
+	if strings.Contains(named, "lm1") || strings.Contains(named, "or1") || !strings.Contains(named, "PATH=/bin") {
+		t.Errorf("named key: %s", named)
+	}
+	if named := strings.Join(ChildEnv([]string{"LITELLM_MASTER=lm1"}, []string{"LITELLM_MASTER"}, "LITELLM_MASTER"), " "); named != "LITELLM_MASTER=lm1" {
+		t.Errorf("pass_env over a named key: %q", named)
+	}
 	passed := strings.Join(ChildEnv(base, []string{"GITHUB_TOKEN", "FOO_TOKEN"}), " ")
 	if !strings.Contains(passed, "GITHUB_TOKEN=t") || !strings.Contains(passed, "FOO_TOKEN=t") || strings.Contains(passed, "sk-1") {
 		t.Errorf("pass_env: %s", passed)

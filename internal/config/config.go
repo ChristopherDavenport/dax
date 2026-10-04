@@ -29,19 +29,24 @@ import (
 )
 
 // Providers are the model providers dex can talk to.
-var Providers = []string{"ollama", "openai", "anthropic", "gemini"}
+var Providers = []string{"ollama", "openai", "openrouter", "openresponses", "anthropic", "gemini"}
 
 // Config is one file's settings. A field left out of the file is left
 // to the layer below.
 type Config struct {
-	// Provider is ollama (the default), openai, anthropic or gemini.
+	// Provider is ollama (the default), openai, openrouter,
+	// openresponses, anthropic or gemini.
 	Provider string `json:"provider,omitempty"`
 	// Model is the provider's model name; empty takes the provider's
 	// default.
 	Model string `json:"model,omitempty"`
-	// BaseURL is the endpoint of an OpenAI-compatible server, for the
-	// ollama and openai providers.
+	// BaseURL is the endpoint of an Open Responses server: another
+	// Ollama host, or the server the openresponses provider talks to.
 	BaseURL string `json:"base_url,omitempty"`
+	// APIKeyEnv names the environment variable that holds the
+	// openresponses provider's key; the key itself never goes in a
+	// config file.
+	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
 	// InstructionsFile is a file of your own instructions, added to
@@ -180,12 +185,16 @@ func (l *Layer) validate() error {
 			return err
 		}
 	}
+	if c.APIKeyEnv != "" && !envName.MatchString(c.APIKeyEnv) {
+		return fmt.Errorf("api_key_env: %q is not a variable name", c.APIKeyEnv)
+	}
 	if l.Project {
 		for _, f := range []struct {
 			name string
 			set  bool
 		}{
 			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"base_url", c.BaseURL != ""},
+			{"api_key_env", c.APIKeyEnv != ""},
 			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
@@ -276,8 +285,8 @@ func (l *Layer) resolvePaths() {
 // Flags are the settings the command line can override. A nil field
 // was not given.
 type Flags struct {
-	Provider, Model, BaseURL, MemoryDir *string
-	Think                               *bool
+	Provider, Model, BaseURL, APIKeyEnv, MemoryDir *string
+	Think                                          *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
 }
@@ -288,6 +297,7 @@ type Settings struct {
 	Provider         string
 	Model            string // empty: the provider's default
 	BaseURL          string // empty: the provider's default
+	APIKeyEnv        string // empty: the openresponses provider sends no key
 	Think            bool
 	InstructionsFile string
 	SkillsDirs       []string
@@ -296,8 +306,8 @@ type Settings struct {
 	PassEnv          []string
 	MaxReadBytes     int64
 	Policy           PolicySettings
-	// Sources says which layer set each of provider, model, base_url:
-	// "default", the file's path, or "flag".
+	// Sources says which layer set each of provider, model, base_url
+	// and api_key_env: "default", the file's path, or "flag".
 	Sources map[string]string
 }
 
@@ -324,7 +334,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
-		Sources: map[string]string{"provider": "default", "model": "default", "base_url": "default"},
+		Sources: map[string]string{"provider": "default", "model": "default", "base_url": "default", "api_key_env": "default"},
 	}
 	servers := map[string]MCP{}
 	for _, l := range layers {
@@ -336,6 +346,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.BaseURL != "" {
 			s.BaseURL, s.Sources["base_url"] = l.BaseURL, l.Path
+		}
+		if l.APIKeyEnv != "" {
+			s.APIKeyEnv, s.Sources["api_key_env"] = l.APIKeyEnv, l.Path
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -395,6 +408,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.BaseURL != nil {
 		s.BaseURL, s.Sources["base_url"] = *f.BaseURL, "flag"
 	}
+	if f.APIKeyEnv != nil {
+		s.APIKeyEnv, s.Sources["api_key_env"] = *f.APIKeyEnv, "flag"
+	}
 	if f.Think != nil {
 		s.Think = *f.Think
 	}
@@ -412,8 +428,19 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if err := checkBaseURL(s.BaseURL); err != nil {
 			return s, err
 		}
-		if s.Provider != "ollama" && s.Provider != "openai" {
-			return s, fmt.Errorf("base_url is for the ollama and openai providers, not %s", s.Provider)
+		if s.Provider != "ollama" && s.Provider != "openresponses" {
+			return s, fmt.Errorf("base_url is for the ollama and openresponses providers, not %s (%s); use provider openresponses for another server", s.Provider, s.Sources["base_url"])
+		}
+	}
+	if s.Provider == "openresponses" && s.BaseURL == "" {
+		return s, errors.New("provider openresponses needs a base_url")
+	}
+	if s.APIKeyEnv != "" {
+		if !envName.MatchString(s.APIKeyEnv) {
+			return s, fmt.Errorf("api_key_env: %q is not a variable name", s.APIKeyEnv)
+		}
+		if s.Provider != "openresponses" {
+			return s, fmt.Errorf("api_key_env is for the openresponses provider, not %s (%s)", s.Provider, s.Sources["api_key_env"])
 		}
 	}
 	return s, nil

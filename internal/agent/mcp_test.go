@@ -99,6 +99,19 @@ func TestMCPToolsAreNamedMcpServerTool(t *testing.T) {
 	if got := leak(t, s2, "mcp__p__leak"); got != "key=[] token=[tok-leak] plain=[visible]" {
 		t.Errorf("pass_env: %s", got)
 	}
+
+	// The provider's key variable is removed whatever its name.
+	o3 := options(t, &echo.Adapter{})
+	o3.MCP = []MCPServer{{Name: "k", Command: os.Args[0]}}
+	o3.KeyEnv = "PLAIN"
+	s3, err := New(ctx, o3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s3.Close()
+	if got := leak(t, s3, "mcp__k__leak"); got != "key=[] token=[] plain=[]" {
+		t.Errorf("key variable: %s", got)
+	}
 }
 
 func TestMCPNamesAreChecked(t *testing.T) {
