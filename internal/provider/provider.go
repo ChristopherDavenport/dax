@@ -19,6 +19,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"google.golang.org/genai"
 
+	"github.com/ChristopherDavenport/dex/internal/modelinfo"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
 	"github.com/ChristopherDavenport/openresponses/providers/gemini"
@@ -95,6 +96,9 @@ type Model struct {
 	// KeyEnv is the variable the key was read from, empty for none, so
 	// that the child processes' environment can be kept free of it.
 	KeyEnv string
+	// Describer asks the vendor what a model supports; nil for a vendor
+	// that publishes nothing (OpenAI, an openresponses server).
+	Describer modelinfo.Describer
 }
 
 // New builds the model for spec. No request is made.
@@ -147,10 +151,17 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		}
 		m.Streamer = openresponses.NewClient(base, opts...).AsAdapter()
 		m.Endpoint = base
+		switch spec.Provider {
+		case "ollama":
+			m.Describer = modelinfo.Ollama(base, nil)
+		case "openrouter":
+			m.Describer = modelinfo.OpenRouter(base, nil)
+		}
 	case "anthropic":
 		client := sdk.NewClient(option.WithAPIKey(key))
 		m.Streamer = anthropic.New(client.Messages)
 		m.Endpoint = "api.anthropic.com"
+		m.Describer = modelinfo.Anthropic(&client.Models)
 	case "gemini":
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: key, Backend: genai.BackendGeminiAPI})
 		if err != nil {
@@ -158,6 +169,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		}
 		m.Streamer = gemini.New(client)
 		m.Endpoint = "generativelanguage.googleapis.com"
+		m.Describer = modelinfo.Gemini(client.Models)
 	}
 	return m, nil
 }

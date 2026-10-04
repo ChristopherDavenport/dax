@@ -16,9 +16,11 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentturn/session"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dex/internal/agent"
 	"github.com/ChristopherDavenport/dex/internal/config"
+	"github.com/ChristopherDavenport/dex/internal/modelinfo"
 	"github.com/ChristopherDavenport/dex/internal/policy"
 	"github.com/ChristopherDavenport/dex/internal/provider"
 )
@@ -198,6 +200,15 @@ func run() error {
 		Agents:        *agents,
 		Log:           func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
+	// Every request, the explorer's and the compaction summary's too,
+	// has its reasoning effort fitted to what the vendor says the model
+	// takes. The notice goes through opts.Log as the front leaves it.
+	opts.Streamer = modelinfo.Wrap(m.Streamer, m.Describer, func(msg string) {
+		if opts.Log != nil {
+			opts.Log("%s", msg)
+		}
+	})
+	modelLine := describeModel(ctx, opts.Streamer, m)
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)
 		if err != nil {
@@ -223,7 +234,7 @@ func run() error {
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
-		Provider: settings.Provider, Model: m.Name, Dir: dir, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: m.Name, ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy),
 	}, processEnv(*root != ""))
 	if err != nil {
@@ -329,4 +340,20 @@ func policySummary(p config.PolicySettings) string {
 		parts = append(parts, fmt.Sprintf("%d rule(s) from the project", n))
 	}
 	return strings.Join(parts, ", ") + "; anything else: " + p.Fallback
+}
+
+// describeModel is the banner's line about the model: what its vendor
+// says it takes, or why that could not be asked. It is empty for a
+// vendor that publishes nothing. The answer is kept, so the first
+// request does not ask again.
+func describeModel(ctx context.Context, s openresponses.Streamer, m provider.Model) string {
+	w := modelinfo.Of(s)
+	if w == nil || m.Describer == nil {
+		return ""
+	}
+	info, err := w.Describe(ctx, m.Name)
+	if err != nil {
+		return "unknown (" + err.Error() + "); reasoning is sent as asked"
+	}
+	return info.String()
 }
