@@ -214,6 +214,7 @@ func TestValidation(t *testing.T) {
 		{"project api_key_env", `{"api_key_env":"GITHUB_TOKEN"}`, true, "api_key_env: a project file may only tighten"},
 		{"project subagent_model", `{"subagent_model":"x"}`, true, "subagent_model: a project file may only tighten"},
 		{"project think", `{"think":false}`, true, "think: a project file may only tighten"},
+		{"project agents", `{"agents":true}`, true, "agents: a project file may only tighten"},
 		{"project instructions_file", `{"instructions_file":"~/.aws/credentials"}`, true, "instructions_file: a project file may only tighten"},
 		{"project skills_dirs", `{"skills_dirs":["/etc"]}`, true, "skills_dirs: a project file may only tighten"},
 		{"project memory_dir", `{"memory_dir":"/tmp/x"}`, true, "memory_dir: a project file may only tighten"},
@@ -342,5 +343,19 @@ func TestSubagentModelPrecedence(t *testing.T) {
 	s, err = Resolve([]Layer{user}, Flags{SubagentModel: ptr("f/flash")}, "")
 	if err != nil || s.SubagentModel != "f/flash" || s.Sources["subagent_model"] != "flag" {
 		t.Fatalf("flag: %q from %s, %v", s.SubagentModel, s.Sources["subagent_model"], err)
+	}
+}
+
+func TestAgentsPrecedence(t *testing.T) {
+	s, _ := Resolve(nil, Flags{}, "")
+	if !s.Agents {
+		t.Fatal("sub-agents are offered by default")
+	}
+	off := parse(t, `{"agents":false}`, false)
+	if s, _ = Resolve([]Layer{off}, Flags{}, ""); s.Agents {
+		t.Fatal("the file turns them off")
+	}
+	if s, _ = Resolve([]Layer{off}, Flags{Agents: ptr(true)}, ""); !s.Agents {
+		t.Fatal("the flag wins")
 	}
 }

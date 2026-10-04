@@ -3,10 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -408,5 +410,40 @@ func TestBashOutputIsBoundedInMemory(t *testing.T) {
 	}
 	if len(out) > maxBashBytes+200 || !strings.Contains(out, "truncated, 4948800 bytes omitted") || !strings.Contains(out, "[exit 0]") {
 		t.Errorf("output of %d bytes, tail %q", len(out), out[max(0, len(out)-80):])
+	}
+}
+
+// Sub-agents in one batch edit at the same moment; without the
+// workspace's write lock an edit based on an older read overwrote
+// another's.
+func TestConcurrentEditsOfOneFileAllLand(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := NewWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	const n = 32
+	var src strings.Builder
+	for i := range n {
+		fmt.Fprintf(&src, "line %d: old\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte(src.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edit := Edit(ws)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			args := fmt.Sprintf(`{"path":"f.txt","old_string":"line %d: old","new_string":"line %d: new"}`, i, i)
+			if _, err := call(context.Background(), edit, args); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	data, _ := os.ReadFile(filepath.Join(dir, "f.txt"))
+	if got := strings.Count(string(data), ": new"); got != n {
+		t.Errorf("%d of %d edits landed:\n%s", got, n, data)
 	}
 }

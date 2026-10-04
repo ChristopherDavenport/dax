@@ -141,7 +141,8 @@ type Options struct {
 	// the session. Session.Agent is nil, and Prompt, Steer and the
 	// other methods that drive it must not be called.
 	NoAgent bool
-	// Agents adds the explore child agent as a tool.
+	// Agents offers the sub-agents as tools: explore, read-only, and
+	// task, which changes files; both run on SubagentModel.
 	Agents bool
 	// Log receives dex's own notes: compactions, denials, skill grants.
 	// nil discards them.
@@ -312,7 +313,7 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env [
 		// the hook reads it through eng, which open fills in. A call the
 		// policy asks about is put to the user, through the same Approve
 		// the parent's calls go through, from inside the child's run.
-		cfg.BeforeToolCall = o.childPolicy(eng, &tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})
+		cfg.BeforeToolCall = o.childPolicy("explore", eng, &tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})
 	}
 	return cfg
 }
@@ -402,8 +403,11 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 			// plan it approved, and runs only that plan.
 			agentkit.WithBeforeToolCall(stampBash(&tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})))
 	}
+	var kitRef atomic.Pointer[agentkit.Kit]
 	if o.Agents {
-		kopts = append(kopts, agentkit.WithChildAgent(o.explore(model, ws, env, &engine)))
+		kopts = append(kopts,
+			agentkit.WithChildAgent(o.explore(model, ws, env, &engine)),
+			agentkit.WithChildAgent(o.task(model, ws, env, &engine, &kitRef)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
@@ -467,6 +471,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		return nil, err
 	}
 	s.Kit = kit
+	kitRef.Store(kit)
 	if e := kit.Engine(); e != nil {
 		engine.Store(e)
 	}
@@ -952,7 +957,7 @@ func stampBash(an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) 
 // the policy auto-allows, stamped like the parent's), and a call the
 // policy asks about is put to the user. With no one to ask, it is
 // refused. A policy that is off governs nothing, the child included.
-func (o Options) childPolicy(eng *atomic.Pointer[agentpolicy.Engine], an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		e := eng.Load()
 		if e == nil {
@@ -966,7 +971,7 @@ func (o Options) childPolicy(eng *atomic.Pointer[agentpolicy.Engine], an *tool.A
 		case agentturn.Block:
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: v.Reason, By: agentpolicy.ByPolicy}, nil
 		case agentturn.Defer:
-			reason := "the explore sub-agent asks: " + v.Reason
+			reason := "the " + name + " sub-agent asks: " + v.Reason
 			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
 				reason += "; about: " + v.Subject
 			}
@@ -976,10 +981,10 @@ func (o Options) childPolicy(eng *atomic.Pointer[agentpolicy.Engine], an *tool.A
 				// calls a run leaves pending, and a sub-agent's run is
 				// not the parent's) refuses, and says what to do: make
 				// the call from the main agent, where it can be asked.
-				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the explore sub-agent cannot ask you (" + v.Reason + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}, nil
+				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + v.Reason + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}, nil
 			}
 			if !o.Approve(info.Call, reason) {
-				o.log("  ✗ %s denied (explore)", info.Call.Name)
+				o.log("  ✗ %s denied (%s)", info.Call.Name, name)
 				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: deniedOutput, By: agentpolicy.ByHuman}, nil
 			}
 			return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}, nil

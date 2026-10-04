@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: the `task` sub-agent. The main agent starts it for a
+  self-contained coding task; it runs on the sub-agent model with the file
+  tools and bash under the same policy, sees dex's prompt, your
+  instructions and AGENTS.md, and reports back. Calls in one turn run in
+  parallel. Starting one is on the built-in allow list.
+- Changed: the sub-agents are offered by default; `-agents=false` or
+  `"agents": false` in the user config turns them off.
+- Fixed: two edits of one file running at once, parallel calls in one
+  turn, could lose one of them; writes and edits now take a workspace
+  lock.
+- Known: in the terminal client a sub-agent's call that the policy asks
+  about is refused, as it was for explore, since the client cannot yet
+  put a sub-agent's question on screen. The REPL asks.
 - Added: `subagent_model` and `-subagent-model`, the model the explore
   sub-agent runs.
 - Changed: the `openrouter` provider defaults to

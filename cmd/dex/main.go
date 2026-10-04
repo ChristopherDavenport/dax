@@ -84,7 +84,7 @@ func run() error {
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
-	agents := fs.Bool("agents", false, "offer the explore sub-agent as a tool")
+	agents := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
 	agentsMD := fs.Bool("agents-md", true, "put ~/.dex/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
 	skills := fs.Bool("skills", true, "offer the skills in .dex/skills, ~/.dex/skills and the config's skills_dirs through the skill tool")
@@ -165,6 +165,9 @@ func run() error {
 	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
 	flags.APIKeyEnv = str("api-key-env", keyEnv)
 	flags.SubagentModel = str("subagent-model", subModel)
+	if given["agents"] {
+		flags.Agents = agents
+	}
 	if given["think"] {
 		flags.Think = think
 	}
@@ -199,7 +202,7 @@ func run() error {
 		MemoryDir:     settings.MemoryDir,
 		Compact:       *compactAt,
 		CompactServer: *compactServer,
-		Agents:        *agents,
+		Agents:        settings.Agents,
 		Log:           func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
 	// Every request, the explorer's and the compaction summary's too,
@@ -236,7 +239,7 @@ func run() error {
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
-		Provider: settings.Provider, Model: modelNames(m, *agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, settings.Agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy),
 	}, processEnv(*root != ""))
 	if err != nil {

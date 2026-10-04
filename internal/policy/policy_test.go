@@ -235,3 +235,21 @@ func TestBuiltinAllowParses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Starting a sub-agent is allowed: it does nothing of itself, and what
+// the sub-agent then does is decided call by call.
+func TestStartingASubagentIsAllowedAndItsWritesAsk(t *testing.T) {
+	shipped := config.PolicySettings{Builtin: true, Fallback: "ask"}
+	for _, name := range []string{"task", "explore"} {
+		if a, why := decide(t, shipped, name, `{"input":"x"}`); a != agentturn.Allow {
+			t.Errorf("%s: %v (%s), want allowed", name, a, why)
+		}
+	}
+	if a, _ := decide(t, shipped, "write", `{"path":"x","content":"y"}`); a != agentturn.Defer {
+		t.Errorf("a write: %v, want asked", a)
+	}
+	// A user who drops the built-in list asks about starting one too.
+	if a, _ := decide(t, config.PolicySettings{Builtin: false, Fallback: "ask"}, "task", `{"input":"x"}`); a != agentturn.Defer {
+		t.Errorf("task without the built-in list: %v, want asked", a)
+	}
+}
