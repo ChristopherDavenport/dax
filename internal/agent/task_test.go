@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,4 +222,81 @@ func TestTaskArgumentsAreChecked(t *testing.T) {
 		model.mu.Unlock()
 		s.Close()
 	}
+}
+
+// Ask, the question a running call puts to the user, is how a front
+// that can ask one answers a sub-agent's held call; it is preferred to
+// Approve, a refusal's note reaches the sub-agent, and a front that
+// cannot ask refuses with a reason the model can act on.
+func TestASubagentsHeldCallGoesToAsk(t *testing.T) {
+	type outcome struct {
+		allow bool
+		note  string
+		err   error
+	}
+	for name, tc := range map[string]struct {
+		ask      outcome
+		wrote    bool
+		childSaw string
+	}{
+		"allowed":       {outcome{allow: true}, true, ""},
+		"refused":       {outcome{note: "not now"}, false, "Reason: not now"},
+		"nobody to ask": {outcome{err: errors.New("no client")}, false, "cannot ask you"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := &taskModels{
+				parent: scripted{calls: [][2]string{{"task", `{"input":"write hello.txt"}`}}},
+				child:  scripted{calls: [][2]string{{"write", `{"path":"hello.txt","content":"hi\\n"}`}}},
+			}
+			o := options(t, model)
+			o.Agents = true
+			p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.Policy = &p
+			o.Approve = func(*openresponses.FunctionCall, string) bool {
+				t.Error("Approve was asked while Ask is set")
+				return true
+			}
+			var asked []string
+			o.Ask = func(_ context.Context, call *openresponses.FunctionCall, reason string) (bool, string, error) {
+				asked = append(asked, call.Name+": "+reason)
+				return tc.ask.allow, tc.ask.note, tc.ask.err
+			}
+			s, err := New(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := s.Prompt(context.Background(), "go"); err != nil {
+				t.Fatal(err)
+			}
+			if len(asked) != 1 || !strings.HasPrefix(asked[0], "write: the task sub-agent asks") {
+				t.Errorf("asked %q", asked)
+			}
+			_, err = os.Stat(filepath.Join(o.Dir, "hello.txt"))
+			if (err == nil) != tc.wrote {
+				t.Errorf("hello.txt written: %v, want %v", err == nil, tc.wrote)
+			}
+			if tc.childSaw != "" {
+				model.mu.Lock()
+				last := model.childReqs[len(model.childReqs)-1]
+				model.mu.Unlock()
+				if !strings.Contains(itemsOutputs(last.Input), tc.childSaw) {
+					t.Errorf("the sub-agent saw %q, want %q", itemsOutputs(last.Input), tc.childSaw)
+				}
+			}
+		})
+	}
+}
+
+func itemsOutputs(items openresponses.Items) string {
+	var b strings.Builder
+	for _, it := range items {
+		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
+			b.WriteString(o.Output.Text + "\\n")
+		}
+	}
+	return b.String()
 }
