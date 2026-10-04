@@ -3,7 +3,8 @@ module github.com/ChristopherDavenport/dex
 go 1.25.0
 
 require (
-	github.com/ChristopherDavenport/agentconsole v0.0.3
+	github.com/ChristopherDavenport/agentconsole v0.0.4
+	github.com/ChristopherDavenport/agenteval v0.0.10
 	github.com/ChristopherDavenport/agentkit v0.0.7
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.11
@@ -89,3 +90,4 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
