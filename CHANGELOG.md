@@ -13,8 +13,8 @@ versions may break flags and the config file.
   the main agent to make the call itself. A tool's yes-or-no question
   (MCP elicitation) is asked the same way; a form or a page to visit is
   still cancelled.
-- Dependencies: agentconsole with `client.Question` and
-  `native.Backend.Ask`.
+- Dependencies: agentconsole v0.0.3, up from v0.0.2, for
+  `client.Question` and `native.Backend.Ask`.
 - Dependencies: agentturn and agentturn/session v0.0.18, up from
   v0.0.17: a forked task's progress shows the sub-agent's own messages,
   not the main agent's last answer at the head of each update.
