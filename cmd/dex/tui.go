@@ -86,6 +86,9 @@ func (f *tuiFront) Prepare(o *agent.Options) {
 // banner is the lines dex shows at start in every front.
 func banner(info frontInfo, sess *agent.Session) []string {
 	lines := []string{fmt.Sprintf("dex · %s %s · %s", info.Provider, info.Model, info.Dir)}
+	if info.ModelInfo != "" {
+		lines = append(lines, "model: "+info.ModelInfo)
+	}
 	if id := sess.ID(); id != "" {
 		lines = append(lines, "session "+id)
 	}

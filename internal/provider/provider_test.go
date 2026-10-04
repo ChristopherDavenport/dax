@@ -63,6 +63,11 @@ func TestSelection(t *testing.T) {
 			if m.KeyEnv != tc.wantKeyEnv {
 				t.Errorf("key variable = %q, want %q", m.KeyEnv, tc.wantKeyEnv)
 			}
+			// Every vendor that publishes model metadata is asked;
+			// OpenAI and a generic server publish none.
+			if wantDescriber := tc.spec.Provider != "openai" && tc.spec.Provider != "openresponses"; (m.Describer != nil) != wantDescriber {
+				t.Errorf("describer = %T, want one: %v", m.Describer, wantDescriber)
+			}
 			for _, k := range keys {
 				if strings.Contains(m.Endpoint, k) {
 					t.Errorf("endpoint carries a key: %q", m.Endpoint)
