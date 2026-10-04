@@ -27,7 +27,7 @@ func TestSelection(t *testing.T) {
 		{Spec{Provider: "ollama"}, "client", "qwen3.5:9b", OllamaURL, ""},
 		{Spec{Provider: "ollama", Model: "qwen3:1.7b", BaseURL: "http://gpu:11434/v1"}, "client", "qwen3:1.7b", "http://gpu:11434/v1", ""},
 		{Spec{Provider: "openai"}, "client", "gpt-5", OpenAIURL, "OPENAI_API_KEY"},
-		{Spec{Provider: "openrouter"}, "client", "anthropic/claude-sonnet-5.5", OpenRouterURL, "OPENROUTER_API_KEY"},
+		{Spec{Provider: "openrouter"}, "client", "deepseek/deepseek-v4-pro-0813", OpenRouterURL, "OPENROUTER_API_KEY"},
 		{Spec{Provider: "openrouter", Model: "openai/gpt-5"}, "client", "openai/gpt-5", OpenRouterURL, "OPENROUTER_API_KEY"},
 		{Spec{Provider: "openresponses", Model: "m", BaseURL: "http://vllm:8000/v1"}, "client", "m", "http://vllm:8000/v1", ""},
 		{Spec{Provider: "openresponses", Model: "m", BaseURL: "https://llm.example/v1", KeyEnv: "LITELLM_MASTER"}, "client", "m", "https://llm.example/v1", "LITELLM_MASTER"},
@@ -150,5 +150,32 @@ func TestErrorsNeverCarryTheKey(t *testing.T) {
 func TestProviderTable(t *testing.T) {
 	if KeyEnv("ollama") != "" || KeyEnv("openai") != "OPENAI_API_KEY" || KeyEnv("openrouter") != "OPENROUTER_API_KEY" || KeyEnv("openresponses") != "" || KeyEnv("anthropic") != "ANTHROPIC_API_KEY" || KeyEnv("gemini") != "GEMINI_API_KEY" {
 		t.Error("key variables")
+	}
+}
+
+func TestSubagentModel(t *testing.T) {
+	getenv := env(map[string]string{"OPENROUTER_API_KEY": "k", "ANTHROPIC_API_KEY": "k"})
+	for _, tc := range []struct {
+		spec Spec
+		want string
+	}{
+		{Spec{Provider: "openrouter"}, "deepseek/deepseek-v4.1-flash"},
+		// The provider's default for sub-agents holds whatever the main
+		// model is.
+		{Spec{Provider: "openrouter", Model: "openai/gpt-5"}, "deepseek/deepseek-v4.1-flash"},
+		{Spec{Provider: "openrouter", SubagentModel: "x/y"}, "x/y"},
+		// A provider with no default for them runs the main model.
+		{Spec{Provider: "anthropic"}, "claude-sonnet-5-5"},
+		{Spec{Provider: "ollama", Model: "qwen3:1.7b"}, "qwen3:1.7b"},
+		{Spec{Provider: "ollama", Model: "qwen3:1.7b", SubagentModel: "qwen3:0.6b"}, "qwen3:0.6b"},
+	} {
+		tc.spec.Getenv = getenv
+		m, err := New(context.Background(), tc.spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.SubagentName != tc.want {
+			t.Errorf("%+v: subagent model %q, want %q", tc.spec, m.SubagentName, tc.want)
+		}
 	}
 }

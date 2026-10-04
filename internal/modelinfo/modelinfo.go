@@ -81,9 +81,12 @@ func sortEfforts(in []openresponses.ReasoningEffort) []openresponses.ReasoningEf
 
 // Fit is the effort to send for a requested one: the request itself
 // when the model accepts it or nothing is known, else the accepted
-// effort nearest to it, the lower of two equally near. So "none" on a
-// model that always reasons becomes its least effort, and "low" on one
-// that cannot reason becomes "none".
+// effort nearest to it, the lower of two equally near. Reasoning asked
+// for is never fitted to "none" while the model takes any other effort,
+// however near none is. So "none" on a model that always reasons
+// becomes its least effort, "low" on one that takes none, high and
+// xhigh becomes high, and "low" on one that cannot reason becomes
+// "none".
 func (i Info) Fit(requested openresponses.ReasoningEffort) openresponses.ReasoningEffort {
 	if requested == "" || i.Efforts == nil || slices.Contains(i.Efforts, requested) {
 		return requested
@@ -92,8 +95,12 @@ func (i Info) Fit(requested openresponses.ReasoningEffort) openresponses.Reasoni
 	if r < 0 {
 		return requested
 	}
+	on := slices.ContainsFunc(i.Efforts, func(e openresponses.ReasoningEffort) bool { return e != none && rank(e) >= 0 })
 	best, bestDist := requested, len(Order)
 	for _, e := range i.Efforts {
+		if requested != none && e == none && on {
+			continue
+		}
 		d := rank(e) - r
 		if d < 0 {
 			d = -d
