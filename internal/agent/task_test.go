@@ -190,3 +190,35 @@ func TestATaskRecordsItsPolicyDecisions(t *testing.T) {
 	}
 	t.Fatal("no task session")
 }
+
+// The model may only name a role and a context the tool offers; anything
+// else is refused before a sub-agent starts, and the main agent sees
+// why.
+func TestTaskArgumentsAreChecked(t *testing.T) {
+	for args, want := range map[string]string{
+		`{"input":"x","model":"gpt-9"}`:     `model "gpt-9": want subagent or main`,
+		`{"input":"x","context":"inherit"}`: `context "inherit": want fresh or fork`,
+		`{"input":"  "}`:                    "input is required",
+	} {
+		model := &taskModels{parent: scripted{calls: [][2]string{{"task", args}}}}
+		o := options(t, model)
+		o.Agents = true
+		s, err := New(context.Background(), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Prompt(context.Background(), "go"); err != nil {
+			t.Fatal(err)
+		}
+		out := outputs(s)
+		if len(out) == 0 || !strings.Contains(out[0], want) {
+			t.Errorf("%s: outputs %q, want %q", args, out, want)
+		}
+		model.mu.Lock()
+		if len(model.childReqs) != 0 {
+			t.Errorf("%s: a sub-agent started", args)
+		}
+		model.mu.Unlock()
+		s.Close()
+	}
+}

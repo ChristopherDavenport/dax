@@ -7,6 +7,16 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: `/think` and `/model` did not reach the sub-agents, whose model
+  and effort were fixed when the session started; each `explore` and
+  `task` call now reads them as they stand.
+- Added: `task` takes `context` (`fresh`, the default, or `fork`, which
+  also sees the conversation so far) and `model` (`subagent`, the
+  default, or `main`), so the main agent picks per call. A fork's
+  conversation is the child run's opening items, recorded and verified
+  in the child session; the main agent's reasoning items are left out.
+- Dependencies: agentturn and agentturn/session v0.0.17, up from
+  v0.0.16, for `tools/agent.WithCallConfig`.
 - Fixed: the session record said a request asked for the effort dex
   configured when the model was sent the fitted one, so the recorded
   request hashes were of requests never sent; `-verify` could not see it,
