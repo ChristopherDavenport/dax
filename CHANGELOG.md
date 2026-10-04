@@ -7,6 +7,14 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: dex asks the vendor what the model takes (Anthropic's and
+  Gemini's model endpoints, OpenRouter's catalogue, Ollama's
+  `/api/show`), shows it under the banner, and fits each request's
+  reasoning effort to it, saying once when it changes one.
+- Fixed: `-think` (the default) on an Ollama model without thinking,
+  `qwen3-coder:30b` say, failed every request with "does not support
+  thinking"; reasoning is now sent as none.
+
 - Added: the `openrouter` provider, with its key from `OPENROUTER_API_KEY`
   and `anthropic/claude-sonnet-5.5` as the default model.
 - Added: the `openresponses` provider for any other Open Responses

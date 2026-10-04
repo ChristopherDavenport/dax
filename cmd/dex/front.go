@@ -38,7 +38,10 @@ import (
 // frontInfo is what a front shows the user about the session.
 type frontInfo struct {
 	Provider, Model, Dir string
-	Think                bool
+	// ModelInfo is a line about what the model takes; empty when its
+	// vendor says nothing.
+	ModelInfo string
+	Think     bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
@@ -168,6 +171,9 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
 	abortOnInterrupt(sess)
 	fmt.Printf("dex · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
+	if f.info.ModelInfo != "" {
+		fmt.Printf("model: %s\n", f.info.ModelInfo)
+	}
 	if id := sess.ID(); id != "" {
 		fmt.Printf("session %s\n", id)
 	}
