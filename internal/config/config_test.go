@@ -123,9 +123,12 @@ func TestMemoryDir(t *testing.T) {
 }
 
 func TestPathsResolveAgainstTheFile(t *testing.T) {
-	user := parse(t, `{"instructions_file":"me.md","skills_dirs":["skills","/abs/s"]}`, false)
+	user := parse(t, `{"instructions_file":"me.md","skills_dirs":["skills","/abs/s"],"pricing_file":"prices.json"}`, false)
 	if user.InstructionsFile != "/home/u/.config/dex/me.md" || user.SkillsDirs[0] != "/home/u/.config/dex/skills" || user.SkillsDirs[1] != "/abs/s" {
 		t.Fatalf("user paths: %+v", user.Config)
+	}
+	if user.PricingFile != "/home/u/.config/dex/prices.json" {
+		t.Fatalf("pricing file: %q", user.PricingFile)
 	}
 }
 
@@ -219,6 +222,7 @@ func TestValidation(t *testing.T) {
 		{"project skills_dirs", `{"skills_dirs":["/etc"]}`, true, "skills_dirs: a project file may only tighten"},
 		{"project memory_dir", `{"memory_dir":"/tmp/x"}`, true, "memory_dir: a project file may only tighten"},
 		{"project empty memory_dir", `{"memory_dir":""}`, true, "memory_dir: a project file may only tighten"},
+		{"project pricing_file", `{"pricing_file":"/tmp/prices.json"}`, true, "pricing_file: a project file may only tighten"},
 		{"project allow", `{"policy":{"allow":["bash(curl:*)"]}}`, true, "policy.allow: a project file may not allow anything"},
 		{"project carve-out in deny", `{"policy":{"deny":["bash(!git push:*)"]}}`, true, "may not carve an exception"},
 		{"project carve-out in ask", `{"policy":{"ask":["bash(!go test -race:*)"]}}`, true, "may not carve an exception"},

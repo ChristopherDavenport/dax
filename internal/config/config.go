@@ -75,6 +75,9 @@ type Config struct {
 	PassEnv []string `json:"pass_env,omitempty"`
 	// Policy decides which tool calls run, ask or are refused.
 	Policy *Policy `json:"policy,omitempty"`
+	// PricingFile is a JSON file of model prices, for the terminal
+	// client's session cost. The user sets it; a project cannot.
+	PricingFile string `json:"pricing_file,omitempty"`
 }
 
 // MCPServer is how to start one MCP server.
@@ -204,6 +207,7 @@ func (l *Layer) validate() error {
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
+			{"pricing_file", c.PricingFile != ""},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -285,12 +289,14 @@ func (l *Layer) resolvePaths() {
 		m := fix(*l.MemoryDir)
 		l.MemoryDir = &m
 	}
+	l.PricingFile = fix(l.PricingFile)
 }
 
 // Flags are the settings the command line can override. A nil field
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
+	PricingFile                                                   *string
 	Think, Agents                                                 *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
@@ -309,6 +315,7 @@ type Settings struct {
 	InstructionsFile string
 	SkillsDirs       []string
 	MemoryDir        string // empty: off; Resolve fills the default in
+	PricingFile      string // empty: no terminal-client cost
 	MCP              []MCP
 	PassEnv          []string
 	MaxReadBytes     int64
@@ -380,6 +387,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MemoryDir != nil {
 			s.MemoryDir = *l.MemoryDir
+		}
+		if l.PricingFile != "" {
+			s.PricingFile = l.PricingFile
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
@@ -459,6 +469,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.MemoryDir != nil {
 		s.MemoryDir = *f.MemoryDir
+	}
+	if f.PricingFile != nil {
+		s.PricingFile = *f.PricingFile
 	}
 	s.Policy.Off = f.NoPolicy
 	for _, n := range sortedKeys(servers) {

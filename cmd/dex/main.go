@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
+	"github.com/ChristopherDavenport/agenteval/price"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentturn/session"
@@ -90,6 +92,7 @@ func run() error {
 	skills := fs.Bool("skills", true, "offer the skills in .dex/skills, ~/.dex/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	memory := fs.String("memory", "", "memory store directory (default ~/.dex/memory, or the config's); off or empty disables memory")
+	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -165,6 +168,7 @@ func run() error {
 	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
 	flags.APIKeyEnv = str("api-key-env", keyEnv)
 	flags.SubagentModel = str("subagent-model", subModel)
+	flags.PricingFile = str("pricing-file", pricingFile)
 	if given["agents"] {
 		flags.Agents = agents
 	}
@@ -180,6 +184,10 @@ func run() error {
 	}
 	flags.NoPolicy = *noPolicy
 	settings, err := loadSettings(dir, *cfgPath, flags)
+	if err != nil {
+		return err
+	}
+	cost, err := pricing(settings.PricingFile)
 	if err != nil {
 		return err
 	}
@@ -250,7 +258,7 @@ func run() error {
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
 		Provider: settings.Provider, Model: modelNames(m, settings.Agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
-		Policy: policySummary(settings.Policy),
+		Policy: policySummary(settings.Policy), Cost: cost,
 	}, processEnv(*root != ""))
 	if err != nil {
 		return err
@@ -286,6 +294,23 @@ func loadSettings(dir, userPath string, flags config.Flags) (config.Settings, er
 		return config.Settings{}, err
 	}
 	return config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
+}
+
+// pricing loads the terminal client's price source. It is empty without
+// one, and the client then shows token usage but no cost.
+func pricing(path string) (client.Cost, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("pricing_file: %w", err)
+	}
+	table, err := price.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("pricing_file: %w", err)
+	}
+	return price.Hook(table), nil
 }
 
 func runVerify(ctx context.Context, root, id string) error {
