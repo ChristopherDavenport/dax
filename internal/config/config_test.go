@@ -204,6 +204,8 @@ func TestValidation(t *testing.T) {
 		{"wrong type", `{"think":"yes"}`, false, "think"},
 		{"trailing data", `{} {}`, false, "trailing data"},
 		{"unknown provider", `{"provider":"cohere"}`, false, `provider "cohere": want one of ollama, openai, openrouter, openresponses, anthropic, gemini`},
+		{"unknown effort", `{"effort":"max"}`, false, `effort "max": want one of minimal, low, medium, high, xhigh`},
+		{"none is not an effort", `{"effort":"none"}`, false, `effort "none"`},
 		{"bad api_key_env", `{"api_key_env":"MY-KEY"}`, false, `api_key_env: "MY-KEY" is not a variable name`},
 		{"bad base url", `{"base_url":"localhost:11434"}`, false, "want an http:// or https:// URL"},
 		{"bad base url scheme", `{"base_url":"ftp://x"}`, false, "want an http://"},
@@ -217,6 +219,7 @@ func TestValidation(t *testing.T) {
 		{"project api_key_env", `{"api_key_env":"GITHUB_TOKEN"}`, true, "api_key_env: a project file may only tighten"},
 		{"project subagent_model", `{"subagent_model":"x"}`, true, "subagent_model: a project file may only tighten"},
 		{"project think", `{"think":false}`, true, "think: a project file may only tighten"},
+		{"project effort", `{"effort":"xhigh"}`, true, "effort: a project file may only tighten"},
 		{"project agents", `{"agents":true}`, true, "agents: a project file may only tighten"},
 		{"project instructions_file", `{"instructions_file":"~/.aws/credentials"}`, true, "instructions_file: a project file may only tighten"},
 		{"project skills_dirs", `{"skills_dirs":["/etc"]}`, true, "skills_dirs: a project file may only tighten"},
@@ -261,6 +264,8 @@ func TestResolveRefusals(t *testing.T) {
 		{"openresponses without base url", nil, Flags{Provider: ptr("openresponses")}, "provider openresponses needs a base_url"},
 		{"api_key_env with openai", []Layer{parse(t, `{"provider":"openai","api_key_env":"OTHER_KEY"}`, false)}, Flags{}, "api_key_env is for the openresponses provider, not openai"},
 		{"api_key_env flag with the default", nil, Flags{APIKeyEnv: ptr("K")}, "not ollama (flag)"},
+		{"bad effort flag", nil, Flags{Effort: ptr("max")}, `effort "max"`},
+		{"empty effort flag", nil, Flags{Effort: ptr("")}, `effort ""`},
 		{"bad api_key_env flag", nil, Flags{Provider: ptr("openresponses"), BaseURL: ptr("https://x"), APIKeyEnv: ptr("$(id)")}, "is not a variable name"},
 	}
 	for _, tc := range tests {
@@ -361,5 +366,19 @@ func TestAgentsPrecedence(t *testing.T) {
 	}
 	if s, _ = Resolve([]Layer{off}, Flags{Agents: ptr(true)}, ""); !s.Agents {
 		t.Fatal("the flag wins")
+	}
+}
+
+func TestEffortPrecedence(t *testing.T) {
+	s, _ := Resolve(nil, Flags{}, "")
+	if s.Effort != "low" {
+		t.Fatalf("default: %q, want low", s.Effort)
+	}
+	high := parse(t, `{"effort":"high"}`, false)
+	if s, _ = Resolve([]Layer{high}, Flags{}, ""); s.Effort != "high" {
+		t.Fatalf("file: %q, want high", s.Effort)
+	}
+	if s, _ = Resolve([]Layer{high}, Flags{Effort: ptr("medium")}, ""); s.Effort != "medium" {
+		t.Fatalf("flag: %q, want medium", s.Effort)
 	}
 }

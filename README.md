@@ -83,8 +83,10 @@ summary, `/think` and `/model`), never to a request on its way out, so
 the session records the effort that was sent. When the vendor cannot be
 asked, or does not know the model, the effort is asked for as
 configured. `-think` (default on)
-asks for low reasoning effort with summaries and shows the reasoning;
-`-think=false` turns reasoning off.
+asks for the `-effort` (`minimal`, `low` by default, `medium`, `high` or
+`xhigh`) with summaries and shows the reasoning; `-think=false` turns
+reasoning off. The effort is fitted like any other, so `medium` on a model
+that takes only `low` and `high` asks for `low`.
 
 ## Sub-agents
 
@@ -137,6 +139,7 @@ Settings come from three layers, each overriding the one before:
   "model": "claude-sonnet-5-5",
   "base_url": "",
   "think": true,
+  "effort": "high",
   "instructions_file": "~/.config/dex/instructions.md",
   "skills_dirs": ["~/skills"],
   "memory_dir": "~/.dex/memory",
@@ -167,7 +170,7 @@ names the file and the field.
 
 | field | meaning |
 |---|---|
-| `provider`, `model`, `subagent_model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openresponses` |
+| `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
@@ -185,7 +188,7 @@ it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `agents`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `effort`, `agents`,
 `instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dex
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -194,7 +197,7 @@ keys somewhere; a repository does not get to make them.)
 
 | flag | |
 |---|---|
-| `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think` | override the config |
+| `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think`, `-effort` | override the config |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
