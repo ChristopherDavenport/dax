@@ -7,6 +7,20 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: the `openrouter` provider, with its key from `OPENROUTER_API_KEY`
+  and `anthropic/claude-sonnet-5.5` as the default model.
+- Added: the `openresponses` provider for any other Open Responses
+  server: `-base-url` and `-model` are required, and `-api-key-env`
+  (`api_key_env` in the user config) names the variable its key is read
+  from. The project config may not set it.
+- Changed: `openai` no longer takes `-base-url`; it is OpenAI. A config
+  that pointed it at another server is refused with an error that says
+  to use `openresponses`.
+- Security: the variable the provider's key was read from is removed
+  from the environment of bash commands and MCP servers even when its
+  name does not look like a credential's, unless `pass_env` names it.
+  `OPENROUTER_API_KEY` joins the named credentials.
+
 - Added: dex as its own repository, extracted from the agent studies
   with the siblings at agentkit v0.0.7, agentturn and agentturn/session
   v0.0.16, agentsession v0.0.21, agenttool v0.0.15, openresponses and its
