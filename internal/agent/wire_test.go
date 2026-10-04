@@ -298,3 +298,85 @@ func TestThinkAndModelSwitchesAreFitted(t *testing.T) {
 		t.Errorf("after /think off, a switch to an unknown model: %+v, want none kept", r)
 	}
 }
+
+// switchable is a scripted parent whose next call can be changed
+// between runs, over a wire that keeps every child request.
+type switchable struct {
+	mu     sync.Mutex
+	parent scripted
+	child  []openresponses.Request
+}
+
+func (m *switchable) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	sub := strings.Contains(req.Instructions, "You are a sub-agent of dex") || strings.Contains(req.Instructions, "read-only explorer")
+	if sub {
+		m.child = append(m.child, req)
+	}
+	parent := m.parent
+	m.mu.Unlock()
+	if sub {
+		return (&scripted{}).CreateStream(ctx, req, sink)
+	}
+	return parent.CreateStream(ctx, req, sink)
+}
+
+func (m *switchable) next(name, args string) {
+	m.mu.Lock()
+	m.parent = scripted{calls: [][2]string{{name, args}}}
+	m.child = nil
+	m.mu.Unlock()
+}
+
+func (m *switchable) last() openresponses.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.child[0]
+}
+
+// /think and /model reach the sub-agents from their next call: the
+// effort each asks for, the model a task with model main runs, and,
+// with no sub-agent model configured, the model every sub-agent runs.
+func TestSubagentsFollowThinkAndModel(t *testing.T) {
+	ctx := context.Background()
+	m := &switchable{}
+	o := options(t, nil)
+	o.Streamer = modelinfo.Wrap(m, efforts{"pro": {"none", "low"}, "other": {"none", "low"}}, nil)
+	o.Fit = modelinfo.Of(o.Streamer).Fit
+	o.Agents, o.Model, o.Think = true, "pro", true
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	run := func(tool, args string) openresponses.Request {
+		t.Helper()
+		m.next(tool, args)
+		if _, err := s.Prompt(ctx, "go"); err != nil {
+			t.Fatal(err)
+		}
+		return m.last()
+	}
+	if r := run("task", `{"input":"x"}`); r.Model != "pro" || r.Reasoning.Effort != "low" {
+		t.Errorf("before: task asked %s at %q, want pro at low", r.Model, r.Reasoning.Effort)
+	}
+	if err := s.SetThink(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetModel("other"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ tool, args string }{
+		{"task", `{"input":"x","model":"main"}`},
+		{"task", `{"input":"x"}`},
+		{"explore", `{"input":"x"}`},
+	} {
+		if r := run(c.tool, c.args); r.Model != "other" || r.Reasoning.Effort != "none" {
+			t.Errorf("after /think off and /model other: %s %s asked %s at %q, want other at none", c.tool, c.args, r.Model, r.Reasoning.Effort)
+		}
+	}
+	// The main agent's own setting holds too.
+	if r := s.Agent.Config().Reasoning; r.Effort != "none" {
+		t.Errorf("main agent effort %q", r.Effort)
+	}
+}

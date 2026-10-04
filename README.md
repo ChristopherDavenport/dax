@@ -103,6 +103,10 @@ sub-agent model, recorded as a child session:
   - `model`: `subagent` (the default) runs the sub-agent model; `main`
     runs the main model, for a task that needs it.
 
+  Each call reads `/think` and `/model` as they stand: `main` is the
+  model `/model` last chose, and with no `subagent_model` configured the
+  sub-agents run it too.
+
   A fork's conversation is recorded in the child session as its own
   opening items, so the child verifies like any session. On OpenRouter
   the defaults were the cheapest in a trial: a fresh Flash sub-agent
