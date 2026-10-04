@@ -82,7 +82,7 @@ func run() error {
 	repair := fs.String("repair", "", "rewrite the damaged log of the session with this ID from what still reads, and exit")
 	gc := fs.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
-	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; 0 disables")
+	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
 	agents := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
@@ -218,7 +218,12 @@ func run() error {
 	if w := modelinfo.Of(opts.Streamer); w != nil {
 		opts.Fit = w.Fit
 	}
-	modelLine := describeModel(ctx, opts.Streamer, m)
+	info, modelLine := describeModel(ctx, opts.Streamer, m)
+	if !given["compact"] {
+		// The model's window when the vendor reports one; otherwise
+		// compaction stays off, as before.
+		opts.Compact = info.CompactBudget()
+	}
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)
 		if err != nil {
@@ -352,20 +357,20 @@ func policySummary(p config.PolicySettings) string {
 	return strings.Join(parts, ", ") + "; anything else: " + p.Fallback
 }
 
-// describeModel is the banner's line about the model: what its vendor
-// says it takes, or why that could not be asked. It is empty for a
-// vendor that publishes nothing. The answer is kept, so the first
+// describeModel is what the model's vendor says about it, and the
+// banner's line about the model: what it takes, or why that could not
+// be asked. Both are empty for a vendor that publishes nothing. The answer is kept, so the first
 // request does not ask again.
-func describeModel(ctx context.Context, s openresponses.Streamer, m provider.Model) string {
+func describeModel(ctx context.Context, s openresponses.Streamer, m provider.Model) (modelinfo.Info, string) {
 	w := modelinfo.Of(s)
 	if w == nil || m.Describer == nil {
-		return ""
+		return modelinfo.Info{}, ""
 	}
 	info, err := w.Describe(ctx, m.Name)
 	if err != nil {
-		return "unknown (" + err.Error() + "); reasoning is sent as asked"
+		return modelinfo.Info{}, "unknown (" + err.Error() + "); reasoning is sent as asked"
 	}
-	return info.String()
+	return info, info.String()
 }
 
 // modelNames is the model for the banner, and the sub-agents' when they

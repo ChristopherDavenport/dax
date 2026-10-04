@@ -61,3 +61,21 @@ func TestString(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactBudget(t *testing.T) {
+	tests := []struct {
+		info Info
+		want int
+	}{
+		{Info{}, 0},
+		{Info{MaxOutput: 8192}, 0},
+		{Info{ContextWindow: 128_000}, 96_000},
+		{Info{ContextWindow: 1_048_576, MaxOutput: 943_718}, 786_432},
+		{Info{ContextWindow: 200_000, MaxOutput: 64_000}, 150_000},
+	}
+	for _, tc := range tests {
+		if got := tc.info.CompactBudget(); got != tc.want {
+			t.Errorf("%+v: %d, want %d", tc.info, got, tc.want)
+		}
+	}
+}
