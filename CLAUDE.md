@@ -27,7 +27,11 @@ sibling libraries; the design and who owns what is in
   session for it is built with `Options.NoAgent` (the client builds its
   own agent over the kit).
 - `internal/config`: the JSON config layers, validation, `Resolve`.
-- `internal/provider`: provider setting to `openresponses.Streamer`.
+- `internal/provider`: provider setting to `openresponses.Streamer`, and
+  the vendor's `modelinfo.Describer`.
+- `internal/modelinfo`: asks the vendor what a model takes and fits each
+  request's reasoning effort to it; a trial of a shape meant to move to
+  openresponses.
 - `internal/policy`: the default rules, matchers, merge of the user's and
   the project's.
 - `internal/tool`: the tools, the `Workspace` they are confined to, and

@@ -58,7 +58,24 @@ removed from the environment of bash commands and MCP servers, whatever
 it is called, unless `pass_env` names it.
 
 Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
-client; Anthropic and Gemini use its provider adapters. `-think` (default on)
+client; Anthropic and Gemini use its provider adapters.
+
+### What the model takes
+
+At start dex asks the vendor what the model supports and shows it under
+the banner, `model: reasoning low–max, always on · default high · 1M
+context · 128k out (openrouter)`. Anthropic and Gemini are asked through
+their model endpoints, OpenRouter through its public catalogue (fetched
+once, without the key) and Ollama through `/api/show`; OpenAI and an
+`openresponses` server publish nothing, and nothing is shown.
+
+Every request's reasoning effort is then fitted to the answer: an effort
+the model does not take becomes the nearest one it does, and dex says so
+once, `[qwen3-coder:30b: reasoning effort low is not accepted; sent none
+(ollama)]`. So `-think` on a model that cannot reason turns reasoning off
+instead of failing, and `-think=false` on one that always reasons sends
+its least effort. When the vendor cannot be asked, or does not know the
+model, requests go out as asked. `-think` (default on)
 asks for low reasoning effort with summaries and shows the reasoning;
 `-think=false` turns reasoning off.
 
