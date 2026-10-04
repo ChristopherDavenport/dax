@@ -15,7 +15,8 @@ versions may break flags and the config file.
   default, or `main`), so the main agent picks per call. A fork's
   conversation is the child run's opening items, recorded and verified
   in the child session; the main agent's reasoning items are left out.
-- Dependencies: requires agentturn with `tools/agent.WithCallConfig`.
+- Dependencies: agentturn and agentturn/session v0.0.17, up from
+  v0.0.16, for `tools/agent.WithCallConfig`.
 - Fixed: the session record said a request asked for the effort dex
   configured when the model was sent the fitted one, so the recorded
   request hashes were of requests never sent; `-verify` could not see it,
