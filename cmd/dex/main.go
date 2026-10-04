@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agenteval/price"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
@@ -292,7 +293,7 @@ func loadSettings(dir, userPath string, flags config.Flags) (config.Settings, er
 
 // pricing loads the terminal client's price source. It is empty without
 // one, and the client then shows token usage but no cost.
-func pricing(path string) (costFunc, error) {
+func pricing(path string) (client.Cost, error) {
 	if path == "" {
 		return nil, nil
 	}

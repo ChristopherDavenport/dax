@@ -8,11 +8,13 @@ versions may break flags and the config file.
 ## Unreleased
 
 - Added: `-pricing-file` and the config's `pricing_file` load model
-  prices, and the terminal client's session pane shows token usage by
-  model and the session's cost; without a price file it shows usage and
-  no cost.
+  prices. The terminal client's status line shows a running total of
+  token usage and, with a price file, the session's cost, and the
+  session pane shows the usage split by model. Without a price file it
+  shows usage but no cost.
 - Changed: the terminal client's prompt wraps over up to five lines,
-  then scrolls, instead of scrolling sideways one line at a time.
+  then scrolls, instead of scrolling sideways one line at a time; pasted
+  newlines stay newlines.
 - Fixed: in the terminal client, a sub-agent's call that the policy asks
   about is asked on screen while the run goes, y or n with an optional
   reason that reaches the sub-agent; it was refused, with a note telling
@@ -21,8 +23,9 @@ versions may break flags and the config file.
   still cancelled.
 - Dependencies: agentconsole v0.0.3, up from v0.0.2, for
   `client.Question` and `native.Backend.Ask`.
-- Dependencies: agentconsole v0.0.4, for `console.WithCost` and the
-  wrapping prompt; this depends on the next agentconsole release.
+- Dependencies: agentconsole v0.0.4, for `client.Cost`, `console.WithCost`,
+  the wrapping prompt, and the running usage on the status line; this
+  depends on the next agentconsole release.
 - Dependencies: agenteval v0.0.10, for `price` and its JSON table.
 - Dependencies: agentturn and agentturn/session v0.0.18, up from
   v0.0.17: a forked task's progress shows the sub-agent's own messages,

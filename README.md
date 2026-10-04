@@ -173,7 +173,7 @@ names the file and the field.
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
-| `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's session pane to show cost; without it the pane shows token usage but no cost |
+| `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
