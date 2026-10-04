@@ -71,6 +71,7 @@ func run() error {
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
+	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
@@ -169,6 +170,7 @@ func run() error {
 	flags.APIKeyEnv = str("api-key-env", keyEnv)
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.PricingFile = str("pricing-file", pricingFile)
+	flags.Effort = str("effort", effort)
 	if given["agents"] {
 		flags.Agents = agents
 	}
@@ -198,7 +200,7 @@ func run() error {
 	}
 	opts := agent.Options{
 		Streamer: m.Streamer, Model: m.Name, SubagentModel: m.SubagentName, Think: settings.Think,
-		Dir: dir, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Root: *root, Sync: policyMode,
 		UserDir:       agent.DefaultUserDir(),
 		AgentsMD:      *agentsMD,
 		Skills:        *skills,
