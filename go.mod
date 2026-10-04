@@ -12,8 +12,8 @@ require (
 	github.com/ChristopherDavenport/agentsmd v0.0.2
 	github.com/ChristopherDavenport/agenttool v0.0.15
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.15
-	github.com/ChristopherDavenport/agentturn v0.0.16
-	github.com/ChristopherDavenport/agentturn/session v0.0.16
+	github.com/ChristopherDavenport/agentturn v0.0.17
+	github.com/ChristopherDavenport/agentturn/session v0.0.17
 	github.com/ChristopherDavenport/openresponses v0.0.14
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.14
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.14
