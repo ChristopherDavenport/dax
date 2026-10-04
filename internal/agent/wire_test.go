@@ -299,6 +299,46 @@ func TestThinkAndModelSwitchesAreFitted(t *testing.T) {
 	}
 }
 
+// The configured effort is what -think asks for, fitted to each model,
+// and /think on brings it back after /think off.
+func TestTheConfiguredEffortIsAskedAndFitted(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Streamer = modelinfo.Wrap(&scripted{}, efforts{"glm": {"low", "high"}, "mid": {"none", "low", "medium"}}, nil)
+	o.Fit = modelinfo.Of(o.Streamer).Fit
+	o.Model, o.Think, o.Effort = "glm", true, openresponses.ReasoningEffortHigh
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	effort := func() openresponses.ReasoningEffort { return s.Agent.Config().Reasoning.Effort }
+	if e := effort(); e != "high" {
+		t.Errorf("start on glm with effort high: %q, want high", e)
+	}
+	if err := s.SetModel("mid"); err != nil {
+		t.Fatal(err)
+	}
+	if e := effort(); e != "medium" {
+		t.Errorf("switched to a model whose most is medium: %q, want medium", e)
+	}
+	if err := s.SetThink(false); err != nil {
+		t.Fatal(err)
+	}
+	if e := effort(); e != "none" {
+		t.Errorf("/think off: %q, want none", e)
+	}
+	if err := s.SetModel("glm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetThink(true); err != nil {
+		t.Fatal(err)
+	}
+	if e := effort(); e != "high" {
+		t.Errorf("/think on again: %q, want the configured high", e)
+	}
+}
+
 // switchable is a scripted parent whose next call can be changed
 // between runs, over a wire that keeps every child request.
 type switchable struct {

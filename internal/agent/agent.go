@@ -78,6 +78,8 @@ type Options struct {
 	// request that was sent.
 	Fit   func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
 	Think bool
+	// Effort is the reasoning effort Think asks for; empty is low.
+	Effort openresponses.ReasoningEffort
 	// Dir is the working directory the tools and prompt are rooted at.
 	Dir string
 	// Root is the session store, a content-addressed store holding
@@ -310,8 +312,12 @@ func (o Options) fit(ctx context.Context, model string, r openresponses.Reasonin
 
 func (o Options) reasoning() openresponses.ReasoningConfig {
 	if o.Think {
+		e := o.Effort
+		if e == "" {
+			e = openresponses.ReasoningEffortLow
+		}
 		return openresponses.ReasoningConfig{
-			Effort:  openresponses.ReasoningEffortLow,
+			Effort:  e,
 			Summary: openresponses.ReasoningSummaryAuto,
 		}
 	}
