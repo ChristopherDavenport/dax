@@ -7,6 +7,14 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: in the terminal client, a sub-agent's call that the policy asks
+  about is asked on screen while the run goes, y or n with an optional
+  reason that reaches the sub-agent; it was refused, with a note telling
+  the main agent to make the call itself. A tool's yes-or-no question
+  (MCP elicitation) is asked the same way; a form or a page to visit is
+  still cancelled.
+- Dependencies: agentconsole with `client.Question` and
+  `native.Backend.Ask`.
 - Dependencies: agentturn and agentturn/session v0.0.18, up from
   v0.0.17: a forked task's progress shows the sub-agent's own messages,
   not the main agent's last answer at the head of each update.
@@ -40,9 +48,6 @@ versions may break flags and the config file.
 - Fixed: two edits of one file running at once, parallel calls in one
   turn, could lose one of them; writes and edits now take a workspace
   lock.
-- Known: in the terminal client a sub-agent's call that the policy asks
-  about is refused, as it was for explore, since the client cannot yet
-  put a sub-agent's question on screen. The REPL asks.
 - Added: `subagent_model` and `-subagent-model`, the model the explore
   sub-agent runs.
 - Changed: the `openrouter` provider defaults to
