@@ -31,6 +31,10 @@ import (
 // Providers are the model providers dex can talk to.
 var Providers = []string{"ollama", "openai", "openrouter", "openresponses", "anthropic", "gemini"}
 
+// Efforts are the reasoning efforts effort may name; none is
+// think false.
+var Efforts = []string{"minimal", "low", "medium", "high", "xhigh"}
+
 // Config is one file's settings. A field left out of the file is left
 // to the layer below.
 type Config struct {
@@ -52,6 +56,9 @@ type Config struct {
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
+	// Effort is the reasoning effort Think asks for: minimal, low (the
+	// default), medium, high or xhigh.
+	Effort string `json:"effort,omitempty"`
 	// Agents offers the explore and task sub-agents; default true.
 	Agents *bool `json:"agents,omitempty"`
 	// InstructionsFile is a file of your own instructions, added to
@@ -185,6 +192,9 @@ func (l *Layer) validate() error {
 			return fmt.Errorf("pass_env: %q is not a variable name", v)
 		}
 	}
+	if c.Effort != "" && !slices.Contains(Efforts, c.Effort) {
+		return fmt.Errorf(`effort %q: want one of %s`, c.Effort, strings.Join(Efforts, ", "))
+	}
 	if c.MaxReadBytes < 0 {
 		return errors.New("max_read_bytes: want a positive number of bytes")
 	}
@@ -203,7 +213,7 @@ func (l *Layer) validate() error {
 		}{
 			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""},
-			{"think", c.Think != nil}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
+			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
@@ -296,7 +306,7 @@ func (l *Layer) resolvePaths() {
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
-	PricingFile                                                   *string
+	PricingFile, Effort                                           *string
 	Think, Agents                                                 *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
@@ -311,6 +321,7 @@ type Settings struct {
 	BaseURL          string // empty: the provider's default
 	APIKeyEnv        string // empty: the openresponses provider sends no key
 	Think            bool
+	Effort           string // the effort Think asks for
 	Agents           bool
 	InstructionsFile string
 	SkillsDirs       []string
@@ -346,7 +357,7 @@ type Rules struct{ Allow, Ask, Deny []string }
 // defaultMemory is the memory directory when no layer names one.
 func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
-		Provider: "ollama", Think: true, Agents: true, MemoryDir: defaultMemory,
+		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default"},
 	}
@@ -373,6 +384,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
+		}
+		if l.Effort != "" {
+			s.Effort = l.Effort
 		}
 		if l.Agents != nil {
 			s.Agents = *l.Agents
@@ -464,6 +478,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.Think != nil {
 		s.Think = *f.Think
 	}
+	if f.Effort != nil {
+		s.Effort = *f.Effort
+	}
 	if f.Agents != nil {
 		s.Agents = *f.Agents
 	}
@@ -487,6 +504,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if s.Provider != "ollama" && s.Provider != "openresponses" {
 			return s, fmt.Errorf("base_url is for the ollama and openresponses providers, not %s (%s); use provider openresponses for another server", s.Provider, s.Sources["base_url"])
 		}
+	}
+	if !slices.Contains(Efforts, s.Effort) {
+		return s, fmt.Errorf("effort %q: want one of %s", s.Effort, strings.Join(Efforts, ", "))
 	}
 	if s.Provider == "openresponses" && s.BaseURL == "" {
 		return s, errors.New("provider openresponses needs a base_url")

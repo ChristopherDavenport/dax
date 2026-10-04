@@ -7,6 +7,10 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `-effort` and the config's `effort`, the reasoning effort
+  `-think` asks for (`minimal`, `low`, `medium`, `high` or `xhigh`);
+  `low`, as before, by default. It is fitted to each model like the
+  default was, and a project file may not set it.
 - Added: `-pricing-file` and the config's `pricing_file` load model
   prices. The terminal client's status line shows a running total of
   token usage and, with a price file, the session's cost, and the
