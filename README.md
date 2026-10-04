@@ -34,7 +34,7 @@ dex -provider anthropic      # a hosted model
 |---|---|---|---|
 | `ollama` (default) | `qwen3.5:9b` | none | default `http://localhost:11434/v1`; another Ollama host |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | not supported |
-| `openrouter` | `anthropic/claude-sonnet-5.5` | `OPENROUTER_API_KEY` | not supported |
+| `openrouter` | `deepseek/deepseek-v4-pro-0813`; sub-agents `deepseek/deepseek-v4.1-flash` | `OPENROUTER_API_KEY` | not supported |
 | `openresponses` | none; `-model` is required | the variable `-api-key-env` names, or none | required |
 | `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | not supported |
 | `gemini` | `gemini-2.5-pro` | `GEMINI_API_KEY` | not supported |
@@ -49,7 +49,10 @@ or a proxy, is `openresponses`, with its `-base-url`, a `-model`, and
 LITELLM_KEY=... dex -provider openresponses -base-url https://llm.internal/v1 -model qwen3-coder -api-key-env LITELLM_KEY
 ```
 
-`-model` names another model. A missing key is an error before any request
+`-model` names another model. `-subagent-model` names the one the
+`explore` sub-agent (`-agents`) runs; without it a sub-agent runs the
+provider's default for sub-agents, where it has one, else the main model.
+A missing key is an error before any request
 is made: `dex: openai: no API key: set OPENAI_API_KEY in the
 environment`. dex reads keys from the environment and nowhere else (not
 from a config file, not from a flag, so they stay out of `ps` and out of
@@ -109,13 +112,20 @@ Settings come from three layers, each overriding the one before:
 }
 ```
 
+`model`, `subagent_model`, `base_url` and `api_key_env` belong to the provider in force
+where they are set. A later layer that switches the provider leaves them
+behind, so with `"model": "qwen3-coder:30b"` in your config,
+`dex -provider openrouter` runs OpenRouter's default model rather than
+asking OpenRouter for an Ollama one; `-model` beside `-provider` names
+another.
+
 Every field is optional. The files are strict: an unknown field, a bad
 provider, a malformed URL or a rule that does not parse is an error that
 names the file and the field.
 
 | field | meaning |
 |---|---|
-| `provider`, `model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openresponses` |
+| `provider`, `model`, `subagent_model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openresponses` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
@@ -131,7 +141,7 @@ it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `base_url`, `api_key_env`, `think`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`,
 `instructions_file`, `skills_dirs`, `memory_dir` or `mcp_servers`: dex
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -140,7 +150,7 @@ keys somewhere; a repository does not get to make them.)
 
 | flag | |
 |---|---|
-| `-provider`, `-model`, `-base-url`, `-api-key-env`, `-think` | override the config |
+| `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think` | override the config |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |

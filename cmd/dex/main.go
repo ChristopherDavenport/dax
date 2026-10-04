@@ -64,6 +64,7 @@ func run() error {
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic or gemini")
 	model := fs.String("model", "", "model name; empty takes the provider's default")
+	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
 	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
@@ -163,6 +164,7 @@ func run() error {
 	}
 	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
 	flags.APIKeyEnv = str("api-key-env", keyEnv)
+	flags.SubagentModel = str("subagent-model", subModel)
 	if given["think"] {
 		flags.Think = think
 	}
@@ -179,12 +181,12 @@ func run() error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv})
 	if err != nil {
 		return err
 	}
 	opts := agent.Options{
-		Streamer: m.Streamer, Model: m.Name, Think: settings.Think,
+		Streamer: m.Streamer, Model: m.Name, SubagentModel: m.SubagentName, Think: settings.Think,
 		Dir: dir, Root: *root, Sync: policyMode,
 		UserDir:       agent.DefaultUserDir(),
 		AgentsMD:      *agentsMD,
@@ -234,7 +236,7 @@ func run() error {
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
-		Provider: settings.Provider, Model: m.Name, ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, *agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy),
 	}, processEnv(*root != ""))
 	if err != nil {
@@ -356,4 +358,13 @@ func describeModel(ctx context.Context, s openresponses.Streamer, m provider.Mod
 		return "unknown (" + err.Error() + "); reasoning is sent as asked"
 	}
 	return info.String()
+}
+
+// modelNames is the model for the banner, and the sub-agents' when they
+// are offered and run another.
+func modelNames(m provider.Model, agents bool) string {
+	if agents && m.SubagentName != m.Name {
+		return m.Name + " (explore: " + m.SubagentName + ")"
+	}
+	return m.Name
 }

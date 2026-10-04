@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `subagent_model` and `-subagent-model`, the model the explore
+  sub-agent runs.
+- Changed: the `openrouter` provider defaults to
+  `deepseek/deepseek-v4-pro-0813`, with `deepseek/deepseek-v4.1-flash`
+  for sub-agents.
+- Fixed: reasoning asked for was fitted to `none` when `none` and the
+  nearest effort the model takes were equally near, so `-think` on
+  `deepseek/deepseek-v4-pro` (none, high, xhigh) turned reasoning off.
+- Fixed: a model, `base_url` or `api_key_env` from the config was kept
+  when a flag switched the provider, so `"model": "qwen3-coder:30b"` with
+  `-provider openrouter` asked OpenRouter for the Ollama model. They now
+  belong to the provider in force where they were set, and a switch
+  takes the new provider's defaults.
 - Added: dex asks the vendor what the model takes (Anthropic's and
   Gemini's model endpoints, OpenRouter's catalogue, Ollama's
   `/api/show`), shows it under the banner, and fits each request's

@@ -40,6 +40,9 @@ type Config struct {
 	// Model is the provider's model name; empty takes the provider's
 	// default.
 	Model string `json:"model,omitempty"`
+	// SubagentModel is the model the sub-agents run; empty takes the
+	// provider's default for them, else the main model.
+	SubagentModel string `json:"subagent_model,omitempty"`
 	// BaseURL is the endpoint of an Open Responses server: another
 	// Ollama host, or the server the openresponses provider talks to.
 	BaseURL string `json:"base_url,omitempty"`
@@ -193,7 +196,7 @@ func (l *Layer) validate() error {
 			name string
 			set  bool
 		}{
-			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"base_url", c.BaseURL != ""},
+			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""},
 			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
@@ -285,8 +288,8 @@ func (l *Layer) resolvePaths() {
 // Flags are the settings the command line can override. A nil field
 // was not given.
 type Flags struct {
-	Provider, Model, BaseURL, APIKeyEnv, MemoryDir *string
-	Think                                          *bool
+	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
+	Think                                                         *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
 }
@@ -296,6 +299,7 @@ type Flags struct {
 type Settings struct {
 	Provider         string
 	Model            string // empty: the provider's default
+	SubagentModel    string // empty: the provider's default, else Model
 	BaseURL          string // empty: the provider's default
 	APIKeyEnv        string // empty: the openresponses provider sends no key
 	Think            bool
@@ -334,21 +338,28 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
-		Sources: map[string]string{"provider": "default", "model": "default", "base_url": "default", "api_key_env": "default"},
+		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default"},
 	}
 	servers := map[string]MCP{}
+	// model, subagent_model, base_url and api_key_env belong to the
+	// provider in force
+	// where they were set; setFor records which one that was.
+	setFor := map[string]string{}
 	for _, l := range layers {
 		if l.Provider != "" {
 			s.Provider, s.Sources["provider"] = l.Provider, l.Path
 		}
 		if l.Model != "" {
-			s.Model, s.Sources["model"] = l.Model, l.Path
+			s.Model, s.Sources["model"], setFor["model"] = l.Model, l.Path, s.Provider
+		}
+		if l.SubagentModel != "" {
+			s.SubagentModel, s.Sources["subagent_model"], setFor["subagent_model"] = l.SubagentModel, l.Path, s.Provider
 		}
 		if l.BaseURL != "" {
-			s.BaseURL, s.Sources["base_url"] = l.BaseURL, l.Path
+			s.BaseURL, s.Sources["base_url"], setFor["base_url"] = l.BaseURL, l.Path, s.Provider
 		}
 		if l.APIKeyEnv != "" {
-			s.APIKeyEnv, s.Sources["api_key_env"] = l.APIKeyEnv, l.Path
+			s.APIKeyEnv, s.Sources["api_key_env"], setFor["api_key_env"] = l.APIKeyEnv, l.Path, s.Provider
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -403,13 +414,36 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		s.Provider, s.Sources["provider"] = *f.Provider, "flag"
 	}
 	if f.Model != nil {
-		s.Model, s.Sources["model"] = *f.Model, "flag"
+		s.Model, s.Sources["model"], setFor["model"] = *f.Model, "flag", s.Provider
+	}
+	if f.SubagentModel != nil {
+		s.SubagentModel, s.Sources["subagent_model"], setFor["subagent_model"] = *f.SubagentModel, "flag", s.Provider
 	}
 	if f.BaseURL != nil {
-		s.BaseURL, s.Sources["base_url"] = *f.BaseURL, "flag"
+		s.BaseURL, s.Sources["base_url"], setFor["base_url"] = *f.BaseURL, "flag", s.Provider
 	}
 	if f.APIKeyEnv != nil {
-		s.APIKeyEnv, s.Sources["api_key_env"] = *f.APIKeyEnv, "flag"
+		s.APIKeyEnv, s.Sources["api_key_env"], setFor["api_key_env"] = *f.APIKeyEnv, "flag", s.Provider
+	}
+	// A later layer that switched the provider leaves the earlier
+	// provider's model, endpoint and key variable behind: the user's
+	// "model": "qwen3-coder:30b" is Ollama's, and -provider openrouter
+	// takes OpenRouter's default instead.
+	for name, p := range setFor {
+		if p == s.Provider {
+			continue
+		}
+		switch name {
+		case "model":
+			s.Model = ""
+		case "subagent_model":
+			s.SubagentModel = ""
+		case "base_url":
+			s.BaseURL = ""
+		case "api_key_env":
+			s.APIKeyEnv = ""
+		}
+		s.Sources[name] = "default"
 	}
 	if f.Think != nil {
 		s.Think = *f.Think
