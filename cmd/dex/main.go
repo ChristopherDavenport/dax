@@ -213,6 +213,11 @@ func run() error {
 			opts.Log("%s", msg)
 		}
 	})
+	// The fitting happens where each configuration is built, so the
+	// session records the effort that is sent.
+	if w := modelinfo.Of(opts.Streamer); w != nil {
+		opts.Fit = w.Fit
+	}
 	modelLine := describeModel(ctx, opts.Streamer, m)
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)

@@ -77,33 +77,55 @@ var (
 	}}
 )
 
-func TestRequestsAreFitted(t *testing.T) {
+func TestFitFitsAndTellsOnce(t *testing.T) {
+	var notes []string
+	s := Of(Wrap(&recorder{}, vary, func(m string) { notes = append(notes, m) }))
+	ctx := context.Background()
+	for _, tc := range []struct {
+		model     string
+		want, got E
+	}{
+		{"always", "none", "low"},
+		{"never", "low", "none"},
+		{"thinks", "low", "low"},
+		{"always", "", ""},
+		{"always", "none", "low"},
+		{"never", "low", "none"},
+	} {
+		if got := s.Fit(ctx, tc.model, tc.want); got != tc.got {
+			t.Errorf("Fit(%s, %q) = %q, want %q", tc.model, tc.want, got, tc.got)
+		}
+	}
+	if len(notes) != 2 || !strings.Contains(notes[0], "always: reasoning effort none is not accepted; asking for low (openrouter)") ||
+		!strings.Contains(notes[1], "never: reasoning effort low is not accepted; asking for none (ollama)") {
+		t.Errorf("notes: %q", notes)
+	}
+}
+
+// A session records the request the loop built, so the Streamer, below
+// the recorder, must send it unchanged; a request that was not fitted
+// is reported so the path that built it can be found.
+func TestRequestsAreSentAsTheyAre(t *testing.T) {
 	var notes []string
 	inner := &recorder{}
 	s := Wrap(inner, vary, func(m string) { notes = append(notes, m) })
-
-	send(t, s, "always", off)
-	if got := inner.last().Reasoning; got.Effort != "low" {
-		t.Errorf("none on a model that always reasons: %+v", got)
-	}
 	send(t, s, "never", low)
-	if got := inner.last().Reasoning; got.Effort != "none" || got.Summary != "" {
-		t.Errorf("low on a model that cannot reason: %+v, want none and no summary", got)
-	}
-	send(t, s, "thinks", low)
-	if got := inner.last().Reasoning; got != low {
-		t.Errorf("unknown efforts change nothing: %+v", got)
-	}
-	send(t, s, "always", openresponses.ReasoningConfig{})
-	if got := inner.last().Reasoning; !got.IsZero() {
-		t.Errorf("no reasoning asked, none added: %+v", got)
-	}
-	// Once per model and effort, whatever the number of requests.
-	send(t, s, "always", off)
 	send(t, s, "never", low)
-	if len(notes) != 2 || !strings.Contains(notes[0], "always: reasoning effort none is not accepted; sent low (openrouter)") ||
-		!strings.Contains(notes[1], "never: reasoning effort low is not accepted; sent none (ollama)") {
+	send(t, s, "always", off)
+	if got := inner.last().Reasoning; got != off {
+		t.Errorf("changed: %+v", got)
+	}
+	if got := inner.reqs[0].Reasoning; got != low {
+		t.Errorf("changed: %+v", got)
+	}
+	if len(notes) != 2 || !strings.Contains(notes[0], "never: a request asks for reasoning effort low, which ollama says is not accepted; sent as asked") {
 		t.Errorf("notes: %q", notes)
+	}
+	// A fitted request goes without a note.
+	notes = nil
+	send(t, s, "never", off)
+	if len(notes) != 0 {
+		t.Errorf("a fitted request noted: %q", notes)
 	}
 }
 
@@ -125,12 +147,11 @@ func TestEachModelIsAskedOnce(t *testing.T) {
 func TestAFailureIsKeptAndToldOnce(t *testing.T) {
 	d := &table{err: errors.New("catalogue down")}
 	var notes []string
-	inner := &recorder{}
-	s := Wrap(inner, d, func(m string) { notes = append(notes, m) })
-	send(t, s, "m", low)
-	send(t, s, "m", low)
-	if got := inner.last().Reasoning; got != low {
-		t.Errorf("sent as asked: %+v", got)
+	s := Of(Wrap(&recorder{}, d, func(m string) { notes = append(notes, m) }))
+	for range 2 {
+		if got := s.Fit(context.Background(), "m", "low"); got != "low" {
+			t.Errorf("asked as configured: %q", got)
+		}
 	}
 	if d.calls != 1 || len(notes) != 1 || !strings.Contains(notes[0], "model info for m unavailable: catalogue down") {
 		t.Errorf("calls %d, notes %q", d.calls, notes)
@@ -143,7 +164,7 @@ func TestACancelledDescribeIsNotKept(t *testing.T) {
 	s := Wrap(&recorder{}, d, func(m string) { notes = append(notes, m) })
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_ = s.CreateStream(ctx, openresponses.Request{Model: "never", Reasoning: low}, nil)
+	_ = Of(s).Fit(ctx, "never", "low")
 	if len(notes) != 0 {
 		t.Errorf("a cancelled request told: %q", notes)
 	}

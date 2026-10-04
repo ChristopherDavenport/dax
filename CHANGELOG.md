@@ -7,6 +7,16 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: the session record said a request asked for the effort dex
+  configured when the model was sent the fitted one, so the recorded
+  request hashes were of requests never sent; `-verify` could not see it,
+  since it checks the record against itself. The effort is now fitted
+  where each configuration is made, and the model wrapper only reports a
+  request that was not.
+- Fixed: `/model` kept the effort fitted to the previous model, and
+  `/think` was forgotten by the next `/model`.
+- Fixed: a sub-agent's session recorded no decision for a call its
+  policy allowed.
 - Added: the `task` sub-agent. The main agent starts it for a
   self-contained coding task; it runs on the sub-agent model with the file
   tools and bash under the same policy, sees dex's prompt, your

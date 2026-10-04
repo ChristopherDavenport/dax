@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dex/internal/config"
@@ -95,6 +96,13 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	if got := strings.Join(names, ","); got != "read,write,edit,glob,grep,ls,bash" {
 		t.Errorf("child tools %s; want the built-ins and no sub-agents of its own", got)
 	}
+	// The AGENTS.md text the child is told is the part the kit renders
+	// for the main agent, byte for byte.
+	for _, p := range s.Kit.Parts() {
+		if p.ID == agentsmd.PartID && (p.Text == "" || !strings.Contains(req.Instructions, p.Text)) {
+			t.Errorf("the child's AGENTS.md text is not the kit's part %q", p.Text)
+		}
+	}
 	// The parent sees the child's answer as the task's output.
 	if out := outputs(s); len(out) == 0 || !strings.Contains(out[len(out)-1], "done") {
 		t.Errorf("parent outputs %q", out)
@@ -152,4 +160,33 @@ func TestNoSubagentsWhenTurnedOff(t *testing.T) {
 			t.Errorf("%s offered without Agents", n)
 		}
 	}
+}
+
+// The sub-agent's session records a decision for each call the policy
+// allowed, as the main agent's does.
+func TestATaskRecordsItsPolicyDecisions(t *testing.T) {
+	o, _, s := runTask(t, [][2]string{{"write", `{"path":"hello.txt","content":"hi\n"}`}}, config.Rules{}, "allow", nil)
+	parent := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sums, err := List(context.Background(), o.Root, o.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sum := range sums {
+		if sum.Header.ParentSession != parent {
+			continue
+		}
+		path, err := Project(context.Background(), o.Root, sum.Header.ID, t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(path)
+		if !strings.Contains(string(data), `"type":"decision"`) || !strings.Contains(string(data), `"by":"policy"`) {
+			t.Errorf("the task session records no policy decision:\n%s", data)
+		}
+		return
+	}
+	t.Fatal("no task session")
 }

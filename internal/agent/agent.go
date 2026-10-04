@@ -69,7 +69,13 @@ type Options struct {
 	// SubagentModel is the model name the sub-agents' requests carry;
 	// empty is Model.
 	SubagentModel string
-	Think         bool
+	// Fit is the reasoning effort to ask a model for in place of the
+	// one Think implies, from what its vendor says it takes; nil asks
+	// as configured. It is applied where each configuration is built,
+	// never to a request on its way out, so the session records the
+	// request that was sent.
+	Fit   func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
+	Think bool
 	// Dir is the working directory the tools and prompt are rooted at.
 	Dir string
 	// Root is the session store, a content-addressed store holding
@@ -252,6 +258,26 @@ func (o Options) log(format string, args ...any) {
 	}
 }
 
+// reasoningFor is the reasoning Think implies, fitted to model.
+func (o Options) reasoningFor(ctx context.Context, model string) openresponses.ReasoningConfig {
+	return o.fit(ctx, model, o.reasoning())
+}
+
+// fit fits r's effort to model; an effort fitted to none asks for no
+// summary.
+func (o Options) fit(ctx context.Context, model string, r openresponses.ReasoningConfig) openresponses.ReasoningConfig {
+	if o.Fit == nil || r.Effort == "" {
+		return r
+	}
+	if e := o.Fit(ctx, model, r.Effort); e != r.Effort {
+		r.Effort = e
+		if e == openresponses.ReasoningEffortNone {
+			r.Summary = ""
+		}
+	}
+	return r
+}
+
 func (o Options) reasoning() openresponses.ReasoningConfig {
 	if o.Think {
 		return openresponses.ReasoningConfig{
@@ -290,7 +316,7 @@ func ProjectScope(dir string) agentmemory.Scope {
 // explore is the child agent: a read-only investigator on a fresh
 // transcript whose final answer comes back to the parent as the tool
 // output.
-func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine]) agentturn.Config {
+func (o Options) explore(ctx context.Context, model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine]) agentturn.Config {
 	cfg := agentturn.Config{
 		Name: "explore",
 		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
@@ -301,7 +327,7 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env [
 		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read, glob, grep, ls and bash tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
 		Tools:     append(tool.ReadOnly(ws, o.MaxReadBytes), tool.Bash(ws.Dir(), tool.WithEnv(env))),
-		Reasoning: o.reasoning(),
+		Reasoning: o.reasoningFor(ctx, o.subagentModel()),
 		MaxTurns:  10,
 		Retry:     agentturn.Retry{MaxAttempts: 3},
 	}
@@ -342,22 +368,35 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	kopts := []agentkit.Option{
 		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
 		agentkit.WithModel(model, o.Model),
-		agentkit.WithReasoning(o.reasoning()),
+		agentkit.WithReasoning(o.reasoningFor(ctx, o.Model)),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions)),
 		agentkit.WithTools(tool.Builtins(ws, o.MaxReadBytes, tool.WithEnv(env))...),
 	}
+	// agentsText is the AGENTS.md part as the kit renders it, for the
+	// task sub-agent, whose configuration is fixed before the kit is
+	// built. The kit has no instruction budget, under which it renders
+	// the chain whole, so the same options give the same text.
+	agentsText := ""
 	if o.AgentsMD {
 		// The walk is done here, so that a file that is a link out of
 		// the workspace can be left out; agentsmd is given the screened
 		// files and a name that matches nothing, so it walks to no more.
 		files, refused := agentsFiles(o.Dir)
 		s.refused = append(s.refused, refused...)
-		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, agentsmd.Options{
+		mdOpts := agentsmd.Options{
 			Names:  []string{".dex-no-such-file"},
 			Extra:  append([]string{filepath.Join(o.UserDir, "AGENTS.md")}, files...),
 			Budget: 32 << 10,
-		}))
+		}
+		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, mdOpts))
+		if o.Agents {
+			res, err := agentsmd.Chain(o.Dir, mdOpts)
+			if err != nil {
+				return nil, fmt.Errorf("AGENTS.md: %w", err)
+			}
+			agentsText = agentsmd.Render(res.Files)
+		}
 	}
 	if o.Skills {
 		// Neither directory is one the user configured, so either may
@@ -403,11 +442,10 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 			// plan it approved, and runs only that plan.
 			agentkit.WithBeforeToolCall(stampBash(&tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})))
 	}
-	var kitRef atomic.Pointer[agentkit.Kit]
 	if o.Agents {
 		kopts = append(kopts,
-			agentkit.WithChildAgent(o.explore(model, ws, env, &engine)),
-			agentkit.WithChildAgent(o.task(model, ws, env, &engine, &kitRef)))
+			agentkit.WithChildAgent(o.explore(ctx, model, ws, env, &engine)),
+			agentkit.WithChildAgent(o.task(ctx, model, ws, env, &engine, agentsText)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
@@ -452,8 +490,10 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 			// transcript, two were asked twice, the summaries were 106
 			// to 649 bytes against 858 to 1,313 at effort none, and they
 			// took 3.4 times as long. So the summary stays at none.
+			// Fitted to the model the summary is asked of, which may be
+			// one that always reasons.
 			none := compact.WithRequest(func(r *openresponses.Request) {
-				r.Reasoning = openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone}
+				r.Reasoning = o.fit(context.Background(), r.Model, openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone})
 			})
 			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none), fold)
 		}
@@ -471,7 +511,6 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		return nil, err
 	}
 	s.Kit = kit
-	kitRef.Store(kit)
 	if e := kit.Engine(); e != nil {
 		engine.Store(e)
 	}
@@ -674,13 +713,15 @@ func (s *Session) Steer(text string) { s.Agent.Steer(openresponses.UserText(text
 // otherwise end.
 func (s *Session) FollowUp(text string) { s.Agent.FollowUp(openresponses.UserText(text)) }
 
-// SetModel changes the model name for later runs. The loop leaves the
-// reasoning items another model produced out of the new model's
-// requests, so a switch under -think sends no signature the new model
-// refuses; the recorder writes those requests' responses unhashed.
+// SetModel changes the model name for later runs, with the reasoning
+// fitted to it. The loop leaves the reasoning items another model
+// produced out of the new model's requests, so a switch under -think
+// sends no signature the new model refuses; the recorder writes those
+// requests' responses unhashed.
 func (s *Session) SetModel(name string) error {
 	cfg := s.Agent.Config()
 	cfg.ModelName = name
+	cfg.Reasoning = s.opts.reasoningFor(context.Background(), name)
 	return s.Agent.SetConfig(cfg)
 }
 
@@ -714,12 +755,12 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 // from the next run.
 func (s *Session) RemoveMCP(label string) error { return s.Kit.RemoveMCP(label) }
 
-// SetThink turns reasoning on or off for later runs.
+// SetThink turns reasoning on or off for later runs, fitted to the
+// model in force, and keeps the setting for a later SetModel.
 func (s *Session) SetThink(on bool) error {
-	o := s.opts
-	o.Think = on
+	s.opts.Think = on
 	cfg := s.Agent.Config()
-	cfg.Reasoning = o.reasoning()
+	cfg.Reasoning = s.opts.reasoningFor(context.Background(), cfg.ModelName)
 	return s.Agent.SetConfig(cfg)
 }
 
@@ -989,11 +1030,15 @@ func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine
 			}
 			return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}, nil
 		}
+		// The verdict is returned rather than left implicit, so the
+		// sub-agent's session records a decision for each call, as the
+		// main agent's does through the engine's observer.
+		d := &agentturn.ToolDecision{Action: agentturn.Allow, Reason: v.Reason, By: agentpolicy.ByPolicy}
 		if info.Call != nil && info.Call.Name == "bash" {
 			if args, changed, err := tool.StampArgs(ctx, an, info.Args); err == nil && changed {
-				return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args}, nil
+				d.Args = args
 			}
 		}
-		return nil, nil
+		return d, nil
 	}
 }
