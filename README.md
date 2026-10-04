@@ -93,11 +93,21 @@ sub-agent model, recorded as a child session:
 
 - `explore` investigates without changing anything (read, glob, grep, ls
   and bash) and returns a written answer.
-- `task` carries out a self-contained coding task with the file tools and
-  bash, then reports what it changed, what it ran and what is left. It
-  does not see the conversation; the main agent's model writes the whole
-  brief. Its instructions are dex's, your `instructions_file` and the
-  AGENTS.md chain, without skills or memory.
+- `task` carries out a coding task with the file tools and bash, then
+  reports what it changed, what it ran and what is left. Its instructions
+  are dex's, your `instructions_file` and the AGENTS.md chain, without
+  skills or memory. The main agent chooses, per call:
+  - `context`: `fresh` (the default) sees only the brief, so the brief
+    must be complete; `fork` also sees the conversation so far, for a
+    task that depends on what was said or decided in it.
+  - `model`: `subagent` (the default) runs the sub-agent model; `main`
+    runs the main model, for a task that needs it.
+
+  A fork's conversation is recorded in the child session as its own
+  opening items, so the child verifies like any session. On OpenRouter
+  the defaults were the cheapest in a trial: a fresh Flash sub-agent
+  cost about a twentieth of a Pro one at the same pass rate, and a Pro
+  fork about twice a fresh Pro task.
 
 Several calls in one turn run at once, so the main agent can hand out
 independent pieces of work in parallel. Writes and edits take a
