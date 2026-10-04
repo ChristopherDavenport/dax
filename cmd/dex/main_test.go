@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/openresponses"
+
 	"github.com/ChristopherDavenport/dex/internal/config"
 	"github.com/ChristopherDavenport/dex/internal/provider"
 )
@@ -81,6 +83,35 @@ func TestABrokenConfigFileIsAClearError(t *testing.T) {
 	_, err := loadSettings(t.TempDir(), "", config.Flags{})
 	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "modle") {
 		t.Fatalf("err = %v, want the file and the field named", err)
+	}
+}
+
+func TestPricingParsesAndPrices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prices.json")
+	write(t, path, `{"m":{"input":2,"cached":0.5,"output":8}}`)
+	cost, err := pricing(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := openresponses.Usage{
+		InputTokens:        3,
+		OutputTokens:       2,
+		InputTokensDetails: openresponses.InputTokensDetails{CachedTokens: 1},
+	}
+	got, ok := cost("m", u)
+	if !ok || got != 0.0000205 {
+		t.Fatalf("cost = %v, %v; want $0.0000205, true", got, ok)
+	}
+	if _, ok := cost("unknown", u); ok {
+		t.Error("an unpriced model was shown as priced")
+	}
+	if _, err := pricing(""); err != nil {
+		t.Errorf("empty pricing file: %v", err)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	write(t, bad, `[]`)
+	if _, err := pricing(bad); err == nil || !strings.Contains(err.Error(), "pricing_file") {
+		t.Fatalf("bad pricing file: %v", err)
 	}
 }
 

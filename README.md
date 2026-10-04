@@ -141,6 +141,7 @@ Settings come from three layers, each overriding the one before:
   "instructions_file": "~/.config/dex/instructions.md",
   "skills_dirs": ["~/skills"],
   "memory_dir": "~/.dex/memory",
+  "pricing_file": "~/.config/dex/prices.json",
   "mcp_servers": {
     "fs": { "command": "mcp-server-filesystem /home/me/notes" }
   },
@@ -173,6 +174,7 @@ names the file and the field.
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
+| `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's session pane to show cost; without it the pane shows token usage but no cost |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
@@ -185,7 +187,7 @@ drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `agents`,
-`instructions_file`, `skills_dirs`, `memory_dir` or `mcp_servers`: dex
+`instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dex
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -196,6 +198,7 @@ keys somewhere; a repository does not get to make them.)
 | `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think` | override the config |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
+| `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
