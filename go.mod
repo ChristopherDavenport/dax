@@ -3,7 +3,7 @@ module github.com/ChristopherDavenport/dex
 go 1.25.0
 
 require (
-	github.com/ChristopherDavenport/agentconsole v0.0.1
+	github.com/ChristopherDavenport/agentconsole v0.0.2
 	github.com/ChristopherDavenport/agentkit v0.0.7
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.11
