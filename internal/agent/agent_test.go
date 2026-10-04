@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -591,6 +592,56 @@ func TestAModelSwitchLeavesTheOldReasoningOutAndTheSecondResponseStillVerifies(t
 	}
 	if len(causes) != 0 {
 		t.Fatalf("causes %+v, want none: the omitted reasoning no longer leaves the request unhashed", causes)
+	}
+}
+
+// names records the model name each request carried, the explore
+// child's apart from the parent's.
+type names struct {
+	scripted
+	mu            sync.Mutex
+	parent, child []string
+}
+
+func (m *names) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	if strings.Contains(req.Instructions, "read-only explorer") {
+		m.child = append(m.child, req.Model)
+	} else {
+		m.parent = append(m.parent, req.Model)
+	}
+	m.mu.Unlock()
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+func TestTheSubagentRunsItsOwnModel(t *testing.T) {
+	for _, tc := range []struct{ sub, want string }{{"deepseek/flash", "deepseek/flash"}, {"", "deepseek/pro"}} {
+		model := &names{scripted: scripted{calls: [][2]string{{"explore", `{"input":"what is here?"}`}}}}
+		o := options(t, model)
+		o.Agents, o.Model, o.SubagentModel = true, "deepseek/pro", tc.sub
+		s, err := New(context.Background(), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Prompt(context.Background(), "explore"); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		model.mu.Lock()
+		if len(model.parent) == 0 || len(model.child) == 0 {
+			t.Fatalf("parent %v, child %v: want both asked", model.parent, model.child)
+		}
+		for _, n := range model.parent {
+			if n != "deepseek/pro" {
+				t.Errorf("parent asked %q", n)
+			}
+		}
+		for _, n := range model.child {
+			if n != tc.want {
+				t.Errorf("subagent %q: child asked %q, want %q", tc.sub, n, tc.want)
+			}
+		}
+		model.mu.Unlock()
 	}
 }
 

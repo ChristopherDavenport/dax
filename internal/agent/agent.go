@@ -66,7 +66,10 @@ type Options struct {
 	Streamer openresponses.Streamer
 	// Model is the model name the requests carry.
 	Model string
-	Think bool
+	// SubagentModel is the model name the sub-agents' requests carry;
+	// empty is Model.
+	SubagentModel string
+	Think         bool
 	// Dir is the working directory the tools and prompt are rooted at.
 	Dir string
 	// Root is the session store, a content-addressed store holding
@@ -235,6 +238,13 @@ func output(p agentturn.PendingCall) string {
 	return unknownOutput
 }
 
+func (o Options) subagentModel() string {
+	if o.SubagentModel != "" {
+		return o.SubagentModel
+	}
+	return o.Model
+}
+
 func (o Options) log(format string, args ...any) {
 	if o.Log != nil {
 		o.Log(format, args...)
@@ -286,7 +296,7 @@ func (o Options) explore(model openresponses.Streamer, ws *tool.Workspace, env [
 			"Give it one clear question; it reads files and runs read-only commands and returns a written answer. " +
 			"Use it for broad searches so their output stays out of this conversation.",
 		Model:     model,
-		ModelName: o.Model,
+		ModelName: o.subagentModel(),
 		Instructions: "You are a read-only explorer working in " + o.Dir + ". Answer the question using the read, glob, grep, ls and bash tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
 		Tools:     append(tool.ReadOnly(ws, o.MaxReadBytes), tool.Bash(ws.Dir(), tool.WithEnv(env))),

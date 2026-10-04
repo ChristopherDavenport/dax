@@ -40,7 +40,7 @@ func DefaultModel(provider string) string {
 	case "openai":
 		return "gpt-5"
 	case "openrouter":
-		return "anthropic/claude-sonnet-5.5"
+		return "deepseek/deepseek-v4-pro-0813"
 	case "openresponses":
 		return ""
 	case "anthropic":
@@ -49,6 +49,15 @@ func DefaultModel(provider string) string {
 		return "gemini-2.5-pro"
 	}
 	return "qwen3.5:9b"
+}
+
+// DefaultSubagentModel is the model a provider's sub-agents run when
+// none is named; empty means the main model.
+func DefaultSubagentModel(provider string) string {
+	if provider == "openrouter" {
+		return "deepseek/deepseek-v4.1-flash"
+	}
+	return ""
 }
 
 // KeyEnv is the environment variable that holds the provider's API
@@ -76,6 +85,9 @@ type Spec struct {
 	Provider string
 	// Model is the model name; empty takes DefaultModel.
 	Model string
+	// SubagentModel is the sub-agents' model name; empty takes
+	// DefaultSubagentModel, and failing that the main model.
+	SubagentModel string
 	// BaseURL is for ollama, where empty takes the default, and for
 	// openresponses, where it is required.
 	BaseURL string
@@ -91,6 +103,8 @@ type Spec struct {
 type Model struct {
 	Streamer openresponses.Streamer
 	Name     string
+	// SubagentName is the model the sub-agents are asked for.
+	SubagentName string
 	// Endpoint says where requests go, for the banner; it holds no key.
 	Endpoint string
 	// KeyEnv is the variable the key was read from, empty for none, so
@@ -107,9 +121,15 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	m := Model{Name: spec.Model}
+	m := Model{Name: spec.Model, SubagentName: spec.SubagentModel}
 	if m.Name == "" {
 		m.Name = DefaultModel(spec.Provider)
+	}
+	if m.SubagentName == "" {
+		m.SubagentName = DefaultSubagentModel(spec.Provider)
+	}
+	if m.SubagentName == "" {
+		m.SubagentName = m.Name
 	}
 	// Settings errors come before a missing key, so a key is never
 	// asked for on behalf of a setting that cannot work.

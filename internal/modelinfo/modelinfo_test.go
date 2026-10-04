@@ -25,6 +25,10 @@ func TestFit(t *testing.T) {
 		{"nearest above", []E{"none", "medium", "high"}, "low", "medium"},
 		{"nearest below", []E{"none", "low", "medium"}, "xhigh", "medium"},
 		{"a tie goes lower", []E{"minimal", "medium"}, "low", "minimal"},
+		// deepseek-v4-pro on OpenRouter: none, high and xhigh. none and
+		// high are as near to low, and reasoning was asked for.
+		{"reasoning asked is not turned off", []E{"none", "high", "xhigh"}, "low", "high"},
+		{"minimal is not turned off either", []E{"none", "high"}, "minimal", "high"},
 		{"an effort Order does not know is sent as asked", []E{"none"}, "turbo", "turbo"},
 		{"no effort asked", []E{"none"}, "", ""},
 	}
