@@ -411,9 +411,11 @@ exits.
 | Ctrl-C | abort the run; quit when idle (a second one quits at once) |
 | `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
-| Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full |
+| Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
 | Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
+| click | select the row under the pointer; a click on the selected row expands or collapses it |
+| Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and
 the reason, which is the policy's with what it is asking about added: the
