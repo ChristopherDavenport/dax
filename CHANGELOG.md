@@ -97,6 +97,10 @@ versions may break flags and the config file.
   pre-client pause needs both ends a terminal; dex's buffered notes and the
   session ID are flushed however the client ends, and warnings held back for
   the screen are shown before an error opening the session.
+- Dependencies: agentconsole v0.0.2. In the terminal client, Ctrl-O and
+  Ctrl-R expand or collapse the selected row alone (every row with none
+  selected), a click selects a row and a second click expands it, bars
+  frame the input line, and Ctrl-/ (or F1) lists the keys.
 - Changed: CI runs on `workflow_dispatch` only until a `DEX_DEPS_TOKEN`
   secret exists (agentconsole is private).
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
