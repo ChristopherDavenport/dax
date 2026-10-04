@@ -127,6 +127,11 @@ type Options struct {
 	// servers may still inherit; every other credential is removed from
 	// their environment.
 	PassEnv []string
+	// KeyEnv is the variable the provider's key was read from. It is
+	// removed from the environment of bash commands and MCP servers
+	// even when its name does not look like a credential's, unless
+	// PassEnv names it.
+	KeyEnv string
 	// NoAgent builds the kit and no agent over it: a front that drives
 	// the kit through its own backend (the terminal client) builds the
 	// agent itself, and two agents on one recorder would both write
@@ -321,7 +326,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	}()
 	model := o.Streamer
 	var engine atomic.Pointer[agentpolicy.Engine]
-	env := tool.DefaultEnv(o.PassEnv)
+	env := tool.DefaultEnv(o.PassEnv, o.KeyEnv)
 	s.env = env
 	kopts := []agentkit.Option{
 		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
