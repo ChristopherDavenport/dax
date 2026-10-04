@@ -144,6 +144,8 @@ type WriteArgs struct {
 func Write(ws *Workspace) agenttool.Tool {
 	return agenttool.New("write", "Create or overwrite a file with the given content. Parent directories are created.",
 		func(_ context.Context, in WriteArgs) (string, error) {
+			ws.writes.Lock()
+			defer ws.writes.Unlock()
 			rel, err := ws.writeFile(in.Path, []byte(in.Content), true)
 			if err != nil {
 				return "", err
@@ -167,6 +169,8 @@ func Edit(ws *Workspace, opts ...ReadOption) agenttool.Tool {
 			if in.Old == "" {
 				return "", errors.New("old_string must not be empty")
 			}
+			ws.writes.Lock()
+			defer ws.writes.Unlock()
 			data, err := ws.readFileMax(in.Path, limitBytes)
 			if err != nil {
 				return "", err
