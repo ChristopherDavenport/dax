@@ -26,6 +26,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -34,10 +35,6 @@ import (
 	"github.com/ChristopherDavenport/dex/internal/agent"
 	"github.com/ChristopherDavenport/dex/internal/render"
 )
-
-// costFunc prices one model call, for the terminal client's session
-// cost.
-type costFunc func(model string, usage openresponses.Usage) (float64, bool)
 
 // frontInfo is what a front shows the user about the session.
 type frontInfo struct {
@@ -51,8 +48,9 @@ type frontInfo struct {
 	Prompt string
 	// Policy is a line saying what policy is in force.
 	Policy string
-	// Cost prices the terminal client's session pane; nil shows no cost.
-	Cost costFunc
+	// Cost prices the terminal client's session pane and status line; nil
+	// shows token usage but no cost.
+	Cost client.Cost
 }
 
 // front is a way to talk to a session.
