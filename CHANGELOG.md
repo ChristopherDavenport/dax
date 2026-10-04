@@ -7,6 +7,9 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Dependencies: agentturn and agentturn/session v0.0.18, up from
+  v0.0.17: a forked task's progress shows the sub-agent's own messages,
+  not the main agent's last answer at the head of each update.
 - Fixed: `/think` and `/model` did not reach the sub-agents, whose model
   and effort were fixed when the session started; each `explore` and
   `task` call now reads them as they stand.
