@@ -508,6 +508,7 @@ exits.
 | Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
+| drag | select text anywhere on the screen; the release copies it to the terminal's clipboard (OSC 52, over ssh too) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and
