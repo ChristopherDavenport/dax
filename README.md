@@ -509,14 +509,16 @@ the reason, which is the policy's with what it is asking about added: the
 rule that fired, the secret-looking path, the git config key that names a
 program, the part of a command line. Everything that can ask is answered on
 screen; nothing reads standard input once the client has the terminal. Two
-things cannot be a permission and are handled as follows:
+things cannot be a permission, which a run that ended answers, since the
+call that needs the answer is still running; the client asks them as
+questions while the run goes, ahead of any permission:
 
-- A call a **sub-agent** (`explore` or `task`) makes that the policy asks about: the
-  client answers the calls its own agent's run left pending, and the
-  sub-agent's run is not that run. The call is refused with a reason that
-  tells the model to make it from the main agent, where it is asked.
-- A **question a tool asks mid-call** (MCP elicitation): the client has no
-  screen for it yet, so it is declined.
+- A call a **sub-agent** (`explore` or `task`) makes that the policy asks
+  about: `y` allows it, `n` refuses it with an optional reason, which the
+  sub-agent sees, and `Esc` goes back.
+- A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
+  One that is a form or a page to visit has no screen in the client, and
+  is cancelled.
 
 A call stamped as auto-allowed that changed before it ran fails with "the
 command changed since it was allowed ... ask again", which shows in the
