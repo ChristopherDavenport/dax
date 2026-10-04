@@ -26,6 +26,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -47,6 +48,9 @@ type frontInfo struct {
 	Prompt string
 	// Policy is a line saying what policy is in force.
 	Policy string
+	// Cost prices the terminal client's session pane and status line; nil
+	// shows token usage but no cost.
+	Cost client.Cost
 }
 
 // front is a way to talk to a session.

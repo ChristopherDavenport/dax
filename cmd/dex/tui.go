@@ -184,7 +184,11 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if run == nil {
 		run = console.Run
 	}
-	return run(ctx, be, f.console...)
+	opts := append([]console.Option(nil), f.console...)
+	if f.info.Cost != nil {
+		opts = append(opts, console.WithCost(f.info.Cost))
+	}
+	return run(ctx, be, opts...)
 }
 
 // flush prints the notes dex buffered and the session's ID.
