@@ -124,6 +124,12 @@ type Options struct {
 	// Approve decides a call the policy asked about; reason is the
 	// policy's. nil denies every call.
 	Approve func(call *openresponses.FunctionCall, reason string) bool
+	// Ask puts a sub-agent's call the policy asks about to the user from
+	// inside the running call, and is preferred to Approve there: allow,
+	// and the note the user typed with a refusal. Its context is the
+	// call's, so an abort gives the question up. An error means nobody
+	// could be asked. Nil falls back to Approve.
+	Ask func(ctx context.Context, call *openresponses.FunctionCall, reason string) (allow bool, note string, err error)
 	// Elicit answers a question a tool asks mid-call: an MCP server's
 	// elicitation, or a nested call the policy asked about. nil leaves
 	// every such question unasked, which the tool takes as a cancel.
@@ -1058,6 +1064,23 @@ func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine
 			reason := "the " + name + " sub-agent asks: " + v.Reason
 			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
 				reason += "; about: " + v.Subject
+			}
+			if o.Ask != nil {
+				allow, note, err := o.Ask(ctx, info.Call, reason)
+				switch {
+				case err != nil && ctx.Err() != nil:
+					return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}, nil
+				case err != nil:
+					return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + v.Reason + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}, nil
+				case !allow:
+					o.log("  ✗ %s denied (%s)", info.Call.Name, name)
+					out := deniedOutput
+					if note != "" {
+						out += " Reason: " + note
+					}
+					return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}, nil
+				}
+				return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}, nil
 			}
 			if o.Approve == nil {
 				// A front with no way to put a question from inside a

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +52,7 @@ type steps struct {
 
 func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	calls := m.parent
-	isChild := strings.Contains(req.Instructions, "read-only explorer")
+	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dex")
 	if isChild {
 		calls = m.child
 	}
@@ -167,10 +169,18 @@ func startRig(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Opti
 	if tweakFront != nil {
 		tweakFront(f)
 	}
-	if a, e := f.Hooks(); a != nil || e != nil {
-		t.Fatal("the terminal client answers on its screen, not through callbacks")
+	// Nothing reads standard input once the client has the terminal:
+	// there is no approver that would prompt on it, and the elicitor and
+	// the sub-agents' Ask put their questions on the client's screen.
+	a, e := f.Hooks()
+	if a != nil {
+		t.Fatal("the terminal client answers on its screen, not through a prompt on standard input")
 	}
+	o.Approve, o.Elicit = a, e
 	f.Prepare(&o)
+	if o.Ask == nil {
+		t.Fatal("the sub-agents' questions have no way to the screen")
+	}
 	sess, err := agent.New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
@@ -311,23 +321,32 @@ func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
 	r.quit()
 }
 
-func TestTheExploreChildCannotAskTheUserAndIsToldToMakeTheCallItself(t *testing.T) {
+// The explore child's held calls are questions on the screen, one at a
+// time, while the run goes; refused, nothing runs and the child is told
+// so. They were refused unasked before the client could ask a running
+// call's question.
+func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	m := &steps{
 		parent: [][2]string{{"explore", `{"input":"look"}`}},
 		child:  [][2]string{{"bash", `{"command":"touch CHILD"}`}, {"read", `{"path":".env"}`}},
 	}
 	r := startTUI(t, m, config.Rules{}, nil)
 	r.type_("go\r")
+	r.waitOutput("Question (1/1): bash")
+	r.waitOutput("the explore sub-agent asks")
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("\r")
+	r.waitOutput("Question (1/1): read")
+	r.type_("n\r")
 	r.waitOutput("all done")
 	r.quit()
-	// No panel opened for the child's calls, nothing ran, and the child
-	// was told why and what to do.
 	if _, err := os.Stat(filepath.Join(r.dir, "CHILD")); err == nil {
 		t.Error("the child's touch ran")
 	}
 	saw := m.sawInChild()
-	if !strings.Contains(saw, "cannot ask you") || !strings.Contains(saw, "make this call yourself") {
-		t.Errorf("the child saw %q", saw)
+	if strings.Count(saw, "the user denied this call") != 2 {
+		t.Errorf("the child saw %q, want both calls denied", saw)
 	}
 	if strings.Contains(saw, "abc123") {
 		t.Error("the child read .env")
@@ -409,4 +428,48 @@ func TestWarningsHeldBackAreShownWhenTheSessionCannotOpen(t *testing.T) {
 	var w syncBuf
 	undo := agent.CaptureWarnings(&w)
 	undo()
+}
+
+// A sub-agent's call the policy asks about is asked on the screen while
+// the run goes, and the answer reaches the call: it was refused, with a
+// reason telling the model to make the call itself, before the client
+// could ask a running call's question.
+func TestASubagentsAskIsAnsweredOnTheScreen(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"FROM_TASK","content":"x"}`}},
+	}
+	r := startTUI(t, m, config.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): write")
+	r.waitOutput("the task sub-agent asks")
+	r.waitFile("FROM_TASK", false)
+	r.type_("y")
+	r.waitFile("FROM_TASK", true)
+	r.waitOutput("all done")
+	r.quit()
+}
+
+func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"REFUSED","content":"x"}`}},
+	}
+	r := startTUI(t, m, config.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): write")
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("wrong file\r")
+	r.waitOutput("all done")
+	if _, err := os.Stat(filepath.Join(r.dir, "REFUSED")); err == nil {
+		t.Error("a refused call ran")
+	}
+	m.mu.Lock()
+	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
+	m.mu.Unlock()
+	if !strings.Contains(saw, "Reason: wrong file") {
+		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
+	}
+	r.quit()
 }
