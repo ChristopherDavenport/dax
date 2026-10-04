@@ -50,8 +50,8 @@ LITELLM_KEY=... dex -provider openresponses -base-url https://llm.internal/v1 -m
 ```
 
 `-model` names another model. `-subagent-model` names the one the
-`explore` sub-agent (`-agents`) runs; without it a sub-agent runs the
-provider's default for sub-agents, where it has one, else the main model.
+sub-agents run; without it a sub-agent runs the provider's default for
+sub-agents, where it has one, else the main model.
 A missing key is an error before any request
 is made: `dex: openai: no API key: set OPENAI_API_KEY in the
 environment`. dex reads keys from the environment and nowhere else (not
@@ -72,15 +72,42 @@ their model endpoints, OpenRouter through its public catalogue (fetched
 once, without the key) and Ollama through `/api/show`; OpenAI and an
 `openresponses` server publish nothing, and nothing is shown.
 
-Every request's reasoning effort is then fitted to the answer: an effort
-the model does not take becomes the nearest one it does, and dex says so
-once, `[qwen3-coder:30b: reasoning effort low is not accepted; sent none
-(ollama)]`. So `-think` on a model that cannot reason turns reasoning off
-instead of failing, and `-think=false` on one that always reasons sends
-its least effort. When the vendor cannot be asked, or does not know the
-model, requests go out as asked. `-think` (default on)
+The reasoning effort dex asks for is then fitted to the answer: an
+effort the model does not take becomes the nearest one it does, and dex
+says so once, `[qwen3-coder:30b: reasoning effort low is not accepted;
+asking for none (ollama)]`. So `-think` on a model that cannot reason
+turns reasoning off instead of failing, and `-think=false` on one that
+always reasons asks for its least effort. The fitting is done where each
+configuration is made (the main agent's, the sub-agents', a fold's
+summary, `/think` and `/model`), never to a request on its way out, so
+the session records the effort that was sent. When the vendor cannot be
+asked, or does not know the model, the effort is asked for as
+configured. `-think` (default on)
 asks for low reasoning effort with summaries and shows the reasoning;
 `-think=false` turns reasoning off.
+
+## Sub-agents
+
+The main agent can start sub-agents, each a run of its own on the
+sub-agent model, recorded as a child session:
+
+- `explore` investigates without changing anything (read, glob, grep, ls
+  and bash) and returns a written answer.
+- `task` carries out a self-contained coding task with the file tools and
+  bash, then reports what it changed, what it ran and what is left. It
+  does not see the conversation; the main agent's model writes the whole
+  brief. Its instructions are dex's, your `instructions_file` and the
+  AGENTS.md chain, without skills or memory.
+
+Several calls in one turn run at once, so the main agent can hand out
+independent pieces of work in parallel. Writes and edits take a
+workspace lock, so two sub-agents editing one file cannot lose an edit,
+though they can still make changes that do not fit together; the
+sub-agent is told to change only the files its task is about.
+
+Both are offered by default; `-agents=false` or `"agents": false`
+turns them off. Starting one is on the built-in allow list, since what a
+sub-agent then does is decided call by call by the same policy.
 
 ## Config
 
@@ -126,6 +153,7 @@ names the file and the field.
 | field | meaning |
 |---|---|
 | `provider`, `model`, `subagent_model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openresponses` |
+| `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
@@ -141,7 +169,7 @@ it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `agents`,
 `instructions_file`, `skills_dirs`, `memory_dir` or `mcp_servers`: dex
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -158,7 +186,7 @@ keys somewhere; a repository does not get to make them.)
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
-| `-agents` | offer the read-only `explore` sub-agent |
+| `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
 | `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
 
 ## Tools
@@ -427,10 +455,11 @@ machine matters.
   routes to, Anthropic, Google, your Ollama host, or the `openresponses`
   server you named). Choose the provider with that in mind; a path rule is not a read
   ACL for a search that includes the directory from above.
-- **The explore sub-agent (`-agents`) is governed like the parent**: its
-  read, grep, glob, ls and bash calls are decided by the same rules (your
-  denies, the secret-path asks, path rules, the auto-allow list), and one
-  that asks is put to you, from inside the sub-agent's run.
+- **The sub-agents are governed like the parent**: every call `explore`
+  or `task` makes is decided by the same rules (your denies, the
+  secret-path asks, path rules, the auto-allow list), and one that asks is
+  put to you, from inside the sub-agent's run. A `task` can write, so with
+  `"fallback": "allow"` it writes unasked, as the main agent would.
 - **Not covered:** programs the *user's own* git config names (it is
   trusted), a race between dex checking a path and the command using it,
   credential-file path variables such as `KUBECONFIG` (they pass through to
@@ -467,7 +496,7 @@ program, the part of a command line. Everything that can ask is answered on
 screen; nothing reads standard input once the client has the terminal. Two
 things cannot be a permission and are handled as follows:
 
-- A call the **explore sub-agent** makes that the policy asks about: the
+- A call a **sub-agent** (`explore` or `task`) makes that the policy asks about: the
   client answers the calls its own agent's run left pending, and the
   sub-agent's run is not that run. The call is refused with a reason that
   tells the model to make it from the main agent, where it is asked.

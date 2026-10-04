@@ -52,6 +52,8 @@ type Config struct {
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
+	// Agents offers the explore and task sub-agents; default true.
+	Agents *bool `json:"agents,omitempty"`
 	// InstructionsFile is a file of your own instructions, added to
 	// the system prompt after dex's and before the AGENTS.md chain.
 	InstructionsFile string `json:"instructions_file,omitempty"`
@@ -198,7 +200,7 @@ func (l *Layer) validate() error {
 		}{
 			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""},
-			{"think", c.Think != nil}, {"instructions_file", c.InstructionsFile != ""},
+			{"think", c.Think != nil}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
@@ -289,7 +291,7 @@ func (l *Layer) resolvePaths() {
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
-	Think                                                         *bool
+	Think, Agents                                                 *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
 }
@@ -303,6 +305,7 @@ type Settings struct {
 	BaseURL          string // empty: the provider's default
 	APIKeyEnv        string // empty: the openresponses provider sends no key
 	Think            bool
+	Agents           bool
 	InstructionsFile string
 	SkillsDirs       []string
 	MemoryDir        string // empty: off; Resolve fills the default in
@@ -336,7 +339,7 @@ type Rules struct{ Allow, Ask, Deny []string }
 // defaultMemory is the memory directory when no layer names one.
 func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
-		Provider: "ollama", Think: true, MemoryDir: defaultMemory,
+		Provider: "ollama", Think: true, Agents: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default"},
 	}
@@ -363,6 +366,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
+		}
+		if l.Agents != nil {
+			s.Agents = *l.Agents
 		}
 		if l.InstructionsFile != "" {
 			s.InstructionsFile = l.InstructionsFile
@@ -447,6 +453,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.Think != nil {
 		s.Think = *f.Think
+	}
+	if f.Agents != nil {
+		s.Agents = *f.Agents
 	}
 	if f.MemoryDir != nil {
 		s.MemoryDir = *f.MemoryDir

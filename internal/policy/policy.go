@@ -23,7 +23,10 @@ import (
 	"github.com/ChristopherDavenport/dex/internal/tool"
 )
 
-// BuiltinAllow is the allow list dex ships. go test, build, vet and
+// BuiltinAllow is the allow list dex ships. The sub-agents, explore
+// and task, are on it because starting one does nothing of itself:
+// every call the sub-agent makes is decided by this same policy, so a
+// task's writes and commands ask as the main agent's do. go test, build, vet and
 // list are not on it: they run the repository's code (TestMain, cgo,
 // a vet tool, a toolchain the go.mod names). A user who trusts a
 // repository allows them in the user config; see the README. Writes
@@ -37,7 +40,7 @@ import (
 // rule only names them: whether this call's arguments are read-only,
 // inside the workspace and free of programs is the analyzer's, and a
 // call that fails it asks whatever the rule says.
-const BuiltinAllow = "read glob grep ls skill explore memory_search " +
+const BuiltinAllow = "read glob grep ls skill explore task memory_search " +
 	"bash(git status:*) bash(git diff:*) bash(git log:*) bash(git show:*) " +
 	"bash(go version) bash(go env:*) " +
 	"bash(git branch:*) bash(git rev-parse:*) bash(git ls-files:*) bash(git remote:*) bash(git blame:*) " +

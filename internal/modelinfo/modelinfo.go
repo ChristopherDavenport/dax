@@ -1,5 +1,6 @@
 // Package modelinfo asks a provider what a model supports, ahead of the
-// first request, and fits each request's reasoning effort to it.
+// first request, and fits the reasoning effort a configuration asks for
+// to it.
 //
 // No table of models is kept here: a table lags every release. Each
 // vendor that publishes model metadata is asked at run time (Anthropic's
