@@ -49,7 +49,7 @@ type taskArgs struct {
 // agent's model for a piece of work. Each call is a fresh run, recorded
 // as a child session; several calls in one batch run at once.
 //
-// The returned option decides each call from its arguments: the model,
+// Session.taskCall decides each call from its arguments: the model,
 // sub-agent or main, with the reasoning effort fitted to it, and the
 // opening items, the brief alone or, for a fork, the main agent's
 // conversation and then the brief. A fork's conversation goes in as the
@@ -62,7 +62,7 @@ type taskArgs struct {
 // with the user's instructions, and agentsText, the AGENTS.md chain as
 // the kit renders it for the main agent. Skills and memory are left
 // out: the sub-agent has neither tool.
-func (o Options) task(ctx context.Context, model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine], agentsText string) (agentturn.Config, childagent.Option) {
+func (o Options) task(ctx context.Context, model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine], agentsText string) agentturn.Config {
 	parts := []string{taskPreamble, prompt.Build(o.Dir, o.Instructions)}
 	if agentsText != "" {
 		parts = append(parts, agentsText)
@@ -85,19 +85,38 @@ func (o Options) task(ctx context.Context, model openresponses.Streamer, ws *too
 	if o.Policy != nil {
 		cfg.BeforeToolCall = o.childPolicy("task", eng, &tool.Analyzer{Dir: o.Dir, MaxFile: o.MaxReadBytes})
 	}
-	return cfg, childagent.WithCallConfig(o.taskCall)
+	return cfg
 }
 
-// taskCall is one task call's configuration and opening items.
-func (o Options) taskCall(ctx context.Context, a taskArgs, parent agentturn.Transcript, cfg agentturn.Config) (agentturn.Config, openresponses.Items, error) {
+// subagentCall is cfg for one sub-agent call on model, with the effort
+// /think sets now fitted to it.
+func (s *Session) subagentCall(ctx context.Context, cfg agentturn.Config, model string, think bool) agentturn.Config {
+	o := s.opts
+	o.Think = think
+	cfg.ModelName = model
+	cfg.Reasoning = o.reasoningFor(ctx, model)
+	return cfg
+}
+
+// exploreCall is one explore call: the sub-agent model and the effort
+// in force now, and the question.
+func (s *Session) exploreCall(ctx context.Context, in childagent.Input, _ agentturn.Transcript, cfg agentturn.Config) (agentturn.Config, openresponses.Items, error) {
+	think, _, sub := s.now()
+	return s.subagentCall(ctx, cfg, sub, think), openresponses.Items{openresponses.UserText(in.Input)}, nil
+}
+
+// taskCall is one task call's configuration and opening items, read
+// against what /think and /model have set by now.
+func (s *Session) taskCall(ctx context.Context, a taskArgs, parent agentturn.Transcript, cfg agentturn.Config) (agentturn.Config, openresponses.Items, error) {
 	if strings.TrimSpace(a.Input) == "" {
 		return cfg, nil, errors.New("input is required: the task for the sub-agent")
 	}
+	think, main, sub := s.now()
 	switch a.Model {
 	case "", "subagent":
+		cfg = s.subagentCall(ctx, cfg, sub, think)
 	case "main":
-		cfg.ModelName = o.Model
-		cfg.Reasoning = o.reasoningFor(ctx, o.Model)
+		cfg = s.subagentCall(ctx, cfg, main, think)
 	default:
 		return cfg, nil, fmt.Errorf("model %q: want subagent or main", a.Model)
 	}

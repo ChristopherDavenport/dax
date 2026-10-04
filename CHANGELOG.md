@@ -7,6 +7,9 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: `/think` and `/model` did not reach the sub-agents, whose model
+  and effort were fixed when the session started; each `explore` and
+  `task` call now reads them as they stand.
 - Added: `task` takes `context` (`fresh`, the default, or `fork`, which
   also sees the conversation so far) and `model` (`subagent`, the
   default, or `main`), so the main agent picks per call. A fork's

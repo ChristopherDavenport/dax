@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
+	childagent "github.com/ChristopherDavenport/agentturn/tools/agent"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -182,11 +184,33 @@ type Session struct {
 	Kit   *agentkit.Kit
 
 	opts    Options
+	live    live
 	env     []string            // what bash and MCP servers start with
 	refused []agentkit.Omission // repository files screened out before the kit
 	ws      *tool.Workspace
 	store   *cas.Store
 	detach  func()
+}
+
+// live is what /think and /model have set, read by each sub-agent
+// call, which may run while the main agent's settings change.
+type live struct {
+	mu    sync.Mutex
+	think bool
+	main  string
+}
+
+// now is the Think setting and the main model in force, and the
+// sub-agent model: the configured one, or the main model when none is.
+func (s *Session) now() (think bool, main, sub string) {
+	s.live.mu.Lock()
+	think, main = s.live.think, s.live.main
+	s.live.mu.Unlock()
+	sub = s.opts.SubagentModel
+	if sub == "" {
+		sub = main
+	}
+	return think, main, sub
 }
 
 // Describe is one line for the user: the call and why it is unanswered.
@@ -355,6 +379,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		return nil, fmt.Errorf("workspace: %w", err)
 	}
 	s := &Session{opts: o, store: store, ws: ws}
+	s.live.think, s.live.main = o.Think, o.Model
 	ok := false
 	defer func() {
 		if !ok {
@@ -444,8 +469,8 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	}
 	if o.Agents {
 		kopts = append(kopts,
-			agentkit.WithChildAgent(o.explore(ctx, model, ws, env, &engine)),
-			agentkit.WithChildAgent(o.task(ctx, model, ws, env, &engine, agentsText)))
+			agentkit.WithChildAgent(o.explore(ctx, model, ws, env, &engine), childagent.WithCallConfig(s.exploreCall)),
+			agentkit.WithChildAgent(o.task(ctx, model, ws, env, &engine, agentsText), childagent.WithCallConfig(s.taskCall)))
 	}
 	if o.Elicit != nil {
 		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
@@ -718,11 +743,24 @@ func (s *Session) FollowUp(text string) { s.Agent.FollowUp(openresponses.UserTex
 // produced out of the new model's requests, so a switch under -think
 // sends no signature the new model refuses; the recorder writes those
 // requests' responses unhashed.
+//
+// The sub-agents follow it from their next call: a task with model
+// main runs it, and so does every sub-agent when no sub-agent model is
+// configured.
 func (s *Session) SetModel(name string) error {
+	think, _, _ := s.now()
+	o := s.opts
+	o.Think = think
 	cfg := s.Agent.Config()
 	cfg.ModelName = name
-	cfg.Reasoning = s.opts.reasoningFor(context.Background(), name)
-	return s.Agent.SetConfig(cfg)
+	cfg.Reasoning = o.reasoningFor(context.Background(), name)
+	if err := s.Agent.SetConfig(cfg); err != nil {
+		return err
+	}
+	s.live.mu.Lock()
+	s.live.main = name
+	s.live.mu.Unlock()
+	return nil
 }
 
 // mcpPrefix is the prefix of a server's tools, mcp__<name>__<tool>
@@ -756,11 +794,16 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 func (s *Session) RemoveMCP(label string) error { return s.Kit.RemoveMCP(label) }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
-// model in force, and keeps the setting for a later SetModel.
+// model in force, and keeps the setting for a later SetModel. The
+// sub-agents follow it from their next call.
 func (s *Session) SetThink(on bool) error {
-	s.opts.Think = on
+	s.live.mu.Lock()
+	s.live.think = on
+	s.live.mu.Unlock()
+	o := s.opts
+	o.Think = on
 	cfg := s.Agent.Config()
-	cfg.Reasoning = s.opts.reasoningFor(context.Background(), cfg.ModelName)
+	cfg.Reasoning = o.reasoningFor(context.Background(), cfg.ModelName)
 	return s.Agent.SetConfig(cfg)
 }
 
