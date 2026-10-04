@@ -13,11 +13,18 @@ import (
 // slow catalogue delays a first request by at most this long.
 const describeTimeout = 10 * time.Second
 
-// Streamer fits each request's reasoning effort to its model before
-// passing it on. It asks the Describer once per model name, the first
-// time that name is sent or Describe is called, and keeps the answer,
-// a failure included, for the life of the Streamer. A change it makes
-// is reported through Notify once per model and effort.
+// Streamer keeps what the Describer says about each model, asking once
+// per model name and keeping the answer, a failure included, for the
+// life of the Streamer, and fits efforts to it through [Streamer.Fit].
+//
+// It never changes a request. A session records the request the loop
+// built, so a change made here, below the recorder, would make the
+// record say something other than what was sent. The fitting is done
+// where the request is built instead: the caller asks Fit for the
+// effort of each configuration it makes. A request that still reaches
+// the Streamer with an effort its model does not take, from a path
+// that did not ask Fit, is sent as it is and reported once, so the
+// path can be found.
 type Streamer struct {
 	inner    openresponses.Streamer
 	describe Describer
@@ -97,19 +104,34 @@ func (s *Streamer) Describe(ctx context.Context, model string) (Info, error) {
 	return info, err
 }
 
-// CreateStream sends req with its reasoning effort fitted to its model.
+// Fit is the effort to ask model for in place of want: want when the
+// model takes it or nothing is known, else the nearest effort it takes,
+// as [Info.Fit] decides. A change, and a vendor that could not be
+// asked, are reported once each.
+func (s *Streamer) Fit(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort {
+	if want == "" {
+		return want
+	}
+	info, err := s.Describe(ctx, model)
+	if err != nil && ctx.Err() == nil {
+		s.tell(model+"\x00err", fmt.Sprintf("[model info for %s unavailable: %v; reasoning is asked for as configured]", model, err))
+	}
+	got := info.Fit(want)
+	if got != want {
+		s.tell(model+"\x00"+string(want), fmt.Sprintf("[%s: reasoning effort %s is not accepted; asking for %s (%s)]", model, want, got, info.Source))
+	}
+	return got
+}
+
+// CreateStream sends req as it is. An effort the model does not take
+// means a path built the request without asking Fit; it is reported
+// once, and the provider decides.
 func (s *Streamer) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	if want := req.Reasoning.Effort; want != "" {
-		info, err := s.Describe(ctx, req.Model)
-		if err != nil && ctx.Err() == nil {
-			s.tell(req.Model+"\x00err", fmt.Sprintf("[model info for %s unavailable: %v; reasoning is sent as asked]", req.Model, err))
-		}
-		if got := info.Fit(want); got != want {
-			req.Reasoning.Effort = got
-			if got == openresponses.ReasoningEffortNone {
-				req.Reasoning.Summary = ""
+		if info, err := s.Describe(ctx, req.Model); err == nil {
+			if got := info.Fit(want); got != want {
+				s.tell(req.Model+"\x00unfitted"+string(want), fmt.Sprintf("[%s: a request asks for reasoning effort %s, which %s says is not accepted; sent as asked]", req.Model, want, info.Source))
 			}
-			s.tell(req.Model+"\x00"+string(want), fmt.Sprintf("[%s: reasoning effort %s is not accepted; sent %s (%s)]", req.Model, want, got, info.Source))
 		}
 	}
 	return s.inner.CreateStream(ctx, req, sink)

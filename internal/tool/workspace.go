@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -28,6 +29,11 @@ type Workspace struct {
 	root *os.Root
 	dir  string // as given, absolute and cleaned
 	real string // dir with its symbolic links resolved
+	// writes is held across each write, and across an edit's read and
+	// write, so two calls running at once (sub-agents in one batch, or
+	// parallel calls of one agent) cannot lose an edit to a write
+	// based on an older read.
+	writes sync.Mutex
 }
 
 // NewWorkspace opens dir as a workspace.
