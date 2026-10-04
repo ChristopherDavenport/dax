@@ -59,8 +59,20 @@ type front interface {
 	// that drives the kit through its own backend asks for no agent, and
 	// one that takes the screen collects what would be printed.
 	Prepare(o *agent.Options)
+	// setOpen gives a front the opener that starts a fresh session with
+	// the same options, after the first session has been opened. A front
+	// that does not support a fresh context in place ignores it.
+	setOpen(func() (*agent.Session, error))
 	// Run drives the session until the user is done.
 	Run(ctx context.Context, sess *agent.Session) error
+}
+
+// closesOwnSessions marks a front that manages the lifetime of the
+// session it runs, replacing it in place on /clear, so the caller must
+// not close the one it was given.
+type closesOwnSessions interface {
+	front
+	closesOwnSessions()
 }
 
 // frontEnv is what selectFront needs to know of the process: whether
@@ -116,6 +128,16 @@ func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 func (f *printFront) Prepare(*agent.Options) {}
 func (f *replFront) Prepare(*agent.Options)  {}
 
+// setOpen is a no-op for the print front: a one-shot prompt never asks
+// to start again.
+func (f *printFront) setOpen(func() (*agent.Session, error)) {}
+
+// setOpen stores the opener /clear uses to replace the session.
+func (f *replFront) setOpen(open func() (*agent.Session, error)) { f.open = open }
+
+// closesOwnSessions marks the repl as owning its session's lifetime.
+func (*replFront) closesOwnSessions() {}
+
 // printFront runs one prompt: approvals read stdin directly.
 type printFront struct {
 	info frontInfo
@@ -139,7 +161,7 @@ func (f *printFront) Hooks() (func(*openresponses.FunctionCall, string) bool, ag
 
 func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
 	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
-	abortOnInterrupt(sess)
+	abortOnInterrupt(func() *agent.Session { return sess })
 	showAssembly(sess)
 	showPending(sess, "resumed")
 	return turn(ctx, sess, f.info.Prompt)
@@ -152,6 +174,9 @@ type replFront struct {
 	info frontInfo
 	in   *bufio.Scanner
 	asks chan *ask
+	// open starts a fresh session with the original options; the front's
+	// setOpen stores it once the first session has been opened.
+	open func() (*agent.Session, error)
 }
 
 func (f *replFront) Hooks() (func(*openresponses.FunctionCall, string) bool, agenttool.Elicitor) {
@@ -168,17 +193,25 @@ func (f *replFront) Hooks() (func(*openresponses.FunctionCall, string) bool, age
 }
 
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
-	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
-	abortOnInterrupt(sess)
-	fmt.Printf("dex · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
-	if f.info.ModelInfo != "" {
-		fmt.Printf("model: %s\n", f.info.ModelInfo)
+	// start wires a session into the prompt loop: it shows the banner and
+	// subscribes the printer.
+	start := func(s *agent.Session) {
+		s.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
+		fmt.Printf("dex · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
+		if f.info.ModelInfo != "" {
+			fmt.Printf("model: %s\n", f.info.ModelInfo)
+		}
+		if id := s.ID(); id != "" {
+			fmt.Printf("session %s\n", id)
+		}
+		showAssembly(s)
+		showPending(s, "resumed")
 	}
-	if id := sess.ID(); id != "" {
-		fmt.Printf("session %s\n", id)
-	}
-	showAssembly(sess)
-	showPending(sess, "resumed")
+	start(sess)
+	// The repl owns its sessions and swaps sess in place on /clear; the
+	// deferred close lands on whatever session it leaves running.
+	defer func() { sess.Close() }()
+	abortOnInterrupt(func() *agent.Session { return sess })
 	lines := make(chan string)
 	go func() {
 		defer close(lines)
@@ -241,6 +274,33 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 				}
 				continue
 			}
+			if line == "/clear" {
+				// Drop the whole conversation and start fresh, keeping the
+				// options the session was built with. The old session is
+				// idle here and its store and MCP servers are reused by no
+				// one, so it is closed to release them before the new one
+				// opens.
+				if f.open == nil {
+					fmt.Fprintln(os.Stderr, "error: /clear is not available")
+					prompt()
+					continue
+				}
+				if err := sess.Close(); err != nil {
+					fmt.Fprintln(os.Stderr, "error:", err)
+					prompt()
+					continue
+				}
+				next, err := f.open()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "error:", err)
+					prompt()
+					continue
+				}
+				sess = next
+				start(sess)
+				prompt()
+				continue
+			}
 			if handled, err := command(ctx, sess, line); handled {
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
@@ -252,7 +312,7 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 				continue
 			}
 			running = true
-			go func(text string) { done <- turn(ctx, sess, text) }(line)
+			go func(text string, s *agent.Session) { done <- turn(ctx, s, text) }(line, sess)
 		}
 	}
 }
@@ -316,12 +376,15 @@ func openSession(ctx context.Context, opts agent.Options, resume string) (*agent
 }
 
 // abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
-// or one while idle, exits.
-func abortOnInterrupt(sess *agent.Session) {
+// or one while idle, exits. get returns the session to act on, so a
+// front that replaces its session in place keeps the handler pointing at
+// the current one.
+func abortOnInterrupt(get func() *agent.Session) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		for range sigs {
+			sess := get()
 			if !sess.Agent.State().Running {
 				fmt.Println()
 				sess.Close()

@@ -71,6 +71,11 @@ func (f *tuiFront) Hooks() (func(*openresponses.FunctionCall, string) bool, agen
 	return nil, nil
 }
 
+// setOpen is a no-op for the terminal client: a /clear that swaps the
+// kit under the client would need the client itself to rebuild its
+// backend, which is a larger change than the repl's.
+func (f *tuiFront) setOpen(func() (*agent.Session, error)) {}
+
 // Prepare builds the session without an agent, collects what it would
 // have printed, and holds back its warnings.
 func (f *tuiFront) Prepare(o *agent.Options) {

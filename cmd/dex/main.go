@@ -253,7 +253,19 @@ func run() error {
 		}
 		return err
 	}
-	defer sess.Close()
+	// The opener is how a front drops the current context and starts a
+	// fresh session with the same options. It never resumes: /clear means
+	// from now, not from the leaf the session was opened at.
+	f.setOpen(func() (*agent.Session, error) {
+		return agent.New(ctx, opts)
+	})
+	defer func() {
+		// A front that swaps the session in place closes the one it leaves
+		// running; the others are closed here.
+		if _, own := f.(closesOwnSessions); !own {
+			sess.Close()
+		}
+	}()
 	return f.Run(ctx, sess)
 }
 
