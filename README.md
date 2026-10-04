@@ -198,7 +198,7 @@ keys somewhere; a repository does not get to make them.)
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
-| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server |
+| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
 | `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
