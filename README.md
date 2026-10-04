@@ -572,5 +572,5 @@ make build    # ./dex
 ```
 
 In this workspace the module is built outside the go.work:
-`GOWORK=off GOFLAGS=-mod=readonly make check`. See [CLAUDE.md](CLAUDE.md)
+`GOWORK=off GOFLAGS=-mod=readonly make check`. See [AGENTS.md](AGENTS.md)
 for the layout and release process, and [CHANGELOG.md](CHANGELOG.md).
