@@ -18,7 +18,7 @@ var secretSuffixes = []string{
 // names.
 var secretNames = set("PASSWORD", "TOKEN", "API_KEY", "SECRET_KEY", "SECRET", "KEY", "AUTH",
 	"DATABASE_URL", "SSH_AUTH_SOCK", "PGPASSWORD", "MYSQL_PWD",
-	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "DEX_API_KEY",
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "DEX_API_KEY",
 	"AWS_SESSION_TOKEN", "NPM_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
 
 // secretWords scrub a name that holds one anywhere in it.
@@ -60,15 +60,17 @@ func Secret(name, value string) bool {
 }
 
 // ChildEnv is base without its credentials: every variable Secret
-// names, except those in pass. Bash commands and MCP servers get this
-// environment, so a test, a build script or a server cannot read the
-// provider's key from it.
-func ChildEnv(base, pass []string) []string {
+// names, and every one in secrets, except those in pass. Bash commands
+// and MCP servers get this environment, so a test, a build script or a
+// server cannot read the provider's key from it. secrets is for a key
+// whose variable the user named and Secret may not recognise.
+func ChildEnv(base, pass []string, secrets ...string) []string {
 	keep := set(pass...)
+	extra := set(secrets...)
 	out := make([]string, 0, len(base))
 	for _, kv := range base {
 		name, value, _ := strings.Cut(kv, "=")
-		if Secret(name, value) && !keep[name] {
+		if (Secret(name, value) || extra[name]) && !keep[name] {
 			continue
 		}
 		out = append(out, kv)
@@ -77,4 +79,6 @@ func ChildEnv(base, pass []string) []string {
 }
 
 // DefaultEnv is the current environment through ChildEnv.
-func DefaultEnv(pass []string) []string { return ChildEnv(os.Environ(), pass) }
+func DefaultEnv(pass []string, secrets ...string) []string {
+	return ChildEnv(os.Environ(), pass, secrets...)
+}

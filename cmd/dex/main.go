@@ -60,9 +60,10 @@ func run() error {
 		fmt.Fprintln(fs.Output(), "usage: dex [flags]   (REPL)\n       dex -p \"prompt\" [flags]\n\nflags override ~/.config/dex/config.json and .dex/config.json; see the README.")
 		fs.PrintDefaults()
 	}
-	prov := fs.String("provider", "", "model provider: ollama (default), openai, anthropic or gemini")
+	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic or gemini")
 	model := fs.String("model", "", "model name; empty takes the provider's default")
-	base := fs.String("base-url", "", "endpoint of an OpenAI-compatible server (ollama and openai providers)")
+	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
+	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
@@ -159,6 +160,7 @@ func run() error {
 		return nil
 	}
 	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
+	flags.APIKeyEnv = str("api-key-env", keyEnv)
 	if given["think"] {
 		flags.Think = think
 	}
@@ -175,7 +177,7 @@ func run() error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, BaseURL: settings.BaseURL})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv})
 	if err != nil {
 		return err
 	}
@@ -187,6 +189,7 @@ func run() error {
 		Skills:        *skills,
 		SkillsDirs:    settings.SkillsDirs,
 		PassEnv:       settings.PassEnv,
+		KeyEnv:        m.KeyEnv,
 		MaxReadBytes:  settings.MaxReadBytes,
 		TrustSkills:   *trustSkills,
 		MemoryDir:     settings.MemoryDir,

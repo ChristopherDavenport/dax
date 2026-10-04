@@ -32,19 +32,33 @@ dex -provider anthropic      # a hosted model
 
 | `-provider` | default model | key (environment only) | `-base-url` |
 |---|---|---|---|
-| `ollama` (default) | `qwen3.5:9b` | none | `http://localhost:11434/v1` |
-| `openai` | `gpt-5` | `OPENAI_API_KEY` | `https://api.openai.com/v1`; any OpenAI-compatible server |
+| `ollama` (default) | `qwen3.5:9b` | none | default `http://localhost:11434/v1`; another Ollama host |
+| `openai` | `gpt-5` | `OPENAI_API_KEY` | not supported |
+| `openrouter` | `anthropic/claude-sonnet-5.5` | `OPENROUTER_API_KEY` | not supported |
+| `openresponses` | none; `-model` is required | the variable `-api-key-env` names, or none | required |
 | `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | not supported |
 | `gemini` | `gemini-2.5-pro` | `GEMINI_API_KEY` | not supported |
+
+A provider is a vendor: `openai` is OpenAI, and `openrouter` is
+OpenRouter, whose models are named `vendor/model`. Any other server that
+speaks the Open Responses (OpenAI Responses) API, such as vLLM, LM Studio
+or a proxy, is `openresponses`, with its `-base-url`, a `-model`, and
+`-api-key-env` naming the variable its key is in, if it takes one:
+
+```sh
+LITELLM_KEY=... dex -provider openresponses -base-url https://llm.internal/v1 -model qwen3-coder -api-key-env LITELLM_KEY
+```
 
 `-model` names another model. A missing key is an error before any request
 is made: `dex: openai: no API key: set OPENAI_API_KEY in the
 environment`. dex reads keys from the environment and nowhere else (not
 from a config file, not from a flag, so they stay out of `ps` and out of
-a repository), and never prints one.
+a repository), and never prints one. The variable a key was read from is
+removed from the environment of bash commands and MCP servers, whatever
+it is called, unless `pass_env` names it.
 
-Ollama and the OpenAI-compatible path use the `openresponses` client;
-Anthropic and Gemini use its provider adapters. `-think` (default on)
+Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
+client; Anthropic and Gemini use its provider adapters. `-think` (default on)
 asks for low reasoning effort with summaries and shows the reasoning;
 `-think=false` turns reasoning off.
 
@@ -84,7 +98,8 @@ names the file and the field.
 
 | field | meaning |
 |---|---|
-| `provider`, `model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openai` |
+| `provider`, `model`, `base_url`, `think` | as above; `base_url` is for `ollama` and `openresponses` |
+| `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
@@ -99,7 +114,7 @@ it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `base_url`, `think`,
+one of yours. It may **not** set `provider`, `model`, `base_url`, `api_key_env`, `think`,
 `instructions_file`, `skills_dirs`, `memory_dir` or `mcp_servers`: dex
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -108,7 +123,7 @@ keys somewhere; a repository does not get to make them.)
 
 | flag | |
 |---|---|
-| `-provider`, `-model`, `-base-url`, `-think` | override the config |
+| `-provider`, `-model`, `-base-url`, `-api-key-env`, `-think` | override the config |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
@@ -381,8 +396,9 @@ machine matters.
   repository's: a skill in `.dex/skills` is text from the repository, and
   its `allowed-tools` are withheld, so it cannot run anything unasked.
 - **The provider sees what the model reads.** Files and command output go
-  to the model's provider (OpenAI, Anthropic, Google, or your Ollama
-  host). Choose the provider with that in mind; a path rule is not a read
+  to the model's provider (OpenAI, OpenRouter and whichever upstream it
+  routes to, Anthropic, Google, your Ollama host, or the `openresponses`
+  server you named). Choose the provider with that in mind; a path rule is not a read
   ACL for a search that includes the directory from above.
 - **The explore sub-agent (`-agents`) is governed like the parent**: its
   read, grep, glob, ls and bash calls are decided by the same rules (your
