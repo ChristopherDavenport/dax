@@ -500,14 +500,14 @@ exits.
 | key | |
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
-| Ctrl-C | abort the run; quit when idle (a second one quits at once) |
+| Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
 | `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
 | Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
-| drag | select text anywhere on the screen; the release copies it to the terminal's clipboard (OSC 52, over ssh too) |
+| drag | select text anywhere on the screen; it stays drawn until the next key or press |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and

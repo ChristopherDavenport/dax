@@ -12,11 +12,12 @@ versions may break flags and the config file.
   `low`, as before, by default. It is fitted to each model like the
   default was, and a project file may not set it.
 - Added: a mouse drag in the terminal client selects text anywhere on
-  the screen (the conversation, the panes, the top bar) and the release
-  copies it to the terminal's clipboard with OSC 52, over ssh too; a
-  terminal that does not take it copies nothing. A click with no drag
-  still selects the row under it; this depends on the next agentconsole
-  release.
+  the screen (the conversation, the panes, the top bar) and the
+  selection stays drawn until the next key or press; Ctrl-C copies it
+  to the terminal's clipboard with OSC 52, over ssh too, as a desktop's
+  copy does, and drops the selection so the next Ctrl-C is the abort or
+  quit it always was. A click with no drag still selects the row under
+  it; this depends on the next agentconsole release.
 - Added: `-pricing-file` and the config's `pricing_file` load model
   prices. The terminal client's status line shows a running total of
   token usage and, with a price file, the session's cost, and the
