@@ -32,8 +32,8 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"golang.org/x/term"
 
-	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/render"
+	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // frontInfo is what a front shows the user about the session.
@@ -174,7 +174,7 @@ func (f *replFront) Hooks() (func(*openresponses.FunctionCall, string) bool, age
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
 	abortOnInterrupt(sess)
-	fmt.Printf("dex · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
+	fmt.Printf("dax · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
@@ -276,7 +276,7 @@ func question(c *openresponses.FunctionCall, reason string) string {
 }
 
 // elicitor puts a tool's mid-call question to the user as a yes or no.
-// dex has no form to fill in, so a question asking for one is
+// dax has no form to fill in, so a question asking for one is
 // cancelled, as is one answered out of band at a URL, which is shown.
 // Questions asked together are put one at a time.
 func elicitor(confirm func(q string) bool) agenttool.Elicitor {
@@ -289,7 +289,7 @@ func elicitor(confirm func(q string) bool) agenttool.Elicitor {
 			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 		}
 		if hasFields(q.Schema) {
-			fmt.Printf("[a tool asks for a form dex cannot show: %s]\n", render.Clean(q.Message))
+			fmt.Printf("[a tool asks for a form dax cannot show: %s]\n", render.Clean(q.Message))
 			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 		}
 		if confirm("? " + render.Clean(q.Message) + " [y/N] ") {
@@ -402,7 +402,7 @@ func turn(ctx context.Context, sess *agent.Session, text string) error {
 }
 
 // assemblyLines are the tools the kit assembled, with the source of
-// each one that is not dex's own, and what the instruction layers left
+// each one that is not dax's own, and what the instruction layers left
 // out, so the user knows what the model was not given.
 func assemblyLines(sess *agent.Session) []string {
 	var names []string

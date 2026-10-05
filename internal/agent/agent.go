@@ -1,4 +1,4 @@
-// Package agent assembles one dex session with agentkit: dex's tools
+// Package agent assembles one dax session with agentkit: dax's tools
 // and prompt, the AGENTS.md chain, skills, memory, a confirmation
 // policy, MCP servers, the explore child agent and compaction, recorded
 // into an agentsession content-addressed store (RFC 0002). What the kit cannot express is
@@ -38,11 +38,11 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/policy"
-	"github.com/ChristopherDavenport/dex/internal/prompt"
-	"github.com/ChristopherDavenport/dex/internal/render"
-	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/prompt"
+	"github.com/ChristopherDavenport/dax/internal/render"
+	"github.com/ChristopherDavenport/dax/internal/tool"
 )
 
 // Version is what the session header names as the harness version.
@@ -89,18 +89,18 @@ type Options struct {
 	// returns: every append (the default), a response or a call's
 	// output and what came before it, or at Close.
 	Sync cas.SyncPolicy
-	// UserDir is the user's dex directory, ~/.dex: its AGENTS.md is
+	// UserDir is the user's dax directory, ~/.dax: its AGENTS.md is
 	// read before the project's and its skills directory searched
 	// after the project's.
 	UserDir string
 	// Instructions is text of the user's own, from the config's
-	// instructions_file, added to dex's part of the system prompt.
+	// instructions_file, added to dax's part of the system prompt.
 	Instructions string
 
 	// AgentsMD reads UserDir/AGENTS.md and the AGENTS.md chain from the
 	// file system root down to Dir into the instructions.
 	AgentsMD bool
-	// Skills offers the skills under Dir/.dex/skills and
+	// Skills offers the skills under Dir/.dax/skills and
 	// UserDir/skills, through the skill tool, and those under
 	// SkillsDirs.
 	Skills bool
@@ -121,7 +121,7 @@ type Options struct {
 	// (compact.New) instead of a local summary (compact.NewLocal).
 	CompactServer bool
 	// Policy decides which calls run, ask or are refused; nil lets
-	// every call run. internal/policy builds dex's.
+	// every call run. internal/policy builds dax's.
 	Policy *agentpolicy.Policy
 	// Approve decides a call the policy asked about; reason is the
 	// policy's. nil denies every call.
@@ -137,7 +137,7 @@ type Options struct {
 	// every such question unasked, which the tool takes as a cancel.
 	Elicit agenttool.Elicitor
 	// MCP are stdio MCP servers started with the session, each offering
-	// its tools as mcp__<Name>__<tool>. Their stderr is dex's.
+	// its tools as mcp__<Name>__<tool>. Their stderr is dax's.
 	MCP []MCPServer
 	// MaxReadBytes is the most bytes of a file the read tool scans and
 	// the edit tool will rewrite; zero is tool.DefaultMaxRead.
@@ -160,7 +160,7 @@ type Options struct {
 	// Agents offers the sub-agents as tools: explore, read-only, and
 	// task, which changes files; both run on SubagentModel.
 	Agents bool
-	// Log receives dex's own notes: compactions, denials, skill grants.
+	// Log receives dax's own notes: compactions, denials, skill grants.
 	// nil discards them.
 	Log func(format string, args ...any)
 }
@@ -173,19 +173,19 @@ type MCPServer struct {
 	Command string
 }
 
-// DefaultUserDir is ~/.dex.
+// DefaultUserDir is ~/.dax.
 func DefaultUserDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".dex"
+		return ".dax"
 	}
-	return filepath.Join(home, ".dex")
+	return filepath.Join(home, ".dax")
 }
 
-// DefaultRoot is ~/.dex/sessions.
+// DefaultRoot is ~/.dax/sessions.
 func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 
-// Session is one dex conversation: the kit that assembled it, the
+// Session is one dax conversation: the kit that assembled it, the
 // agent running it and, when recording, the store it is written to.
 type Session struct {
 	Agent *agentturn.Agent
@@ -403,7 +403,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 	env := tool.DefaultEnv(o.PassEnv, o.KeyEnv)
 	s.env = env
 	kopts := []agentkit.Option{
-		agentkit.WithName("dex", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
+		agentkit.WithName("dax", "A coding agent that reads, writes and edits files and runs shell commands in a project."),
 		agentkit.WithModel(model, o.Model),
 		agentkit.WithReasoning(o.reasoningFor(ctx, o.Model)),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
@@ -422,7 +422,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		files, refused := agentsFiles(o.Dir)
 		s.refused = append(s.refused, refused...)
 		mdOpts := agentsmd.Options{
-			Names:  []string{".dex-no-such-file"},
+			Names:  []string{".dax-no-such-file"},
 			Extra:  append([]string{filepath.Join(o.UserDir, "AGENTS.md")}, files...),
 			Budget: 32 << 10,
 		}
@@ -440,7 +440,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		// be absent; the project's comes first and shadows the user's.
 		dirs := []string{filepath.Join(o.UserDir, "skills")}
 		if ok, refused := projectSkillsOK(o.Dir); ok {
-			dirs = []string{filepath.Join(o.Dir, ".dex", "skills"), dirs[0]}
+			dirs = []string{filepath.Join(o.Dir, ".dax", "skills"), dirs[0]}
 		} else {
 			s.refused = append(s.refused, refused...)
 		}
@@ -452,7 +452,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 			kopts = append(kopts,
 				agentkit.WithSkillGrants(func(sk *agentskill.Skill) agentpolicy.Source {
 					// Only a skill from a directory the user named is
-					// trusted: ~/.dex/skills and the config's skills_dirs.
+					// trusted: ~/.dax/skills and the config's skills_dirs.
 					// A repository's skill is text from the repository; its
 					// allowed-tools are withheld like any untrusted rule.
 					return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: userSkill(o, sk.Location)}
@@ -562,7 +562,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 func (o Options) header() agentsession.Header {
 	return agentsession.Header{
 		CWD:     o.Dir,
-		Harness: &agentsession.Harness{Name: "dex", Version: Version},
+		Harness: &agentsession.Harness{Name: "dax", Version: Version},
 	}
 }
 
@@ -615,15 +615,15 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	}
 	sess := s.Kit.Session()
 	if t := sess.Truncated(); t != nil {
-		fmt.Fprintf(stderr, "dex: session %s: %v (dropped)\n", id, t)
+		fmt.Fprintf(stderr, "dax: session %s: %v (dropped)\n", id, t)
 	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
 		// which no reader older than agentsession v0.0.18 opens it.
-		fmt.Fprintf(stderr, "dex: session %s was written as %s; this dex writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
+		fmt.Fprintf(stderr, "dax: session %s was written as %s; this dax writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
 	}
 	if cwd := sess.Header().CWD; cwd != "" && cwd != o.Dir {
-		fmt.Fprintf(stderr, "dex: session was recorded in %s, continuing in %s\n", cwd, o.Dir)
+		fmt.Fprintf(stderr, "dax: session was recorded in %s, continuing in %s\n", cwd, o.Dir)
 	}
 	return s, nil
 }
@@ -836,7 +836,7 @@ func (s *Session) Close() error {
 }
 
 // readOnly opens the store for reading, without the session locks, so
-// a session a running dex holds can be listed, verified and projected.
+// a session a running dax holds can be listed, verified and projected.
 func readOnly(root string) (*cas.Store, error) { return cas.Open(root, cas.WithReadOnly()) }
 
 // List returns the recorded sessions under root, newest first, for cwd
@@ -945,7 +945,7 @@ func Project(ctx context.Context, root, id, dir string) (string, error) {
 	return store.ProjectDir(ctx, dir, id)
 }
 
-// Import reads an RFC 0001 JSONL session, one an earlier dex wrote,
+// Import reads an RFC 0001 JSONL session, one an earlier dax wrote,
 // into the store as the session's record, so -list, -resume and -verify
 // reach it. It returns the session's ID.
 func Import(ctx context.Context, root, path string) (string, error) {
@@ -969,7 +969,7 @@ func Import(ctx context.Context, root, path string) (string, error) {
 // GC packs the store's loose objects, or with sweep repacks everything
 // into one pack and drops what no session needs, sparing objects
 // younger than grace. It returns the number of objects packed or
-// removed. A dex holding a session may keep writing meanwhile.
+// removed. A dax holding a session may keep writing meanwhile.
 func GC(ctx context.Context, root string, sweep bool, grace time.Duration) (int, error) {
 	store, err := openStore(root)
 	if err != nil {
@@ -997,8 +997,8 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 
 // mcpTransport starts an MCP server from a command line, split on
 // spaces, with env as its whole environment and its diagnostics on
-// dex's stderr. The kit's own command transport would hand the server
-// dex's environment, keys included.
+// dax's stderr. The kit's own command transport would hand the server
+// dax's environment, keys included.
 func mcpTransport(command string, env []string) (mcp.Transport, error) {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
@@ -1014,7 +1014,7 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 
 // userSkill reports whether a skill's location is under a directory
 // the user chose: UserDir/skills or one of Options.SkillsDirs. The
-// project's .dex/skills is not, nor is anything else.
+// project's .dax/skills is not, nor is anything else.
 func userSkill(o Options, location string) bool {
 	roots := append([]string{filepath.Join(o.UserDir, "skills")}, o.SkillsDirs...)
 	loc := filepath.Clean(location)

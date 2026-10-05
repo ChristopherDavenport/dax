@@ -1,4 +1,4 @@
-# dex
+# dax
 
 A coding agent: a REPL and a one-shot `-p` mode over an Open Responses
 model, with read, write, edit, glob, grep, ls and bash tools under a
@@ -8,9 +8,9 @@ sibling libraries; the design and who owns what is in
 
 ## Module
 
-- Module path: `github.com/ChristopherDavenport/dex`.
+- Module path: `github.com/ChristopherDavenport/dax`.
 - Go 1.25 is the floor (`os.Root` and its `MkdirAll`, `ReadFile` and
-  `WriteFile` need it). The binary is `./cmd/dex`.
+  `WriteFile` need it). The binary is `./cmd/dax`.
 - This is a product, so unlike the siblings it has no dependency
   boundary: it depends on every sibling it assembles, and on
   `anthropic-sdk-go` and `google.golang.org/genai` through the
@@ -19,10 +19,10 @@ sibling libraries; the design and who owns what is in
 
 ## Layout
 
-- `cmd/dex/main.go`: flags, the admin modes (`-list`, `-verify`, `-project`,
+- `cmd/dax/main.go`: flags, the admin modes (`-list`, `-verify`, `-project`,
   `-import`, `-gc`, `-repair`), settings, then one front.
-  `cmd/dex/front.go`: the `front` interface, `selectFront`, the REPL and
-  print fronts. `cmd/dex/tui.go`: the terminal client, `console.Run` over a
+  `cmd/dax/front.go`: the `front` interface, `selectFront`, the REPL and
+  print fronts. `cmd/dax/tui.go`: the terminal client, `console.Run` over a
   `kitbackend` on the session's kit; the default front on a terminal. The
   session for it is built with `Options.NoAgent` (the client builds its
   own agent over the kit).
@@ -38,7 +38,7 @@ sibling libraries; the design and who owns what is in
   `BashSubjects`, the command splitter the policy uses.
 - `internal/agent`: one `agentkit.New` per session, prompt and approval
   plumbing, and the session-store helpers.
-- `internal/prompt`, `internal/render`: dex's part of the system prompt;
+- `internal/prompt`, `internal/render`: dax's part of the system prompt;
   the REPL's event printer.
 
 ## Siblings

@@ -12,8 +12,8 @@ import (
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/policy"
 )
 
 // taskModels is a scripted parent and a scripted task child, the child
@@ -26,7 +26,7 @@ type taskModels struct {
 }
 
 func (m *taskModels) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	if strings.Contains(req.Instructions, "You are a sub-agent of dex") {
+	if strings.Contains(req.Instructions, "You are a sub-agent of dax") {
 		m.mu.Lock()
 		m.childReqs = append(m.childReqs, req)
 		m.mu.Unlock()
@@ -75,10 +75,10 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	if req.Model != "flash" {
 		t.Errorf("the child asked %q, want the sub-agent model", req.Model)
 	}
-	// dex's prompt, the user's instructions and the project's AGENTS.md
+	// dax's prompt, the user's instructions and the project's AGENTS.md
 	// reach the child; the memory and skills blocks, whose tools it
 	// lacks, do not.
-	for _, want := range []string{"You are a sub-agent of dex", "You are dex, a coding agent", "Use tabs.", "Run go test before saying done."} {
+	for _, want := range []string{"You are a sub-agent of dax", "You are dax, a coding agent", "Use tabs.", "Run go test before saying done."} {
 		if !strings.Contains(req.Instructions, want) {
 			t.Errorf("child instructions lack %q", want)
 		}

@@ -8,10 +8,10 @@ import (
 	"github.com/ChristopherDavenport/agentsession/cas"
 )
 
-// stderr is where dex warns; a variable so tests can read it.
+// stderr is where dax warns; a variable so tests can read it.
 var stderr io.Writer = os.Stderr
 
-// CaptureWarnings sends the warnings dex writes while it opens a store
+// CaptureWarnings sends the warnings dax writes while it opens a store
 // and a session to w instead of standard error, and returns what
 // undoes it. A front that is about to take the screen (the terminal
 // client) collects them to show before it does.
@@ -22,7 +22,7 @@ func CaptureWarnings(w io.Writer) (restore func()) {
 }
 
 // secureDir makes sure path exists and only its owner can enter it.
-// What dex keeps there is transcripts, with the contents of every file
+// What dax keeps there is transcripts, with the contents of every file
 // the model read and every command's output, and memory. A missing
 // directory is created 0700, with any parents. One that exists and is
 // readable by group or others is made private, and the user is told,
@@ -42,7 +42,7 @@ func secureDir(path string) error {
 		if err := os.Chmod(path, mode&^0o077); err != nil {
 			return fmt.Errorf("%s is readable by others (mode %04o) and could not be made private: %w", path, mode, err)
 		}
-		fmt.Fprintf(stderr, "dex: %s was readable by other users (mode %04o); it is now private (%04o)\n", path, mode, mode&^0o077)
+		fmt.Fprintf(stderr, "dax: %s was readable by other users (mode %04o); it is now private (%04o)\n", path, mode, mode&^0o077)
 	}
 	return nil
 }

@@ -7,9 +7,9 @@
 // and Gemini's model endpoints, OpenRouter's catalogue, Ollama's
 // /api/show). A vendor that publishes none (OpenAI, a generic Open
 // Responses server) describes nothing, and its requests go out as they
-// were asked, which is what dex did before this package.
+// were asked, which is what dax did before this package.
 //
-// This lives in dex while the shape is being tried; the intent is to
+// This lives in dax while the shape is being tried; the intent is to
 // move Info, Describer and the Streamer to openresponses once it holds.
 package modelinfo
 
@@ -156,7 +156,7 @@ func (i Info) String() string {
 // CompactBudget is the compaction budget the model's context window
 // allows: three quarters of it, leaving room for the instructions, the
 // tool schemas and the reply, none of which the estimate weighs. The
-// model's longest output is not taken off: dex sends no
+// model's longest output is not taken off: dax sends no
 // max_output_tokens, and a vendor may report one nearly the window's
 // size. Zero when the window is unknown.
 func (i Info) CompactBudget() int { return int(i.ContextWindow * 3 / 4) }

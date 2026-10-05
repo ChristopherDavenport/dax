@@ -18,9 +18,9 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/policy"
 )
 
 type syncBuf struct {
@@ -52,7 +52,7 @@ type steps struct {
 
 func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	calls := m.parent
-	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dex")
+	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dax")
 	if isChild {
 		calls = m.child
 	}
@@ -114,7 +114,7 @@ func (m *steps) sawInChild() string {
 	return strings.Join(all, "\n")
 }
 
-// tuiRig is dex's terminal client over a scripted model, on a pipe.
+// tuiRig is dax's terminal client over a scripted model, on a pipe.
 type tuiRig struct {
 	f    *tuiFront
 	t    *testing.T
@@ -229,25 +229,42 @@ func (r *tuiRig) waitFile(name string, want bool) {
 	}
 }
 
+// quit presses ctrl+c until the client returns. A run can still be
+// ending after the output a test waited for is on the screen, and ctrl+c
+// during a run aborts it rather than quitting, so one press is not
+// always enough; the next press, after the abort, quits.
 func (r *tuiRig) quit() {
 	r.t.Helper()
-	time.Sleep(150 * time.Millisecond)
-	r.type_("\x03")
-	select {
-	case err := <-r.done:
-		if err != nil {
-			r.t.Errorf("Run: %v", err)
+	deadline := time.After(20 * time.Second)
+	for {
+		r.type_("\x03")
+		select {
+		case err := <-r.done:
+			if err != nil {
+				r.t.Errorf("Run: %v", err)
+			}
+			return
+		case <-time.After(500 * time.Millisecond):
+		case <-deadline:
+			r.t.Fatal("the client did not return")
 		}
-	case <-time.After(20 * time.Second):
-		r.t.Fatal("the client did not return")
 	}
+}
+
+// waitPanel waits for the permission panel. A call's row shows the
+// policy's reason as soon as the record has it, which can be before the
+// live permission reaches the panel, and a key pressed before the panel
+// is up goes to the prompt instead.
+func (r *tuiRig) waitPanel() {
+	r.t.Helper()
+	r.waitOutput("[y] approve")
 }
 
 func TestTheTUIShowsTheStartLinesBeforeItTakesTheScreen(t *testing.T) {
 	r := startTUI(t, &steps{}, config.Rules{}, nil)
 	r.quit()
 	pre := r.pre.String()
-	for _, want := range []string{"dex · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
+	for _, want := range []string{"dax · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
 		if !strings.Contains(pre, want) {
 			t.Errorf("start lines lack %q:\n%s", want, pre)
 		}
@@ -262,6 +279,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	// policy's reason.
 	r.waitOutput("touch APPROVED")
 	r.waitOutput("no rule allows bash")
+	r.waitPanel()
 	r.waitFile("APPROVED", false)
 	r.type_("y")
 	r.waitFile("APPROVED", true)
@@ -273,8 +291,9 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	r2 := startTUI(t, m2, config.Rules{}, nil)
 	r2.type_("go\r")
 	r2.waitOutput("no rule allows bash")
+	r2.waitPanel()
 	r2.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r2.waitOutput("Reason for refusing")
 	r2.type_("not now\r")
 	// An ended call's row hides its output, the refusal text with it;
 	// the policy's verdict stays on the row.
@@ -288,7 +307,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	m := &steps{parent: [][2]string{{"bash", `{"command":"cat .ENV"}`}}}
-	os.Setenv("DEX_TEST", "1")
+	os.Setenv("DAX_TEST", "1")
 	r := startTUI(t, m, config.Rules{}, func(o *agent.Options) {
 		os.WriteFile(filepath.Join(o.Dir, ".ENV"), []byte("SECRET_TOKEN=upper\n"), 0o644)
 	})
@@ -296,8 +315,9 @@ func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	r.waitOutput("cat .ENV")
 	// The question says what is being asked about, from the read rule.
 	r.waitOutput("reads .ENV")
+	r.waitPanel()
 	r.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r.waitOutput("Reason for refusing")
 	r.type_("\r")
 	time.Sleep(300 * time.Millisecond)
 	if strings.Contains(r.out.String(), "SECRET_TOKEN=upper") {
@@ -317,8 +337,9 @@ func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
 	})
 	r.type_("go\r")
 	r.waitOutput("core.fsmonitor")
+	r.waitPanel()
 	r.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r.waitOutput("Reason for refusing")
 	r.type_("\r")
 	r.quit()
 }
@@ -355,12 +376,12 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	}
 }
 
-func TestANoteDexMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
+func TestANoteDaxMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
 	r := startTUI(t, &steps{}, config.Rules{}, func(o *agent.Options) {
 		o.Compact = 1
 	})
 	r.quit()
-	// Nothing was written to the terminal during the run through dex's
+	// Nothing was written to the terminal during the run through dax's
 	// own Log; what was noted is printed once the client lets go.
 	if strings.Contains(r.out.String(), "compacted") {
 		t.Error("a log line reached the screen")
@@ -374,7 +395,7 @@ func gitIn(dir string, args ...string) error {
 	return cmd.Run()
 }
 
-// A panic in the client does not lose what dex noted, nor the session's
+// A panic in the client does not lose what dax noted, nor the session's
 // ID, and the panic goes on.
 func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
 	var out syncBuf

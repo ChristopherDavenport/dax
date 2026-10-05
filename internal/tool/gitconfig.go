@@ -17,7 +17,7 @@ import (
 // will run when a read-only command is: a clean or smudge filter, a
 // textconv or external diff, an askpass or editor, a proxy command, an
 // upload-pack or receive-pack, a credential helper, a merge driver, a
-// pack-objects hook, a pager for one command. The keys dex switches
+// pack-objects hook, a pager for one command. The keys dax switches
 // off itself, in GitEnv, are not here: core.fsmonitor, core.pager,
 // core.sshCommand, core.hooksPath and the gpg programs.
 var execKeys = regexp.MustCompile(`(?i)^(` +

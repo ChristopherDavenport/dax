@@ -12,15 +12,15 @@ import (
 	childagent "github.com/ChristopherDavenport/agentturn/tools/agent"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/prompt"
-	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/ChristopherDavenport/dax/internal/prompt"
+	"github.com/ChristopherDavenport/dax/internal/tool"
 )
 
-// taskPreamble is what a task sub-agent is told on top of dex's own
+// taskPreamble is what a task sub-agent is told on top of dax's own
 // prompt and the project's AGENTS.md. It is the same for a fresh task
 // and a fork, so their instructions do not differ; what a fork has
 // more of is in its messages.
-const taskPreamble = "You are a sub-agent of dex. The main agent gave you one task, in the last message. Carry it out " +
+const taskPreamble = "You are a sub-agent of dax. The main agent gave you one task, in the last message. Carry it out " +
 	"with the tools, then end with a short report the main agent can act on: what you changed (files and what in " +
 	"them), what you ran and its result, and anything left undone or uncertain. Other sub-agents may be working in " +
 	"the same project at the same time; change only the files your task is about."
@@ -58,7 +58,7 @@ type taskArgs struct {
 // cannot be replayed and the same model's were sent to the main agent.
 //
 // The instructions are fixed in the configuration, so the child
-// session records what the child is told: the preamble, dex's prompt
+// session records what the child is told: the preamble, dax's prompt
 // with the user's instructions, and agentsText, the AGENTS.md chain as
 // the kit renders it for the main agent. Skills and memory are left
 // out: the sub-agent has neither tool.

@@ -6,10 +6,10 @@ GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
 	release-guard release clean
 
 build:
-	$(GO) build -o dex ./cmd/dex
+	$(GO) build -o dax ./cmd/dax
 
 install:
-	$(GO) install ./cmd/dex
+	$(GO) install ./cmd/dax
 
 # Race detector on, as CI runs it.
 test:
@@ -77,5 +77,5 @@ release:
 	git push origin --atomic HEAD $(VERSION)
 
 clean:
-	rm -f dex
+	rm -f dax
 	rm -rf .cache

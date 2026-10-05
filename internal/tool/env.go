@@ -18,7 +18,7 @@ var secretSuffixes = []string{
 // names.
 var secretNames = set("PASSWORD", "TOKEN", "API_KEY", "SECRET_KEY", "SECRET", "KEY", "AUTH",
 	"DATABASE_URL", "SSH_AUTH_SOCK", "PGPASSWORD", "MYSQL_PWD",
-	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "DEX_API_KEY",
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "DAX_API_KEY",
 	"AWS_SESSION_TOKEN", "NPM_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
 
 // secretWords scrub a name that holds one anywhere in it.
@@ -28,7 +28,7 @@ var secretWords = []string{"PASSWORD", "SECRET"}
 // are passed through, though some end the way a credential does: a
 // program that needs its file needs the variable, and the file is as
 // readable to the model through bash as it was. They are not scrubbed;
-// to keep one from a command, unset it before starting dex.
+// to keep one from a command, unset it before starting dax.
 var pathVars = set("GOOGLE_APPLICATION_CREDENTIALS", "KUBECONFIG", "DOCKER_CONFIG", "NETRC",
 	"AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "CLOUDSDK_CONFIG",
 	"SSH_ASKPASS", "GIT_ASKPASS", "XDG_RUNTIME_DIR", "PGPASSFILE", "PGSERVICEFILE")

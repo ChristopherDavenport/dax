@@ -1,16 +1,22 @@
 # Changelog
 
-All user-visible changes to dex. The format follows
+All user-visible changes to dax. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: the project is named dax. The module is
+  `github.com/ChristopherDavenport/dax`, the binary `dax`
+  (`go install github.com/ChristopherDavenport/dax/cmd/dax@latest`), and
+  its state moves with it: `~/.dax` (AGENTS.md, skills, memory,
+  sessions), `~/.config/dax` (config.json, prices.json, instructions)
+  and a project's `.dax/`. The old paths are not read; move them once.
 - Added: the MIT license.
 - Changed: CI runs on pushes to main and on pull requests. agentconsole
-  is public, so a runner fetches it without the `DEX_DEPS_TOKEN` secret,
-  and the workflow no longer sets `GOPRIVATE`.
+  is public, so a runner fetches it without a token, and the workflow no
+  longer sets `GOPRIVATE`.
 - Added: a running `bash` command reports its output as progress while
   it goes — the terminal client shows the lines under the call's row,
   and the REPL prints them as they arrive — instead of everything
@@ -77,7 +83,7 @@ versions may break flags and the config file.
   in the child session; the main agent's reasoning items are left out.
 - Dependencies: agentturn and agentturn/session v0.0.17, up from
   v0.0.16, for `tools/agent.WithCallConfig`.
-- Fixed: the session record said a request asked for the effort dex
+- Fixed: the session record said a request asked for the effort dax
   configured when the model was sent the fitted one, so the recorded
   request hashes were of requests never sent; `-verify` could not see it,
   since it checks the record against itself. The effort is now fitted
@@ -89,7 +95,7 @@ versions may break flags and the config file.
   policy allowed.
 - Added: the `task` sub-agent. The main agent starts it for a
   self-contained coding task; it runs on the sub-agent model with the file
-  tools and bash under the same policy, sees dex's prompt, your
+  tools and bash under the same policy, sees dax's prompt, your
   instructions and AGENTS.md, and reports back. Calls in one turn run in
   parallel. Starting one is on the built-in allow list.
 - Changed: the sub-agents are offered by default; `-agents=false` or
@@ -110,7 +116,7 @@ versions may break flags and the config file.
   `-provider openrouter` asked OpenRouter for the Ollama model. They now
   belong to the provider in force where they were set, and a switch
   takes the new provider's defaults.
-- Added: dex asks the vendor what the model takes (Anthropic's and
+- Added: dax asks the vendor what the model takes (Anthropic's and
   Gemini's model endpoints, OpenRouter's catalogue, Ollama's
   `/api/show`), shows it under the banner, and fits each request's
   reasoning effort to it, saying once when it changes one.
@@ -132,7 +138,7 @@ versions may break flags and the config file.
   name does not look like a credential's, unless `pass_env` names it.
   `OPENROUTER_API_KEY` joins the named credentials.
 
-- Added: dex, with the siblings at agentkit v0.0.7, agentturn and
+- Added: dax, with the siblings at agentkit v0.0.7, agentturn and
   agentturn/session v0.0.16, agentsession v0.0.21, agenttool v0.0.15,
   openresponses and its anthropic and gemini providers v0.0.14,
   agentpolicy v0.0.11, agentskill v0.0.11, agentmemory v0.0.10 and
@@ -144,8 +150,8 @@ versions may break flags and the config file.
 - Added: providers, `-provider ollama|openai|anthropic|gemini`, `-model`
   and `-base-url`, with keys from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
   and `GEMINI_API_KEY`. Ollama stays the default.
-- Added: a config file, `~/.config/dex/config.json`, and a per-project
-  `.dex/config.json`; `-config` names another user file.
+- Added: a config file, `~/.config/dax/config.json`, and a per-project
+  `.dax/config.json`; `-config` names another user file.
 - Added: a default policy that is always on: the read-only tools and a
   few safe commands run, writes and every other command ask. `bash` is
   decided per subcommand. `-no-policy` turns it off.
@@ -162,7 +168,7 @@ versions may break flags and the config file.
   memory_dir, mcp_servers or pass_env, nor add allow rules or carve-outs.
 - Security: path rules match the normalised path; glob, grep and ls are
   matched on where they search.
-- Security: AGENTS.md files and `.dex/skills` that link out of the workspace
+- Security: AGENTS.md files and `.dax/skills` that link out of the workspace
   are not read; reported as omitted.
 - Security: bash commands and MCP servers start without credentials in their
   environment (`pass_env` names exceptions); `max_read_bytes` bounds `read`
@@ -219,18 +225,18 @@ versions may break flags and the config file.
 - Fixed: the terminal client is the default only with a terminal at both ends
   (a real isatty, so /dev/null is not one) and a session store; `-front tui`
   without them fails before a store is opened or a banner printed; the
-  pre-client pause needs both ends a terminal; dex's buffered notes and the
+  pre-client pause needs both ends a terminal; dax's buffered notes and the
   session ID are flushed however the client ends, and warnings held back for
   the screen are shown before an error opening the session.
 - Dependencies: agentconsole v0.0.2. In the terminal client, Ctrl-O and
   Ctrl-R expand or collapse the selected row alone (every row with none
   selected), a click selects a row and a second click expands it, bars
   frame the input line, and Ctrl-/ (or F1) lists the keys.
-- Changed: CI runs on `workflow_dispatch` only until a `DEX_DEPS_TOKEN`
+- Changed: CI runs on `workflow_dispatch` only until a `DAX_DEPS_TOKEN`
   secret exists (agentconsole is private).
 - Changed: `-confirm` is gone, since the policy is always on; `-key` and
-  `DEX_API_KEY` are gone, since a key is read from the provider's own
+  `DAX_API_KEY` are gone, since a key is read from the provider's own
   variable; `-base` is now `-base-url`; the default `-model` follows the
   provider.
-- Changed: the front is chosen in `cmd/dex/front.go`, the place a
+- Changed: the front is chosen in `cmd/dax/front.go`, the place a
   terminal UI plugs in; `-front` names it, and only `repl` exists.

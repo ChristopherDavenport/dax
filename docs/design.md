@@ -1,19 +1,19 @@
 # Design
 
-dex is a coding agent built as one session that owns the conversation's
+dax is a coding agent built as one session that owns the conversation's
 state, a loop that emits fine-grained events, and fronts that are thin
 subscribers. There is no runtime extension system. What the model can
 do is a fixed set of built-in tools plus MCP servers the user
 configures.
 
-Most of the machinery is not in this repository. dex is the product that
+Most of the machinery is not in this repository. dax is the product that
 assembles sibling libraries, each independently versioned, and keeps
 only what is specific to a coding agent. This document says what that is
 and the rules the assembly keeps.
 
 ## Who owns what
 
-| Concern | Owner | dex's part |
+| Concern | Owner | dax's part |
 |---|---|---|
 | Wire types, the provider client | `openresponses` and its `providers/anthropic`, `providers/gemini` | `internal/provider` picks one from the config |
 | The agent loop, events, steering, follow-ups, retry | `agentturn` | `internal/agent` configures and drives it |
@@ -22,8 +22,8 @@ and the rules the assembly keeps.
 | Allow, ask, deny | `agentpolicy` | `internal/policy`: the default rules, the bash splitter's use |
 | The session record | `agentsession` | the store, `-list`, `-verify`, `-resume`, `-gc` |
 | AGENTS.md, skills, memory | `agentsmd`, `agentskill`, `agentmemory` | directories and budgets |
-| Settings | dex | `internal/config` |
-| Presentation | dex (REPL) | `cmd/dex/front.go`, `internal/render` |
+| Settings | dax | `internal/config` |
+| Presentation | dax (REPL) | `cmd/dax/front.go`, `internal/render` |
 
 ## Rules that hold
 
@@ -46,8 +46,8 @@ and the rules the assembly keeps.
    policy verdict, the memory manifest, a model switch. `-verify`
    rebuilds every recorded request and checks its hash.
 6. **Unknown kinds decode, they do not fail.** The record is read by
-   newer and older dex alike; the format's own versioning says when a
-   reader is too old, and dex says so on `-resume`.
+   newer and older dax alike; the format's own versioning says when a
+   reader is too old, and dax says so on `-resume`.
 7. **`context.Context` is the only cancellation mechanism.** `Abort`
    cancels the run's context; a call cut off in flight is answered on the
    next prompt as having possibly run.
@@ -60,7 +60,7 @@ and the rules the assembly keeps.
 A turn is one assistant message plus its tool calls and their results.
 Calls in a batch run concurrently except a sequential tool, and `bash`
 is sequential, so a command never races a concurrent edit of the same
-file. That is dex's whole concurrency policy.
+file. That is dax's whole concurrency policy.
 
 After each tool batch the loop polls for steering messages and, when the
 model returns with no tool calls, for follow-ups. A line typed in the REPL
@@ -75,11 +75,11 @@ run; it never reached its tool; it was denied.
 
 ## The prompt
 
-dex's part of the system prompt is a role line, a nudge toward glob, grep
+dax's part of the system prompt is a role line, a nudge toward glob, grep
 and ls over shell commands, the user's `instructions_file`, and the
 working directory. `agentkit` renders and joins the rest in a fixed
 order: the skill catalogue, the memory block, then the AGENTS.md chain
-(`~/.dex/AGENTS.md`, then every `AGENTS.md` from `/` down to the working
+(`~/.dax/AGENTS.md`, then every `AGENTS.md` from `/` down to the working
 directory, nearest last). What a layer left out, a file over the budget
 or a skill that would not load, is printed at start as `omitted:`.
 
@@ -121,7 +121,7 @@ be. This is a splitter, not a shell parser, and it errs toward asking.
 ## Security model
 
 The model is untrusted input to a machine that can run commands, and so
-is the repository it works in. dex's defences are layered and none is a
+is the repository it works in. dax's defences are layered and none is a
 sandbox:
 
 1. Ask by default; auto-allow only what is checked, as a safe subset
@@ -148,7 +148,7 @@ unconfined, prompt injection can still ask, the user's own allow rules,
 ## Settings
 
 Three layers, each overriding the one below: the user's
-`~/.config/dex/config.json`, the project's `.dex/config.json`, the
+`~/.config/dax/config.json`, the project's `.dax/config.json`, the
 flags. The files are strict JSON: an unknown field is an error naming
 the file. A project file comes from a repository, so it may only tighten
 the policy: it may not set the provider, model, endpoint, instructions,
@@ -157,7 +157,7 @@ skills, memory or MCP servers. See the README for the schema.
 ## Fronts
 
 A front implements `Hooks()` (how a question reaches the user) and
-`Run(ctx, session)`. `cmd/dex/front.go` is where one is chosen. Today
+`Run(ctx, session)`. `cmd/dax/front.go` is where one is chosen. Today
 there is the REPL and print (`-p`). A terminal UI is a third front that
 subscribes to the same events and answers the same two hooks.
 

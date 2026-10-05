@@ -19,7 +19,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"google.golang.org/genai"
 
-	"github.com/ChristopherDavenport/dex/internal/modelinfo"
+	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
 	"github.com/ChristopherDavenport/openresponses/providers/gemini"
@@ -156,7 +156,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 	var key string
 	if env := m.KeyEnv; env != "" {
 		if key = strings.TrimSpace(getenv(env)); key == "" {
-			return m, fmt.Errorf("%s: %w: set %s in the environment (dex does not read keys from its config files)", spec.Provider, ErrNoKey, env)
+			return m, fmt.Errorf("%s: %w: set %s in the environment (dax does not read keys from its config files)", spec.Provider, ErrNoKey, env)
 		}
 	}
 	switch spec.Provider {

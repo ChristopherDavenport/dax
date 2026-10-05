@@ -260,12 +260,12 @@ func hostileLine(r *rand.Rand) string {
 }
 
 // TestDifferentialFuzz generates lines from a hostile alphabet and runs
-// each one the analyzer auto-allows through real bash. DEX_FUZZ_LINES
+// each one the analyzer auto-allows through real bash. DAX_FUZZ_LINES
 // sets how many lines (default 3000).
 func TestDifferentialFuzz(t *testing.T) {
 	e := newDiffEnv(t)
 	lines := 3000
-	if s := os.Getenv("DEX_FUZZ_LINES"); s != "" {
+	if s := os.Getenv("DAX_FUZZ_LINES"); s != "" {
 		lines, _ = strconv.Atoi(s)
 	}
 	exercised := 0

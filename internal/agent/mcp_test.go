@@ -18,8 +18,8 @@ import (
 // TestMain lets the test binary be the MCP server the tests start: one
 // tool, leak, that says what its environment holds.
 func TestMain(m *testing.M) {
-	if os.Getenv("DEX_TEST_MCP_SERVER") == "1" {
-		if os.Getenv("DEX_TEST_MCP_NOISE") == "1" {
+	if os.Getenv("DAX_TEST_MCP_SERVER") == "1" {
+		if os.Getenv("DAX_TEST_MCP_NOISE") == "1" {
 			os.Stderr.WriteString("start \x1b[2K\x1b]0;pwned\x07\r\u202eshout\n")
 		}
 		srv := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil)
@@ -59,7 +59,7 @@ func leak(t *testing.T, s *Session, name string) string {
 
 // #14 of the review: /mcp add skipped the mcp__ prefix.
 func TestMCPToolsAreNamedMcpServerTool(t *testing.T) {
-	t.Setenv("DEX_TEST_MCP_SERVER", "1")
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
 	t.Setenv("OPENAI_API_KEY", "sk-leak")
 	t.Setenv("MY_TOKEN", "tok-leak")
 	t.Setenv("PLAIN", "visible")
@@ -140,8 +140,8 @@ func TestAnMCPServersStderrIsCleaned(t *testing.T) {
 	var got syncBuffer
 	stderr = &got
 	defer func() { stderr = os.Stderr }()
-	t.Setenv("DEX_TEST_MCP_SERVER", "1")
-	t.Setenv("DEX_TEST_MCP_NOISE", "1")
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	t.Setenv("DAX_TEST_MCP_NOISE", "1")
 	o := options(t, &echo.Adapter{})
 	o.MCP = []MCPServer{{Name: "noisy", Command: os.Args[0]}}
 	s, err := New(context.Background(), o)
