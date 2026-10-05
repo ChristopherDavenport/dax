@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
 	"github.com/ChristopherDavenport/openresponses/providers/gemini"
@@ -15,8 +18,17 @@ func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+// fakeCredentials stands in for Application Default Credentials, so
+// no test reads the machine's gcloud login.
+func fakeCredentials(context.Context) (*google.Credentials, error) {
+	return &google.Credentials{TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "t"})}, nil
+}
+
 func TestSelection(t *testing.T) {
 	keys := map[string]string{"OPENAI_API_KEY": "sk-secret-1", "ANTHROPIC_API_KEY": "sk-secret-2", "GEMINI_API_KEY": "secret-3", "OPENROUTER_API_KEY": "sk-or-4", "LITELLM_MASTER": "secret-5"}
+	// The vertex project and region are settings, not keys, so the
+	// endpoint may name them.
+	vertexVars := map[string]string{ProjectEnv: "my-project", LocationEnv: "global"}
 	tests := []struct {
 		spec       Spec
 		wantType   string
@@ -34,10 +46,14 @@ func TestSelection(t *testing.T) {
 		{Spec{Provider: "anthropic"}, "anthropic", "claude-sonnet-5-5", "", "ANTHROPIC_API_KEY"},
 		{Spec{Provider: "anthropic", Model: "claude-x"}, "anthropic", "claude-x", "", "ANTHROPIC_API_KEY"},
 		{Spec{Provider: "gemini"}, "gemini", "gemini-2.5-pro", "", "GEMINI_API_KEY"},
+		{Spec{Provider: "vertex"}, "vertex", "claude-sonnet-5-5", "vertex ai my-project/global", ""},
+		{Spec{Provider: "vertex", Model: "claude-opus-5-5"}, "vertex", "claude-opus-5-5", "vertex ai my-project/global", ""},
+		{Spec{Provider: "vertex", Model: "gemini-3.5-flash"}, "vertex", "gemini-3.5-flash", "vertex ai my-project/global", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.spec.Provider+"/"+tc.spec.Model, func(t *testing.T) {
-			tc.spec.Getenv = env(keys)
+			tc.spec.Getenv = func(k string) string { return keys[k] + vertexVars[k] }
+			tc.spec.Credentials = fakeCredentials
 			m, err := New(context.Background(), tc.spec)
 			if err != nil {
 				t.Fatal(err)
@@ -50,6 +66,8 @@ func TestSelection(t *testing.T) {
 				got = "anthropic"
 			case *gemini.Adapter:
 				got = "gemini"
+			case vertexModels:
+				got = "vertex"
 			}
 			if got != tc.wantType {
 				t.Errorf("streamer is %T, want %s", m.Streamer, tc.wantType)
@@ -127,6 +145,63 @@ func TestSettingsErrorsComeBeforeTheKey(t *testing.T) {
 	}
 }
 
+func TestVertexReadsGoogleCloudSettings(t *testing.T) {
+	withProject := func(project string) func(context.Context) (*google.Credentials, error) {
+		return func(ctx context.Context) (*google.Credentials, error) {
+			c, _ := fakeCredentials(ctx)
+			c.ProjectID = project
+			return c, nil
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		vars  map[string]string
+		creds string
+		want  string
+	}{
+		{"both set", map[string]string{ProjectEnv: "p", LocationEnv: "us-east5"}, "adc", "vertex ai p/us-east5"},
+		{"region for location", map[string]string{ProjectEnv: "p", RegionEnv: "europe-west1"}, "", "vertex ai p/europe-west1"},
+		{"location over region", map[string]string{ProjectEnv: "p", LocationEnv: "global", RegionEnv: "us-east5"}, "", "vertex ai p/global"},
+		{"project from credentials", map[string]string{LocationEnv: "global"}, "adc", "vertex ai adc/global"},
+		// Claude Code's own variables are not read.
+		{"not anthropic's", map[string]string{ProjectEnv: "p", LocationEnv: "global", "ANTHROPIC_VERTEX_PROJECT_ID": "other", "CLOUD_ML_REGION": "us"}, "", "vertex ai p/global"},
+	} {
+		m, err := New(context.Background(), Spec{Provider: "vertex", Getenv: env(tc.vars), Credentials: withProject(tc.creds)})
+		if err != nil || m.Endpoint != tc.want || m.KeyEnv != "" {
+			t.Errorf("%s: endpoint %q, key variable %q, err %v; want %q", tc.name, m.Endpoint, m.KeyEnv, err, tc.want)
+		}
+	}
+	if _, err := New(context.Background(), Spec{Provider: "vertex", Getenv: env(map[string]string{LocationEnv: "global"}), Credentials: withProject("")}); err == nil || !strings.Contains(err.Error(), "set "+ProjectEnv) {
+		t.Errorf("no project anywhere: err = %v", err)
+	}
+}
+
+func TestVertexSettingsErrorsComeBeforeCredentials(t *testing.T) {
+	asked := false
+	spy := func(ctx context.Context) (*google.Credentials, error) { asked = true; return fakeCredentials(ctx) }
+	full := map[string]string{ProjectEnv: "p", LocationEnv: "global"}
+	for _, spec := range []Spec{
+		{Provider: "vertex", Getenv: env(map[string]string{ProjectEnv: "p", LocationEnv: " "})},
+		{Provider: "vertex", Getenv: env(full), BaseURL: "https://x"},
+		{Provider: "vertex", Getenv: env(full), KeyEnv: "K"},
+	} {
+		spec.Credentials = spy
+		if _, err := New(context.Background(), spec); err == nil || asked {
+			t.Errorf("%+v: err = %v, credentials looked for: %v", spec, err, asked)
+		}
+	}
+	if _, err := New(context.Background(), Spec{Provider: "vertex", Getenv: env(nil), Credentials: spy}); err == nil || !strings.Contains(err.Error(), LocationEnv) {
+		t.Errorf("no location: err = %v", err)
+	}
+	none := func(context.Context) (*google.Credentials, error) {
+		return nil, errors.New("could not find default credentials")
+	}
+	_, err := New(context.Background(), Spec{Provider: "vertex", Getenv: env(full), Credentials: none})
+	if err == nil || !strings.Contains(err.Error(), "gcloud auth application-default login") || !strings.Contains(err.Error(), "could not find") {
+		t.Errorf("without credentials: err = %v", err)
+	}
+}
+
 func TestErrorsNeverCarryTheKey(t *testing.T) {
 	const secret = "sk-very-secret-value"
 	getenv := env(map[string]string{"ANTHROPIC_API_KEY": secret, "OPENAI_API_KEY": secret, "GEMINI_API_KEY": secret, "OPENROUTER_API_KEY": secret})
@@ -154,7 +229,7 @@ func TestProviderTable(t *testing.T) {
 }
 
 func TestSubagentModel(t *testing.T) {
-	getenv := env(map[string]string{"OPENROUTER_API_KEY": "k", "ANTHROPIC_API_KEY": "k"})
+	getenv := env(map[string]string{"OPENROUTER_API_KEY": "k", "ANTHROPIC_API_KEY": "k", ProjectEnv: "p", LocationEnv: "global"})
 	for _, tc := range []struct {
 		spec Spec
 		want string
@@ -166,10 +241,11 @@ func TestSubagentModel(t *testing.T) {
 		{Spec{Provider: "openrouter", SubagentModel: "x/y"}, "x/y"},
 		// A provider with no default for them runs the main model.
 		{Spec{Provider: "anthropic"}, "claude-sonnet-5-5"},
+		{Spec{Provider: "vertex", Model: "claude-opus-5-5", SubagentModel: "claude-sonnet-5-5"}, "claude-sonnet-5-5"},
 		{Spec{Provider: "ollama", Model: "qwen3:1.7b"}, "qwen3:1.7b"},
 		{Spec{Provider: "ollama", Model: "qwen3:1.7b", SubagentModel: "qwen3:0.6b"}, "qwen3:0.6b"},
 	} {
-		tc.spec.Getenv = getenv
+		tc.spec.Getenv, tc.spec.Credentials = getenv, fakeCredentials
 		m, err := New(context.Background(), tc.spec)
 		if err != nil {
 			t.Fatal(err)

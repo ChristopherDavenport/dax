@@ -64,7 +64,7 @@ func run() error {
 		fmt.Fprintln(fs.Output(), "usage: dax [flags]   (REPL)\n       dax -p \"prompt\" [flags]\n\nflags override ~/.config/dax/config.json and .dax/config.json; see the README.")
 		fs.PrintDefaults()
 	}
-	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic or gemini")
+	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
 	model := fs.String("model", "", "model name; empty takes the provider's default")
 	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
 	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")

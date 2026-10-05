@@ -29,7 +29,7 @@ import (
 )
 
 // Providers are the model providers dax can talk to.
-var Providers = []string{"ollama", "openai", "openrouter", "openresponses", "anthropic", "gemini"}
+var Providers = []string{"ollama", "openai", "openrouter", "openresponses", "anthropic", "gemini", "vertex"}
 
 // Efforts are the reasoning efforts effort may name; none is
 // think false.
@@ -39,7 +39,7 @@ var Efforts = []string{"minimal", "low", "medium", "high", "xhigh"}
 // to the layer below.
 type Config struct {
 	// Provider is ollama (the default), openai, openrouter,
-	// openresponses, anthropic or gemini.
+	// openresponses, anthropic, gemini or vertex.
 	Provider string `json:"provider,omitempty"`
 	// Model is the provider's model name; empty takes the provider's
 	// default.
