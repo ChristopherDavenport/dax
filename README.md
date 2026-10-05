@@ -14,7 +14,7 @@ owns what.
 ## Install
 
 ```sh
-go install github.com/ChristopherDavenport/dex/cmd/dex@latest   # needs GOPRIVATE=github.com/ChristopherDavenport/*
+go install github.com/ChristopherDavenport/dex/cmd/dex@latest
 # or, in a checkout
 make install
 ```
@@ -570,13 +570,13 @@ are read too.
 
 ```sh
 make check    # gofmt, go mod tidy -diff, go vet, staticcheck, govulncheck, go test -race
-
-# CI is manual (workflow_dispatch) until the repository has a DEX_DEPS_TOKEN secret:
-# agentconsole is private, so a runner needs a fine-grained token with read
-# access to it. The gate is `GOWORK=off GOFLAGS=-mod=readonly make check` locally.
 make build    # ./dex
 ```
 
 In this workspace the module is built outside the go.work:
 `GOWORK=off GOFLAGS=-mod=readonly make check`. See [AGENTS.md](AGENTS.md)
 for the layout and release process, and [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+MIT. See `LICENSE`.

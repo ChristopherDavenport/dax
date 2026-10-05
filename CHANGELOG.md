@@ -7,6 +7,10 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: the MIT license.
+- Changed: CI runs on pushes to main and on pull requests. agentconsole
+  is public, so a runner fetches it without the `DEX_DEPS_TOKEN` secret,
+  and the workflow no longer sets `GOPRIVATE`.
 - Added: a running `bash` command reports its output as progress while
   it goes — the terminal client shows the lines under the call's row,
   and the REPL prints them as they arrive — instead of everything
