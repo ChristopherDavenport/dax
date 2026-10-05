@@ -220,7 +220,7 @@ keys somewhere; a repository does not get to make them.)
 | `glob` | paths matching a doublestar pattern (`**/*.go`, `cmd/*/main.go`, `*.{md,txt}`), sorted |
 | `grep` | a regular expression over files: `path`, `include` (a glob), `ignore_case`, `max_results`; prints `path:line:text` |
 | `ls` | one directory, sorted, directories with `/`, files with their size |
-| `bash` | a command in the working directory with a timeout; runs one at a time |
+| `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs |
 
 The file tools are confined to the working directory. A path that is
 absolute outside it, climbs out with `..`, or goes out through a

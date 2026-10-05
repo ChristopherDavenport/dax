@@ -7,6 +7,11 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: a running `bash` command reports its output as progress while
+  it goes — the terminal client shows the lines under the call's row,
+  and the REPL prints them as they arrive — instead of everything
+  appearing when the command ends. The result the model sees is
+  unchanged, and progress is not recorded.
 - Changed: thinking streams as it happens, as assistant text always did.
   Against a server that follows OpenAI's Responses API (OpenRouter among
   them) the reasoning deltas arrive under OpenAI's event names, which
