@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -14,11 +15,18 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 const (
 	defaultBashTimeout = 2 * time.Minute
 	maxBashBytes       = 50 << 10
+	// progressEvery is how often a running command's output is reported
+	// as progress, and progressBytes the most a report holds: what the
+	// command printed since the last one, or its last progressBytes when
+	// it printed more. The final result the model sees is untouched.
+	progressEvery = 250 * time.Millisecond
+	progressBytes = 4096
 )
 
 // BashArgs are the arguments of the bash tool.
@@ -83,10 +91,13 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 
 			// Keep the first maxBashBytes of the output and count the
 			// rest: a cat of a huge file or a runaway command costs
-			// what its first screen does.
+			// what its first screen does. What arrives is reported as
+			// progress as it does, so a front shows the command
+			// running instead of waiting for it to end.
 			out := &capWriter{max: maxBashBytes}
-			cmd.Stdout = out
-			cmd.Stderr = out
+			pw := &progressWriter{ctx: ctx}
+			cmd.Stdout = io.MultiWriter(out, pw)
+			cmd.Stderr = io.MultiWriter(out, pw)
 			runErr := cmd.Run()
 			if in.Stamp != "" {
 				// What an auto-allowed command printed goes to the model
@@ -116,6 +127,43 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 			}
 			return b.String(), nil
 		}, agenttool.WithSequential())
+}
+
+// progressWriter reports a command's output as it arrives: as
+// [agenttool.Progress] the window since the last report, at most one
+// report per progressEvery, so the terminal client shows the command
+// running instead of waiting for it to end. A report reaches the
+// fronts of the run only, never the model or the session record, so it
+// is not redacted where the result of an auto-allowed command is: what
+// is on the user's own screen is what their command printed.
+type progressWriter struct {
+	ctx context.Context
+
+	mu    sync.Mutex
+	since []byte    // the output since the last report, its last progressBytes
+	last  time.Time // when the last report went, zero before the first
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.since = append(w.since, p...)
+	if len(w.since) > progressBytes {
+		w.since = append(w.since[:0], w.since[len(w.since)-progressBytes:]...)
+	}
+	var window string
+	if w.last.IsZero() || time.Since(w.last) >= progressEvery {
+		// Copy: the next write reuses the slice while the report
+		// travels without the lock.
+		window = string(w.since)
+		w.since, w.last = w.since[:0], time.Now()
+	}
+	w.mu.Unlock()
+	if window != "" {
+		agenttool.Progress(w.ctx, agenttool.Result{
+			Output: openresponses.FunctionCallOutputData{Text: window},
+		})
+	}
+	return len(p), nil
 }
 
 // command is what runs a bash call, and in which environment.

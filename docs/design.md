@@ -93,6 +93,12 @@ the name before the file system follows it. `bash` runs in the directory
 but is not confined; a shell reaches whatever the user does, and the
 policy is what stands in front of it.
 
+A running `bash` command reports its output as progress as it arrives,
+the window since the last report, so a front shows the command working
+over the run's events and not only when it ends. The model still sees
+the command's whole output as the result; progress reaches fronts
+alone and is not recorded.
+
 `glob` and `grep` skip `.git`, `node_modules`, `vendor` and a few other
 trees by name. There is no `.gitignore` reader. A path named explicitly
 as the search root is searched even if it is one of those.
