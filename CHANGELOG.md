@@ -12,6 +12,15 @@ versions may break flags and the config file.
   and the REPL prints them as they arrive — instead of everything
   appearing when the command ends. The result the model sees is
   unchanged, and progress is not recorded.
+- Changed: in the terminal client a function call's row is one line
+  while it is collapsed: its arguments as key=value pairs instead of
+  raw JSON, and, once it has ended, a hint of how many lines its output
+  holds instead of the first of them; Ctrl-O or a second click shows
+  the whole call as before. A running call shows the last five lines of
+  its progress, not only the first. The session pane refreshes when a
+  run ends, which it did not always do. This is agentconsole v0.0.6's.
+- Dependencies: agentconsole v0.0.6, up from v0.0.5, for the one-line
+  call rows and the running call's last lines.
 - Changed: thinking streams as it happens, as assistant text always did.
   Against a server that follows OpenAI's Responses API (OpenRouter among
   them) the reasoning deltas arrive under OpenAI's event names, which

@@ -276,7 +276,9 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	r2.type_("n")
 	time.Sleep(100 * time.Millisecond)
 	r2.type_("not now\r")
-	r2.waitOutput("refused")
+	// An ended call's row hides its output, the refusal text with it;
+	// the policy's verdict stays on the row.
+	r2.waitOutput("policy: reject")
 	time.Sleep(200 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(r2.dir, "REFUSED")); err == nil {
 		t.Error("a refused call ran")
