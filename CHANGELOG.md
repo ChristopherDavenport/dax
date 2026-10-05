@@ -17,7 +17,9 @@ versions may break flags and the config file.
   to the terminal's clipboard with OSC 52, over ssh too, as a desktop's
   copy does, and drops the selection so the next Ctrl-C is the abort or
   quit it always was. A click with no drag still selects the row under
-  it; this depends on the next agentconsole release.
+  it. This is agentconsole v0.0.5's.
+- Dependencies: agentconsole v0.0.5, up from v0.0.4, for the drag
+  selection and the ctrl+c copy.
 - Added: `-pricing-file` and the config's `pricing_file` load model
   prices. The terminal client's status line shows a running total of
   token usage and, with a price file, the session's cost, and the
@@ -35,8 +37,7 @@ versions may break flags and the config file.
 - Dependencies: agentconsole v0.0.3, up from v0.0.2, for
   `client.Question` and `native.Backend.Ask`.
 - Dependencies: agentconsole v0.0.4, for `client.Cost`, `console.WithCost`,
-  the wrapping prompt, and the running usage on the status line; this
-  depends on the next agentconsole release.
+  the wrapping prompt, and the running usage on the status line.
 - Dependencies: agenteval v0.0.10, for `price` and its JSON table.
 - Dependencies: agentturn and agentturn/session v0.0.18, up from
   v0.0.17: a forked task's progress shows the sub-agent's own messages,
