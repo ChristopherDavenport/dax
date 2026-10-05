@@ -3,7 +3,7 @@ STATICCHECK ?= $(GO) run honnef.co/go/tools/cmd/staticcheck@latest
 GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
 
 .PHONY: build install test vet fmt tidy tidy-check lint vuln check \
-	release-guard release clean
+	guard-test release-guard release clean
 
 build:
 	$(GO) build -o dax ./cmd/dax
@@ -37,9 +37,13 @@ vuln:
 
 # Everything CI runs. The go.work repositories in this workspace need
 # GOWORK=off GOFLAGS=-mod=readonly in front of it.
-check: fmt tidy-check vet lint vuln test
+check: fmt tidy-check vet lint vuln test guard-test
 
 MODULE := $(shell $(GO) list -m)
+
+# The release guard's own tests, against throwaway repositories.
+guard-test:
+	@scripts/release-guard-test.sh
 
 # Checks one tag is safe to push, before it is pushed. A pushed tag is
 # permanent: the proxy and the checksum database keep the version

@@ -6,7 +6,9 @@
 #   scripts/release-guard.sh v0.0.1
 #
 # Exits non-zero, with the reason, if the tree is dirty, the tag already
-# exists, or the version does not sort above the current release.
+# exists, or the version does not sort above the current release. With no
+# plain vX.Y.Z tag is published yet, any vX.Y.Z of the module's major
+# version is the first release. Prerelease versions are refused.
 #
 # Run it before the tag is written; make release does. Nothing is public
 # until the push, so a refusal costs a git reset --hard HEAD~1 and a git
@@ -80,14 +82,40 @@ ok "tag is new"
 # A version that sorts below one already published is the one mistake
 # this cannot be undone from: the proxy serves both forever, and nobody
 # can supersede the older content.
-LATEST="$(matching '^v' | newest)"
-[ -n "$LATEST" ] || die "no tag found; cannot establish the version floor"
+# The remote listing above succeeded, so an empty floor means nothing has
+# been published: this is the first release, which has nothing to sort
+# above.
+#
+# Only plain vX.Y.Z tags make the floor. sort -V puts v0.0.7-rc1 above
+# v0.0.7 and vnext above every number, so counting them would refuse the
+# release of a version that is not behind anything.
+LATEST="$(matching '^v[0-9]+\.[0-9]+\.[0-9]+$' | newest)"
 
 case "$TAG" in
   v*)
-    [ "$(printf '%s\n%s\n' "$LATEST" "$TAG" | newest)" = "$TAG" ] \
-      || die "$TAG does not sort above the current release $LATEST"
-    ok "$TAG is newer than $LATEST"
+    printf '%s\n' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+      || die "$TAG is not a plain vX.Y.Z version; prereleases and other forms are not released by this guard"
+    # Go's rule: a module whose path has no /vN suffix is v0 or v1; /vN is
+    # vN. A v2.0.0 tag on the unsuffixed path cannot be withdrawn and no
+    # consumer can require it as the module.
+    MODPATH="$(sed -n 's/^module[[:space:]]*//p' go.mod | head -1)"
+    MAJOR="${TAG#v}"; MAJOR="${MAJOR%%.*}"
+    if printf '%s\n' "$MODPATH" | grep -qE '/v[0-9]+$'; then
+      WANT="${MODPATH##*/v}"
+      [ "$MAJOR" = "$WANT" ] \
+        || die "$TAG does not match the module path $MODPATH, whose major version is $WANT"
+    else
+      [ "$MAJOR" = 0 ] || [ "$MAJOR" = 1 ] \
+        || die "$TAG is major version $MAJOR, but the module path $MODPATH has no /v$MAJOR suffix; a v2 or later needs the path to say so (and go.mod changed first)"
+    fi
+    ok "major version $MAJOR matches the module path"
+    if [ -z "$LATEST" ]; then
+      ok "$TAG is the first release"
+    else
+      [ "$(printf '%s\n%s\n' "$LATEST" "$TAG" | newest)" = "$TAG" ] \
+        || die "$TAG does not sort above the current release $LATEST"
+      ok "$TAG is newer than $LATEST"
+    fi
     ;;
 
   */v*)
