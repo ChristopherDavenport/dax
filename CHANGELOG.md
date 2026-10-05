@@ -7,6 +7,13 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: thinking streams as it happens, as assistant text always did.
+  Against a server that follows OpenAI's Responses API (OpenRouter among
+  them) the reasoning deltas arrive under OpenAI's event names, which
+  decoded to nothing, so thinking showed once, whole, at completion.
+- Dependencies: openresponses v0.0.15, up from v0.0.14, which decodes
+  OpenAI's reasoning event names; providers/anthropic and
+  providers/gemini at v0.0.15, the release that requires that root.
 - Added: `-effort` and the config's `effort`, the reasoning effort
   `-think` asks for (`minimal`, `low`, `medium`, `high` or `xhigh`);
   `low`, as before, by default. It is fitted to each model like the

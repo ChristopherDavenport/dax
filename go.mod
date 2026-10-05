@@ -15,9 +15,9 @@ require (
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.15
 	github.com/ChristopherDavenport/agentturn v0.0.18
 	github.com/ChristopherDavenport/agentturn/session v0.0.18
-	github.com/ChristopherDavenport/openresponses v0.0.14
-	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.14
-	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.14
+	github.com/ChristopherDavenport/openresponses v0.0.15
+	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
+	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
 	github.com/anthropics/anthropic-sdk-go v1.74.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/term v0.45.0
