@@ -14,10 +14,10 @@ import (
 // The libraries that read AGENTS.md files and skill directories follow
 // symbolic links, and what they read goes into the system prompt, which
 // goes to the provider. A repository can ship AGENTS.md -> ~/.ssh/id_rsa
-// or .dex/skills -> ~/. So the files that come with the repository are
+// or .dax/skills -> ~/. So the files that come with the repository are
 // screened here, before the libraries see them: one that is a link
 // resolving outside the workspace is left out and reported as omitted.
-// The user's own files (~/.dex/AGENTS.md, ~/.dex/skills and the
+// The user's own files (~/.dax/AGENTS.md, ~/.dax/skills and the
 // skills_dirs of the user's config) are the user's and are not screened.
 
 // within reports whether p, once its links are resolved, is dir or
@@ -32,7 +32,7 @@ func within(dir, p string) bool {
 }
 
 func omission(part, path, reason string) agentkit.Omission {
-	return agentkit.Omission{Part: part, Source: "dex", What: path, Reason: reason}
+	return agentkit.Omission{Part: part, Source: "dax", What: path, Reason: reason}
 }
 
 // agentsFiles lists the AGENTS.md files that apply at dir, farthest
@@ -73,7 +73,7 @@ func agentsFiles(dir string) (files []string, omitted []agentkit.Omission) {
 // directory with one link that leaves is left out whole, since the
 // kit takes directories, and reported.
 func projectSkillsOK(dir string) (ok bool, omitted []agentkit.Omission) {
-	skills := filepath.Join(dir, ".dex", "skills")
+	skills := filepath.Join(dir, ".dax", "skills")
 	if _, err := os.Lstat(skills); err != nil {
 		return true, nil // absent: nothing to offer, nothing to refuse
 	}

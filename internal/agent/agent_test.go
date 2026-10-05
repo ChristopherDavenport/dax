@@ -22,8 +22,8 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/policy"
 )
 
 // forced is the echo model made to call one tool by name, then answer
@@ -112,7 +112,7 @@ func options(t *testing.T, model openresponses.Streamer) Options {
 	return o
 }
 
-// confirmPolicy is dex's shipped policy: reads run, writes and
+// confirmPolicy is dax's shipped policy: reads run, writes and
 // commands ask.
 func confirmPolicy(t *testing.T) *agentpolicy.Policy {
 	t.Helper()
@@ -183,7 +183,7 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 		}
 	}
 	instr := s.Agent.Config().Instructions
-	for _, sub := range []string{"You are dex", "greet", "Short answers.", "Run go test before saying done."} {
+	for _, sub := range []string{"You are dax", "greet", "Short answers.", "Run go test before saying done."} {
 		if !strings.Contains(instr, sub) {
 			t.Errorf("instructions lack %q", sub)
 		}
@@ -303,7 +303,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	// The next message ends the grant, so bash without the skill read
 	// first falls back to the policy's default and asks. (Under an
 	// explicit ask rule on bash, agentkit v0.0.7 refuses with a reason
-	// naming the skill instead; dex leaves bash to the default so that
+	// naming the skill instead; dax leaves bash to the default so that
 	// a user's allow rule can override it.)
 	model.calls = model.calls[1:]
 	if _, err := s.Prompt(ctx, "again"); err != nil {

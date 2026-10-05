@@ -1,4 +1,4 @@
-// Command dex is a coding agent: a REPL, or one prompt with -p, over
+// Command dax is a coding agent: a REPL, or one prompt with -p, over
 // an Open Responses model, with read, write, edit, glob, grep, ls and
 // bash tools under a policy, recording every session.
 package main
@@ -20,38 +20,38 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/modelinfo"
-	"github.com/ChristopherDavenport/dex/internal/policy"
-	"github.com/ChristopherDavenport/dex/internal/provider"
+	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/modelinfo"
+	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/provider"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "dex:", err)
+		fmt.Fprintln(os.Stderr, "dax:", err)
 		if h := hint(err); h != "" {
-			fmt.Fprintln(os.Stderr, "dex:", h)
+			fmt.Fprintln(os.Stderr, "dax:", h)
 		}
 		os.Exit(1)
 	}
 }
 
 // hint says what to do about a store error that names no remedy the
-// user can act on from dex.
+// user can act on from dax.
 func hint(err error) string {
 	var damage cas.LogDamage
 	switch {
 	case errors.Is(err, agentsession.ErrSessionLocked):
-		return "close the other dex holding it"
+		return "close the other dax holding it"
 	case errors.Is(err, cas.ErrMigrationBusy):
-		return "the store must move to per-session logs, and an older dex holds a session; stop every older dex, then start this one again"
+		return "the store must move to per-session logs, and an older dax holds a session; stop every older dax, then start this one again"
 	case errors.Is(err, cas.ErrLayout):
-		return "a newer dex wrote this store; use that one"
+		return "a newer dax wrote this store; use that one"
 	case errors.Is(err, cas.ErrLegacyStore):
-		return "the store predates per-session logs; start a session or run -gc pack once to migrate it (older dex cannot read it after)"
+		return "the store predates per-session logs; start a session or run -gc pack once to migrate it (older dax cannot read it after)"
 	case errors.Is(err, cas.ErrStopped):
-		return "a write to the store failed to reach the disk, so nothing more is written; restart dex and -resume the session"
+		return "a write to the store failed to reach the disk, so nothing more is written; restart dax and -resume the session"
 	case errors.As(err, &damage):
 		return "a session's log is damaged; -repair <id> keeps what still reads"
 	}
@@ -59,9 +59,9 @@ func hint(err error) string {
 }
 
 func run() error {
-	fs := flag.NewFlagSet("dex", flag.ContinueOnError)
+	fs := flag.NewFlagSet("dax", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: dex [flags]   (REPL)\n       dex -p \"prompt\" [flags]\n\nflags override ~/.config/dex/config.json and .dex/config.json; see the README.")
+		fmt.Fprintln(fs.Output(), "usage: dax [flags]   (REPL)\n       dax -p \"prompt\" [flags]\n\nflags override ~/.config/dax/config.json and .dax/config.json; see the README.")
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic or gemini")
@@ -69,7 +69,7 @@ func run() error {
 	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
 	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
-	cfgPath := fs.String("config", "", "user config file; default ~/.config/dex/config.json")
+	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
@@ -81,7 +81,7 @@ func run() error {
 	verify := fs.String("verify", "", "verify the request hashes of the session with this ID and exit")
 	project := fs.String("project", "", "write the session with this ID as a JSONL file into -out and exit")
 	out := fs.String("out", ".", "directory -project writes into")
-	importFile := fs.String("import", "", "read a JSONL session file an earlier dex wrote into the store and exit")
+	importFile := fs.String("import", "", "read a JSONL session file an earlier dax wrote into the store and exit")
 	repair := fs.String("repair", "", "rewrite the damaged log of the session with this ID from what still reads, and exit")
 	gc := fs.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
@@ -89,10 +89,10 @@ func run() error {
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
 	agents := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
-	agentsMD := fs.Bool("agents-md", true, "put ~/.dex/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
-	skills := fs.Bool("skills", true, "offer the skills in .dex/skills, ~/.dex/skills and the config's skills_dirs through the skill tool")
+	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
+	skills := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
-	memory := fs.String("memory", "", "memory store directory (default ~/.dex/memory, or the config's); off or empty disables memory")
+	memory := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

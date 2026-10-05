@@ -38,7 +38,7 @@ func repoWithFiles(t *testing.T) string {
 	return dir
 }
 
-// The lines dex runs without asking do what bash would have done with
+// The lines dax runs without asking do what bash would have done with
 // them: the plan it parsed is the plan it renders.
 func TestAutoAllowedLinesRunAsBashWouldRunThem(t *testing.T) {
 	dir := repoWithFiles(t)

@@ -27,7 +27,7 @@ func tree(t *testing.T, files map[string]string) string {
 var project = map[string]string{
 	"main.go":              "package main\n\nfunc main() {}\n",
 	"README.md":            "# hi\nTODO: docs\n",
-	"cmd/dex/main.go":      "package main\n// TODO: flags\n",
+	"cmd/dax/main.go":      "package main\n// TODO: flags\n",
 	"internal/a/a.go":      "package a\n",
 	"internal/a/a_test.go": "package a\n// todo lower\n",
 	"internal/b/deep/b.go": "package b\n",
@@ -45,11 +45,11 @@ func TestGlob(t *testing.T) {
 		args string
 		want string
 	}{
-		{"recursive", `{"pattern":"**/*.go"}`, "cmd/dex/main.go\ninternal/a/a.go\ninternal/a/a_test.go\ninternal/b/deep/b.go\nmain.go"},
+		{"recursive", `{"pattern":"**/*.go"}`, "cmd/dax/main.go\ninternal/a/a.go\ninternal/a/a_test.go\ninternal/b/deep/b.go\nmain.go"},
 		{"top level only", `{"pattern":"*.go"}`, "main.go"},
 		{"zero dirs for **", `{"pattern":"internal/**/a.go"}`, "internal/a/a.go"},
 		{"braces", `{"pattern":"**/*.{md,js}"}`, "README.md"},
-		{"single segment star", `{"pattern":"cmd/*/main.go"}`, "cmd/dex/main.go"},
+		{"single segment star", `{"pattern":"cmd/*/main.go"}`, "cmd/dax/main.go"},
 		{"path is the base", `{"pattern":"**/*.go","path":"internal"}`, "internal/a/a.go\ninternal/a/a_test.go\ninternal/b/deep/b.go"},
 		{"pattern relative to path", `{"pattern":"*.go","path":"internal/a"}`, "internal/a/a.go\ninternal/a/a_test.go"},
 		{"vendored dir named explicitly", `{"pattern":"**/*.go","path":"vendor"}`, "vendor/x/x.go"},
@@ -101,12 +101,12 @@ func TestGrep(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{"line numbers and paths", `{"pattern":"TODO"}`, []string{"README.md:2:TODO: docs", "cmd/dex/main.go:2:// TODO: flags"}, []string{"vendor", "node_modules", ".git", "bin/blob", "lower"}},
+		{"line numbers and paths", `{"pattern":"TODO"}`, []string{"README.md:2:TODO: docs", "cmd/dax/main.go:2:// TODO: flags"}, []string{"vendor", "node_modules", ".git", "bin/blob", "lower"}},
 		{"ignore case", `{"pattern":"todo","ignore_case":true}`, []string{"README.md:2:", "internal/a/a_test.go:2:// todo lower"}, nil},
 		{"case sensitive by default", `{"pattern":"todo"}`, []string{"internal/a/a_test.go:2:// todo lower"}, []string{"README.md"}},
 		{"include by name", `{"pattern":"package","include":"*_test.go"}`, []string{"internal/a/a_test.go:1:package a"}, []string{"main.go"}},
 		{"include by path glob", `{"pattern":"package","include":"internal/**/*.go"}`, []string{"internal/b/deep/b.go:1:package b"}, []string{"cmd/"}},
-		{"path directory", `{"pattern":"package","path":"cmd"}`, []string{"cmd/dex/main.go:1:package main"}, []string{"internal"}},
+		{"path directory", `{"pattern":"package","path":"cmd"}`, []string{"cmd/dax/main.go:1:package main"}, []string{"internal"}},
 		{"path file", `{"pattern":"main","path":"main.go"}`, []string{"main.go:1:package main", "main.go:3:func main"}, nil},
 		{"regexp", `{"pattern":"^func \\w+\\(\\)"}`, []string{"main.go:3:func main() {}"}, nil},
 		{"max results", `{"pattern":"package","max_results":2}`, []string{"... (stopped at 2 matches"}, nil},

@@ -10,7 +10,7 @@ import (
 
 // wd is a real directory: deciding a git command reads its config.
 var wd = func() string {
-	d, err := os.MkdirTemp("", "dex-tool-")
+	d, err := os.MkdirTemp("", "dax-tool-")
 	if err != nil {
 		panic(err)
 	}
@@ -139,7 +139,7 @@ func TestSafeWords(t *testing.T) {
 		"git diff HEAD~1 HEAD^":            {"git", "diff", "HEAD~1", "HEAD^"},
 		`git log --grep='a #1 b'`:          {"git", "log", "--grep=a #1 b"},
 		`git log --format="%h %s"`:         {"git", "log", "--format=%h %s"},
-		"git show main:cmd/dex/main.go":    {"git", "show", "main:cmd/dex/main.go"},
+		"git show main:cmd/dax/main.go":    {"git", "show", "main:cmd/dax/main.go"},
 		"ls\t-la  ./internal":              {"ls", "-la", "./internal"},
 		`ls "my dir"'/x'`:                  {"ls", "my dir/x"},
 		"git diff --stat=80,40 a..b c...d": {"git", "diff", "--stat=80,40", "a..b", "c...d"},

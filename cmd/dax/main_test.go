@@ -9,8 +9,8 @@ import (
 
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/provider"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/provider"
 )
 
 func write(t *testing.T, path, content string) {
@@ -37,7 +37,7 @@ func str(s string) *string { return &s }
 func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	h := home(t)
 	proj := t.TempDir()
-	write(t, filepath.Join(h, ".config", "dex", "config.json"), `{"provider":"anthropic","model":"from-user","think":false}`)
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"anthropic","model":"from-user","think":false}`)
 
 	s, err := loadSettings(proj, "", config.Flags{})
 	if err != nil {
@@ -48,11 +48,11 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	}
 
 	// A project file tightens the policy and cannot set the model.
-	write(t, filepath.Join(proj, ".dex", "config.json"), `{"model":"from-project"}`)
+	write(t, filepath.Join(proj, ".dax", "config.json"), `{"model":"from-project"}`)
 	if _, err = loadSettings(proj, "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
 		t.Fatalf("project model: %v", err)
 	}
-	write(t, filepath.Join(proj, ".dex", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
+	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
 	if s, err = loadSettings(proj, "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("project over user: %+v, %v", s, err)
 	}
@@ -61,7 +61,7 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	if err != nil || s.Model != "from-flag" || s.Provider != "openai" {
 		t.Fatalf("flags over files: %+v, %v", s, err)
 	}
-	if s.MemoryDir != filepath.Join(h, ".dex", "memory") {
+	if s.MemoryDir != filepath.Join(h, ".dax", "memory") {
 		t.Errorf("default memory dir = %q", s.MemoryDir)
 	}
 
@@ -78,7 +78,7 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 
 func TestABrokenConfigFileIsAClearError(t *testing.T) {
 	h := home(t)
-	path := filepath.Join(h, ".config", "dex", "config.json")
+	path := filepath.Join(h, ".config", "dax", "config.json")
 	write(t, path, `{"provider":"ollama","modle":"x"}`)
 	_, err := loadSettings(t.TempDir(), "", config.Flags{})
 	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "modle") {

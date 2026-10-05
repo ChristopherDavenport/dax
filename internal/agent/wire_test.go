@@ -15,13 +15,13 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/modelinfo"
-	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/modelinfo"
+	"github.com/ChristopherDavenport/dax/internal/policy"
 )
 
 // wire keeps the hash of every request as it reached the model, below
-// every layer dex puts between the loop and the provider.
+// every layer dax puts between the loop and the provider.
 type wire struct {
 	next    openresponses.Streamer
 	mu      sync.Mutex
@@ -177,7 +177,7 @@ func TestTheRecordIsWhatWasSent(t *testing.T) {
 			// with the brief alone.
 			var first *openresponses.Request
 			for i := range w.reqs {
-				if strings.Contains(w.reqs[i].Instructions, "You are a sub-agent of dex") {
+				if strings.Contains(w.reqs[i].Instructions, "You are a sub-agent of dax") {
 					first = &w.reqs[i]
 					break
 				}
@@ -349,7 +349,7 @@ type switchable struct {
 
 func (m *switchable) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	m.mu.Lock()
-	sub := strings.Contains(req.Instructions, "You are a sub-agent of dex") || strings.Contains(req.Instructions, "read-only explorer")
+	sub := strings.Contains(req.Instructions, "You are a sub-agent of dax") || strings.Contains(req.Instructions, "read-only explorer")
 	if sub {
 		m.child = append(m.child, req)
 	}

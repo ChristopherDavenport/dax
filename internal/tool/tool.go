@@ -1,4 +1,4 @@
-// Package tool holds dex's built-in tools: read, write, edit, glob, grep, ls and bash.
+// Package tool holds dax's built-in tools: read, write, edit, glob, grep, ls and bash.
 // They are written against the agenttool contract, so the same values
 // run under agentturn, under any other Open Responses loop, or behind
 // an MCP server.

@@ -1,6 +1,6 @@
-// Package config reads dex's settings. There are three layers, each
+// Package config reads dax's settings. There are three layers, each
 // overriding the one before: the user's file
-// (~/.config/dex/config.json), the project's (.dex/config.json in the
+// (~/.config/dax/config.json), the project's (.dax/config.json in the
 // working directory) and the command line. The files are JSON, read
 // with the standard library, and strict: an unknown field is an error
 // naming the file, so a typo is not a silently ignored setting.
@@ -28,7 +28,7 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 )
 
-// Providers are the model providers dex can talk to.
+// Providers are the model providers dax can talk to.
 var Providers = []string{"ollama", "openai", "openrouter", "openresponses", "anthropic", "gemini"}
 
 // Efforts are the reasoning efforts effort may name; none is
@@ -62,10 +62,10 @@ type Config struct {
 	// Agents offers the explore and task sub-agents; default true.
 	Agents *bool `json:"agents,omitempty"`
 	// InstructionsFile is a file of your own instructions, added to
-	// the system prompt after dex's and before the AGENTS.md chain.
+	// the system prompt after dax's and before the AGENTS.md chain.
 	InstructionsFile string `json:"instructions_file,omitempty"`
 	// SkillsDirs are further directories of skills, searched after
-	// .dex/skills and ~/.dex/skills.
+	// .dax/skills and ~/.dax/skills.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
@@ -96,7 +96,7 @@ type MCPServer struct {
 // Policy holds the rules of the policy layer. A rule is a tool name,
 // or a name with a specifier: "read", "bash(go test:*)", "write(docs/**)".
 type Policy struct {
-	// Builtin keeps dex's own allow list: the read-only tools and a
+	// Builtin keeps dax's own allow list: the read-only tools and a
 	// few safe commands. Default true.
 	Builtin *bool `json:"builtin,omitempty"`
 	// Fallback is what a call no rule names does: ask (the default),
@@ -107,21 +107,21 @@ type Policy struct {
 	Deny     []string `json:"deny,omitempty"`
 }
 
-// Path is where the user's file is: $XDG_CONFIG_HOME/dex/config.json,
-// else ~/.config/dex/config.json.
+// Path is where the user's file is: $XDG_CONFIG_HOME/dax/config.json,
+// else ~/.config/dax/config.json.
 func Path() string {
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "dex", "config.json")
+		return filepath.Join(x, "dax", "config.json")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "dex", "config.json")
+		return filepath.Join(".config", "dax", "config.json")
 	}
-	return filepath.Join(home, ".config", "dex", "config.json")
+	return filepath.Join(home, ".config", "dax", "config.json")
 }
 
 // ProjectPath is the project's file for a working directory.
-func ProjectPath(dir string) string { return filepath.Join(dir, ".dex", "config.json") }
+func ProjectPath(dir string) string { return filepath.Join(dir, ".dax", "config.json") }
 
 // Layer is a Config and where it came from.
 type Layer struct {
@@ -274,7 +274,7 @@ func checkBaseURL(s string) error {
 func (l *Layer) resolvePaths() {
 	base := filepath.Dir(l.Path)
 	if l.Project {
-		// .dex/config.json: relative paths are the project's.
+		// .dax/config.json: relative paths are the project's.
 		base = filepath.Dir(base)
 	}
 	fix := func(p string) string {
@@ -312,7 +312,7 @@ type Flags struct {
 	NoPolicy bool
 }
 
-// Settings is what dex runs with: the layers folded, the flags laid
+// Settings is what dax runs with: the layers folded, the flags laid
 // over them, validated as a whole.
 type Settings struct {
 	Provider         string

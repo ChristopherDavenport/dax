@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Analyzer decides which command lines dex runs without asking. It is
+// Analyzer decides which command lines dax runs without asking. It is
 // an allow-list: a command line is auto-allowed only if it parses in
 // the safe subset (parsePlan) and every stage is one of the commands
 // below, run with arguments that can be shown to be read-only and to
@@ -904,7 +904,7 @@ func ReadOnlyArgs(words []string, dir string) bool {
 	return !governed || ok
 }
 
-// Allowlisted reports whether a single simple command is one dex runs
+// Allowlisted reports whether a single simple command is one dax runs
 // without asking when ReadOnlyArgs agrees, as opposed to one the user's
 // rules decide.
 func Allowlisted(words []string) bool { return autoFirst(words) }

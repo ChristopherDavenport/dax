@@ -18,9 +18,9 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/policy"
+	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/policy"
 )
 
 type syncBuf struct {
@@ -52,7 +52,7 @@ type steps struct {
 
 func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	calls := m.parent
-	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dex")
+	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dax")
 	if isChild {
 		calls = m.child
 	}
@@ -114,7 +114,7 @@ func (m *steps) sawInChild() string {
 	return strings.Join(all, "\n")
 }
 
-// tuiRig is dex's terminal client over a scripted model, on a pipe.
+// tuiRig is dax's terminal client over a scripted model, on a pipe.
 type tuiRig struct {
 	f    *tuiFront
 	t    *testing.T
@@ -247,7 +247,7 @@ func TestTheTUIShowsTheStartLinesBeforeItTakesTheScreen(t *testing.T) {
 	r := startTUI(t, &steps{}, config.Rules{}, nil)
 	r.quit()
 	pre := r.pre.String()
-	for _, want := range []string{"dex · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
+	for _, want := range []string{"dax · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
 		if !strings.Contains(pre, want) {
 			t.Errorf("start lines lack %q:\n%s", want, pre)
 		}
@@ -288,7 +288,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	m := &steps{parent: [][2]string{{"bash", `{"command":"cat .ENV"}`}}}
-	os.Setenv("DEX_TEST", "1")
+	os.Setenv("DAX_TEST", "1")
 	r := startTUI(t, m, config.Rules{}, func(o *agent.Options) {
 		os.WriteFile(filepath.Join(o.Dir, ".ENV"), []byte("SECRET_TOKEN=upper\n"), 0o644)
 	})
@@ -355,12 +355,12 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	}
 }
 
-func TestANoteDexMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
+func TestANoteDaxMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
 	r := startTUI(t, &steps{}, config.Rules{}, func(o *agent.Options) {
 		o.Compact = 1
 	})
 	r.quit()
-	// Nothing was written to the terminal during the run through dex's
+	// Nothing was written to the terminal during the run through dax's
 	// own Log; what was noted is printed once the client lets go.
 	if strings.Contains(r.out.String(), "compacted") {
 		t.Error("a log line reached the screen")
@@ -374,7 +374,7 @@ func gitIn(dir string, args ...string) error {
 	return cmd.Run()
 }
 
-// A panic in the client does not lose what dex noted, nor the session's
+// A panic in the client does not lose what dax noted, nor the session's
 // ID, and the panic goes on.
 func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
 	var out syncBuf

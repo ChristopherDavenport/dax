@@ -80,7 +80,7 @@ func TestGitCommandsAskWhenTheRepositoryNamesAProgram(t *testing.T) {
 			}
 		})
 	}
-	// A clean repository, and the same commands with only keys dex
+	// A clean repository, and the same commands with only keys dax
 	// switches off or that are harmless, run.
 	for name, cfg := range map[string]string{
 		"nothing":                "",

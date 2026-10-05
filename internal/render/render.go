@@ -14,7 +14,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/ChristopherDavenport/dax/internal/tool"
 )
 
 const maxToolOutputShown = 800

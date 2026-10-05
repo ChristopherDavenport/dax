@@ -9,9 +9,9 @@ import (
 
 func parse(t *testing.T, json string, project bool) Layer {
 	t.Helper()
-	path := "/home/u/.config/dex/config.json"
+	path := "/home/u/.config/dax/config.json"
 	if project {
-		path = "/work/proj/.dex/config.json"
+		path = "/work/proj/.dax/config.json"
 	}
 	l, err := Parse([]byte(json), path, project)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestPrecedenceIsFileThenFlags(t *testing.T) {
 }
 
 // The user's "model": "qwen3-coder:30b" was sent to OpenRouter by
-// dex -provider openrouter: a model, endpoint or key variable is the
+// dax -provider openrouter: a model, endpoint or key variable is the
 // provider's that was in force where it was set.
 func TestSwitchingProviderLeavesItsSettingsBehind(t *testing.T) {
 	user := func(js string) []Layer { return []Layer{parse(t, js, false)} }
@@ -86,12 +86,12 @@ func TestSwitchingProviderLeavesItsSettingsBehind(t *testing.T) {
 	}{
 		{"the user's ollama model, a provider flag", user(`{"model":"qwen3-coder:30b"}`), Flags{Provider: ptr("openrouter")}, "openrouter", "", "", "", "default"},
 		{"the user's ollama model and host, a provider flag", user(`{"model":"qwen3-coder:30b","base_url":"http://gpu:11434/v1"}`), Flags{Provider: ptr("anthropic")}, "anthropic", "", "", "", "default"},
-		{"the same provider again keeps them", user(`{"model":"qwen3-coder:30b","base_url":"http://gpu:11434/v1"}`), Flags{Provider: ptr("ollama")}, "ollama", "qwen3-coder:30b", "http://gpu:11434/v1", "", "/home/u/.config/dex/config.json"},
+		{"the same provider again keeps them", user(`{"model":"qwen3-coder:30b","base_url":"http://gpu:11434/v1"}`), Flags{Provider: ptr("ollama")}, "ollama", "qwen3-coder:30b", "http://gpu:11434/v1", "", "/home/u/.config/dax/config.json"},
 		{"a model flag with the provider flag stays", user(`{"model":"qwen3-coder:30b"}`), Flags{Provider: ptr("openrouter"), Model: ptr("openai/gpt-5")}, "openrouter", "openai/gpt-5", "", "", "flag"},
 		{"the user's subagent model goes with its provider", user(`{"provider":"ollama","model":"a","subagent_model":"b"}`), Flags{Provider: ptr("openrouter")}, "openrouter", "", "", "", "default"},
 		{"a model flag alone is the file's provider's", user(`{"provider":"anthropic","model":"claude-x"}`), Flags{Model: ptr("claude-y")}, "anthropic", "claude-y", "", "", "flag"},
 		{"an openresponses server's settings, a provider flag", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{Provider: ptr("openai")}, "openai", "", "", "", "default"},
-		{"no switch, nothing dropped", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{}, "openresponses", "m", "https://llm/v1", "K", "/home/u/.config/dex/config.json"},
+		{"no switch, nothing dropped", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{}, "openresponses", "m", "https://llm/v1", "K", "/home/u/.config/dax/config.json"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,10 +124,10 @@ func TestMemoryDir(t *testing.T) {
 
 func TestPathsResolveAgainstTheFile(t *testing.T) {
 	user := parse(t, `{"instructions_file":"me.md","skills_dirs":["skills","/abs/s"],"pricing_file":"prices.json"}`, false)
-	if user.InstructionsFile != "/home/u/.config/dex/me.md" || user.SkillsDirs[0] != "/home/u/.config/dex/skills" || user.SkillsDirs[1] != "/abs/s" {
+	if user.InstructionsFile != "/home/u/.config/dax/me.md" || user.SkillsDirs[0] != "/home/u/.config/dax/skills" || user.SkillsDirs[1] != "/abs/s" {
 		t.Fatalf("user paths: %+v", user.Config)
 	}
-	if user.PricingFile != "/home/u/.config/dex/prices.json" {
+	if user.PricingFile != "/home/u/.config/dax/prices.json" {
 		t.Fatalf("pricing file: %q", user.PricingFile)
 	}
 }
@@ -232,13 +232,13 @@ func TestValidation(t *testing.T) {
 		{"bad fallback", `{"policy":{"fallback":"maybe"}}`, false, `policy.fallback "maybe"`},
 		{"project fallback allow", `{"policy":{"fallback":"allow"}}`, true, "may only make the fallback stricter"},
 		{"bad rule", `{"policy":{"allow":["bash(unclosed"]}}`, false, "policy.allow"},
-		{"error names the file", `{"provider":"x"}`, false, "/home/u/.config/dex/config.json"},
+		{"error names the file", `{"provider":"x"}`, false, "/home/u/.config/dax/config.json"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			path := "/home/u/.config/dex/config.json"
+			path := "/home/u/.config/dax/config.json"
 			if tc.project {
-				path = "/work/proj/.dex/config.json"
+				path = "/work/proj/.dax/config.json"
 			}
 			_, err := Parse([]byte(tc.json), path, tc.project)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -259,7 +259,7 @@ func TestResolveRefusals(t *testing.T) {
 		{"base url with anthropic", []Layer{parse(t, `{"provider":"anthropic","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama and openresponses providers, not anthropic"},
 		{"base url flag with gemini", nil, Flags{Provider: ptr("gemini"), BaseURL: ptr("https://x")}, "not gemini"},
 		// openai means OpenAI; another server is openresponses.
-		{"base url with openai", []Layer{parse(t, `{"provider":"openai","base_url":"https://openrouter.ai/api/v1"}`, false)}, Flags{}, "not openai (/home/u/.config/dex/config.json); use provider openresponses"},
+		{"base url with openai", []Layer{parse(t, `{"provider":"openai","base_url":"https://openrouter.ai/api/v1"}`, false)}, Flags{}, "not openai (/home/u/.config/dax/config.json); use provider openresponses"},
 		{"base url with openrouter", nil, Flags{Provider: ptr("openrouter"), BaseURL: ptr("https://x")}, "not openrouter (flag)"},
 		{"openresponses without base url", nil, Flags{Provider: ptr("openresponses")}, "provider openresponses needs a base_url"},
 		{"api_key_env with openai", []Layer{parse(t, `{"provider":"openai","api_key_env":"OTHER_KEY"}`, false)}, Flags{}, "api_key_env is for the openresponses provider, not openai"},
@@ -292,10 +292,10 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("load: %v %v", l, err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", "/xdg")
-	if Path() != "/xdg/dex/config.json" {
+	if Path() != "/xdg/dax/config.json" {
 		t.Fatalf("Path = %s", Path())
 	}
-	if ProjectPath("/p") != "/p/.dex/config.json" {
+	if ProjectPath("/p") != "/p/.dax/config.json" {
 		t.Fatalf("ProjectPath = %s", ProjectPath("/p"))
 	}
 }
@@ -309,7 +309,7 @@ func TestPassEnv(t *testing.T) {
 	if _, err := Parse([]byte(`{"pass_env":["A=B"]}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "not a variable name") {
 		t.Errorf("err = %v", err)
 	}
-	if _, err := Parse([]byte(`{"pass_env":["OPENAI_API_KEY"]}`), "/p/.dex/config.json", true); err == nil || !strings.Contains(err.Error(), "pass_env: a project file may only tighten") {
+	if _, err := Parse([]byte(`{"pass_env":["OPENAI_API_KEY"]}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "pass_env: a project file may only tighten") {
 		t.Errorf("a project may not pass credentials on: %v", err)
 	}
 }
@@ -322,7 +322,7 @@ func TestMaxReadBytes(t *testing.T) {
 	if _, err := Parse([]byte(`{"max_read_bytes":-1}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_read_bytes") {
 		t.Errorf("err = %v", err)
 	}
-	if _, err := Parse([]byte(`{"max_read_bytes":1}`), "/p/.dex/config.json", true); err == nil || !strings.Contains(err.Error(), "max_read_bytes: a project file may only tighten") {
+	if _, err := Parse([]byte(`{"max_read_bytes":1}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "max_read_bytes: a project file may only tighten") {
 		t.Errorf("err = %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-# dex
+# dax
 
 A coding agent for the terminal. It reads, searches, edits and writes
 files in your project and runs commands, asking you before it does
@@ -14,18 +14,18 @@ owns what.
 ## Install
 
 ```sh
-go install github.com/ChristopherDavenport/dex/cmd/dex@latest
+go install github.com/ChristopherDavenport/dax/cmd/dax@latest
 # or, in a checkout
 make install
 ```
 
-Go 1.25 or later. With no flags dex talks to Ollama on
+Go 1.25 or later. With no flags dax talks to Ollama on
 `localhost:11434` and runs `qwen3.5:9b`.
 
 ```sh
-dex                          # REPL in the current directory; Ctrl-C aborts a run in flight
-dex -p "what is in go.mod"   # one prompt, then exit
-dex -provider anthropic      # a hosted model
+dax                          # REPL in the current directory; Ctrl-C aborts a run in flight
+dax -p "what is in go.mod"   # one prompt, then exit
+dax -provider anthropic      # a hosted model
 ```
 
 ## Providers and keys
@@ -46,15 +46,15 @@ or a proxy, is `openresponses`, with its `-base-url`, a `-model`, and
 `-api-key-env` naming the variable its key is in, if it takes one:
 
 ```sh
-LITELLM_KEY=... dex -provider openresponses -base-url https://llm.internal/v1 -model qwen3-coder -api-key-env LITELLM_KEY
+LITELLM_KEY=... dax -provider openresponses -base-url https://llm.internal/v1 -model qwen3-coder -api-key-env LITELLM_KEY
 ```
 
 `-model` names another model. `-subagent-model` names the one the
 sub-agents run; without it a sub-agent runs the provider's default for
 sub-agents, where it has one, else the main model.
 A missing key is an error before any request
-is made: `dex: openai: no API key: set OPENAI_API_KEY in the
-environment`. dex reads keys from the environment and nowhere else (not
+is made: `dax: openai: no API key: set OPENAI_API_KEY in the
+environment`. dax reads keys from the environment and nowhere else (not
 from a config file, not from a flag, so they stay out of `ps` and out of
 a repository), and never prints one. The variable a key was read from is
 removed from the environment of bash commands and MCP servers, whatever
@@ -65,15 +65,15 @@ client; Anthropic and Gemini use its provider adapters.
 
 ### What the model takes
 
-At start dex asks the vendor what the model supports and shows it under
+At start dax asks the vendor what the model supports and shows it under
 the banner, `model: reasoning low–max, always on · default high · 1M
 context · 128k out (openrouter)`. Anthropic and Gemini are asked through
 their model endpoints, OpenRouter through its public catalogue (fetched
 once, without the key) and Ollama through `/api/show`; OpenAI and an
 `openresponses` server publish nothing, and nothing is shown.
 
-The reasoning effort dex asks for is then fitted to the answer: an
-effort the model does not take becomes the nearest one it does, and dex
+The reasoning effort dax asks for is then fitted to the answer: an
+effort the model does not take becomes the nearest one it does, and dax
 says so once, `[qwen3-coder:30b: reasoning effort low is not accepted;
 asking for none (ollama)]`. So `-think` on a model that cannot reason
 turns reasoning off instead of failing, and `-think=false` on one that
@@ -97,7 +97,7 @@ sub-agent model, recorded as a child session:
   and bash) and returns a written answer.
 - `task` carries out a coding task with the file tools and bash, then
   reports what it changed, what it ran and what is left. Its instructions
-  are dex's, your `instructions_file` and the AGENTS.md chain, without
+  are dax's, your `instructions_file` and the AGENTS.md chain, without
   skills or memory. The main agent chooses, per call:
   - `context`: `fresh` (the default) sees only the brief, so the brief
     must be complete; `fork` also sees the conversation so far, for a
@@ -129,8 +129,8 @@ sub-agent then does is decided call by call by the same policy.
 
 Settings come from three layers, each overriding the one before:
 
-1. `~/.config/dex/config.json` (`$XDG_CONFIG_HOME/dex/config.json`; `-config path` names another)
-2. `.dex/config.json` in the working directory, which can only tighten the policy
+1. `~/.config/dax/config.json` (`$XDG_CONFIG_HOME/dax/config.json`; `-config path` names another)
+2. `.dax/config.json` in the working directory, which can only tighten the policy
 3. flags
 
 ```json
@@ -140,10 +140,10 @@ Settings come from three layers, each overriding the one before:
   "base_url": "",
   "think": true,
   "effort": "high",
-  "instructions_file": "~/.config/dex/instructions.md",
+  "instructions_file": "~/.config/dax/instructions.md",
   "skills_dirs": ["~/skills"],
-  "memory_dir": "~/.dex/memory",
-  "pricing_file": "~/.config/dex/prices.json",
+  "memory_dir": "~/.dax/memory",
+  "pricing_file": "~/.config/dax/prices.json",
   "mcp_servers": {
     "fs": { "command": "mcp-server-filesystem /home/me/notes" }
   },
@@ -160,7 +160,7 @@ Settings come from three layers, each overriding the one before:
 `model`, `subagent_model`, `base_url` and `api_key_env` belong to the provider in force
 where they are set. A later layer that switches the provider leaves them
 behind, so with `"model": "qwen3-coder:30b"` in your config,
-`dex -provider openrouter` runs OpenRouter's default model rather than
+`dax -provider openrouter` runs OpenRouter's default model rather than
 asking OpenRouter for an Ollama one; `-model` beside `-provider` names
 another.
 
@@ -173,23 +173,23 @@ names the file and the field.
 | `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
-| `instructions_file` | your own instructions, added to the system prompt after dex's; a relative path is relative to the file that names it |
-| `skills_dirs` | more skill directories, after `.dex/skills` and `~/.dex/skills`; one that does not exist is an error |
-| `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dex/memory` |
+| `instructions_file` | your own instructions, added to the system prompt after dax's; a relative path is relative to the file that names it |
+| `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
+| `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `policy` | see below |
 
-A project's `.dex/config.json` comes from a repository, not from you, so
+A project's `.dax/config.json` comes from a repository, not from you, so
 it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 (no `allow`, and no `!` carve-out of any rule), set `"builtin": false` to
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dex
+`instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -203,7 +203,7 @@ keys somewhere; a repository does not get to make them.)
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
-| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dex/skills` and `skills_dirs` only, never the repository's |
+| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
@@ -231,7 +231,7 @@ naming it as `path`.
 
 ## Environment of commands and servers
 
-Commands the `bash` tool runs and the MCP servers dex starts do not get
+Commands the `bash` tool runs and the MCP servers dax starts do not get
 your credentials. A variable is removed from their environment if its
 name ends in `_KEY`, `_KEY_ID`, `_PAT`, `_PWD`, `_JWT`, `_CREDENTIALS`,
 `_AUTH`, `_TOKEN`, `_SECRET`, `_PASSWORD` or `_API_KEY`, contains
@@ -245,8 +245,8 @@ Variables that hold the **path of a credential file** pass through, since
 a program that needs its file needs them: `GOOGLE_APPLICATION_CREDENTIALS`,
 `KUBECONFIG`, `DOCKER_CONFIG`, `NETRC`, `AWS_SHARED_CREDENTIALS_FILE`,
 `AWS_CONFIG_FILE`, `CLOUDSDK_CONFIG`, `PGPASSFILE`. The files are as
-readable to a command as they are to you. dex has no setting to withhold
-them; unset one before starting dex to keep it from commands.
+readable to a command as they are to you. dax has no setting to withhold
+them; unset one before starting dax to keep it from commands.
 
 A command that needs a scrubbed variable (`gh`, a private module proxy)
 gets it by name from your config: `"pass_env": ["GITHUB_TOKEN"]`. Only
@@ -262,7 +262,7 @@ specifier is matched against the command; `go test:*` means `go test` and
 anything after it at a word boundary, so it matches `go test ./...` and
 not `go testing`.
 
-dex ships this default:
+dax ships this default:
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls`, `skill`,
   `memory_search`, and the read-only bash commands listed below;
@@ -273,7 +273,7 @@ dex ships this default:
 
 **What runs without asking is a safe subset, not a blacklist.** A `bash`
 call is auto-allowed only when it parses in a strict subset of the syntax
-and every part of it is a command dex knows to be read-only, with
+and every part of it is a command dax knows to be read-only, with
 arguments that are.
 
 *The syntax*: words of letters, digits and `_ . / : @ % + , = -` (and `~`
@@ -314,7 +314,7 @@ resolved and no `..` component at all, and no git revision or pathspec
 contains a `:` (`HEAD:file` and `:/file` name what is in the repository,
 which may be above the working directory).
 
-*git*: before a git command runs unasked, dex asks git for the config it
+*git*: before a git command runs unasked, dax asks git for the config it
 would use (`git config --list --show-scope`). If the repository's own
 config, or anything it includes, names a program (`filter.*.clean`,
 `smudge` or `process`, `diff.*.textconv` or `command`, `core.askPass`,
@@ -338,7 +338,7 @@ you would run it, hooks and `GIT_CONFIG_*` included.
 the plan it approved, and the bash tool runs a stamped call only if the line
 still analyses to that plan. If a file or the repository's config changed in
 between, the call fails with "the command changed since it was allowed; ask
-again", and the original line is never run instead. Only dex can stamp a
+again", and the original line is never run instead. Only dax can stamp a
 call; one the model stamps is refused. `ls` with a glob runs with the
 expansion after a `--`, so a file called `-n` is a name.
 
@@ -373,7 +373,7 @@ the list above does not govern (`make`, `rm`) is for your rules, one stage
 at a time.
 
 **Trusting `go test` for your own repositories.** Put the rule in your
-**user** config, `~/.config/dex/config.json`, never a repository's (a
+**user** config, `~/.config/dax/config.json`, never a repository's (a
 project file's `allow` rules are ignored):
 
 ```json
@@ -401,11 +401,11 @@ Your answer is recorded in the session as a person's.
 
 ## Security model
 
-dex gives a model the ability to read your files, change them and run
+dax gives a model the ability to read your files, change them and run
 commands, so what it does and does not stand between the model and your
 machine matters.
 
-**What dex does**
+**What dax does**
 
 - **Asks by default.** Every call that is not on a short allow list asks
   you first: writes, edits, every command that is not one simple read-only
@@ -418,16 +418,16 @@ machine matters.
   `go version`/`go env NAME` or `cd` into the workspace, with arguments
   that pass a per-command check and paths that stay inside the working
   directory (no `..`, links resolved). It is an allow-list of what is safe,
-  not a list of what is dangerous: anything dex does not recognise asks.
+  not a list of what is dangerous: anything dax does not recognise asks.
   git is asked what its config would run first. `go test`, `go build` and
   `go vet` run the repository's code and are not on it.
 - **Confines the file tools.** Paths outside the working directory,
   `..`, and symbolic links that lead out are refused, by the operating
   system's rooted open rather than by string checks.
-- **Treats the repository as untrusted.** Its `.dex/config.json` can only
+- **Treats the repository as untrusted.** Its `.dax/config.json` can only
   tighten the policy; it cannot choose the provider, model or endpoint,
   add instructions, skills, memory or MCP servers, or allow anything.
-  `AGENTS.md` files and `.dex/skills` that are symbolic links out of the
+  `AGENTS.md` files and `.dax/skills` that are symbolic links out of the
   workspace are not read into the prompt. Path rules match the path
   after normalisation, so `docs/../.git/x` is not under `docs/**`.
 - **Keeps credentials away from what it starts.** Bash commands and MCP
@@ -442,19 +442,19 @@ machine matters.
   created `0700`; terminal control sequences in tool output and model text
   are stripped.
 
-**What dex does not do**
+**What dax does not do**
 
 - **There is no sandbox.** A command you approve runs with all your
   privileges, and a command that is auto-allowed is only as safe as the
   checks above. `bash` reaches files outside the working directory
   (approved commands are not confined, and the read-only allow list
   checks paths but cannot see what a program does with them). If you
-  need a boundary, run dex in a container or VM.
+  need a boundary, run dax in a container or VM.
 - **A prompt injection can still ask.** A file, a web page, an MCP
-  tool's output or an `AGENTS.md` can tell the model what to do. dex
+  tool's output or an `AGENTS.md` can tell the model what to do. dax
   makes the dangerous steps ask; it cannot make you read the question.
   Read what you approve, especially a compound command, a write to
-  `.git/hooks`, `.dex/`, `AGENTS.md` or `.github/`, and anything that
+  `.git/hooks`, `.dax/`, `AGENTS.md` or `.github/`, and anything that
   sends data out.
 - **Your own `allow` rules are yours.** `"allow": ["write"]` lets a
   model write `.git/hooks/pre-commit`; `bash(go test:*)` runs a hostile
@@ -464,11 +464,11 @@ machine matters.
   file is named. `git log -p`, `git show` and `git diff` without a path,
   `grep` over the tree and `git show HEAD~5` print what a repository
   holds, and a `.env` or key that was ever committed is in it. Keep
-  secrets out of history (and rotate one that got in); dex cannot tell
+  secrets out of history (and rotate one that got in); dax cannot tell
   which lines of a diff are keys.
 - **`-trust-skills` trusts the skills in directories you named**
-  (`~/.dex/skills` and your config's `skills_dirs`) and never the
-  repository's: a skill in `.dex/skills` is text from the repository, and
+  (`~/.dax/skills` and your config's `skills_dirs`) and never the
+  repository's: a skill in `.dax/skills` is text from the repository, and
   its `allowed-tools` are withheld, so it cannot run anything unasked.
 - **The provider sees what the model reads.** Files and command output go
   to the model's provider (OpenAI, OpenRouter and whichever upstream it
@@ -481,20 +481,20 @@ machine matters.
   put to you, from inside the sub-agent's run. A `task` can write, so with
   `"fallback": "allow"` it writes unasked, as the main agent would.
 - **Not covered:** programs the *user's own* git config names (it is
-  trusted), a race between dex checking a path and the command using it,
+  trusted), a race between dax checking a path and the command using it,
   credential-file path variables such as `KUBECONFIG` (they pass through to
   commands), and denial of service by a model that loops (use `Ctrl-C`).
 
 ## The terminal client
 
-On a terminal, `dex` opens the terminal client
+On a terminal, `dax` opens the terminal client
 ([agentconsole](https://github.com/ChristopherDavenport/agentconsole)) over
 the same session: the conversation rendered from the session's record, with
-the run's live deltas on top. Before it takes the screen dex prints its start
+the run's live deltas on top. Before it takes the screen dax prints its start
 lines (provider and model, the session, the policy in force, the tools, any
 `omitted:` line and any warning such as a store whose permissions were fixed)
 and, if there are warnings or omissions, waits for Enter, since the client
-uses the alternate screen; what dex noted during the run is printed when it
+uses the alternate screen; what dax noted during the run is printed when it
 exits.
 
 | key | |
@@ -532,7 +532,7 @@ transcript.
 
 ## In the REPL
 
-`dex -front repl` (the default when not on a terminal) is a line REPL with
+`dax -front repl` (the default when not on a terminal) is a line REPL with
 slash commands the terminal client does not have yet, since the client
 takes the input line itself. A line typed while a run is in flight steers
 it and lands before the next model call; `/follow text` queues a follow-up
@@ -547,30 +547,30 @@ exist in either (use `-compact N`).
 ## Sessions
 
 Every run is recorded in one content-addressed store,
-`~/.dex/sessions`, for every project. Admin commands:
+`~/.dax/sessions`, for every project. Admin commands:
 
 ```sh
-dex -list                          # sessions recorded for this directory
-dex -resume <id>                   # continue one, answering any call an abort cut off
-dex -verify <id>                   # rebuild every request and check its hash
-dex -project <id> -out dir         # write one as a JSONL file (RFC 0001)
-dex -import old.jsonl              # bring a JSONL session into the store
-dex -gc pack                       # pack loose objects; -gc sweep also drops what no session needs
-dex -repair <id>                   # rewrite a damaged log from what still reads
+dax -list                          # sessions recorded for this directory
+dax -resume <id>                   # continue one, answering any call an abort cut off
+dax -verify <id>                   # rebuild every request and check its hash
+dax -project <id> -out dir         # write one as a JSONL file (RFC 0001)
+dax -import old.jsonl              # bring a JSONL session into the store
+dax -gc pack                       # pack loose objects; -gc sweep also drops what no session needs
+dax -repair <id>                   # rewrite a damaged log from what still reads
 ```
 
 `-list`, `-verify` and `-project` open the store read-only, so they work
-beside a running dex. `-sessions ""` disables recording.
+beside a running dax. `-sessions ""` disables recording.
 
-Other state lives in `~/.dex`: `AGENTS.md` (read before the project's),
-`skills/`, `memory/`. A project's `.dex/skills` and its `AGENTS.md` files
+Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
+`skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
 are read too.
 
 ## Develop
 
 ```sh
 make check    # gofmt, go mod tidy -diff, go vet, staticcheck, govulncheck, go test -race
-make build    # ./dex
+make build    # ./dax
 ```
 
 In this workspace the module is built outside the go.work:

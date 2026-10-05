@@ -1,4 +1,4 @@
-module github.com/ChristopherDavenport/dex
+module github.com/ChristopherDavenport/dax
 
 go 1.25.0
 

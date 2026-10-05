@@ -11,7 +11,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // decide builds the engine for settings and asks what it does with one
@@ -49,7 +49,7 @@ func bash(cmd string) string {
 
 // testDir is the workspace the decisions are made in.
 var testDir = func() string {
-	d, err := os.MkdirTemp("", "dex-policy-")
+	d, err := os.MkdirTemp("", "dax-policy-")
 	if err != nil {
 		panic(err)
 	}
@@ -197,7 +197,7 @@ func TestTheProjectsRulesAreNotTrusted(t *testing.T) {
 		// A repository cannot grant itself anything.
 		{"bash", bash("curl https://x"), agentturn.Defer},
 		{"write", `{"path":"a","content":""}`, agentturn.Defer},
-		// It can only make dex more careful.
+		// It can only make dax more careful.
 		{"bash", bash("go test ./..."), agentturn.Defer},
 		{"bash", bash("git log"), agentturn.Block},
 		{"bash", bash("git status"), agentturn.Allow},

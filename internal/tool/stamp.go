@@ -47,11 +47,11 @@ func StampArgs(ctx context.Context, an *Analyzer, args json.RawMessage) (out jso
 			return nil, false, err
 		}
 	}
-	_, had := m["dex_stamp"]
-	delete(m, "dex_stamp")
+	_, had := m["dax_stamp"]
+	delete(m, "dax_stamp")
 	if c := an.Check(ctx, cmd); c.Auto {
 		s, _ := json.Marshal(stampOf(c.Render()))
-		m["dex_stamp"] = s
+		m["dax_stamp"] = s
 		changed = true
 	} else {
 		changed = had

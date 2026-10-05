@@ -18,11 +18,11 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dex/internal/agent"
-	"github.com/ChristopherDavenport/dex/internal/render"
+	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
-// tuiFront is the terminal client, agentconsole, over the kit dex
+// tuiFront is the terminal client, agentconsole, over the kit dax
 // assembled. The client builds its own agent over the kit
 // (kitbackend), so the session is opened without one.
 //
@@ -120,9 +120,9 @@ func (f *tuiFront) Prepare(o *agent.Options) {
 	f.restore = agent.CaptureWarnings(&f.warnings)
 }
 
-// banner is the lines dex shows at start in every front.
+// banner is the lines dax shows at start in every front.
 func banner(info frontInfo, sess *agent.Session) []string {
-	lines := []string{fmt.Sprintf("dex · %s %s · %s", info.Provider, info.Model, info.Dir)}
+	lines := []string{fmt.Sprintf("dax · %s %s · %s", info.Provider, info.Model, info.Dir)}
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
@@ -164,7 +164,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 		bufio.NewReader(in).ReadString('\n')
 	}
-	// What dex noted while the client had the screen, and the session ID,
+	// What dax noted while the client had the screen, and the session ID,
 	// are printed however the client ends, a panic in it included.
 	defer func() {
 		r := recover()
@@ -191,7 +191,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	return run(ctx, be, opts...)
 }
 
-// flush prints the notes dex buffered and the session's ID.
+// flush prints the notes dax buffered and the session's ID.
 func (f *tuiFront) flush(out io.Writer, sess *agent.Session) {
 	f.mu.Lock()
 	notes := f.log

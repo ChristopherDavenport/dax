@@ -1,4 +1,4 @@
-// Package policy builds the agentpolicy rules dex runs under: its
+// Package policy builds the agentpolicy rules dax runs under: its
 // built-in allow list, the user's rules, and the project's, which are
 // not trusted.
 //
@@ -19,11 +19,11 @@ import (
 
 	"github.com/ChristopherDavenport/agentpolicy"
 
-	"github.com/ChristopherDavenport/dex/internal/config"
-	"github.com/ChristopherDavenport/dex/internal/tool"
+	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/tool"
 )
 
-// BuiltinAllow is the allow list dex ships. The sub-agents, explore
+// BuiltinAllow is the allow list dax ships. The sub-agents, explore
 // and task, are on it because starting one does nothing of itself:
 // every call the sub-agent makes is decided by this same policy, so a
 // task's writes and commands ask as the main agent's do. go test, build, vet and
@@ -59,7 +59,7 @@ var secretPaths = []string{
 	"*secret*", ".kube/config", ".docker/config.json", ".aws/**", ".ssh/**", ".aws", ".ssh",
 }
 
-// BuiltinAsk is the ask list dex ships: reads of the paths above. It
+// BuiltinAsk is the ask list dax ships: reads of the paths above. It
 // ranks with the built-in allow list, so an ask beats the bare read
 // allow; a user's allow rule for a path (read(.env), Read(config/.env))
 // opens it, because Build gives each such rule a carve-out from this
@@ -113,9 +113,9 @@ func Options() []agentpolicy.Option {
 
 // Source names the layers in verdicts and in the session's record.
 const (
-	SourceBuiltin = "dex:builtin"
-	SourceUser    = "dex:config"
-	SourceProject = "dex:project"
+	SourceBuiltin = "dax:builtin"
+	SourceUser    = "dax:config"
+	SourceProject = "dax:project"
 )
 
 // Build merges the built-in allow list with the user's and the

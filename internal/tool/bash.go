@@ -33,9 +33,9 @@ const (
 type BashArgs struct {
 	Command string `json:"command" desc:"The command to run"`
 	Timeout int    `json:"timeout_seconds,omitempty" desc:"Kill the command after this many seconds (default 120)"`
-	// Stamp is set by dex when the policy allowed the command without
-	// asking; a value that dex did not set makes the call fail.
-	Stamp string `json:"dex_stamp,omitempty" desc:"Set by dex; leave it out"`
+	// Stamp is set by dax when the policy allowed the command without
+	// asking; a value that dax did not set makes the call fail.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // BashOption configures the bash tool.
