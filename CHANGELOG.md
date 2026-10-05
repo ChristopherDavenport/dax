@@ -7,6 +7,11 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: `make release` can cut the first release. With no plain vX.Y.Z
+  tag published, the release guard takes any vX.Y.Z as the first one
+  instead of refusing for want of a version floor; it also refuses
+  prereleases and a major version the module path does not carry, and
+  `make check` runs its tests.
 - Changed: the project is named dax. The module is
   `github.com/ChristopherDavenport/dax`, the binary `dax`
   (`go install github.com/ChristopherDavenport/dax/cmd/dax@latest`), and
