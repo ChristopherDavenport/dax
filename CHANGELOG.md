@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.1 - 2026-10-04
 
 - Fixed: `make release` can cut the first release. With no plain vX.Y.Z
   tag published, the release guard takes any vX.Y.Z as the first one
