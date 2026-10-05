@@ -5,6 +5,18 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: the `vertex` provider, Claude and Gemini on Google Vertex AI.
+  Each request goes to the Anthropic adapter for a `claude-` model and
+  the Gemini adapter for a `gemini-` model, so the main agent and the
+  sub-agents can run different families. It authenticates with
+  Application Default Credentials (`gcloud auth application-default
+  login`) and takes the project from `GOOGLE_CLOUD_PROJECT`, else the
+  credentials' project, and the location from `GOOGLE_CLOUD_LOCATION`
+  or `GOOGLE_CLOUD_REGION`. Vertex publishes no model capabilities, so
+  the reasoning effort is fitted from the model ID's generation.
+
 ## v0.0.1 - 2026-10-04
 
 - Fixed: `make release` can cut the first release. With no plain vX.Y.Z

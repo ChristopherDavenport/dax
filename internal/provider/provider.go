@@ -3,9 +3,11 @@
 // not a protocol: Ollama, OpenAI, OpenRouter and any other server that
 // speaks Open Responses (the openresponses provider) all go through the
 // openresponses client, each with its own defaults; Anthropic and
-// Gemini go through their adapter modules. Keys come from the
-// environment and from nowhere else, and no error or log here carries
-// one.
+// Gemini go through their adapter modules, and so does vertex, which is
+// Claude and Gemini on Google Vertex AI through those same two adapters.
+// Keys come from the environment and from nowhere else, and no error or
+// log here carries one; vertex takes no key but Google's Application
+// Default Credentials.
 package provider
 
 import (
@@ -15,8 +17,11 @@ import (
 	"os"
 	"strings"
 
+	"cloud.google.com/go/auth/oauth2adapt"
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/vertex"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/genai"
 
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
@@ -33,6 +38,20 @@ const (
 	OpenRouterURL = "https://openrouter.ai/api/v1"
 )
 
+// The vertex provider's project and location come from Google Cloud's
+// own variables, the ones its SDKs and genai read, not from any vendor's:
+// the project from GOOGLE_CLOUD_PROJECT, else the credentials' own
+// project, and the location from GOOGLE_CLOUD_LOCATION, else
+// GOOGLE_CLOUD_REGION.
+const (
+	ProjectEnv  = "GOOGLE_CLOUD_PROJECT"
+	LocationEnv = "GOOGLE_CLOUD_LOCATION"
+	RegionEnv   = "GOOGLE_CLOUD_REGION"
+)
+
+// cloudPlatform is the OAuth scope Vertex AI takes.
+const cloudPlatform = "https://www.googleapis.com/auth/cloud-platform"
+
 // DefaultModel is the model each provider runs when none is named.
 // The openresponses provider has none: the server decides what exists.
 func DefaultModel(provider string) string {
@@ -43,7 +62,7 @@ func DefaultModel(provider string) string {
 		return "deepseek/deepseek-v4-pro-0813"
 	case "openresponses":
 		return ""
-	case "anthropic":
+	case "anthropic", "vertex":
 		return "claude-sonnet-5-5"
 	case "gemini":
 		return "gemini-2.5-pro"
@@ -96,6 +115,11 @@ type Spec struct {
 	KeyEnv string
 	// Getenv reads the environment; nil is os.Getenv.
 	Getenv func(string) string
+	// Credentials finds the vertex provider's Google credentials; nil
+	// is Application Default Credentials, which reads
+	// GOOGLE_APPLICATION_CREDENTIALS or the file that
+	// `gcloud auth application-default login` writes.
+	Credentials func(context.Context) (*google.Credentials, error)
 }
 
 // Model is a provider's streamer and the model name it will be asked
@@ -142,7 +166,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 			return m, errors.New("openresponses: model is required")
 		}
 		m.KeyEnv = spec.KeyEnv
-	case "ollama", "openai", "openrouter", "anthropic", "gemini":
+	case "ollama", "openai", "openrouter", "anthropic", "gemini", "vertex":
 		if spec.KeyEnv != "" {
 			return m, fmt.Errorf("%s: api_key_env is for the openresponses provider", spec.Provider)
 		}
@@ -150,6 +174,16 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 			return m, fmt.Errorf("%s: base_url is not supported; use the openresponses provider for another server", spec.Provider)
 		}
 		m.KeyEnv = KeyEnv(spec.Provider)
+		if spec.Provider == "vertex" {
+			if vertexLocation(getenv) == "" {
+				return m, fmt.Errorf("vertex: set %s (or %s) in the environment", LocationEnv, RegionEnv)
+			}
+			for _, name := range []string{m.Name, m.SubagentName} {
+				if vertexFamily(name) == "" {
+					return m, errVertexModel(name)
+				}
+			}
+		}
 	default:
 		return m, fmt.Errorf("unknown provider %q", spec.Provider)
 	}
@@ -182,6 +216,38 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		m.Streamer = anthropic.New(client.Messages)
 		m.Endpoint = "api.anthropic.com"
 		m.Describer = modelinfo.Anthropic(&client.Models)
+	case "vertex":
+		find := spec.Credentials
+		if find == nil {
+			find = func(ctx context.Context) (*google.Credentials, error) {
+				return google.FindDefaultCredentials(ctx, cloudPlatform)
+			}
+		}
+		creds, err := find(ctx)
+		if err != nil {
+			return m, fmt.Errorf("vertex: no Google credentials (run gcloud auth application-default login): %w", err)
+		}
+		project := strings.TrimSpace(getenv(ProjectEnv))
+		if project == "" {
+			project = creds.ProjectID
+		}
+		if project == "" {
+			return m, fmt.Errorf("vertex: no Google Cloud project: set %s in the environment", ProjectEnv)
+		}
+		location := vertexLocation(getenv)
+		claude := sdk.NewClient(vertex.WithCredentials(ctx, location, project, creds))
+		gc, err := genai.NewClient(ctx, &genai.ClientConfig{
+			Backend:     genai.BackendVertexAI,
+			Project:     project,
+			Location:    location,
+			Credentials: oauth2adapt.AuthCredentialsFromOauth2Credentials(creds),
+		})
+		if err != nil {
+			return m, fmt.Errorf("vertex: %w", err)
+		}
+		m.Streamer = vertexModels{claude: anthropic.New(claude.Messages), gemini: gemini.New(gc)}
+		m.Endpoint = "vertex ai " + project + "/" + location
+		m.Describer = vertexDescriber{}
 	case "gemini":
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: key, Backend: genai.BackendGeminiAPI})
 		if err != nil {
@@ -192,4 +258,13 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		m.Describer = modelinfo.Gemini(client.Models)
 	}
 	return m, nil
+}
+
+// vertexLocation is the Vertex AI location the environment names, empty
+// for none.
+func vertexLocation(getenv func(string) string) string {
+	if l := strings.TrimSpace(getenv(LocationEnv)); l != "" {
+		return l
+	}
+	return strings.TrimSpace(getenv(RegionEnv))
 }

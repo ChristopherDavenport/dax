@@ -15,7 +15,7 @@ and the rules the assembly keeps.
 
 | Concern | Owner | dax's part |
 |---|---|---|
-| Wire types, the provider client | `openresponses` and its `providers/anthropic`, `providers/gemini` | `internal/provider` picks one from the config |
+| Wire types, the provider client | `openresponses` and its `providers/anthropic`, `providers/gemini` | `internal/provider` picks one from the config; `vertex` routes each request by model family to the anthropic or the gemini adapter over Vertex AI clients |
 | The agent loop, events, steering, follow-ups, retry | `agentturn` | `internal/agent` configures and drives it |
 | Tool contract, MCP client | `agenttool` | `internal/tool`: read, write, edit, glob, grep, ls, bash |
 | Assembling a loop from parts | `agentkit` | `internal/agent.open` is one `agentkit.New` call |

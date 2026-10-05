@@ -4,7 +4,8 @@ A coding agent for the terminal. It reads, searches, edits and writes
 files in your project and runs commands, asking you before it does
 anything it should not do alone, and records every session so you can
 list, resume, verify and export it. It runs against a local Ollama with
-no setup, or OpenAI, Anthropic or Gemini with a key.
+no setup, OpenAI, Anthropic or Gemini with a key, or Claude and Gemini on
+Google Vertex AI with your gcloud login.
 
 It is a thin product over a set of small Go libraries
 (`openresponses`, `agentturn`, `agentkit`, `agentpolicy`,
@@ -38,6 +39,7 @@ dax -provider anthropic      # a hosted model
 | `openresponses` | none; `-model` is required | the variable `-api-key-env` names, or none | required |
 | `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | not supported |
 | `gemini` | `gemini-2.5-pro` | `GEMINI_API_KEY` | not supported |
+| `vertex` | `claude-sonnet-5-5` | none; Google Application Default Credentials | not supported |
 
 A provider is a vendor: `openai` is OpenAI, and `openrouter` is
 OpenRouter, whose models are named `vendor/model`. Any other server that
@@ -62,6 +64,36 @@ it is called, unless `pass_env` names it.
 
 Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
 client; Anthropic and Gemini use its provider adapters.
+
+`vertex` is Google Vertex AI, which serves Claude and Gemini behind one
+project and login. Each request goes to the Anthropic adapter for a
+`claude-` model and to the Gemini adapter for a `gemini-` model, so the
+main agent and the sub-agents can run different families and `/model`
+can move between them; any other model name is refused. It takes no
+key: it authenticates with Application Default Credentials
+(`gcloud auth application-default login`, or
+`GOOGLE_APPLICATION_CREDENTIALS`). It reads Google Cloud's usual settings
+from the environment: the project from `GOOGLE_CLOUD_PROJECT`, falling
+back to the credentials' own project, and the location from
+`GOOGLE_CLOUD_LOCATION` (or `GOOGLE_CLOUD_REGION`), such as `global` or
+`us-east5`.
+
+```sh
+gcloud auth application-default login
+export GOOGLE_CLOUD_PROJECT=my-project GOOGLE_CLOUD_LOCATION=global
+dax -provider vertex -model claude-opus-5-5 -subagent-model gemini-3.5-flash
+```
+
+Vertex publishes no model capabilities, so what dax knows is read off
+the model ID's generation, from what Vertex accepted from each model:
+
+| models | efforts | so |
+|---|---|---|
+| Claude before 4.6 (`claude-haiku-4-5`, `claude-opus-4-5`) | none | reasoning is off; the adapter sends an effort as adaptive thinking, which they do not take |
+| Claude 4.6 | none to high | `xhigh` asks for `high` |
+| Claude 4.7 to 5 | not described | sent as configured |
+| Claude 5.5 and later | minimal to xhigh | `-think=false` asks for `minimal`: they refuse the way the adapter turns thinking off |
+| Gemini | low to high | `none` and `minimal` ask for `low`, `xhigh` for `high` |
 
 ### What the model takes
 

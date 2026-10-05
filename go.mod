@@ -3,6 +3,7 @@ module github.com/ChristopherDavenport/dax
 go 1.25.0
 
 require (
+	cloud.google.com/go/auth/oauth2adapt v0.2.8
 	github.com/ChristopherDavenport/agentconsole v0.0.6
 	github.com/ChristopherDavenport/agenteval v0.0.10
 	github.com/ChristopherDavenport/agentkit v0.0.7
@@ -20,6 +21,7 @@ require (
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
 	github.com/anthropics/anthropic-sdk-go v1.74.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.45.0
 	google.golang.org/genai v1.71.0
 )
@@ -73,6 +75,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
@@ -81,11 +84,11 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	google.golang.org/api v0.264.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
