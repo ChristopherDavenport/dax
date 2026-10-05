@@ -51,18 +51,12 @@ an `Unreleased` changelog line:
   the tool contract.
 - `../agentpolicy`, `../agentsession`, `../agentskill`, `../agentsmd`,
   `../agentmemory`.
-- `../agentconsole`: the terminal client, a dependency (private module).
+- `../agentconsole`: the terminal client, a dependency.
 
 ## Conventions
 
-- CI is manual (`workflow_dispatch` only) until the repository has a
-  `DEX_DEPS_TOKEN` secret: agentconsole is private, and a runner needs a
-  fine-grained personal access token with read access to it to fetch it
-  (the workflow sets `GOPRIVATE` and rewrites github.com URLs with the
-  token, and fails with a clear message when the secret is empty). Do not
-  create the secret without the owner; `GOFLAGS=-mod=readonly make check`
-  locally is the gate. release.yml only publishes a GitHub release from a
-  tag and fetches no module, so it needs no token.
+- CI runs on pushes to main and on pull requests; release.yml publishes
+  a GitHub release from a tag.
 - `make check` (fmt, tidy-check, vet, staticcheck, govulncheck, race
   tests) must pass before any commit. In a workspace with a go.work,
   run `GOWORK=off GOFLAGS=-mod=readonly make check`.
