@@ -229,18 +229,35 @@ func (r *tuiRig) waitFile(name string, want bool) {
 	}
 }
 
+// quit presses ctrl+c until the client returns. A run can still be
+// ending after the output a test waited for is on the screen, and ctrl+c
+// during a run aborts it rather than quitting, so one press is not
+// always enough; the next press, after the abort, quits.
 func (r *tuiRig) quit() {
 	r.t.Helper()
-	time.Sleep(150 * time.Millisecond)
-	r.type_("\x03")
-	select {
-	case err := <-r.done:
-		if err != nil {
-			r.t.Errorf("Run: %v", err)
+	deadline := time.After(20 * time.Second)
+	for {
+		r.type_("\x03")
+		select {
+		case err := <-r.done:
+			if err != nil {
+				r.t.Errorf("Run: %v", err)
+			}
+			return
+		case <-time.After(500 * time.Millisecond):
+		case <-deadline:
+			r.t.Fatal("the client did not return")
 		}
-	case <-time.After(20 * time.Second):
-		r.t.Fatal("the client did not return")
 	}
+}
+
+// waitPanel waits for the permission panel. A call's row shows the
+// policy's reason as soon as the record has it, which can be before the
+// live permission reaches the panel, and a key pressed before the panel
+// is up goes to the prompt instead.
+func (r *tuiRig) waitPanel() {
+	r.t.Helper()
+	r.waitOutput("[y] approve")
 }
 
 func TestTheTUIShowsTheStartLinesBeforeItTakesTheScreen(t *testing.T) {
@@ -262,6 +279,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	// policy's reason.
 	r.waitOutput("touch APPROVED")
 	r.waitOutput("no rule allows bash")
+	r.waitPanel()
 	r.waitFile("APPROVED", false)
 	r.type_("y")
 	r.waitFile("APPROVED", true)
@@ -273,8 +291,9 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	r2 := startTUI(t, m2, config.Rules{}, nil)
 	r2.type_("go\r")
 	r2.waitOutput("no rule allows bash")
+	r2.waitPanel()
 	r2.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r2.waitOutput("Reason for refusing")
 	r2.type_("not now\r")
 	// An ended call's row hides its output, the refusal text with it;
 	// the policy's verdict stays on the row.
@@ -296,8 +315,9 @@ func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	r.waitOutput("cat .ENV")
 	// The question says what is being asked about, from the read rule.
 	r.waitOutput("reads .ENV")
+	r.waitPanel()
 	r.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r.waitOutput("Reason for refusing")
 	r.type_("\r")
 	time.Sleep(300 * time.Millisecond)
 	if strings.Contains(r.out.String(), "SECRET_TOKEN=upper") {
@@ -317,8 +337,9 @@ func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
 	})
 	r.type_("go\r")
 	r.waitOutput("core.fsmonitor")
+	r.waitPanel()
 	r.type_("n")
-	time.Sleep(100 * time.Millisecond)
+	r.waitOutput("Reason for refusing")
 	r.type_("\r")
 	r.quit()
 }
