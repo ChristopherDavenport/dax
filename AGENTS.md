@@ -9,8 +9,9 @@ sibling libraries; the design and who owns what is in
 ## Module
 
 - Module path: `github.com/ChristopherDavenport/dax`.
-- Go 1.25 is the floor (`os.Root` and its `MkdirAll`, `ReadFile` and
-  `WriteFile` need it). The binary is `./cmd/dax`.
+- Go 1.26 is the floor (agentconsole, on Bubble Tea v2, needs it; `os.Root`
+  and its `MkdirAll`, `ReadFile` and `WriteFile` need 1.25). The binary
+  is `./cmd/dax`.
 - This is a product, so unlike the siblings it has no dependency
   boundary: it depends on every sibling it assembles, and on
   `anthropic-sdk-go` and `google.golang.org/genai` through the
