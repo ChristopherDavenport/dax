@@ -655,9 +655,13 @@ func (s *Session) Tools() []agentkit.ToolOrigin { return s.Kit.Tools() }
 // calls it held beside them are released by the engine, and the run is
 // resumed until it ends for another reason.
 func (s *Session) Prompt(ctx context.Context, text string) (*agentturn.RunEnd, error) {
-	// Memory written during the run names this session; the kit cannot
-	// put the ID on a context that is the host's.
+	// Memory written during the run names this session, and so does
+	// each model call, for a server that groups calls by session; the
+	// kit cannot put the ID on a context that is the host's.
 	ctx = agentmemory.WithSession(ctx, s.ID())
+	if id := s.ID(); id != "" {
+		ctx = session.ContextWithSessionID(ctx, id)
+	}
 	var end *agentturn.RunEnd
 	var err error
 	if pending := s.Pending(); s.opts.Approve != nil && slices.ContainsFunc(pending, held) {

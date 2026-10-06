@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -69,6 +70,10 @@ func run() error {
 	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
 	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
+	keyCmd := fs.String("api-key-command", "", "command line whose output is the provider's key, run again as the key ages or is refused; split on spaces")
+	keyLogin := fs.String("api-key-login", "", "how to sign in again when the key command fails or its key is refused, a URL or a command; shown with the error")
+	sessionHeader := fs.String("session-header", "", "header that carries each model call's session ID, for a server that groups calls by session")
+	clientHeader := fs.String("client-header", "", "header that carries dax's name and version, for a server that records which client called")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
@@ -169,6 +174,15 @@ func run() error {
 	}
 	flags.Provider, flags.Model, flags.BaseURL = str("provider", prov), str("model", model), str("base-url", base)
 	flags.APIKeyEnv = str("api-key-env", keyEnv)
+	flags.APIKeyLogin = str("api-key-login", keyLogin)
+	flags.SessionHeader = str("session-header", sessionHeader)
+	flags.ClientHeader = str("client-header", clientHeader)
+	if given["api-key-command"] {
+		flags.APIKeyCommand = strings.Fields(*keyCmd)
+		if flags.APIKeyCommand == nil {
+			flags.APIKeyCommand = []string{}
+		}
+	}
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.PricingFile = str("pricing-file", pricingFile)
 	flags.Effort = str("effort", effort)
@@ -195,7 +209,7 @@ func run() error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: "dax/" + version()})
 	if err != nil {
 		return err
 	}
@@ -265,6 +279,11 @@ func run() error {
 	}, processEnv(*root != ""))
 	if err != nil {
 		return err
+	}
+	// The terminal client owns the screen, so a key command run while
+	// it does keeps what it writes for the error that reports it.
+	if _, ok := f.(*tuiFront); ok && m.KeyStderr != nil {
+		m.KeyStderr(nil)
 	}
 	opts.Approve, opts.Elicit = f.Hooks()
 	f.Prepare(&opts)
@@ -408,4 +427,13 @@ func modelNames(m provider.Model, agents bool) string {
 		return m.Name + " (explore: " + m.SubagentName + ")"
 	}
 	return m.Name
+}
+
+// version is the module version dax was built at, as `go install`
+// stamps it, else the version the session header names.
+func version() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return agent.Version
 }
