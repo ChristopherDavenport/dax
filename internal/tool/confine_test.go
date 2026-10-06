@@ -141,7 +141,12 @@ func TestPathsInsideTheWorkspaceWork(t *testing.T) {
 }
 
 func TestAWorkspaceReachedThroughALinkStillMatchesItsRealName(t *testing.T) {
-	real := t.TempDir()
+	// The temporary directory may itself be reached through a link, as
+	// /var is on macOS; its real name is the one with every link resolved.
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(real, "f.txt"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
