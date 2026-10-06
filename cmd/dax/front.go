@@ -51,6 +51,10 @@ type frontInfo struct {
 	// Cost prices the terminal client's session pane and status line; nil
 	// shows token usage but no cost.
 	Cost client.Cost
+	// Verbose (-v) has the terminal client print its start lines before
+	// it takes the screen and what dax noted after it exits; without it,
+	// the client leaves only the command that resumes the session.
+	Verbose bool
 }
 
 // front is a way to talk to a session.
