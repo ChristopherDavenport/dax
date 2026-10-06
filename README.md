@@ -20,7 +20,7 @@ go install github.com/ChristopherDavenport/dax/cmd/dax@latest
 make install
 ```
 
-Go 1.25 or later. With no flags dax talks to Ollama on
+Go 1.26 or later. With no flags dax talks to Ollama on
 `localhost:11434` and runs `qwen3.5:9b`.
 
 ```sh

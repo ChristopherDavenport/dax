@@ -16,6 +16,15 @@ versions may break flags and the config file.
   credentials' project, and the location from `GOOGLE_CLOUD_LOCATION`
   or `GOOGLE_CLOUD_REGION`. Vertex publishes no model capabilities, so
   the reasoning effort is fitted from the model ID's generation.
+- Changed: agentconsole v0.0.7. The terminal client renders the
+  assistant's messages as markdown, shows the run's state, elapsed time
+  and tokens on a run line above the input, leads the status line with
+  the session's time working, and keeps a mouse selection on the text it
+  covers as the conversation scrolls; a click places the input's cursor
+  or selects a tree item. It moves to Bubble Tea v2, so Go 1.26 is now
+  the floor to build dax.
+- Changed: agenttool and agenttool/mcpclient v0.0.16. The new `cli`
+  package is not used, and nothing dax uses changes.
 
 ## v0.0.1 - 2026-10-04
 

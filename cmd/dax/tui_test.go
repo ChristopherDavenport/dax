@@ -296,8 +296,11 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	r2.waitOutput("Reason for refusing")
 	r2.type_("not now\r")
 	// An ended call's row hides its output, the refusal text with it;
-	// the policy's verdict stays on the row.
-	r2.waitOutput("policy: reject")
+	// the policy's verdict stays on the row. The renderer writes only the
+	// cells that change, so "policy: hold" becomes "policy: reject" by
+	// "reject" written over "hold"; nothing else on the screen says reject.
+	r2.waitOutput("policy: hold")
+	r2.waitOutput("reject")
 	time.Sleep(200 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(r2.dir, "REFUSED")); err == nil {
 		t.Error("a refused call ran")
