@@ -260,13 +260,25 @@ func (r *tuiRig) waitPanel() {
 	r.waitOutput("[y] approve")
 }
 
-func TestTheTUIShowsTheStartLinesBeforeItTakesTheScreen(t *testing.T) {
-	r := startTUI(t, &steps{}, config.Rules{}, nil)
-	r.quit()
-	pre := r.pre.String()
-	for _, want := range []string{"dax · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
-		if !strings.Contains(pre, want) {
-			t.Errorf("start lines lack %q:\n%s", want, pre)
+// With -v the start lines are printed before the client takes the
+// screen; without it, the client leaves only the command that resumes
+// the session.
+func TestTheTUIShowsTheStartLinesOnlyWhenVerbose(t *testing.T) {
+	for _, verbose := range []bool{true, false} {
+		r := startRig(t, &steps{}, config.Rules{}, nil, func(f *tuiFront) { f.info.Verbose = verbose }, true)
+		r.quit()
+		pre := r.pre.String()
+		for _, want := range []string{"dax · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
+			if verbose != strings.Contains(pre, want) {
+				t.Errorf("verbose=%v: start lines have %q: %v\n%s", verbose, want, !verbose, pre)
+			}
+		}
+		resume := "To resume this session: dax -resume " + r.sess.ID() + "\n"
+		if !strings.HasSuffix(pre, resume) {
+			t.Errorf("verbose=%v: the output does not end with %q:\n%s", verbose, resume, pre)
+		}
+		if !verbose && pre != resume {
+			t.Errorf("without -v the output is %q, want only %q", pre, resume)
 		}
 	}
 }
@@ -398,33 +410,40 @@ func gitIn(dir string, args ...string) error {
 	return cmd.Run()
 }
 
-// A panic in the client does not lose what dax noted, nor the session's
-// ID, and the panic goes on.
+// A panic in the client does not lose the resume command, nor with -v
+// what dax noted, and the panic goes on. Without -v the notes (a skill's
+// grants, say) are not printed.
 func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
-	var out syncBuf
-	for _, panics := range []bool{false, true} {
-		out = syncBuf{}
-		r := startFront(t, &steps{}, func(f *tuiFront) {
-			f.out = &out
-			f.run = func(context.Context, client.Backend, ...console.Option) error {
-				f.log = append(f.log, "[compaction failed after 2 call(s): boom]")
-				if panics {
-					panic("the client fell over")
+	for _, verbose := range []bool{true, false} {
+		for _, panics := range []bool{false, true} {
+			out := &syncBuf{}
+			r := startFront(t, &steps{}, func(f *tuiFront) {
+				f.out = out
+				f.info.Verbose = verbose
+				f.run = func(context.Context, client.Backend, ...console.Option) error {
+					f.log = append(f.log, "[compaction failed after 2 call(s): boom]")
+					if panics {
+						panic("the client fell over")
+					}
+					return nil
 				}
-				return nil
-			}
-		})
-		func() {
-			defer func() {
-				got := recover()
-				if panics != (got != nil) {
-					t.Errorf("panics=%v but recovered %v", panics, got)
-				}
+			})
+			func() {
+				defer func() {
+					got := recover()
+					if panics != (got != nil) {
+						t.Errorf("panics=%v but recovered %v", panics, got)
+					}
+				}()
+				r.f.Run(context.Background(), r.sess)
 			}()
-			r.f.Run(context.Background(), r.sess)
-		}()
-		if !strings.Contains(out.String(), "compaction failed after 2 call(s): boom") || !strings.Contains(out.String(), "session "+r.sess.ID()) {
-			t.Errorf("panics=%v: the notes were not flushed:\n%s", panics, out.String())
+			got := out.String()
+			if verbose != strings.Contains(got, "compaction failed after 2 call(s): boom") {
+				t.Errorf("verbose=%v panics=%v: the notes printed: %v\n%s", verbose, panics, !verbose, got)
+			}
+			if !strings.HasSuffix(got, "To resume this session: dax -resume "+r.sess.ID()+"\n") {
+				t.Errorf("verbose=%v panics=%v: no resume command at the end:\n%s", verbose, panics, got)
+			}
 		}
 	}
 }

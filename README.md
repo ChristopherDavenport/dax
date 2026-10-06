@@ -235,6 +235,7 @@ keys somewhere; a repository does not get to make them.)
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
+| `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only warnings before and the resume command after |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
@@ -522,12 +523,20 @@ machine matters.
 On a terminal, `dax` opens the terminal client
 ([agentconsole](https://github.com/ChristopherDavenport/agentconsole)) over
 the same session: the conversation rendered from the session's record, with
-the run's live deltas on top. Before it takes the screen dax prints its start
-lines (provider and model, the session, the policy in force, the tools, any
-`omitted:` line and any warning such as a store whose permissions were fixed)
-and, if there are warnings or omissions, waits for Enter, since the client
-uses the alternate screen; what dax noted during the run is printed when it
-exits.
+the run's live deltas on top. When it exits it leaves one line on the
+terminal, the command that resumes the session:
+
+```
+To resume this session: dax -resume 01a112e5-b4df-7081-bd11-baac746b29cc
+```
+
+Any warning, such as a store whose permissions were fixed, is printed
+before the client takes the screen, and dax waits for Enter, since the
+client uses the alternate screen. With `-v` dax also prints its start lines
+(provider and model, the session, the policy in force, the tools, any
+`omitted:` line) and waits for Enter on an omission too, and when the
+client exits it prints what it noted during the run (skill grants,
+compactions, denied calls) above the resume command.
 
 | key | |
 |---|---|

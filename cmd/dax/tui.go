@@ -143,9 +143,13 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if out == nil {
 		out = os.Stdout
 	}
-	lines := banner(f.info, sess)
-	for _, l := range lines {
-		fmt.Fprintln(out, render.Clean(l))
+	// The start lines stay on the terminal under the client's alternate
+	// screen, so they are printed only with -v. A warning is printed
+	// either way, and waited on, since it may say the store was exposed.
+	if f.info.Verbose {
+		for _, l := range banner(f.info, sess) {
+			fmt.Fprintln(out, render.Clean(l))
+		}
 	}
 	f.mu.Lock()
 	warn := f.warnings.String()
@@ -153,7 +157,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if warn != "" {
 		fmt.Fprint(out, render.Clean(warn))
 	}
-	omitted := len(sess.Omitted()) > 0
+	omitted := f.info.Verbose && len(sess.Omitted()) > 0
 	if f.pause && (warn != "" || omitted) {
 		// The client takes the whole screen, and what is above it goes
 		// out of sight: wait until it has been read.
@@ -164,8 +168,9 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 		bufio.NewReader(in).ReadString('\n')
 	}
-	// What dax noted while the client had the screen, and the session ID,
-	// are printed however the client ends, a panic in it included.
+	// What dax noted while the client had the screen (with -v), and how
+	// to resume the session, are printed however the client ends, a panic
+	// in it included.
 	defer func() {
 		r := recover()
 		f.flush(out, sess)
@@ -191,18 +196,27 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	return run(ctx, be, opts...)
 }
 
-// flush prints the notes dax buffered and the session's ID.
+// flush prints, with -v, the notes dax buffered, and then the command
+// that resumes the session.
 func (f *tuiFront) flush(out io.Writer, sess *agent.Session) {
 	f.mu.Lock()
 	notes := f.log
 	f.log = nil
 	f.mu.Unlock()
-	for _, l := range notes {
-		fmt.Fprintln(out, render.Clean(l))
+	if f.info.Verbose {
+		for _, l := range notes {
+			fmt.Fprintln(out, render.Clean(l))
+		}
 	}
 	if id := sess.ID(); id != "" {
-		fmt.Fprintln(out, "session", id)
+		fmt.Fprintln(out, resumeLine(id))
 	}
+}
+
+// resumeLine is what the terminal client leaves on the terminal when it
+// exits.
+func resumeLine(id string) string {
+	return "To resume this session: dax -resume " + render.Clean(id)
 }
 
 // Abandon is for a session that could not be opened after Prepare: the

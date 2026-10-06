@@ -5,6 +5,15 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: the terminal client leaves only the command that resumes the
+  session when it exits, `To resume this session: dax -resume <id>`. The
+  start lines (model, session, policy, tools, omissions) and what dax
+  noted during the run (skill grants, compactions, denied calls) are
+  printed only with the new `-v` flag. Warnings are still printed, and
+  waited on, before the client takes the screen.
+
 ## v0.0.2 - 2026-10-06
 
 - Added: the `vertex` provider, Claude and Gemini on Google Vertex AI.

@@ -94,6 +94,7 @@ func run() error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	memory := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
+	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -260,7 +261,7 @@ func run() error {
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
 		Provider: settings.Provider, Model: modelNames(m, settings.Agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
-		Policy: policySummary(settings.Policy), Cost: cost,
+		Policy: policySummary(settings.Policy), Cost: cost, Verbose: *verbose,
 	}, processEnv(*root != ""))
 	if err != nil {
 		return err
