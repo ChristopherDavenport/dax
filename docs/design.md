@@ -23,7 +23,7 @@ and the rules the assembly keeps.
 | The session record | `agentsession` | the store, `-list`, `-verify`, `-resume`, `-gc` |
 | AGENTS.md, skills, memory | `agentsmd`, `agentskill`, `agentmemory` | directories and budgets |
 | Settings | dax | `internal/config` |
-| Presentation | dax (REPL) | `cmd/dax/front.go`, `internal/render` |
+| Presentation | dax (REPL); agentconsole (the terminal client) | `cmd/dax/front.go`, `internal/render`; `internal/toolrender` draws dax's tool calls in the terminal client |
 
 ## Rules that hold
 

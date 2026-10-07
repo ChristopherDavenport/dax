@@ -320,6 +320,17 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	r2.quit()
 }
 
+// The client draws dax's calls with dax's renderers: an edit's row
+// counts the lines it adds and removes, "−" being a minus sign that
+// neither the arguments nor the permission panel holds.
+func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
+	m := &steps{parent: [][2]string{{"edit", `{"path":"main.go","old_string":"package main","new_string":"package main\n\nfunc helper() {}"}`}}}
+	r := startTUI(t, m, config.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("−0")
+	r.quit()
+}
+
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	m := &steps{parent: [][2]string{{"bash", `{"command":"cat .ENV"}`}}}
 	os.Setenv("DAX_TEST", "1")

@@ -538,6 +538,23 @@ client uses the alternate screen. With `-v` dax also prints its start lines
 client exits it prints what it noted during the run (skill grants,
 compactions, denied calls) above the resume command.
 
+Each of dax's tool calls is drawn as what it does, on one line, with a
+short body under it:
+
+| tool | the line | collapsed | Ctrl-O |
+|---|---|---|---|
+| `edit` | the path, the lines it adds and removes (`+3 −1`) | the change as a diff, up to 8 lines | the whole diff |
+| `write` | the path and the content's lines | | the content |
+| `bash` | `$` and the command's first line, its timeout if set | how many lines it printed; a failure's exit status and last 3 lines | the whole output and the exit status |
+| `read` | the path and the lines asked for (`a.go:120-199`) | how many lines it read | the output |
+| `grep`, `glob`, `ls` | the pattern or directory, where and how | the matches and files, the files or the entries counted | the output |
+| `explore`, `task` | the brief's first line, `fork` and `main model` when set | the report's first 2 lines | the report |
+
+A call that failed shows its error in place of the body. A call waiting on
+a permission shows what it would do: an edit its diff, a command of several
+lines the rest of it. Any other tool (`skill`, memory, an MCP server's) is
+drawn as the client draws any call, its name and arguments.
+
 | key | |
 |---|---|
 | Enter | send a prompt, or steer the run in flight |

@@ -7,6 +7,14 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: the terminal client draws each of dax's tool calls as what it
+  does instead of its arguments as key=value pairs: an edit as its path
+  and `+3 −1` with the change as a diff under it, a command as `$` and
+  the command with a failure's exit status and last lines under it, a
+  read as its path and line range, a search as its pattern with the
+  matches counted, a sub-agent as its brief with the start of its report.
+  A call waiting on a permission shows what it would do. Ctrl-O shows an
+  edit's whole diff, a write's content and a command's whole output.
 - Changed: agentconsole v0.0.8. The run line's spinner turns in its dot
   rather than at the right edge, as does each tool call's in motion, and
   while a run goes the line says what it is doing after its figures:

@@ -20,6 +20,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/internal/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
+	"github.com/ChristopherDavenport/dax/internal/toolrender"
 )
 
 // tuiFront is the terminal client, agentconsole, over the kit dax
@@ -189,7 +190,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if run == nil {
 		run = console.Run
 	}
-	opts := append([]console.Option(nil), f.console...)
+	opts := append([]console.Option{console.WithToolRenderers(toolrender.Renderers(f.info.Dir))}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
