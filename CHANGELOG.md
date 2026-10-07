@@ -5,6 +5,13 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: agentconsole v0.0.9. The terminal client labels the
+  conversation by role: the model's messages "agent", not "assistant",
+  and yours "user", not "you". The tree's branches and the detail pane
+  say "agent" too.
+
 ## v0.0.3 - 2026-10-06
 
 - Changed: the terminal client draws each of dax's tool calls as what it
