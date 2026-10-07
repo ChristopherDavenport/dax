@@ -31,7 +31,7 @@ dax -provider anthropic      # a hosted model
 
 ## Providers and keys
 
-| `-provider` | default model | key (environment only) | `-base-url` |
+| `-provider` | default model | key (environment or `api_key_command`) | `-base-url` |
 |---|---|---|---|
 | `ollama` (default) | `qwen3.5:9b` | none | default `http://localhost:11434/v1`; another Ollama host |
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | not supported |
@@ -61,6 +61,67 @@ from a config file, not from a flag, so they stay out of `ps` and out of
 a repository), and never prints one. The variable a key was read from is
 removed from the environment of bash commands and MCP servers, whatever
 it is called, unless `pass_env` names it.
+
+For a key that expires, such as a short-lived access token, set
+`api_key_command` in your config (or `-api-key-command`) to a program
+that prints the key, in place of the variable:
+
+```json
+{
+  "provider": "openresponses",
+  "base_url": "https://llm.internal/v1",
+  "model": "qwen3-coder",
+  "api_key_command": ["gcloud", "auth", "print-access-token"]
+}
+```
+
+dax runs it without a shell when it starts, again once the key is five
+minutes old, and again when the server answers 401 or 403, then sends
+the refused request once more with the new key, so a long session
+outlives any one key. Its output must be a single token of printable
+ASCII, at most 16 KiB. It may take up to five minutes, long enough to
+wait on a sign-in in a browser. Concurrent requests share one run. The
+key is held in memory only: it is never written down or printed, and
+never put in any environment, so bash commands and MCP servers cannot
+see it. It is for the providers that take a key (not `ollama` or
+`vertex`), and is one source or the other with `api_key_env`.
+`-api-key-command ""` turns off a command your config sets.
+
+When the command fails, or the server refuses even a fresh key, the
+turn ends with an error that starts `authentication failed` and carries
+the last line the command wrote to standard error. A failure is not
+retried and the command is not run again for a few seconds, so a
+helper that cannot sign in is not run over and over; send the prompt
+again once you have signed in. The REPL and `-p` show the command's
+standard error as it runs; the terminal client keeps it for the error,
+so it does not draw over the screen. To have the error say how to sign
+in, set `api_key_login` to a URL or a command:
+
+```json
+  "api_key_command": ["my-token-helper", "print"],
+  "api_key_login": "my-token-helper login"
+```
+
+gives `authentication failed; sign in with my-token-helper login, then
+try again (...)`. dax only shows it; it does not open or run it.
+
+A server may group a client's calls by session, or key its prompt cache
+on the session, and record which client called. `session_header` names
+the header each model call carries its session's ID in, and
+`client_header` the header that carries `dax/` and dax's version:
+
+```json
+  "session_header": "X-Session-Id",
+  "client_header": "X-Client"
+```
+
+The ID is that of the session the call is recorded in: a sub-agent's
+calls carry the sub-agent's own session, and after `/clear` the new
+session's. A request made outside a run, such as asking the vendor what
+a model supports, carries none. Each must be a header name of letters,
+digits and hyphens, not one the client sets itself (`Authorization`,
+`X-Api-Key`, `Content-Type` and the like), and the two must differ.
+They are not for `vertex`.
 
 Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
 client; Anthropic and Gemini use its provider adapters.
@@ -189,7 +250,7 @@ Settings come from three layers, each overriding the one before:
 }
 ```
 
-`model`, `subagent_model`, `base_url` and `api_key_env` belong to the provider in force
+`model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header` and `client_header` belong to the provider in force
 where they are set. A later layer that switches the provider leaves them
 behind, so with `"model": "qwen3-coder:30b"` in your config,
 `dax -provider openrouter` runs OpenRouter's default model rather than
@@ -205,6 +266,10 @@ names the file and the field.
 | `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
+| `api_key_command` | a program and its arguments, `["program", "arg", ...]`, that prints the provider's key; run again as the key ages or is refused (see above) |
+| `api_key_login` | how to sign in again, a URL or a command, shown when `api_key_command` fails or its key is refused; one line, at most 500 bytes |
+| `session_header` | the header each model call carries its session's ID in, for a server that groups calls by session (see above) |
+| `client_header` | the header each model call carries `dax/<version>` in, for a server that records which client called |
 | `instructions_file` | your own instructions, added to the system prompt after dax's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
@@ -220,7 +285,7 @@ it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `think`, `effort`, `agents`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
 `instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -230,6 +295,9 @@ keys somewhere; a repository does not get to make them.)
 | flag | |
 |---|---|
 | `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think`, `-effort` | override the config |
+| `-api-key-command 'program arg ...'` | overrides `api_key_command`, split on spaces; `""` turns it off, and `api_key_login` with it |
+| `-api-key-login hint` | overrides `api_key_login` |
+| `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
@@ -466,7 +534,8 @@ machine matters.
 - **Keeps credentials away from what it starts.** Bash commands and MCP
   servers get your environment without `*_API_KEY`, `*_TOKEN`,
   `*_SECRET` and the like unless your config names a variable. Keys are
-  read from the environment only and never printed.
+  read from the environment or from your own `api_key_command`, and
+  never printed.
 - **Bounds resource use.** `read` scans at most 2 MiB a call, `grep`
   skips big and non-regular files, search patterns cannot run away, and
   git runs with the repository's fsmonitor, pager and diff programs

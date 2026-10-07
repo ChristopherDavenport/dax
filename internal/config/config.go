@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 )
@@ -54,6 +55,21 @@ type Config struct {
 	// openresponses provider's key; the key itself never goes in a
 	// config file.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
+	// APIKeyCommand is a program and its arguments that print the
+	// provider's key, run again whenever the key is due to be
+	// replaced; in place of the key's environment variable.
+	APIKeyCommand []string `json:"api_key_command,omitempty"`
+	// APIKeyLogin says how to sign in again when the key command fails
+	// or its key is refused, a URL or a command to run, shown with the
+	// error; dax does not open or run it.
+	APIKeyLogin string `json:"api_key_login,omitempty"`
+	// SessionHeader names the request header that carries the ID of
+	// the session each model call is made for, for a server that
+	// groups a harness's calls, or keys a prompt cache, by session.
+	SessionHeader string `json:"session_header,omitempty"`
+	// ClientHeader names the request header that carries dax's name
+	// and version, for a server that records which client called.
+	ClientHeader string `json:"client_header,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
 	// Effort is the reasoning effort Think asks for: minimal, low (the
@@ -206,13 +222,26 @@ func (l *Layer) validate() error {
 	if c.APIKeyEnv != "" && !envName.MatchString(c.APIKeyEnv) {
 		return fmt.Errorf("api_key_env: %q is not a variable name", c.APIKeyEnv)
 	}
+	if err := checkKeyCommand(c.APIKeyCommand); err != nil {
+		return err
+	}
+	if err := checkKeyLogin(c.APIKeyLogin); err != nil {
+		return err
+	}
+	if err := checkHeaderName("session_header", c.SessionHeader); err != nil {
+		return err
+	}
+	if err := checkHeaderName("client_header", c.ClientHeader); err != nil {
+		return err
+	}
 	if l.Project {
 		for _, f := range []struct {
 			name string
 			set  bool
 		}{
 			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
-			{"api_key_env", c.APIKeyEnv != ""},
+			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
+			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
@@ -256,6 +285,68 @@ func (l *Layer) validate() error {
 					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// checkKeyCommand refuses a key command with no program or an empty
+// word; the command is run without a shell, so there is nothing to
+// quote.
+func checkKeyCommand(argv []string) error {
+	if argv == nil {
+		return nil
+	}
+	if len(argv) == 0 {
+		return errors.New("api_key_command: want a program and its arguments, [\"program\", \"arg\", ...]")
+	}
+	for _, a := range argv {
+		if strings.TrimSpace(a) == "" {
+			return errors.New("api_key_command: an empty word; give the program and each argument as its own string")
+		}
+	}
+	return nil
+}
+
+// checkKeyLogin refuses a sign-in hint that would not print as one
+// line of an error.
+func checkKeyLogin(s string) error {
+	if len(s) > 500 {
+		return errors.New("api_key_login: want a URL or a command, at most 500 bytes")
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return errors.New("api_key_login: want one line of text, a URL or a command")
+		}
+	}
+	return nil
+}
+
+// headerName is a header name dax may set: a token of letters, digits
+// and hyphens, at most 64 bytes.
+var headerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+
+// reservedHeaders are the headers a client sets itself: the key, the
+// request's framing and the vendors' own. A session or client header
+// under one of these names would replace what the client sent.
+var reservedHeaders = []string{
+	"Authorization", "Proxy-Authorization", "X-Api-Key", "X-Goog-Api-Key", "Cookie",
+	"Host", "Content-Type", "Content-Length", "Content-Encoding", "Transfer-Encoding",
+	"Connection", "Accept", "Accept-Encoding", "Anthropic-Version", "Anthropic-Beta", "Openai-Beta",
+}
+
+// checkHeaderName refuses a session_header or client_header that is not
+// a header name, or that names a header the client sets itself.
+func checkHeaderName(field, name string) error {
+	if name == "" {
+		return nil
+	}
+	if !headerName.MatchString(name) {
+		return fmt.Errorf("%s: %q is not a header name", field, name)
+	}
+	for _, r := range reservedHeaders {
+		if strings.EqualFold(name, r) {
+			return fmt.Errorf("%s: %s is a header the client sets itself; name another", field, r)
 		}
 	}
 	return nil
@@ -306,8 +397,11 @@ func (l *Layer) resolvePaths() {
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
-	PricingFile, Effort                                           *string
-	Think, Agents                                                 *bool
+	// APIKeyCommand is the program and arguments; nil was not given.
+	APIKeyCommand                    []string
+	APIKeyLogin, PricingFile, Effort *string
+	SessionHeader, ClientHeader      *string
+	Think, Agents                    *bool
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
 }
@@ -316,10 +410,14 @@ type Flags struct {
 // over them, validated as a whole.
 type Settings struct {
 	Provider         string
-	Model            string // empty: the provider's default
-	SubagentModel    string // empty: the provider's default, else Model
-	BaseURL          string // empty: the provider's default
-	APIKeyEnv        string // empty: the openresponses provider sends no key
+	Model            string   // empty: the provider's default
+	SubagentModel    string   // empty: the provider's default, else Model
+	BaseURL          string   // empty: the provider's default
+	APIKeyEnv        string   // empty: the openresponses provider sends no key
+	APIKeyCommand    []string // empty: the key comes from the environment
+	APIKeyLogin      string   // empty: no sign-in hint with a key error
+	SessionHeader    string   // empty: no session header on model calls
+	ClientHeader     string   // empty: no client header on model calls
 	Think            bool
 	Effort           string // the effort Think asks for
 	Agents           bool
@@ -331,8 +429,9 @@ type Settings struct {
 	PassEnv          []string
 	MaxReadBytes     int64
 	Policy           PolicySettings
-	// Sources says which layer set each of provider, model, base_url
-	// and api_key_env: "default", the file's path, or "flag".
+	// Sources says which layer set each of provider, model, base_url,
+	// api_key_env, api_key_command, api_key_login, session_header and
+	// client_header: "default", the file's path, or "flag".
 	Sources map[string]string
 }
 
@@ -359,12 +458,13 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
-		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default"},
+		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default"},
 	}
 	servers := map[string]MCP{}
-	// model, subagent_model, base_url and api_key_env belong to the
-	// provider in force
-	// where they were set; setFor records which one that was.
+	// model, subagent_model, base_url, api_key_env, api_key_command,
+	// api_key_login, session_header and client_header belong to the
+	// provider in force where they were set; setFor records which one
+	// that was.
 	setFor := map[string]string{}
 	for _, l := range layers {
 		if l.Provider != "" {
@@ -381,6 +481,18 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.APIKeyEnv != "" {
 			s.APIKeyEnv, s.Sources["api_key_env"], setFor["api_key_env"] = l.APIKeyEnv, l.Path, s.Provider
+		}
+		if len(l.APIKeyCommand) > 0 {
+			s.APIKeyCommand, s.Sources["api_key_command"], setFor["api_key_command"] = l.APIKeyCommand, l.Path, s.Provider
+		}
+		if l.APIKeyLogin != "" {
+			s.APIKeyLogin, s.Sources["api_key_login"], setFor["api_key_login"] = l.APIKeyLogin, l.Path, s.Provider
+		}
+		if l.SessionHeader != "" {
+			s.SessionHeader, s.Sources["session_header"], setFor["session_header"] = l.SessionHeader, l.Path, s.Provider
+		}
+		if l.ClientHeader != "" {
+			s.ClientHeader, s.Sources["client_header"], setFor["client_header"] = l.ClientHeader, l.Path, s.Provider
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -455,6 +567,23 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.APIKeyEnv != nil {
 		s.APIKeyEnv, s.Sources["api_key_env"], setFor["api_key_env"] = *f.APIKeyEnv, "flag", s.Provider
 	}
+	if f.APIKeyCommand != nil {
+		s.APIKeyCommand, s.Sources["api_key_command"], setFor["api_key_command"] = f.APIKeyCommand, "flag", s.Provider
+		if len(f.APIKeyCommand) == 0 {
+			// Turning the command off turns its sign-in hint off too.
+			s.APIKeyLogin, s.Sources["api_key_login"] = "", "default"
+			delete(setFor, "api_key_login")
+		}
+	}
+	if f.APIKeyLogin != nil {
+		s.APIKeyLogin, s.Sources["api_key_login"], setFor["api_key_login"] = *f.APIKeyLogin, "flag", s.Provider
+	}
+	if f.SessionHeader != nil {
+		s.SessionHeader, s.Sources["session_header"], setFor["session_header"] = *f.SessionHeader, "flag", s.Provider
+	}
+	if f.ClientHeader != nil {
+		s.ClientHeader, s.Sources["client_header"], setFor["client_header"] = *f.ClientHeader, "flag", s.Provider
+	}
 	// A later layer that switched the provider leaves the earlier
 	// provider's model, endpoint and key variable behind: the user's
 	// "model": "qwen3-coder:30b" is Ollama's, and -provider openrouter
@@ -472,6 +601,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.BaseURL = ""
 		case "api_key_env":
 			s.APIKeyEnv = ""
+		case "api_key_command":
+			s.APIKeyCommand = nil
+		case "api_key_login":
+			s.APIKeyLogin = ""
+		case "session_header":
+			s.SessionHeader = ""
+		case "client_header":
+			s.ClientHeader = ""
 		}
 		s.Sources[name] = "default"
 	}
@@ -517,6 +654,39 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if s.Provider != "openresponses" {
 			return s, fmt.Errorf("api_key_env is for the openresponses provider, not %s (%s)", s.Provider, s.Sources["api_key_env"])
+		}
+	}
+	if len(s.APIKeyCommand) > 0 {
+		if err := checkKeyCommand(s.APIKeyCommand); err != nil {
+			return s, err
+		}
+		if s.Provider == "ollama" || s.Provider == "vertex" {
+			return s, fmt.Errorf("api_key_command is for a provider that takes a key, not %s (%s)", s.Provider, s.Sources["api_key_command"])
+		}
+		if s.APIKeyEnv != "" {
+			return s, fmt.Errorf("api_key_command (%s) and api_key_env (%s) are two sources for one key; set one", s.Sources["api_key_command"], s.Sources["api_key_env"])
+		}
+	}
+	for _, h := range []struct{ field, name string }{{"session_header", s.SessionHeader}, {"client_header", s.ClientHeader}} {
+		if h.name == "" {
+			continue
+		}
+		if err := checkHeaderName(h.field, h.name); err != nil {
+			return s, err
+		}
+		if s.Provider == "vertex" {
+			return s, fmt.Errorf("%s is not supported by the vertex provider (%s)", h.field, s.Sources[h.field])
+		}
+	}
+	if s.SessionHeader != "" && strings.EqualFold(s.SessionHeader, s.ClientHeader) {
+		return s, fmt.Errorf("session_header and client_header both name %s; name two headers", s.SessionHeader)
+	}
+	if s.APIKeyLogin != "" {
+		if err := checkKeyLogin(s.APIKeyLogin); err != nil {
+			return s, err
+		}
+		if len(s.APIKeyCommand) == 0 {
+			return s, fmt.Errorf("api_key_login (%s) is for api_key_command, which is not set", s.Sources["api_key_login"])
 		}
 	}
 	return s, nil

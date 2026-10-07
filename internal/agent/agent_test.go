@@ -19,6 +19,7 @@ import (
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
+	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 
@@ -642,6 +643,67 @@ func TestTheSubagentRunsItsOwnModel(t *testing.T) {
 			}
 		}
 		model.mu.Unlock()
+	}
+}
+
+// sessions records the session ID on each model call's context, the
+// main run's and the explorer's apart.
+type sessions struct {
+	scripted
+	mu            sync.Mutex
+	parent, child []string
+}
+
+func (m *sessions) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	if strings.Contains(req.Instructions, "read-only explorer") {
+		m.child = append(m.child, session.SessionIDFromContext(ctx))
+	} else {
+		m.parent = append(m.parent, session.SessionIDFromContext(ctx))
+	}
+	m.mu.Unlock()
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+// Each model call carries the ID of the session it is recorded in, so
+// a session header names the main run's or the sub-agent's.
+func TestEachModelCallCarriesItsSessionID(t *testing.T) {
+	ctx := context.Background()
+	model := &sessions{scripted: scripted{calls: [][2]string{{"explore", `{"input":"what is here?"}`}}}}
+	o := options(t, model)
+	o.Agents = true
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Prompt(ctx, "explore"); err != nil {
+		t.Fatal(err)
+	}
+	sums, err := List(ctx, o.Root, o.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var child string
+	for _, sum := range sums {
+		if sum.Header.ParentSession == s.ID() {
+			child = sum.Header.ID
+		}
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.parent) == 0 || len(model.child) == 0 || child == "" {
+		t.Fatalf("parent calls %v, child calls %v, child session %q: want both", model.parent, model.child, child)
+	}
+	for _, id := range model.parent {
+		if id != s.ID() {
+			t.Errorf("main run's call carried %q, want %s", id, s.ID())
+		}
+	}
+	for _, id := range model.child {
+		if id != child {
+			t.Errorf("explorer's call carried %q, want its own session %s", id, child)
+		}
 	}
 }
 

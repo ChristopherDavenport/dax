@@ -5,6 +5,29 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `api_key_command` and `-api-key-command`, a program whose output
+  is the provider's key, in place of its environment variable. dax runs
+  it at start, again once the key is five minutes old, and again when
+  the server answers 401 or 403, retrying the refused request once with
+  the new key, so a key that expires is replaced without a restart. The
+  key stays in memory and out of every environment dax starts. For every
+  provider that takes a key; a project file may not set it.
+- Added: when the key command fails or the server refuses even a fresh
+  key, the turn ends with an error that starts `authentication failed`
+  and carries the command's last line of standard error. It is not
+  retried, and the command is not run again for a few seconds. The
+  terminal client keeps the command's standard error for the error
+  instead of drawing it over the screen. `api_key_login` and
+  `-api-key-login` add how to sign in again to that error.
+- Added: `session_header` and `client_header`, with `-session-header`
+  and `-client-header`, for a server that groups calls by session or
+  records which client called. Each model call carries the ID of the
+  session it is recorded in under the first, a sub-agent's call its own
+  session's, and `dax/<version>` under the second. Not for `vertex`; a
+  project file may not set them.
+
 ## v0.0.4 - 2026-10-06
 
 - Changed: agentconsole v0.0.9. The terminal client labels the

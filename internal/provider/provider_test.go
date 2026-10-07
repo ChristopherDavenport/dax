@@ -255,3 +255,81 @@ func TestSubagentModel(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyCommand(t *testing.T) {
+	const secret = "sk-from-the-command"
+	cmd := helper(t, secret+"\n")
+	// The variable is set too, to show the command is what is used and
+	// that the variable is then not one the children must be kept from.
+	getenv := env(map[string]string{"OPENAI_API_KEY": "x", "OPENROUTER_API_KEY": "x", "ANTHROPIC_API_KEY": "x", "GEMINI_API_KEY": "x"})
+	for _, spec := range []Spec{
+		{Provider: "openai"},
+		{Provider: "openrouter"},
+		{Provider: "openresponses", Model: "m", BaseURL: "http://x/v1"},
+		{Provider: "anthropic"},
+		{Provider: "gemini"},
+	} {
+		spec.KeyCommand, spec.Getenv = cmd, getenv
+		m, err := New(context.Background(), spec)
+		if err != nil {
+			t.Errorf("%s: %v", spec.Provider, err)
+			continue
+		}
+		if m.KeyEnv != "" || strings.Contains(m.Endpoint, secret) {
+			t.Errorf("%s: key variable %q, endpoint %q", spec.Provider, m.KeyEnv, m.Endpoint)
+		}
+		if _, ok := m.Streamer.(*keyStreamer); !ok && !isCompactingKeyStreamer(m.Streamer) {
+			t.Errorf("%s: model %T does not report key errors", spec.Provider, m.Streamer)
+		}
+		if m.KeyStderr == nil {
+			t.Errorf("%s: no way to quiet the command", spec.Provider)
+		}
+	}
+	// With the command, an unset variable is not missed.
+	if _, err := New(context.Background(), Spec{Provider: "openai", KeyCommand: cmd, Getenv: env(nil)}); err != nil {
+		t.Errorf("command without the variable: %v", err)
+	}
+	// Without one, there is nothing to quiet and nothing to wrap.
+	m, err := New(context.Background(), Spec{Provider: "openai", Getenv: getenv})
+	if err != nil || m.KeyStderr != nil {
+		t.Errorf("no command: %v, %v", m.KeyStderr != nil, err)
+	}
+	if _, ok := m.Streamer.(*keyStreamer); ok || isCompactingKeyStreamer(m.Streamer) {
+		t.Errorf("no command: model wrapped")
+	}
+}
+
+func isCompactingKeyStreamer(s any) bool { _, ok := s.(*compactingKeyStreamer); return ok }
+
+func TestKeyCommandRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		spec Spec
+		want string
+	}{
+		{Spec{Provider: "ollama"}, "ollama: api_key_command is for a provider that takes a key"},
+		{Spec{Provider: "vertex", Getenv: env(map[string]string{LocationEnv: "global"}), Credentials: fakeCredentials}, "vertex: api_key_command"},
+		{Spec{Provider: "openresponses", Model: "m", BaseURL: "http://x/v1", KeyEnv: "K"}, "two sources for one key"},
+		// Settings errors still come first.
+		{Spec{Provider: "openai", BaseURL: "https://x"}, "base_url is not supported"},
+	} {
+		tc.spec.KeyCommand = []string{"never-run"}
+		if tc.spec.Getenv == nil {
+			tc.spec.Getenv = env(nil)
+		}
+		_, err := New(context.Background(), tc.spec)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%+v: err = %v, want %q", tc.spec, err, tc.want)
+		}
+	}
+	// A command that prints no key fails here, before any request, and
+	// is named; the variable is not fallen back on.
+	_, err := New(context.Background(), Spec{Provider: "anthropic", KeyCommand: helper(t, "fail"), KeyLogin: "my-token-helper login", Getenv: env(map[string]string{"ANTHROPIC_API_KEY": "x"})})
+	if !errors.Is(err, ErrKeyCommand) || !strings.HasPrefix(err.Error(), "anthropic: authentication failed; sign in with my-token-helper login") || !strings.Contains(err.Error(), "helper: refusing") {
+		t.Errorf("failing command: %v", err)
+	}
+	// A sign-in hint with no command to give it is a mistake.
+	_, err = New(context.Background(), Spec{Provider: "openai", KeyLogin: "my-token-helper login", Getenv: env(map[string]string{"OPENAI_API_KEY": "x"})})
+	if err == nil || !strings.Contains(err.Error(), "api_key_login is for api_key_command") {
+		t.Errorf("login without a command: %v", err)
+	}
+}

@@ -5,15 +5,17 @@
 // openresponses client, each with its own defaults; Anthropic and
 // Gemini go through their adapter modules, and so does vertex, which is
 // Claude and Gemini on Google Vertex AI through those same two adapters.
-// Keys come from the environment and from nowhere else, and no error or
-// log here carries one; vertex takes no key but Google's Application
-// Default Credentials.
+// Keys come from the environment, or from a command the user names
+// whose output is the key, and no error or log here carries one; vertex
+// takes no key but Google's Application Default Credentials.
 package provider
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 
@@ -113,6 +115,26 @@ type Spec struct {
 	// KeyEnv names the variable holding the openresponses provider's
 	// key; empty sends none. The other providers' are fixed.
 	KeyEnv string
+	// KeyCommand is a program and its arguments whose standard output
+	// is the key, in place of the environment variable. It is run when
+	// the model is built, again once the key is KeyTTL old, and again
+	// when the server answers 401, so a key that expires is replaced
+	// without a restart. It is for the providers that take a key.
+	KeyCommand []string
+	// KeyLogin says how to sign in again, a URL or a command, for the
+	// error when KeyCommand fails or its key is refused; empty leaves
+	// the error a general word about signing in.
+	KeyLogin string
+	// SessionHeader names the header each request carries the ID of
+	// its run's session in, for a server that groups calls or keys a
+	// prompt cache by session; empty sends none. A sub-agent's
+	// requests carry the sub-agent's session.
+	SessionHeader string
+	// ClientHeader names the header each request carries Client in,
+	// for a server that records which client called; empty sends none.
+	ClientHeader string
+	// Client is what ClientHeader carries, such as "dax/v0.0.5".
+	Client string
 	// Getenv reads the environment; nil is os.Getenv.
 	Getenv func(string) string
 	// Credentials finds the vertex provider's Google credentials; nil
@@ -137,6 +159,10 @@ type Model struct {
 	// Describer asks the vendor what a model supports; nil for a vendor
 	// that publishes nothing (OpenAI, an openresponses server).
 	Describer modelinfo.Describer
+	// KeyStderr sends the key command's standard error to w as it runs,
+	// os.Stderr until it is called; nil keeps it only for the error, for
+	// a front that owns the screen. It is nil without a key command.
+	KeyStderr func(w io.Writer)
 }
 
 // New builds the model for spec. No request is made.
@@ -175,6 +201,9 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		}
 		m.KeyEnv = KeyEnv(spec.Provider)
 		if spec.Provider == "vertex" {
+			if spec.SessionHeader != "" || spec.ClientHeader != "" {
+				return m, errors.New("vertex: session_header and client_header are not supported; Google's clients send their own")
+			}
 			if vertexLocation(getenv) == "" {
 				return m, fmt.Errorf("vertex: set %s (or %s) in the environment", LocationEnv, RegionEnv)
 			}
@@ -188,9 +217,31 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		return m, fmt.Errorf("unknown provider %q", spec.Provider)
 	}
 	var key string
-	if env := m.KeyEnv; env != "" {
-		if key = strings.TrimSpace(getenv(env)); key == "" {
-			return m, fmt.Errorf("%s: %w: set %s in the environment (dax does not read keys from its config files)", spec.Provider, ErrNoKey, env)
+	var keys *keySource
+	switch {
+	case len(spec.KeyCommand) > 0:
+		switch spec.Provider {
+		case "ollama", "vertex":
+			return m, fmt.Errorf("%s: api_key_command is for a provider that takes a key", spec.Provider)
+		}
+		if spec.KeyEnv != "" {
+			return m, fmt.Errorf("%s: api_key_command and api_key_env are two sources for one key; set one", spec.Provider)
+		}
+		// The key comes from the command, so there is no variable for
+		// the children's environment to be kept free of.
+		m.KeyEnv = ""
+		keys = newKeySource(spec.KeyCommand, spec.KeyLogin)
+		m.KeyStderr = keys.setEcho
+		// Run it now, so a command that cannot print a key is an error
+		// before any request, as a missing variable is.
+		if _, err := keys.Key(ctx); err != nil {
+			return m, fmt.Errorf("%s: %w", spec.Provider, err)
+		}
+	case spec.KeyLogin != "":
+		return m, fmt.Errorf("%s: api_key_login is for api_key_command, which is not set", spec.Provider)
+	case m.KeyEnv != "":
+		if key = strings.TrimSpace(getenv(m.KeyEnv)); key == "" {
+			return m, fmt.Errorf("%s: %w: set %s in the environment (dax does not read keys from its config files)", spec.Provider, ErrNoKey, m.KeyEnv)
 		}
 	}
 	switch spec.Provider {
@@ -203,6 +254,11 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		if key != "" {
 			opts = append(opts, openresponses.WithAPIKey(key))
 		}
+		if keys != nil || spec.SessionHeader != "" || spec.ClientHeader != "" {
+			opts = append(opts, openresponses.WithMiddleware(func(next http.RoundTripper) http.RoundTripper {
+				return transport(spec, keys, bearer, next)
+			}))
+		}
 		m.Streamer = openresponses.NewClient(base, opts...).AsAdapter()
 		m.Endpoint = base
 		switch spec.Provider {
@@ -212,7 +268,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 			m.Describer = modelinfo.OpenRouter(base, nil)
 		}
 	case "anthropic":
-		client := sdk.NewClient(option.WithAPIKey(key))
+		client := sdk.NewClient(anthropicOptions(key, keys, transport(spec, keys, xAPIKey, nil))...)
 		m.Streamer = anthropic.New(client.Messages)
 		m.Endpoint = "api.anthropic.com"
 		m.Describer = modelinfo.Anthropic(&client.Models)
@@ -249,13 +305,16 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		m.Endpoint = "vertex ai " + project + "/" + location
 		m.Describer = vertexDescriber{}
 	case "gemini":
-		client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: key, Backend: genai.BackendGeminiAPI})
+		client, err := genai.NewClient(ctx, geminiConfig(key, keys, transport(spec, keys, googAPIKey, nil)))
 		if err != nil {
 			return m, fmt.Errorf("gemini: %w", err)
 		}
 		m.Streamer = gemini.New(client)
 		m.Endpoint = "generativelanguage.googleapis.com"
 		m.Describer = modelinfo.Gemini(client.Models)
+	}
+	if keys != nil {
+		m.Streamer = withKeyErrors(m.Streamer, keys)
 	}
 	return m, nil
 }
@@ -267,4 +326,35 @@ func vertexLocation(getenv func(string) string) string {
 		return l
 	}
 	return strings.TrimSpace(getenv(RegionEnv))
+}
+
+// anthropicOptions authenticates the Anthropic client with key, or with
+// the command's key when keys is set, and sends through rt when it is
+// not nil. The command's path drops the SDK's environment defaults, so
+// no ANTHROPIC_* variable adds a credential beside the command's.
+func anthropicOptions(key string, keys *keySource, rt http.RoundTripper) []option.RequestOption {
+	opts := []option.RequestOption{option.WithAPIKey(key)}
+	if keys != nil {
+		opts = []option.RequestOption{option.WithoutEnvironmentDefaults()}
+	}
+	if rt != nil {
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: rt}))
+	}
+	return opts
+}
+
+// geminiConfig is the Gemini API client's config for key, or for the
+// command's key when keys is set, sending through rt when it is not
+// nil. genai insists on a key for this backend and sends it on every
+// request; the transport overwrites it with the command's, so the
+// placeholder never leaves the process.
+func geminiConfig(key string, keys *keySource, rt http.RoundTripper) *genai.ClientConfig {
+	cc := &genai.ClientConfig{APIKey: key, Backend: genai.BackendGeminiAPI}
+	if keys != nil {
+		cc.APIKey = "from-api-key-command"
+	}
+	if rt != nil {
+		cc.HTTPClient = &http.Client{Transport: rt}
+	}
+	return cc
 }
