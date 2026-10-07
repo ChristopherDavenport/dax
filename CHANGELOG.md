@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.4 - 2026-10-06
 
 - Changed: agentconsole v0.0.9. The terminal client labels the
   conversation by role: the model's messages "agent", not "assistant",
