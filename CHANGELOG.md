@@ -7,6 +7,12 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: with sub-agents on, the main agent's system prompt guides it
+  to keep its own context for decisions: broad searches go to `explore`,
+  changes it can brief completely go to `task`, and it works directly
+  when it knows the file or the change is small. It checks a sub-agent's
+  report before relying on it and passes the findings on in its reply.
+  Sub-agents, and sessions with `agents` off, are not given the guide.
 - Added: `api_key_command` and `-api-key-command`, a program whose output
   is the provider's key, in place of its environment variable. dax runs
   it at start, again once the key is five minutes old, and again when

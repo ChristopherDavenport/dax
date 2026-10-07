@@ -75,13 +75,23 @@ run; it never reached its tool; it was denied.
 
 ## The prompt
 
-dax's part of the system prompt is a role line, a nudge toward glob, grep
-and ls over shell commands, the user's `instructions_file`, and the
+dax's part of the system prompt is a role line, a nudge toward glob,
+grep and ls over shell commands, the user's `instructions_file`, and the
 working directory. `agentkit` renders and joins the rest in a fixed
 order: the skill catalogue, the memory block, then the AGENTS.md chain
 (`~/.dax/AGENTS.md`, then every `AGENTS.md` from `/` down to the working
 directory, nearest last). What a layer left out, a file over the budget
 or a skill that would not load, is printed at start as `omitted:`.
+
+When the session offers sub-agents, the main agent's prompt adds a guide
+to them: its context lasts the session, so broad reading goes to
+`explore` and a change it can brief completely to `task`, while a known
+file, a small change or code it must see to decide stays with it. It
+checks a report before building on it and passes the findings on in its
+reply, since a front shows only the start of a report. The tools'
+descriptions say how each works; the guide says how to divide the work.
+A `task` sub-agent is told dax's prompt without the guide, having no
+sub-agents of its own.
 
 ## Tools
 
