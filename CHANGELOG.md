@@ -7,6 +7,15 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: agentconsole v0.0.8. The run line's spinner turns in its dot
+  rather than at the right edge, as does each tool call's in motion, and
+  while a run goes the line says what it is doing after its figures:
+  waiting, thinking, writing, calling or running a tool, retrying. A
+  steer typed during a run is listed over the input as queued until the
+  run takes it, and one queued before an abort and a quit is taken by
+  the next run on resume rather than dropped. Shift-Enter, Alt-Enter or
+  Ctrl-J puts a new line in the input. dax hands the client no tool
+  renderers yet, so calls are drawn as before.
 - Changed: the terminal client leaves only the command that resumes the
   session when it exits, `To resume this session: dax -resume <id>`. The
   start lines (model, session, policy, tools, omissions) and what dax
