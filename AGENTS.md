@@ -41,6 +41,10 @@ sibling libraries; the design and who owns what is in
   plumbing, and the session-store helpers.
 - `internal/prompt`, `internal/render`: dax's part of the system prompt;
   the REPL's event printer.
+- `internal/toolrender`: the terminal client's renderers of dax's tool
+  calls (`toolview.Renderer`s), from the record's arguments and output
+  alone. It does not import `internal/tool`; its tests run the real tools,
+  so a change to a tool's output format fails them.
 
 ## Siblings
 
