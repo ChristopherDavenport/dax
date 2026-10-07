@@ -407,7 +407,7 @@ func open(ctx context.Context, o Options, store *cas.Store, resume string) (*Ses
 		agentkit.WithModel(model, o.Model),
 		agentkit.WithReasoning(o.reasoningFor(ctx, o.Model)),
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
-		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions)),
+		agentkit.WithInstructions(prompt.Build(o.Dir, o.Instructions, o.Agents)),
 		agentkit.WithTools(tool.Builtins(ws, o.MaxReadBytes, tool.WithEnv(env))...),
 	}
 	// agentsText is the AGENTS.md part as the kit renders it, for the

@@ -189,6 +189,9 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 			t.Errorf("instructions lack %q", sub)
 		}
 	}
+	if strings.Contains(instr, "let sub-agents do") {
+		t.Error("instructions guide to sub-agents the session does not offer")
+	}
 	var names []string
 	for _, tl := range s.Tools() {
 		names = append(names, tl.Name)

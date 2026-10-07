@@ -83,10 +83,15 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 			t.Errorf("child instructions lack %q", want)
 		}
 	}
-	for _, not := range []string{"greet", "memory_save"} {
+	// The guide to the sub-agents is the main agent's: the child has
+	// no sub-agents of its own.
+	for _, not := range []string{"greet", "memory_save", "let sub-agents do"} {
 		if strings.Contains(req.Instructions, not) {
 			t.Errorf("child instructions carry %q", not)
 		}
+	}
+	if !strings.Contains(s.Agent.Config().Instructions, "let sub-agents do") {
+		t.Error("the main agent's instructions lack the guide to its sub-agents")
 	}
 	var names []string
 	for _, tl := range req.Tools {

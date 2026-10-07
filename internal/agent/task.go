@@ -63,7 +63,7 @@ type taskArgs struct {
 // the kit renders it for the main agent. Skills and memory are left
 // out: the sub-agent has neither tool.
 func (o Options) task(ctx context.Context, model openresponses.Streamer, ws *tool.Workspace, env []string, eng *atomic.Pointer[agentpolicy.Engine], agentsText string) agentturn.Config {
-	parts := []string{taskPreamble, prompt.Build(o.Dir, o.Instructions)}
+	parts := []string{taskPreamble, prompt.Build(o.Dir, o.Instructions, false)}
 	if agentsText != "" {
 		parts = append(parts, agentsText)
 	}
