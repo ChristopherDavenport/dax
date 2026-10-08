@@ -16,7 +16,7 @@ func runBash(t *testing.T, dir, command string) (partial []string, result string
 	t.Helper()
 	var mu sync.Mutex
 	args, _ := json.Marshal(map[string]string{"command": command})
-	b := Bash(dir)
+	b := Bash(newWS(t, dir))
 	c := agenttool.Call{
 		ID:   "call_1",
 		Args: args,

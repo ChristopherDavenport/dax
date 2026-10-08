@@ -1,4 +1,4 @@
-package main
+package dax
 
 // This file is the seam where the front is chosen. A front is how the
 // user talks to a session: it supplies the callbacks the session asks
@@ -12,7 +12,8 @@ package main
 // REPL, which has the slash commands; and print, which is -p. A new
 // front implements front and gets a case in selectFront. The renderer
 // for events, internal/render, is the REPL's and print's; the terminal
-// client renders the session's record itself.
+// client renders the session's record itself, drawing tool calls with
+// frontInfo.Renderers.
 
 import (
 	"bufio"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
+	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -38,6 +40,12 @@ import (
 
 // frontInfo is what a front shows the user about the session.
 type frontInfo struct {
+	// Name is the program's, which the banner and the resume command
+	// name.
+	Name string
+	// Renderers draw tool calls in the terminal client: dax's, with
+	// the extensions' laid over them.
+	Renderers            toolview.Renderers
 	Provider, Model, Dir string
 	// ModelInfo is a line about what the model takes; empty when its
 	// vendor says nothing.
@@ -178,7 +186,7 @@ func (f *replFront) Hooks() (func(*openresponses.FunctionCall, string) bool, age
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
 	abortOnInterrupt(sess)
-	fmt.Printf("dax · %s %s · %s\n", f.info.Provider, f.info.Model, f.info.Dir)
+	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, f.info.Dir)
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}

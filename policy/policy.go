@@ -1,129 +1,87 @@
-// Package policy builds the agentpolicy rules dax runs under: its
-// built-in allow list, the user's rules, and the project's, which are
-// not trusted.
+// Package policy merges the agentpolicy rules a dax session runs under:
+// the rules each extension ships for its own tools, each under a source
+// of its own, the user's config, and the project's, which is not
+// trusted. It knows no tool: dax's own rules are dax-coding's, and
+// arrive here as any extension's do.
 //
-// The shipped default is: the read-only tools run; so do a few
-// commands that only look (git status, go test, ...); every other
-// call, which is every write, every other command and every tool an
-// MCP server adds, asks. A rule in the config adds to that, and
-// "builtin": false drops the allow list so the rules are all there is.
-// A deny beats an ask and an ask beats an allow, so the way to make a
-// tool the default asks about run unasked is an allow rule, and the way
-// to stop an allowed one is an ask or deny rule.
+// A deny beats an ask and an ask beats an allow, whatever the source.
+// Sources rank for carve-outs: a carve-out (a rule whose specifier
+// starts with !) cancels a rule only of a source it does not rank
+// below. The user's config ranks above the extensions, which rank
+// above the project's config, so the user can lift an extension's ask
+// and the project can lift nothing; an extension may not write a
+// carve-out at all, so none can cancel another's rule.
 package policy
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
-
-	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/tool"
 )
-
-// BuiltinAllow is the allow list dax ships. The sub-agents, explore
-// and task, are on it because starting one does nothing of itself:
-// every call the sub-agent makes is decided by this same policy, so a
-// task's writes and commands ask as the main agent's do. go test, build, vet and
-// list are not on it: they run the repository's code (TestMain, cgo,
-// a vet tool, a toolchain the go.mod names). A user who trusts a
-// repository allows them in the user config; see the README. Writes
-// and bash in general are not on it: they fall to the default, which
-// asks.
-//
-// A bash rule is matched against each stage of the command line on its
-// own (see tool.BashSubjects), at a word boundary, so "git status"
-// allows `git status -s` and not `git statusx`, and `git status && rm
-// -rf x` asks about the rm. For the commands tool.Analyzer governs the
-// rule only names them: whether this call's arguments are read-only,
-// inside the workspace and free of programs is the analyzer's, and a
-// call that fails it asks whatever the rule says.
-const BuiltinAllow = "read glob grep ls skill explore task memory_search " +
-	"bash(git status:*) bash(git diff:*) bash(git log:*) bash(git show:*) " +
-	"bash(go version) bash(go env:*) " +
-	"bash(git branch:*) bash(git rev-parse:*) bash(git ls-files:*) bash(git remote:*) bash(git blame:*) " +
-	"bash(git stash list:*) bash(git tag:*) bash(git describe:*) bash(git shortlog:*) bash(git config:*) " +
-	"bash(cat:*) bash(head:*) bash(tail:*) bash(wc:*) bash(grep:*) bash(sort:*) bash(uniq:*) bash(cut:*) bash(cd:*) " +
-	"bash(ls:*) bash(pwd)"
-
-// secretPaths are names that look like they hold a credential or a
-// key. Reading one asks, whichever tool reads it: Read(...) names read,
-// grep, glob and ls, and cat, head, tail, wc, grep and git show of a
-// path are decided as a read of it. A pattern here has a form for the
-// workspace root and one for any directory below it, since a rule's *
-// runs across slashes but does not match nothing before a dot.
-var secretPaths = []string{
-	".env*", ".npmrc", ".netrc", ".pgpass", ".git-credentials", "id_*", "credentials*", "*.pem", "*.key", "*.p12", "*.pfx",
-	"*secret*", ".kube/config", ".docker/config.json", ".aws/**", ".ssh/**", ".aws", ".ssh",
-}
-
-// BuiltinAsk is the ask list dax ships: reads of the paths above. It
-// ranks with the built-in allow list, so an ask beats the bare read
-// allow; a user's allow rule for a path (read(.env), Read(config/.env))
-// opens it, because Build gives each such rule a carve-out from this
-// list.
-func BuiltinAsk() string {
-	var b strings.Builder
-	for _, s := range secretPaths {
-		// ci: marks a pattern matched without regard to case: .ENV and
-		// ID_RSA are the same names on a case-folding file system and
-		// plausible ones on any other.
-		b.WriteString("Read(ci:" + s + ") ")
-		if !strings.HasPrefix(s, "*") {
-			b.WriteString("Read(ci:*/" + s + ") ")
-		}
-	}
-	return strings.TrimSpace(b.String())
-}
-
-var fileTools = map[string]bool{"read": true, "grep": true, "glob": true, "ls": true}
-
-// Matchers are the per-tool specifier matchers: bash by its command,
-// the file tools by their path, normalised against the workspace dir
-// (a search by the directory it looks in). Rules for a path are written
-// relative to the workspace: write(docs/**), read(.env).
-func Matchers(dir string, maxFile int64) map[string]agentpolicy.ToolMatcher {
-	file := func(def string) agentpolicy.ToolMatcher {
-		return agentpolicy.ToolMatcher{Match: pathMatcher, Subjects: tool.PathSubjects(dir, "path", def)}
-	}
-	return map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(dir, maxFile)},
-		"read":  file(""),
-		"write": file(""),
-		"edit":  file(""),
-		// A search is matched on where it looks, not on its pattern.
-		"glob": file("."),
-		"grep": file("."),
-		"ls":   file("."),
-	}
-}
-
-// Options are the aliases that let rules, and a skill's allowed-tools,
-// name the tools as the reference does: Bash, Read, Edit.
-func Options() []agentpolicy.Option {
-	return []agentpolicy.Option{agentpolicy.WithAliases(map[string][]string{
-		"Bash":  {"bash"},
-		"Read":  {"read", "grep", "glob", "ls"},
-		"Write": {"write"},
-		"Edit":  {"edit", "write"},
-	})}
-}
 
 // Source names the layers in verdicts and in the session's record.
 const (
-	SourceBuiltin = "dax:builtin"
 	SourceUser    = "dax:config"
 	SourceProject = "dax:project"
 )
 
-// Build merges the built-in allow list with the user's and the
-// project's rules. The project's source is untrusted and ranks below
-// the user's and the built-in list, so its allow rules are withheld,
-// its ask and deny rules apply, and a carve-out in it cannot cancel a
-// rule of theirs.
-func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
+// SourceExtension is the source of the rules the extension called name
+// ships: what a verdict a rule of them decides names in the session's
+// record, so a call one allowed is recorded as that extension's
+// decision.
+func SourceExtension(name string) string { return "extension:" + name }
+
+// Settings are the policy's rules, folded across the config's layers,
+// and the extensions'.
+type Settings struct {
+	// Off runs every call without asking; Build is not called.
+	Off bool
+	// Builtin keeps the allow rules the extensions ship. Without it
+	// their asks and denies still apply, so a repository that turns it
+	// off loosens nothing.
+	Builtin bool
+	// Fallback is what a call no rule matches gets: allow, deny, or
+	// ask for anything else.
+	Fallback string
+	// Shipped are the extensions' rules, one source each.
+	Shipped []Shipped
+	// User and Project are the user's config's rules and the project's.
+	User    Rules
+	Project Rules
+}
+
+// Rules are rule lists in the policy grammar, one string per entry.
+type Rules struct{ Allow, Ask, Deny []string }
+
+// Shipped are the rules one extension ships.
+type Shipped struct {
+	// Name names the extension; its source is SourceExtension(Name).
+	// It must be set, and no two may share it.
+	Name  string
+	Rules Rules
+	// Owns are the names its rules may use: its tools and its aliases.
+	// A rule naming anything else is an error.
+	Owns []string
+	// Lifts are its tools whose asks a user's allow rule with a
+	// specifier for the same tool lifts.
+	Lifts []string
+}
+
+// Ranks of the sources: the user's config above the extensions, the
+// extensions above the project's config.
+const (
+	rankProject   = 0
+	rankExtension = 1
+	rankUser      = 2
+)
+
+// Build merges the extensions' rules with the user's and the project's.
+// The project's source is untrusted and ranks below the rest, so its
+// allow rules are withheld, its ask and deny rules apply, and a
+// carve-out in it cannot cancel a rule of theirs.
+func Build(s Settings) (agentpolicy.Policy, error) {
 	parse := func(what string, rules []string) ([]agentpolicy.Rule, error) {
 		out, err := agentpolicy.ParseRules(strings.Join(rules, " "))
 		if err != nil {
@@ -132,23 +90,50 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		return out, nil
 	}
 	var sets []agentpolicy.RuleSet
-	if s.Builtin {
-		allow, err := agentpolicy.ParseRules(BuiltinAllow)
-		if err != nil {
-			return agentpolicy.Policy{}, err
+	lifts := map[string]bool{}
+	names := map[string]bool{}
+	// The shipped rules are read whether or not their allow rules are
+	// kept, so a program's bad rule is its error and not one a user's
+	// "builtin": false hides.
+	for _, sh := range s.Shipped {
+		if sh.Name == "" {
+			return agentpolicy.Policy{}, errors.New("policy: shipped rules without an extension name")
 		}
-		ask, err := agentpolicy.ParseRules(BuiltinAsk())
-		if err != nil {
-			return agentpolicy.Policy{}, err
+		if names[sh.Name] {
+			return agentpolicy.Policy{}, fmt.Errorf("policy: two extensions named %q ship rules", sh.Name)
 		}
-		sets = append(sets, agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBuiltin, Trusted: true, Rank: 1}, Allow: allow, Ask: ask})
+		names[sh.Name] = true
+		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceExtension(sh.Name), Trusted: true, Rank: rankExtension}}
+		for _, l := range []struct {
+			what string
+			in   []string
+			out  *[]agentpolicy.Rule
+		}{{"allow", sh.Rules.Allow, &set.Allow}, {"ask", sh.Rules.Ask, &set.Ask}, {"deny", sh.Rules.Deny, &set.Deny}} {
+			rules, err := parse("extension "+sh.Name+" "+l.what, l.in)
+			if err != nil {
+				return agentpolicy.Policy{}, err
+			}
+			for _, r := range rules {
+				if err := owned(sh, r); err != nil {
+					return agentpolicy.Policy{}, fmt.Errorf("policy extension %s %s %s: %w", sh.Name, l.what, ruleText(r), err)
+				}
+			}
+			*l.out = rules
+		}
+		if !s.Builtin {
+			set.Allow = nil
+		}
+		for _, t := range sh.Lifts {
+			lifts[strings.ToLower(t)] = true
+		}
+		sets = append(sets, set)
 	}
 	for _, l := range []struct {
 		src   agentpolicy.Source
-		rules config.Rules
+		rules Rules
 	}{
-		{agentpolicy.Source{Name: SourceUser, Trusted: true, Rank: 2}, s.User},
-		{agentpolicy.Source{Name: SourceProject}, s.Project},
+		{agentpolicy.Source{Name: SourceUser, Trusted: true, Rank: rankUser}, s.User},
+		{agentpolicy.Source{Name: SourceProject, Rank: rankProject}, s.Project},
 	} {
 		var set agentpolicy.RuleSet
 		var err error
@@ -164,10 +149,10 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 		}
 		if l.src.Trusted {
 			// Allowing a path is meant: an allow rule with a specifier
-			// for a file tool cancels the built-in ask for it, which
-			// precedence alone would not.
+			// for a tool an extension lifts for cancels that
+			// extension's ask for it, which precedence alone would not.
 			for _, r := range set.Allow {
-				if r.Spec != "" && !strings.HasPrefix(r.Spec, "!") && fileTools[strings.ToLower(r.Tool)] {
+				if r.Spec != "" && !strings.HasPrefix(r.Spec, "!") && lifts[strings.ToLower(r.Tool)] {
 					set.Ask = append(set.Ask, agentpolicy.Rule{Tool: r.Tool, Spec: "!" + r.Spec})
 				}
 			}
@@ -189,25 +174,28 @@ func Build(s config.PolicySettings) (agentpolicy.Policy, error) {
 	return p, nil
 }
 
-var pathGlob = agentpolicy.GlobMatcher("path")
+// owned refuses a shipped rule that reaches past its extension: one
+// naming a tool or alias the extension does not own, a tool pattern,
+// or a carve-out, which would cancel another source's rule.
+func owned(sh Shipped, r agentpolicy.Rule) error {
+	if strings.HasPrefix(r.Spec, "!") {
+		return errors.New("an extension may not ship a carve-out")
+	}
+	if strings.ContainsAny(r.Tool, "*?[") {
+		return errors.New("an extension's rule names its tools, not a pattern")
+	}
+	for _, o := range sh.Owns {
+		if strings.EqualFold(o, r.Tool) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is not one of the extension's tools", r.Tool)
+}
 
-// pathMatcher is the glob matcher over a call's path, with one
-// addition: a specifier that starts with ci: is matched without regard
-// to case, the way the built-in secret-path asks are.
-func pathMatcher(spec string, args json.RawMessage) bool {
-	rest, ci := strings.CutPrefix(spec, "ci:")
-	if !ci {
-		return pathGlob(spec, args)
+// ruleText is a rule as it was written.
+func ruleText(r agentpolicy.Rule) string {
+	if r.Spec == "" {
+		return r.Tool
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(args, &m); err != nil {
-		return false
-	}
-	var path string
-	if err := json.Unmarshal(m["path"], &path); err != nil {
-		return false
-	}
-	m["path"], _ = json.Marshal(strings.ToLower(path))
-	lower, _ := json.Marshal(m)
-	return pathGlob(strings.ToLower(rest), lower)
+	return r.Tool + "(" + r.Spec + ")"
 }

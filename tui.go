@@ -1,4 +1,4 @@
-package main
+package dax
 
 import (
 	"bufio"
@@ -20,7 +20,6 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
-	"github.com/ChristopherDavenport/dax/toolrender"
 )
 
 // tuiFront is the terminal client, agentconsole, over the kit dax
@@ -123,7 +122,7 @@ func (f *tuiFront) Prepare(o *agent.Options) {
 
 // banner is the lines dax shows at start in every front.
 func banner(info frontInfo, sess *agent.Session) []string {
-	lines := []string{fmt.Sprintf("dax · %s %s · %s", info.Provider, info.Model, info.Dir)}
+	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, info.Dir)}
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
@@ -190,7 +189,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if run == nil {
 		run = console.Run
 	}
-	opts := append([]console.Option{console.WithToolRenderers(toolrender.Renderers(f.info.Dir))}, f.console...)
+	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers)}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
@@ -210,14 +209,14 @@ func (f *tuiFront) flush(out io.Writer, sess *agent.Session) {
 		}
 	}
 	if id := sess.ID(); id != "" {
-		fmt.Fprintln(out, resumeLine(id))
+		fmt.Fprintln(out, resumeLine(f.info.Name, id))
 	}
 }
 
 // resumeLine is what the terminal client leaves on the terminal when it
-// exits.
-func resumeLine(id string) string {
-	return "To resume this session: dax -resume " + render.Clean(id)
+// exits, for the program called name.
+func resumeLine(name, id string) string {
+	return "To resume this session: " + render.Clean(name) + " -resume " + render.Clean(id)
 }
 
 // Abandon is for a session that could not be opened after Prepare: the

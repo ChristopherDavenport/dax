@@ -7,15 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 const (
@@ -42,7 +42,6 @@ type BashArgs struct {
 type BashOption func(*bashConfig)
 
 type bashConfig struct {
-	env     []string
 	maxFile int64
 }
 
@@ -50,22 +49,15 @@ type bashConfig struct {
 // wc and grep may be given; see Analyzer.
 func WithMaxFile(n int64) BashOption { return func(c *bashConfig) { c.maxFile = n } }
 
-// WithEnv sets the environment commands start with, before GitEnv is
-// added. The default is the current one without its credentials; see
-// ChildEnv.
-func WithEnv(env []string) BashOption { return func(c *bashConfig) { c.env = env } }
-
-// Bash returns a tool that runs a shell command in dir. It is
-// sequential: a batch that contains a shell command runs one call at a
-// time, so a command never races a concurrent edit of the same file.
-func Bash(dir string, opts ...BashOption) agenttool.Tool {
+// Bash returns a tool that runs a shell command at the workspace's
+// root, on whichever machine the workspace is, with the environment the
+// workspace gives its processes. It is sequential: a batch that
+// contains a shell command runs one call at a time, so a command never
+// races a concurrent edit of the same file.
+func Bash(f *Files, opts ...BashOption) agenttool.Tool {
 	var cfg bashConfig
 	for _, o := range opts {
 		o(&cfg)
-	}
-	base := cfg.env
-	if base == nil {
-		base = DefaultEnv(nil)
 	}
 	return agenttool.New("bash", "Run a bash command in the working directory and return its combined output and exit code.",
 		func(ctx context.Context, in BashArgs) (string, error) {
@@ -76,32 +68,15 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 			if in.Timeout > 0 {
 				timeout = time.Duration(in.Timeout) * time.Second
 			}
-			ctx, cancel := context.WithTimeout(ctx, timeout)
-			defer cancel()
-
-			cmd, err := command(ctx, &Analyzer{Dir: dir, MaxFile: cfg.maxFile}, in, base)
+			cmd, err := command(ctx, &Analyzer{Files: f, MaxFile: cfg.maxFile}, in)
 			if err != nil {
 				return "", err
 			}
-			cmd.Dir = dir
-			// Run in its own process group so cancellation reaches children too.
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-			cmd.WaitDelay = 2 * time.Second
-
-			// Keep the first maxBashBytes of the output and count the
-			// rest: a cat of a huge file or a runaway command costs
-			// what its first screen does. What arrives is reported as
-			// progress as it does, so a front shows the command
-			// running instead of waiting for it to end.
 			out := &capWriter{max: maxBashBytes}
-			pw := &progressWriter{ctx: ctx}
-			cmd.Stdout = io.MultiWriter(out, pw)
-			cmd.Stderr = io.MultiWriter(out, pw)
-			runErr := cmd.Run()
+			cmd.Stream = io.MultiWriter(out, &progressWriter{ctx: ctx})
+			cmd.Timeout = timeout
+			res, runErr := f.Workspace().Exec(ctx, cmd)
 			if in.Stamp != "" {
-				// What an auto-allowed command printed goes to the model
-				// and its provider: a URL's user:token@ is taken out.
 				out.redact = true
 			}
 
@@ -111,19 +86,12 @@ func Bash(dir string, opts ...BashOption) agenttool.Tool {
 				b.WriteByte('\n')
 			}
 			switch {
-			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			case runErr != nil:
+				return "", runErr
+			case res.TimedOut:
 				fmt.Fprintf(&b, "[killed after %s]", timeout)
-			case ctx.Err() != nil:
-				return "", ctx.Err()
-			case runErr == nil:
-				b.WriteString("[exit 0]")
 			default:
-				var ee *exec.ExitError
-				if errors.As(runErr, &ee) {
-					fmt.Fprintf(&b, "[exit %d]", ee.ExitCode())
-				} else {
-					return "", runErr
-				}
+				fmt.Fprintf(&b, "[exit %d]", res.ExitCode)
 			}
 			return b.String(), nil
 		}, agenttool.WithSequential())
@@ -172,26 +140,22 @@ func (w *progressWriter) Write(p []byte) (int, error) {
 // it approved (StampArgs). It runs only if the line still analyses to
 // that plan: as the plan rendered, every word quoted and --no-ext-diff
 // --no-textconv added to git diff, log and show, in an environment with
-// AutoEnv added. If the line has changed since, because a file is
+// autoEnv added. If the line has changed since, because a file is
 // different or the repository's git config now names a program, the
-// call fails with ErrChanged, and the original line is never run
+// call fails with errChanged, and the original line is never run
 // instead. A call without a stamp, one a person approved or one run with
-// no policy, is bash -c exactly as given, in the environment the user
-// has minus credentials: their hooks, their sshCommand and their
-// GIT_CONFIG_* are theirs.
-func command(ctx context.Context, an *Analyzer, in BashArgs, base []string) (*exec.Cmd, error) {
+// no policy, is bash -c exactly as given, in the workspace's
+// environment, the user's minus credentials: their hooks, their
+// sshCommand and their GIT_CONFIG_* are theirs.
+func command(ctx context.Context, an *Analyzer, in BashArgs) (workspace.Command, error) {
 	if in.Stamp != "" {
 		c := an.Check(ctx, in.Command)
 		if !c.Auto || !hmac.Equal([]byte(stampOf(c.Render())), []byte(in.Stamp)) {
-			return nil, ErrChanged
+			return workspace.Command{}, errChanged
 		}
-		cmd := exec.CommandContext(ctx, "bash", "-c", c.Render())
-		cmd.Env = append(append([]string(nil), base...), AutoEnv()...)
-		return cmd, nil
+		return workspace.Command{Args: []string{"bash", "-c", c.Render()}, Env: autoEnv()}, nil
 	}
-	cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
-	cmd.Env = append([]string(nil), base...)
-	return cmd, nil
+	return workspace.Command{Args: []string{"bash", "-c", in.Command}}, nil
 }
 
 // capWriter keeps the first max bytes written to it and counts the

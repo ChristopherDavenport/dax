@@ -12,6 +12,21 @@ It is a thin product over a set of small Go libraries
 `agentsession` and friends); [docs/design.md](docs/design.md) says who
 owns what.
 
+dax is a minimal core meant to be extended. The session (the model,
+the store, the policy, the workspace, AGENTS.md, MCP servers,
+compaction) knows no tool. Everything the model can do comes from an
+extension, and dax's own are extensions like any other: `dax-coding`
+(the file tools and bash), `dax-agents` (the sub-agents), `dax-skills`
+and `dax-memory`. A Go program runs dax with extensions of its own on
+the same terms, or leaves one of dax's out; see
+[Building on dax](#building-on-dax).
+
+Where the tools act is a value too. dax is meant to feel the same
+whether its tools act on this machine or elsewhere: every tool, and
+every check the policy makes of a call, goes through one workspace
+interface, and this machine's directory is one implementation of it;
+see [Where the tools act](#where-the-tools-act).
+
 ## Install
 
 ```sh
@@ -215,8 +230,9 @@ though they can still make changes that do not fit together; the
 sub-agent is told to change only the files its task is about.
 
 Both are offered by default; `-agents=false` or `"agents": false`
-turns them off. Starting one is on the built-in allow list, since what a
-sub-agent then does is decided call by call by the same policy.
+turns them off. They are the `dax-agents` extension, which ships an
+allow rule for starting one, since what a sub-agent then does is decided
+call by call by the same policy.
 
 ## Config
 
@@ -282,7 +298,8 @@ names the file and the field.
 A project's `.dax/config.json` comes from a repository, not from you, so
 it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 (no `allow`, and no `!` carve-out of any rule), set `"builtin": false` to
-drop the built-in allow list, and set `"fallback"` to `ask` or `deny` when
+drop the shipped allow rules (their asks and denies stay), and set
+`"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
@@ -363,10 +380,12 @@ specifier is matched against the command; `go test:*` means `go test` and
 anything after it at a word boundary, so it matches `go test ./...` and
 not `go testing`.
 
-dax ships this default:
+dax ships this default, as the rules of its extensions (a verdict names
+the one whose rule decided it: `extension:dax-coding`, say):
 
-- **runs without asking**: `read`, `glob`, `grep`, `ls`, `skill`,
-  `memory_search`, and the read-only bash commands listed below;
+- **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
+  bash commands listed below (dax-coding's), `explore` and `task`
+  (dax-agents'), `skill` (dax-skills') and `memory_search` (dax-memory's);
 - **asks**: `write`, `edit`, every other command, memory writes, and every
   MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile
@@ -491,9 +510,13 @@ too).
 
 Your rules in `policy` add to the default. Because deny beats ask beats
 allow, allow what the default asks about (`"allow": ["write(docs/**)"]`)
-and ask or deny what it allows. `"builtin": false` drops the shipped allow
-list, so only your rules allow anything; `"fallback": "allow"` or `"deny"`
-changes what a call no rule names does.
+and ask or deny what it allows. An ask the extensions ship, such as the
+one for a secret-looking path, holds against a plain allow of yours: lift
+it with a carve-out (`"ask": ["deploy(!staging)"]`) or, for the file
+tools, an allow that names the path (`"allow": ["read(.env)"]`).
+`"builtin": false` drops the shipped allow rules, so only your rules
+allow anything; the shipped asks and denies stay. `"fallback": "allow"`
+or `"deny"` changes what a call no rule names does.
 
 Path rules (`read(.env)`, `write(docs/**)`, `Read(secrets/**)`) are written relative to the working directory and match the path after cleaning, so `./.env`, `a/../.env` and the absolute path all meet the rule for `.env`, and `docs/../.git/x` is `.git/x`. Links are not followed for matching; the tools' own confinement still refuses one that leaves. `glob`, `grep` and `ls` are matched on the directory they search (default `.`), not on their pattern, and a rule for a directory should name `dir` and `dir/**`. A path rule is not a read ACL for a search that includes the directory from above.
 
@@ -528,6 +551,7 @@ machine matters.
 - **Treats the repository as untrusted.** Its `.dax/config.json` can only
   tighten the policy; it cannot choose the provider, model or endpoint,
   add instructions, skills, memory or MCP servers, or allow anything.
+  Its `"builtin": false` drops only allow rules, never an ask or a deny.
   `AGENTS.md` files and `.dax/skills` that are symbolic links out of the
   workspace are not read into the prompt. Path rules match the path
   after normalisation, so `docs/../.git/x` is not under `docs/**`.
@@ -692,6 +716,170 @@ beside a running dax. `-sessions ""` disables recording.
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
 `skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
 are read too.
+
+## Building on dax
+
+dax is a Go module as well as a command. `cmd/dax` is one line,
+`dax.Main` with no options; a program of your own is the same line with
+an extension:
+
+```go
+func main() {
+	os.Exit(dax.Main(context.Background(), os.Args[1:],
+		dax.WithName("acme", ""),
+		dax.WithExtension(extension.Extension{
+			Name:         "acme-deploy",
+			Tools:        deployTools, // func(extension.ToolEnv) []agenttool.Tool
+			Matchers:     extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": {Match: agentpolicy.GlobMatcher("env")}}),
+			Policy:       policy.Rules{Allow: []string{"deploy(staging)"}},
+			Instructions: "Never deploy to prod unless the user asks.",
+			Renderers:    func(string) toolview.Renderers { return toolview.Renderers{"deploy": deployRenderer{}} },
+		})))
+}
+```
+
+dax's own extensions are built the same way, from the same fields:
+
+| Extension | Package | What it offers |
+|---|---|---|
+| `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan the policy approved |
+| `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`) |
+| `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
+| `dax-memory` | `ext/memory` | the memory tools and block |
+
+`dax-coding` is always on; the others follow `agents`, `skills` and
+`memory` in the settings. `WithoutExtension` leaves one of the four out
+whatever the settings say (any other name is an error), and
+`WithExtension` adds the program's after them.
+
+| `extension.Extension` field | What it adds |
+|---|---|
+| `Name` | the extension's name; its rules are recorded as `extension:<Name>` |
+| `Tools` | tools (`agenttool.Tool`), in order, for the main agent and for `task` |
+| `ReadOnly` | the names of its tools that only look, which `explore` gets too; one annotated destructive is refused |
+| `Owns` | names of tools it adds through `Kit` (`skill`, `memory_save`), so its rules may name them |
+| `Matchers` | how a rule's specifier reads a call of one of its tools: `deploy(staging)` above. Built over the session's `ToolEnv`, so one that looks at files looks at the session's workspace; `extension.FixedMatchers` wraps ones that read only the arguments |
+| `Aliases` | names a rule may use for several of its tools: `Read` for read, grep, glob and ls |
+| `Policy` | the allow, ask and deny rules it ships for its tools |
+| `Lifts` | its tools whose asks a user's allow rule with a specifier lifts: `read(.env)` |
+| `BeforeToolCall` | a hook, built over the session's `ToolEnv`, that decides or rewrites a call, folded with the policy, for the main agent and the sub-agents; `extension.FixedHook` wraps one that needs nothing of the session |
+| `Instructions` | text in the main agent's system prompt, in extension order, before your `instructions_file` |
+| `Kit` | agentkit options for anything else (skills, memory, child agents, guards), given every extension's tools |
+| `Renderers` | how the terminal client draws its tools' calls (`toolview.Renderer`) |
+
+A session builds its extensions in two phases: every extension's tools,
+then each one's `Kit` options, so a sub-agent built in the second phase
+gets a tool an extension listed after it adds. Names are checked across
+the whole session, without regard to case: two extensions may not offer
+a tool, an alias or an owned name that differ only in case, `mcp__`
+belongs to MCP servers, and an alias may differ from its own tool only
+in case (`Bash` and `bash`). The session's own kit options (the name,
+the model, the instructions, the policy, the session) go after the
+extensions', so where an option replaces another the session's is the
+one in force; a `Kit` that sets a policy on a session with the policy
+off is an error. The session closes the tools it built. One tool value
+is shared by every agent that has it, the main agent, `explore` and
+`task`, and may be called by them at once, so a tool that keeps state
+guards it.
+
+An extension's tools are under the same policy as dax's. A call no rule
+allows asks first. Each extension's rules are a source of their own,
+`extension:<Name>`, which every verdict one of them decides names in the
+session's record, and the start line counts them. A rule may name only
+the extension's own tools and aliases, not a pattern and not a
+carve-out, so one extension cannot loosen another's tools or cancel its
+rules. Deny beats ask beats allow whatever the source: an extension's
+ask or deny holds against a plain allow in your config, and a carve-out
+in your config (`"ask": ["deploy(!staging)"]`) or, for a tool in
+`Lifts`, an allow with a specifier lifts it. A project's config can add
+asks and denies, and `"builtin": false` drops the extensions' allow
+rules but keeps their asks and denies.
+
+An extension's tools get an `extension.ToolEnv`: the session's
+`Workspace`, `Files` over it, and `MaxReadBytes`. A tool that takes a
+path from the model reads and writes through `Files` (`ReadFile`,
+`WriteFile`, `Update`, `Stat`, `ReadDir`, `Rel`), which turns the path
+the model wrote, absolute in the workspace's root or relative to it,
+into the workspace's name and refuses one that leaves, as dax's file
+tools do. `Update` is a read-modify-write under the lock dax's `write`
+and `edit` take, so a tool's change and an `edit` beside it cannot lose
+each other's; a FIFO or a device is refused rather than waited on. A
+tool that runs a process uses `Workspace.Exec`, whose processes start
+with `Workspace.Env()`, the environment with credentials removed (a
+copy each call). Written that way, a tool runs unchanged wherever the
+session's workspace is. A tool is built over `ToolEnv` rather than
+agentkit's kit because what it needs is dax's, the workspace and its
+confinement, which the kit does not hold.
+
+A renderer reads only the record. It declines (returns ok false) a call
+whose arguments or schema it was not written for, such as one an older
+version recorded, and the client draws that call as raw text. Two
+extensions that draw one tool are an error.
+
+`WithName` puts the program's name in the banner, the resume command,
+the client header, the session header and the prompt; the config files
+and the store are still dax's (`~/.config/dax`, `.dax`, `~/.dax`). The
+program keeps the flags, the config files, the providers, the session
+store, MCP, and the three fronts.
+
+For a front of your own, build the session with `agent.New` and
+`Options.Extensions`, and hand the terminal client
+`extension.Renderers(dir, exts)`. The public packages are `dax`,
+`agent`, `extension`, `policy`, `tool`, `toolrender`, `workspace` and
+the four under `ext/`; the configuration, providers, model metadata, prompt frame and
+renderer for the REPL stay internal. Everything is pre-1.0: the exported
+API may change in a minor version, and the changelog says when.
+
+### Where the tools act
+
+A session acts in one `workspace.Workspace`: a root, a file system that
+never blocks on a FIFO or a device, writes and removes, an environment,
+one-shot execution with its output streamed as it arrives, and a
+descriptor the session records. `workspace.Local` is this machine's
+directory, opened as an `os.Root` so no name leaves it, with each
+command in its own process group. A container or a remote runtime is
+another implementation of the same interface, and the rest of dax
+cannot tell them apart:
+
+- dax-coding's tools act through it: `read`, `write`, `edit`, `glob`,
+  `grep` and `ls` through `tool.Files`, and `bash` through
+  `Workspace.Exec`, with the same output wherever it runs.
+- The policy's checks of a call read the same workspace: a path rule
+  follows links through it, and the bash analyzer stats files, follows
+  links, finds `.git` and reads git's configuration there (git is run
+  through `Exec`, with paths passed as arguments). A workspace whose
+  file system cannot tell a link from its target leaves those checks
+  unable to follow links, and they ask.
+- The session records the workspace: the header's and the env entry's
+  `cwd` are its root, and the env entry names its kind (`local`,
+  `container`, `remote`) and ref. The model is told the root as the
+  working directory.
+
+`agent.Options.Workspace` takes one; without it the session opens a
+`workspace.Local` over `Dir` and closes it. `agent.Options.Store` takes
+the session store the same way: an `agentsession.Store` the caller
+opened and closes, or, without it, the content-addressed store at
+`Root`. A remote store client (agentsession's RFC 0003) is meant to fit
+there. The interface follows the agentworkspace study in this
+workspace (`examples/openhands-workspace`), so dax moves to that module
+by a rename once it exists.
+
+What is not there yet:
+
+- dax ships only `workspace.Local`; a container or remote workspace is
+  a program's to provide until the agentworkspace module exists.
+- AGENTS.md, the project's skills (`.dax/skills`) and its config
+  (`.dax/config.json`) are read from `Dir` on this machine, because
+  agentkit, agentsmd and agentskill take local paths. Reading them
+  through a workspace needs changes in those libraries first.
+- MCP servers run on this machine, with its environment scrubbed.
+- RFC 0003's client is not a drop-in `Store`: opening takes a lease,
+  an append returns a different result, and a lost lease needs
+  handling. `Options.Store` takes today's interface; the lease handling
+  waits for agentsession's remote client. `Session.Path` is empty for a
+  store that is not local.
+- A front over a wire (the terminal client driving a session elsewhere,
+  ACP) is not built.
 
 ## Develop
 

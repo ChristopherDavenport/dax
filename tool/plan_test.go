@@ -42,8 +42,8 @@ func repoWithFiles(t *testing.T) string {
 // them: the plan it parsed is the plan it renders.
 func TestAutoAllowedLinesRunAsBashWouldRunThem(t *testing.T) {
 	dir := repoWithFiles(t)
-	an := &Analyzer{Dir: dir}
-	b := Bash(dir)
+	an := &Analyzer{Files: newWS(t, dir)}
+	b := Bash(newWS(t, dir))
 	for cmd, want := range map[string][]string{
 		"git log --oneline | head -n 1":              {"second", "[exit 0]"},
 		"git log --oneline | wc -l":                  {"2\n"},
@@ -101,7 +101,7 @@ func TestAutoAllowedLinesRunAsBashWouldRunThem(t *testing.T) {
 }
 
 func TestRenderQuotesEveryWordButGlobs(t *testing.T) {
-	an := &Analyzer{Dir: t.TempDir()}
+	an := &Analyzer{Files: newWS(t, t.TempDir())}
 	for cmd, want := range map[string]string{
 		"ls -la *.go sub":                   "'ls' '-la' 'sub' '--' *.go",
 		"ls -d */ x? -l":                    "'ls' '-d' '-l' '--' */ x?",
@@ -162,9 +162,9 @@ func TestAnLsGlobExpandsAfterDoubleDash(t *testing.T) {
 	for _, n := range []string{"-n", "--output=x", "-la", "a.go", "b.go"} {
 		os.WriteFile(filepath.Join(dir, n), []byte("x\n"), 0o644)
 	}
-	b := Bash(dir)
+	b := Bash(newWS(t, dir))
 	for _, cmd := range []string{"ls *", "ls -1 *", "ls -d *", "ls -l -- *", "ls *.go -l", "ls -- *"} {
-		c := (&Analyzer{Dir: dir}).Check(context.Background(), cmd)
+		c := (&Analyzer{Files: newWS(t, dir)}).Check(context.Background(), cmd)
 		if !c.Auto {
 			t.Errorf("%q is not auto-allowed: %+v", cmd, c.Stages)
 			continue

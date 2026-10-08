@@ -1,4 +1,4 @@
-package policy
+package coding
 
 import (
 	"os"
@@ -8,8 +8,8 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 )
 
-// workspace builds a small project with a git repository.
-func workspace(t *testing.T) string {
+// project builds a small project with a git repository.
+func project(t *testing.T) string {
 	t.Helper()
 	dir := hostileRepo(t, "")
 	for name, content := range map[string]string{
@@ -33,7 +33,7 @@ func table(t *testing.T, dir string, want agentturn.ToolAction, cmds ...string) 
 
 // Everything the second review found asking that people do all day.
 func TestTheUsualReadOnlyCommandsRunWithoutAsking(t *testing.T) {
-	dir := workspace(t)
+	dir := project(t)
 	table(t, dir, agentturn.Allow,
 		// (a) combined short flags and space-separated values
 		"git status -sb", "git status -sbv", "git log -n 5", "git log -n 5 --oneline", "git log --author chris", "git log --author=chris",
@@ -68,7 +68,7 @@ func TestTheUsualReadOnlyCommandsRunWithoutAsking(t *testing.T) {
 
 // Each widening keeps every earlier exploit asking.
 func TestTheWideningsStayInsideTheSubset(t *testing.T) {
-	dir := workspace(t)
+	dir := project(t)
 	os.Symlink("/etc", filepath.Join(dir, "etclink"))
 	os.MkdirAll(filepath.Join(dir, "d"), 0o755)
 	os.Symlink(filepath.Join(dir, "d"), filepath.Join(dir, "inlink"))
@@ -126,7 +126,7 @@ func TestTheWideningsStayInsideTheSubset(t *testing.T) {
 }
 
 func TestARedirectFormIsTheWholeToken(t *testing.T) {
-	dir := workspace(t)
+	dir := project(t)
 	table(t, dir, agentturn.Allow, "git status 2>&1", "git status 2>&1 | head", "git log 2>/dev/null | head -n 2", "git status >/dev/null")
 	table(t, dir, agentturn.Defer, "git status2>&1", "git status x2>&1", "git status 22>&1", "git status 2>&12", "git status 2>/dev/null2", "git status -2>&1")
 }

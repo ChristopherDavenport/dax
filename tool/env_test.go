@@ -57,7 +57,7 @@ func TestBashDoesNotHandOverTheKeys(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-leak-2")
 	t.Setenv("MY_SERVICE_TOKEN", "tok-leak-3")
 	t.Setenv("HARMLESS", "visible")
-	out, err := call(context.Background(), Bash(t.TempDir()), `{"command":"echo \"[$OPENAI_API_KEY|$ANTHROPIC_API_KEY|$MY_SERVICE_TOKEN|$HARMLESS]\"; env | grep -c leak"}`)
+	out, err := call(context.Background(), Bash(newWS(t, t.TempDir())), `{"command":"echo \"[$OPENAI_API_KEY|$ANTHROPIC_API_KEY|$MY_SERVICE_TOKEN|$HARMLESS]\"; env | grep -c leak"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestBashDoesNotHandOverTheKeys(t *testing.T) {
 		t.Errorf("a key reached the command: %q", out)
 	}
 	// What the user names is passed.
-	out, _ = call(context.Background(), Bash(t.TempDir(), WithEnv(DefaultEnv([]string{"MY_SERVICE_TOKEN"}))), `{"command":"echo $MY_SERVICE_TOKEN $OPENAI_API_KEY"}`)
+	out, _ = call(context.Background(), Bash(newWSEnv(t, t.TempDir(), DefaultEnv([]string{"MY_SERVICE_TOKEN"}))), `{"command":"echo $MY_SERVICE_TOKEN $OPENAI_API_KEY"}`)
 	if !strings.Contains(out, "tok-leak-3") || strings.Contains(out, "sk-leak") {
 		t.Errorf("pass_env: %q", out)
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -15,8 +14,8 @@ import (
 // allow rule for a command. See BashSubjects.
 const sentinel = "$(...) "
 
-// BashSubjects returns the subjects splitter of the bash tool for a
-// workspace rooted at dir. What it decides is who may auto-run:
+// BashSubjects returns the subjects splitter of the bash tool for the
+// workspace f. What it decides is who may auto-run:
 //
 //   - A command line inside the safe subset (see Analyzer) is one
 //     subject per stage, each its words joined by single spaces, so an
@@ -35,8 +34,8 @@ const sentinel = "$(...) "
 //
 // A command with an unterminated quote is an error, which blocks the
 // call.
-func BashSubjects(dir string, maxFile int64) agentpolicy.Subjects {
-	an := &Analyzer{Dir: dir, MaxFile: maxFile}
+func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
+	an := &Analyzer{Files: f, MaxFile: maxFile}
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
 		var in struct {
 			Command string `json:"command"`
@@ -285,57 +284,54 @@ func readTarget(s string, i int, redirects []string, opaque *bool) (int, []strin
 	return i - 1, redirects
 }
 
+// unresolvedTool is the tool a subject is decided as when the
+// workspace cannot say where a path's links lead: no rule names it, so
+// the call falls to the policy's default, which asks, whatever a bare
+// rule for the file tool says. A link called notes.txt might be .env.
+const unresolvedTool = "dax:links-unknown"
+
 // PathSubjects returns the subjects splitter of a file tool: its one
-// subject is the path in field, normalised against the workspace dir
-// (see NormalizePath), so a rule written for docs/** meets
-// docs/../.git/x as .git/x, ./.env and a/../.env as .env and the
-// absolute path of a file as the same name. Links are not followed:
-// the rule matches the name the model used, and the tool's own
-// confinement refuses a link that leaves. A path that leaves the
-// workspace gets a subject no rule names, so it asks. When the field is
-// absent the subject is def, which is the directory a search defaults to.
-func PathSubjects(dir, field, def string) agentpolicy.Subjects {
-	real, _ := filepath.EvalSymlinks(dir)
+// subject is the path in field, normalised against the workspace's root
+// (see normalizePath), so a rule written for docs/** meets docs/../.git/x
+// as .git/x, ./.env and a/../.env as .env and the absolute path of a
+// file as the same name. The name the model used is matched, and so is
+// what its links lead to, read through the workspace: a file called
+// notes.txt that is a link to .env is .env to the rules. A workspace
+// that cannot read links adds a subject no rule allows, so the call
+// asks. A path that leaves the workspace gets a subject no rule names,
+// so it asks. When the field is absent the subject is def, which is the
+// directory a search defaults to.
+func PathSubjects(f *Files, field, def string) agentpolicy.Subjects {
+	v := f.view()
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(args, &m); err != nil {
 			return nil, err
 		}
 		var raw string
-		if v, ok := m[field]; ok {
-			if err := json.Unmarshal(v, &raw); err != nil {
+		if val, ok := m[field]; ok {
+			if err := json.Unmarshal(val, &raw); err != nil {
 				return nil, err
 			}
 		}
 		if raw == "" {
 			raw = def
 		}
-		rel, ok := NormalizePath(dir, real, raw)
+		rel, ok := v.rel(raw)
 		if !ok {
 			rel = sentinel + raw
 		}
 		a, _ := json.Marshal(map[string]string{"path": rel})
 		subjects := []agentpolicy.Subject{{Args: a, Text: raw}}
-		// What a link leads to is decided as well: a file called notes.txt
-		// that is a link to .env is .env to the rules.
 		if ok {
-			if target := resolvedRel(dir, real, rel); target != "" && target != rel {
+			switch target, r := v.resolve(rel); {
+			case r == inside && target != rel:
 				ta, _ := json.Marshal(map[string]string{"path": target})
 				subjects = append(subjects, agentpolicy.Subject{Args: ta, Text: raw + " -> " + target})
+			case r == unknown:
+				subjects = append(subjects, agentpolicy.Subject{Args: a, Tool: unresolvedTool, Text: raw + " (where its links lead cannot be read)"})
 			}
 		}
 		return subjects, nil
 	}
-}
-
-// resolvedRel is the workspace-relative name of what rel is once the
-// links on its way are followed, as far as it exists; "" when that is
-// outside the workspace or cannot be told (the tool's own confinement
-// refuses what leaves).
-func resolvedRel(dir, real, rel string) string {
-	p := resolveExisting(filepath.Join(dir, rel))
-	if r, ok := NormalizePath(dir, real, p); ok {
-		return r
-	}
-	return ""
 }

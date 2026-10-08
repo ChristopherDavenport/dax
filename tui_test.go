@@ -1,4 +1,4 @@
-package main
+package dax
 
 import (
 	"bytes"
@@ -19,7 +19,10 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
-	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -126,42 +129,44 @@ type tuiRig struct {
 	sess *agent.Session
 }
 
-func startTUI(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Options)) *tuiRig {
+func startTUI(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options)) *tuiRig {
 	return startRig(t, m, rules, tweak, nil, true)
 }
 
 // startFront builds the front and its session without running it.
 func startFront(t *testing.T, m *steps, tweak func(*tuiFront)) *tuiRig {
-	return startRig(t, m, config.Rules{}, nil, tweak, false)
+	return startRig(t, m, policy.Rules{}, nil, tweak, false)
 }
 
-func startRig(t *testing.T, m *steps, rules config.Rules, tweak func(*agent.Options), tweakFront func(*tuiFront), run bool) *tuiRig {
+func startRig(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options), tweakFront func(*tuiFront), run bool) *tuiRig {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	base := t.TempDir()
+	dir := filepath.Join(base, "project")
 	o := agent.Options{
-		Model: "scripted", Streamer: m, Dir: filepath.Join(base, "project"), Root: filepath.Join(base, "sessions"),
-		UserDir: filepath.Join(base, "user"), MemoryDir: filepath.Join(base, "user", "memory"), Agents: true,
+		Model: "scripted", Streamer: m, Dir: dir, Root: filepath.Join(base, "sessions"),
+		UserDir:    filepath.Join(base, "user"),
+		Extensions: []extension.Extension{coding.New(0), agents.New(agents.Options{}), memory.New(filepath.Join(base, "user", "memory"))},
 	}
 	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(o.Dir, ".env"), []byte("SECRET_TOKEN=abc123\n"), 0o644)
 	os.WriteFile(filepath.Join(o.Dir, "main.go"), []byte("package main\n"), 0o644)
-	p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask", User: rules})
-	if err != nil {
-		t.Fatal(err)
-	}
-	o.Policy = &p
+	o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: rules}
 	if tweak != nil {
 		tweak(&o)
+	}
+	renderers, err := extension.Renderers(o.Dir, o.Extensions)
+	if err != nil {
+		t.Fatal(err)
 	}
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { pw.Close() })
 	r := &tuiRig{t: t, dir: o.Dir, in: pw, out: &syncBuf{}, pre: &syncBuf{}, done: make(chan error, 1)}
 	f := &tuiFront{
-		info:    frontInfo{Provider: "test", Model: "scripted", Dir: o.Dir, Policy: policySummary(config.PolicySettings{Builtin: true, Fallback: "ask"})},
+		info:    frontInfo{Name: "dax", Renderers: renderers, Provider: "test", Model: "scripted", Dir: o.Dir, Policy: policySummary(policy.Settings{Builtin: true, Fallback: "ask"}, o.Extensions)},
 		out:     r.pre,
 		console: []console.Option{console.WithInput(pr), console.WithOutput(r.out), console.WithoutSignalHandler(), console.WithWindowSize(220, 50)},
 	}
@@ -265,10 +270,10 @@ func (r *tuiRig) waitPanel() {
 // the session.
 func TestTheTUIShowsTheStartLinesOnlyWhenVerbose(t *testing.T) {
 	for _, verbose := range []bool{true, false} {
-		r := startRig(t, &steps{}, config.Rules{}, nil, func(f *tuiFront) { f.info.Verbose = verbose }, true)
+		r := startRig(t, &steps{}, policy.Rules{}, nil, func(f *tuiFront) { f.info.Verbose = verbose }, true)
 		r.quit()
 		pre := r.pre.String()
-		for _, want := range []string{"dax · test scripted · ", "session ", "policy: built-in allow list and secret-path asks", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
+		for _, want := range []string{"dax · test scripted · ", "session ", "policy: ", "rule(s) from extension:dax-coding", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
 			if verbose != strings.Contains(pre, want) {
 				t.Errorf("verbose=%v: start lines have %q: %v\n%s", verbose, want, !verbose, pre)
 			}
@@ -285,7 +290,7 @@ func TestTheTUIShowsTheStartLinesOnlyWhenVerbose(t *testing.T) {
 
 func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 	m := &steps{parent: [][2]string{{"read", `{"path":"main.go"}`}, {"bash", `{"command":"touch APPROVED"}`}}}
-	r := startTUI(t, m, config.Rules{}, nil)
+	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
 	// The read is allowed and shown; the touch is a permission, with the
 	// policy's reason.
@@ -300,7 +305,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 
 	// Refused, it does not run.
 	m2 := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
-	r2 := startTUI(t, m2, config.Rules{}, nil)
+	r2 := startTUI(t, m2, policy.Rules{}, nil)
 	r2.type_("go\r")
 	r2.waitOutput("no rule allows bash")
 	r2.waitPanel()
@@ -325,7 +330,7 @@ func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
 // neither the arguments nor the permission panel holds.
 func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
 	m := &steps{parent: [][2]string{{"edit", `{"path":"main.go","old_string":"package main","new_string":"package main\n\nfunc helper() {}"}`}}}
-	r := startTUI(t, m, config.Rules{}, nil)
+	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
 	r.waitOutput("−0")
 	r.quit()
@@ -334,7 +339,7 @@ func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 	m := &steps{parent: [][2]string{{"bash", `{"command":"cat .ENV"}`}}}
 	os.Setenv("DAX_TEST", "1")
-	r := startTUI(t, m, config.Rules{}, func(o *agent.Options) {
+	r := startTUI(t, m, policy.Rules{}, func(o *agent.Options) {
 		os.WriteFile(filepath.Join(o.Dir, ".ENV"), []byte("SECRET_TOKEN=upper\n"), 0o644)
 	})
 	r.type_("go\r")
@@ -354,7 +359,7 @@ func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
 
 func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
 	m := &steps{parent: [][2]string{{"bash", `{"command":"git status && echo hi"}`}}}
-	r := startTUI(t, m, config.Rules{Allow: []string{"bash(echo:*)"}}, func(o *agent.Options) {
+	r := startTUI(t, m, policy.Rules{Allow: []string{"bash(echo:*)"}}, func(o *agent.Options) {
 		for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "/bin/true-not-bool"}} {
 			if err := gitIn(o.Dir, args...); err != nil {
 				t.Skip("no git")
@@ -379,7 +384,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 		parent: [][2]string{{"explore", `{"input":"look"}`}},
 		child:  [][2]string{{"bash", `{"command":"touch CHILD"}`}, {"read", `{"path":".env"}`}},
 	}
-	r := startTUI(t, m, config.Rules{}, nil)
+	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
 	r.waitOutput("Question (1/1): bash")
 	r.waitOutput("the explore sub-agent asks")
@@ -403,7 +408,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 }
 
 func TestANoteDaxMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
-	r := startTUI(t, &steps{}, config.Rules{}, func(o *agent.Options) {
+	r := startTUI(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
 		o.Compact = 1
 	})
 	r.quit()
@@ -495,7 +500,7 @@ func TestASubagentsAskIsAnsweredOnTheScreen(t *testing.T) {
 		parent: [][2]string{{"task", `{"input":"write the file"}`}},
 		child:  [][2]string{{"write", `{"path":"FROM_TASK","content":"x"}`}},
 	}
-	r := startTUI(t, m, config.Rules{}, nil)
+	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
 	r.waitOutput("Question (1/1): write")
 	r.waitOutput("the task sub-agent asks")
@@ -511,7 +516,7 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 		parent: [][2]string{{"task", `{"input":"write the file"}`}},
 		child:  [][2]string{{"write", `{"path":"REFUSED","content":"x"}`}},
 	}
-	r := startTUI(t, m, config.Rules{}, nil)
+	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
 	r.waitOutput("Question (1/1): write")
 	r.type_("n")

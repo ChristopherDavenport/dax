@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // call runs one tool with raw arguments and returns the text the model
@@ -25,15 +27,23 @@ func call(ctx context.Context, t agenttool.Tool, args string) (string, error) {
 	return Text(res), nil
 }
 
-// newWS opens dir as a workspace for the test.
-func newWS(t testing.TB, dir string) *Workspace {
+// newWS opens dir as a local workspace for the test, its processes
+// started with this process's environment less its credentials, and
+// returns the tools' view of it.
+func newWS(t testing.TB, dir string) *Files {
 	t.Helper()
-	ws, err := NewWorkspace(dir)
+	return newWSEnv(t, dir, DefaultEnv(nil))
+}
+
+// newWSEnv is newWS with the environment its processes start with.
+func newWSEnv(t testing.TB, dir string, env []string) *Files {
+	t.Helper()
+	ws, err := workspace.NewLocal(dir, env)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	return ws
+	return NewFiles(ws)
 }
 
 // stamped is the arguments of a bash call as the policy hook would pass
@@ -41,7 +51,7 @@ func newWS(t testing.TB, dir string) *Workspace {
 func stamped(t testing.TB, dir, cmd string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"command": cmd})
-	out, _, err := StampArgs(context.Background(), &Analyzer{Dir: dir}, raw)
+	out, _, err := StampArgs(context.Background(), &Analyzer{Files: newWS(t, dir)}, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +132,7 @@ func TestSchemas(t *testing.T) {
 		{Glob(newWS(t, t.TempDir())), []string{"pattern"}, []string{"path", "max_results"}},
 		{Grep(newWS(t, t.TempDir())), []string{"pattern"}, []string{"path", "include", "ignore_case", "max_results"}},
 		{LS(newWS(t, t.TempDir())), nil, []string{"path"}},
-		{Bash(t.TempDir()), []string{"command"}, []string{"timeout_seconds"}},
+		{Bash(newWS(t, t.TempDir())), []string{"command"}, []string{"timeout_seconds"}},
 	} {
 		var s struct {
 			Properties map[string]json.RawMessage `json:"properties"`
@@ -141,7 +151,7 @@ func TestSchemas(t *testing.T) {
 			}
 		}
 	}
-	if !agenttool.IsSequential(Bash(t.TempDir())) {
+	if !agenttool.IsSequential(Bash(newWS(t, t.TempDir()))) {
 		t.Error("bash should be sequential")
 	}
 }
@@ -159,7 +169,7 @@ func TestWriteCreatesDirs(t *testing.T) {
 }
 
 func TestBash(t *testing.T) {
-	b := Bash(t.TempDir())
+	b := Bash(newWS(t, t.TempDir()))
 	run := func(ctx context.Context, args string) (string, error) {
 		return call(ctx, b, args)
 	}
@@ -228,7 +238,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 	run("config", "core.fsmonitor", touch+"; echo")
 	run("config", "core.pager", touch)
 
-	b := Bash(dir)
+	b := Bash(newWS(t, dir))
 	for _, c := range []string{"git status", "git diff", "git log -p", "git show HEAD", "git diff --stat"} {
 		out, err := call(context.Background(), b, stamped(t, dir, c))
 		if err != nil {
@@ -249,7 +259,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 		"git show HEAD":  "'git' 'show' '--no-ext-diff' '--no-textconv' 'HEAD'",
 		"git status":     "'git' 'status'",
 	} {
-		c := (&Analyzer{Dir: dir}).Check(context.Background(), cmd)
+		c := (&Analyzer{Files: newWS(t, dir)}).Check(context.Background(), cmd)
 		if !c.Auto || c.Render() != want {
 			t.Errorf("%s runs as %q (auto %v), want %q", cmd, c.Render(), c.Auto, want)
 		}
@@ -262,7 +272,7 @@ func TestReadOnlyGitDoesNotRunTheRepositorysPrograms(t *testing.T) {
 }
 
 func TestACommandOutsideTheSubsetStillRunsInBash(t *testing.T) {
-	out, err := call(context.Background(), Bash(t.TempDir()), `{"command":"echo a && echo b | tr b c"}`)
+	out, err := call(context.Background(), Bash(newWS(t, t.TempDir())), `{"command":"echo a && echo b | tr b c"}`)
 	if err != nil || !strings.Contains(out, "a\nc\n") {
 		t.Fatalf("%q, %v", out, err)
 	}
@@ -303,13 +313,13 @@ func TestGitEnvSwitchesOffTheGPGPrograms(t *testing.T) {
 		t.Skip("this git does not run gpg.program for the signature placeholders; nothing to prove")
 	}
 	os.Remove(probe)
-	git(GitEnv(), "", "log", "--format=%GG", "-1")
+	git(gitEnv(), "", "log", "--format=%GG", "-1")
 	if _, err := os.Stat(probe); err == nil {
-		t.Fatal("gpg.program ran under GitEnv")
+		t.Fatal("gpg.program ran under gitEnv")
 	}
 }
 
-// R2-3 of the second review: GitEnv was applied to every command, so an
+// R2-3 of the second review: gitEnv was applied to every command, so an
 // approved git commit skipped the user's hooks and sshCommand.
 func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -335,7 +345,7 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
 	t.Setenv("GIT_CONFIG_VALUE_0", "zed")
 	t.Setenv("GIT_CONFIG_KEY_1", "never")
-	b := Bash(dir)
+	b := Bash(newWS(t, dir))
 	ctx := context.Background()
 
 	// git commit is in the safe subset but is not read-only: it asks, and
@@ -357,7 +367,7 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 		if err := json.Unmarshal([]byte(stamped(t, dir, cmd)), &in); err != nil {
 			t.Fatal(err)
 		}
-		c, err := command(ctx, &Analyzer{Dir: dir}, in, DefaultEnv(nil))
+		c, err := command(ctx, &Analyzer{Files: newWS(t, dir)}, in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -386,7 +396,7 @@ func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
 	t.Setenv("GOTOOLCHAIN", "auto")
 	t.Setenv("GOPROXY", "off")
 	t.Setenv("GOFLAGS", "")
-	b := Bash(dir)
+	b := Bash(newWS(t, dir))
 	for _, cmd := range []string{"go version", "go env GOFLAGS", "go env GOROOT"} {
 		out, err := call(context.Background(), b, stamped(t, dir, cmd))
 		if err != nil {
@@ -404,7 +414,7 @@ func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
 }
 
 func TestBashOutputIsBoundedInMemory(t *testing.T) {
-	out, err := call(context.Background(), Bash(t.TempDir()), `{"command":"head -c 5000000 /dev/zero | tr '\\0' x"}`)
+	out, err := call(context.Background(), Bash(newWS(t, t.TempDir())), `{"command":"head -c 5000000 /dev/zero | tr '\\0' x"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,11 +428,7 @@ func TestBashOutputIsBoundedInMemory(t *testing.T) {
 // another's.
 func TestConcurrentEditsOfOneFileAllLand(t *testing.T) {
 	dir := t.TempDir()
-	ws, err := NewWorkspace(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.Close()
+	ws := newWS(t, dir)
 	const n = 32
 	var src strings.Builder
 	for i := range n {

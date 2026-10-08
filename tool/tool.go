@@ -1,7 +1,17 @@
-// Package tool holds dax's built-in tools: read, write, edit, glob, grep, ls and bash.
-// They are written against the agenttool contract, so the same values
-// run under agentturn, under any other Open Responses loop, or behind
-// an MCP server.
+// Package tool holds dax-coding's tools: read, write, edit, glob, grep,
+// ls and bash. They are written against the agenttool contract, so the
+// same values run under agentturn, under any other Open Responses loop,
+// or behind an MCP server. They act through a workspace.Workspace,
+// never os or os/exec, so they run unchanged on this machine
+// (workspace.Local), in a container or on a remote runtime, and the
+// policy's checks of their calls read that workspace's files too.
+//
+// Any extension uses this package for its own tools: Files to turn a
+// path the model gives into the workspace's and confine it (ReadFile,
+// WriteFile, Update, Stat, ReadDir), DefaultEnv for the environment of
+// a local workspace's processes, PathSubjects for a policy matcher over
+// a path argument, and BashSubjects and Analyzer for one that reads a
+// command line.
 package tool
 
 import (
@@ -15,14 +25,14 @@ import (
 
 // Builtins returns read, write, edit, glob, grep, ls and bash, in the
 // order the system prompt lists them. The file tools are confined to
-// ws; bash runs in its directory but is not confined.
-func Builtins(ws *Workspace, maxRead int64, bash ...BashOption) []agenttool.Tool {
-	return []agenttool.Tool{Read(ws, WithMaxRead(maxRead)), Write(ws), Edit(ws, WithMaxRead(maxRead)), Glob(ws), Grep(ws), LS(ws), Bash(ws.Dir(), append([]BashOption{WithMaxFile(maxRead)}, bash...)...)}
+// f's workspace; bash runs at its root but is not confined.
+func Builtins(f *Files, maxRead int64, bash ...BashOption) []agenttool.Tool {
+	return []agenttool.Tool{Read(f, WithMaxRead(maxRead)), Write(f), Edit(f, WithMaxRead(maxRead)), Glob(f), Grep(f), LS(f), Bash(f, append([]BashOption{WithMaxFile(maxRead)}, bash...)...)}
 }
 
 // ReadOnly returns the tools that only look: read, glob, grep and ls.
-func ReadOnly(ws *Workspace, maxRead int64) []agenttool.Tool {
-	return []agenttool.Tool{Read(ws, WithMaxRead(maxRead)), Glob(ws), Grep(ws), LS(ws)}
+func ReadOnly(f *Files, maxRead int64) []agenttool.Tool {
+	return []agenttool.Tool{Read(f, WithMaxRead(maxRead)), Glob(f), Grep(f), LS(f)}
 }
 
 // Text returns the text a tool produced, for tests and renderers. Text

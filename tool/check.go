@@ -2,8 +2,8 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -18,14 +18,19 @@ import (
 // whose arguments fail is not merely unlisted: it is a stage no allow
 // rule may cover, because a rule for "git log" must not allow
 // `git log --output=x`.
+//
+// Every look it takes at a file goes through the workspace (Files), and
+// git's configuration is read by running git there, so a command that
+// will run in a container is checked against the container's files.
 type Analyzer struct {
-	// Dir is the workspace root.
-	Dir string
+	// Files is the workspace the commands run in, at its root.
+	Files *Files
 	// MaxFile is the largest file cat, head, tail, wc and grep may be
 	// given; zero is DefaultMaxRead.
 	MaxFile int64
 	// ConfigKey reads the exec-bearing key a repository's git
-	// configuration names in dir; nil is ExecConfigKey. strict is set for
+	// configuration names in dir, absolute in the workspace's namespace;
+	// nil runs git in the workspace (execConfigKey). strict is set for
 	// a line that will run as typed, without the auto-allow environment.
 	ConfigKey func(ctx context.Context, dir string, strict bool) (string, error)
 }
@@ -222,7 +227,7 @@ func init() {
 // gitArgsOK reports whether the arguments after a git subcommand are
 // read-only, as gitSpec describes, and every revision or path names
 // something inside the workspace.
-func gitArgsOK(sub string, args []string, cwd, root string) (bool, string, []string) {
+func gitArgsOK(sub string, args []string, cwd string, v view) (bool, string, []string) {
 	var paths []string
 	spec := gitSpecs[sub]
 	list := len(spec.listFlags) == 0
@@ -243,7 +248,7 @@ func gitArgsOK(sub string, args []string, cwd, root string) (bool, string, []str
 			}
 			// rev:path, :path, :/path and :(magic) name what is in the
 			// repository, which may be above the workspace.
-			if strings.Contains(a, ":") || !inWorkspaceFrom(a, cwd, root) {
+			if strings.Contains(a, ":") || !v.inside(a, cwd) {
 				return false, "the argument " + a + " may reach outside the workspace", nil
 			}
 			paths = append(paths, a)
@@ -293,7 +298,7 @@ func combined(a, letters string) bool {
 }
 
 // gitStage checks a git stage: the subcommand and its arguments.
-func gitStage(w []string, cwd, root string) (ok bool, why string, paths []string) {
+func gitStage(w []string, cwd string, v view) (ok bool, why string, paths []string) {
 	if len(w) == 1 {
 		return true, "", nil
 	}
@@ -311,7 +316,7 @@ func gitStage(w []string, cwd, root string) (ok bool, why string, paths []string
 		if len(w) < 3 || w[2] != "list" {
 			return false, "git stash other than list", nil
 		}
-		ok, why := gitArgsOKNoPos(w[3:], cwd, root)
+		ok, why := gitArgsOKNoPos(w[3:], cwd, v)
 		return ok, why, nil
 	case "config":
 		ok, why := gitConfigArgs(w[2:])
@@ -320,7 +325,7 @@ func gitStage(w []string, cwd, root string) (ok bool, why string, paths []string
 	if _, known := gitSpecs[sub]; !known {
 		return true, "", nil // not a command this check governs
 	}
-	ok, why, paths = gitArgsOK(sub, w[2:], cwd, root)
+	ok, why, paths = gitArgsOK(sub, w[2:], cwd, v)
 	if sub != "diff" && sub != "log" && sub != "show" && sub != "blame" {
 		paths = nil // names and not contents: ls-files, status, tag ...
 	}
@@ -329,13 +334,13 @@ func gitStage(w []string, cwd, root string) (ok bool, why string, paths []string
 
 // gitArgsOKNoPos is the log flags with no revisions or paths, for
 // git stash list.
-func gitArgsOKNoPos(args []string, cwd, root string) (bool, string) {
+func gitArgsOKNoPos(args []string, cwd string, v view) (bool, string) {
 	spec := gitSpecs["log"]
 	spec.positional = false
 	saved := gitSpecs["log"]
 	gitSpecs["log"] = spec
 	defer func() { gitSpecs["log"] = saved }()
-	ok, why, _ := gitArgsOK("log", args, cwd, root)
+	ok, why, _ := gitArgsOK("log", args, cwd, v)
 	return ok, why
 }
 
@@ -389,12 +394,12 @@ var (
 
 // lsStage checks ls: listing flags, and paths inside the workspace; a
 // glob is expanded here, in the workspace, for the check.
-func lsStage(ws []word, cwd, root string) (bool, string) {
+func lsStage(ws []word, cwd string, v view) (bool, string) {
 	for _, w := range ws[1:] {
 		a := w.text
 		switch {
 		case w.glob:
-			if ok, why := globInside(a, cwd, root); !ok {
+			if ok, why := globInside(a, cwd, v); !ok {
 				return false, why
 			}
 		case a == "--":
@@ -407,7 +412,7 @@ func lsStage(ws []word, cwd, root string) (bool, string) {
 			if !lsBare.MatchString(a) {
 				return false, "the flag " + a + " is not a listing flag"
 			}
-		case !inWorkspaceFrom(a, cwd, root):
+		case !v.inside(a, cwd):
 			return false, "the path " + a + " is outside the workspace"
 		}
 	}
@@ -420,7 +425,7 @@ const maxGlobMatches = 5000
 // globInside expands an ls glob in the workspace and requires every
 // match to be inside it, links resolved. The pattern may not leave the
 // directory it starts in or name a character class.
-func globInside(pattern, cwd, root string) (bool, string) {
+func globInside(pattern, cwd string, v view) (bool, string) {
 	if strings.HasPrefix(pattern, "/") || strings.HasPrefix(pattern, "~") {
 		return false, "the glob " + pattern + " is not relative"
 	}
@@ -431,12 +436,20 @@ func globInside(pattern, cwd, root string) (bool, string) {
 			return false, "the glob " + pattern + " has a dot component"
 		}
 	}
-	matches, err := globFS(os.DirFS(cwd), pattern)
-	if err != nil || len(matches) > maxGlobMatches {
+	// Expanded over the workspace's files from cwd, and refused when a
+	// directory on the way cannot be read: over a confined FS that is a
+	// link out of the workspace, which bash would follow and list.
+	fsys, err := v.sub(cwd)
+	if err != nil {
+		return false, "the glob " + pattern + " could not be checked"
+	}
+	var readErr error
+	matches, err := globFS(strictFS{FS: fsys, err: &readErr}, pattern)
+	if err != nil || readErr != nil || len(matches) > maxGlobMatches {
 		return false, "the glob " + pattern + " could not be checked"
 	}
 	for _, m := range matches {
-		if !inWorkspaceFrom(m, cwd, root) {
+		if !v.inside(m, cwd) {
 			return false, "the glob " + pattern + " reaches outside the workspace"
 		}
 	}
@@ -553,7 +566,7 @@ var dashNum = regexp.MustCompile(`^-\d+$`)
 // a short list, and every file an in-workspace regular file no larger
 // than max. With needFiles false (a later stage of a pipeline) there
 // must be no file at all.
-func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bool) (bool, string, []string) {
+func fileStage(name string, ws []word, cwd string, v view, max int64, needFiles bool) (bool, string, []string) {
 	spec := fileCmds[name]
 	var pos []string
 	afterDD := false
@@ -614,16 +627,16 @@ func fileStage(name string, ws []word, cwd, root string, max int64, needFiles bo
 		max = DefaultMaxRead
 	}
 	for _, f := range pos {
-		if !inWorkspaceFrom(f, cwd, root) {
+		if !v.inside(f, cwd) {
 			return false, "the file " + f + " is outside the workspace", nil
 		}
 		p := f
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(cwd, p)
 		}
-		fi, err := os.Stat(p)
+		fi, err := v.stat(p)
 		switch {
-		case os.IsNotExist(err): // cat of nothing is an error, not a read
+		case errors.Is(err, fs.ErrNotExist): // cat of nothing is an error, not a read
 		case err != nil || !fi.Mode().IsRegular():
 			return false, "the file " + f + " is not a regular file", nil
 		case fi.Size() > max:
@@ -645,7 +658,7 @@ var filterCmds = map[string]fileCmd{
 }
 
 // filterStage checks a stage after a pipe.
-func filterStage(name string, ws []word, cwd, root string, max int64) (bool, string) {
+func filterStage(name string, ws []word, cwd string, v view, max int64) (bool, string) {
 	if spec, ok := filterCmds[name]; ok {
 		args := ws[1:]
 		for i := 0; i < len(args); i++ {
@@ -673,7 +686,7 @@ func filterStage(name string, ws []word, cwd, root string, max int64) (bool, str
 	}
 	switch name {
 	case "head", "tail", "wc", "grep":
-		ok, why, _ := fileStage(name, ws, cwd, root, max, false)
+		ok, why, _ := fileStage(name, ws, cwd, v, max, false)
 		return ok, why
 	}
 	return false, name + " is not allowed after a pipe"
@@ -698,10 +711,10 @@ func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why str
 	}
 	switch name {
 	case "git":
-		ok, why, paths := gitStage(w, cwd, a.Dir)
+		ok, why, paths := gitStage(w, cwd, a.Files.view())
 		return true, ok, why, a.rels(cwd, paths)
 	case "ls":
-		ok, why := lsStage(ws, cwd, a.Dir)
+		ok, why := lsStage(ws, cwd, a.Files.view())
 		return true, ok, why, nil
 	case "pwd":
 		return true, len(w) == 1, "pwd takes no arguments", nil
@@ -709,7 +722,7 @@ func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why str
 		ok := goStage(w)
 		return true, ok, "go other than version and env NAME", nil
 	case "cat", "head", "tail", "wc", "grep":
-		ok, why, files := fileStage(name, ws, cwd, a.Dir, a.MaxFile, true)
+		ok, why, files := fileStage(name, ws, cwd, a.Files.view(), a.MaxFile, true)
 		return true, ok, why, a.rels(cwd, files)
 	case "sort", "uniq", "cut":
 		return true, false, name + " reads a file only after a pipe", nil
@@ -721,16 +734,16 @@ func (a *Analyzer) stageFirst(ws []word, cwd string) (governed, ok bool, why str
 // workspace root, for the policy's path rules; one that leaves is left
 // as it is, since the stage was refused for it already.
 func (a *Analyzer) rels(cwd string, paths []string) []string {
-	real, _ := filepath.EvalSymlinks(a.Dir)
+	v := a.Files.view()
 	var out []string
 	for _, p := range paths {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(cwd, p)
 		}
-		if rel, ok := NormalizePath(a.Dir, real, p); ok {
+		if rel, ok := v.rel(p); ok {
 			out = append(out, rel)
 			// And what a link on the way leads to.
-			if target := resolvedRel(a.Dir, real, rel); target != "" && target != rel {
+			if target, r := v.resolve(rel); r == inside && target != rel {
 				out = append(out, target)
 			}
 		}
@@ -791,18 +804,19 @@ func (a *Analyzer) checkCd(st stage, cwd string) (next string, ok bool, why stri
 		return cwd, false, "cd takes one directory"
 	}
 	arg := st.words[1].text
-	if !inWorkspaceFrom(arg, cwd, a.Dir) {
+	v := a.Files.view()
+	if !v.inside(arg, cwd) {
 		return cwd, false, "the directory " + arg + " is outside the workspace"
 	}
 	p := arg
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(cwd, p)
 	}
-	real, err := filepath.EvalSymlinks(p)
+	fi, err := v.stat(p)
 	if err != nil {
 		return cwd, false, "the directory " + arg + " does not exist"
 	}
-	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+	if !fi.IsDir() {
 		return cwd, false, arg + " is not a directory"
 	}
 	return filepath.Clean(p), true, ""
@@ -816,7 +830,7 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 		return c
 	}
 	c.Parsed, c.plan = true, p
-	cwd := a.Dir
+	cwd := a.Files.Dir()
 	auto := true
 	gitDirs := map[string]bool{}
 	for _, pl := range p.pipelines {
@@ -843,7 +857,7 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 			default:
 				sc.Governed = governedFirst[w[0]] || governedLater[w[0]]
 				if sc.Governed {
-					sc.OK, sc.Why = filterStage(w[0], st.words, cwd, a.Dir, a.MaxFile)
+					sc.OK, sc.Why = filterStage(w[0], st.words, cwd, a.Files.view(), a.MaxFile)
 				}
 				if !sc.Governed {
 					auto = false
@@ -866,7 +880,9 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 		strict := !auto
 		keyFn := a.ConfigKey
 		if keyFn == nil {
-			keyFn = ExecConfigKey
+			keyFn = func(ctx context.Context, dir string, strict bool) (string, error) {
+				return execConfigKey(ctx, a.Files, dir, strict)
+			}
 		}
 		for dir := range gitDirs {
 			key, err := keyFn(ctx, dir, strict)
@@ -890,21 +906,16 @@ func (a *Analyzer) Check(ctx context.Context, cmd string) *Check {
 	return c
 }
 
-// ReadOnlyArgs reports whether a single simple command's arguments are
+// readOnlyArgs reports whether a single simple command's arguments are
 // acceptable to the check, or the command is not one the check governs
 // (and so is for the rules to decide). It is the first-stage check
 // with the workspace as the current directory.
-func ReadOnlyArgs(words []string, dir string) bool {
+func readOnlyArgs(words []string, f *Files) bool {
 	ws := make([]word, len(words))
 	for i, w := range words {
 		ws[i] = word{text: w}
 	}
-	a := &Analyzer{Dir: dir}
-	governed, ok, _, _ := a.stageFirst(ws, dir)
+	a := &Analyzer{Files: f}
+	governed, ok, _, _ := a.stageFirst(ws, f.Dir())
 	return !governed || ok
 }
-
-// Allowlisted reports whether a single simple command is one dax runs
-// without asking when ReadOnlyArgs agrees, as opposed to one the user's
-// rules decide.
-func Allowlisted(words []string) bool { return autoFirst(words) }

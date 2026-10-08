@@ -36,9 +36,9 @@ var pathVars = set("GOOGLE_APPLICATION_CREDENTIALS", "KUBECONFIG", "DOCKER_CONFI
 // urlWithPassword is a URL carrying user:password@.
 var urlWithPassword = regexp.MustCompile(`://[^/@\s:]*:[^/@\s]+@`)
 
-// Secret reports whether a variable looks like a credential, by its
+// isSecret reports whether a variable looks like a credential, by its
 // name and, for a URL, by its value.
-func Secret(name, value string) bool {
+func isSecret(name, value string) bool {
 	n := strings.ToUpper(name)
 	if pathVars[n] {
 		return false
@@ -59,18 +59,18 @@ func Secret(name, value string) bool {
 	return urlWithPassword.MatchString(value)
 }
 
-// ChildEnv is base without its credentials: every variable Secret
+// ChildEnv is base without its credentials: every variable isSecret
 // names, and every one in secrets, except those in pass. Bash commands
 // and MCP servers get this environment, so a test, a build script or a
 // server cannot read the provider's key from it. secrets is for a key
-// whose variable the user named and Secret may not recognise.
+// whose variable the user named and isSecret may not recognise.
 func ChildEnv(base, pass []string, secrets ...string) []string {
 	keep := set(pass...)
 	extra := set(secrets...)
 	out := make([]string, 0, len(base))
 	for _, kv := range base {
 		name, value, _ := strings.Cut(kv, "=")
-		if (Secret(name, value) || extra[name]) && !keep[name] {
+		if (isSecret(name, value) || extra[name]) && !keep[name] {
 			continue
 		}
 		out = append(out, kv)

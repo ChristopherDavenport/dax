@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,14 +10,14 @@ import (
 	"github.com/ChristopherDavenport/agentsmd"
 )
 
-// The libraries that read AGENTS.md files and skill directories follow
-// symbolic links, and what they read goes into the system prompt, which
-// goes to the provider. A repository can ship AGENTS.md -> ~/.ssh/id_rsa
-// or .dax/skills -> ~/. So the files that come with the repository are
-// screened here, before the libraries see them: one that is a link
-// resolving outside the workspace is left out and reported as omitted.
-// The user's own files (~/.dax/AGENTS.md, ~/.dax/skills and the
-// skills_dirs of the user's config) are the user's and are not screened.
+// The library that reads AGENTS.md files follows symbolic links, and
+// what it reads goes into the system prompt, which goes to the
+// provider. A repository can ship AGENTS.md -> ~/.ssh/id_rsa. So the
+// files that come with the repository are screened here, before the
+// library sees them: one that is a link resolving outside the
+// workspace is left out and reported as omitted. The user's own
+// ~/.dax/AGENTS.md is the user's and is not screened. dax-skills
+// screens a repository's skills the same way.
 
 // within reports whether p, once its links are resolved, is dir or
 // below it. dir is already resolved.
@@ -66,36 +65,4 @@ func agentsFiles(dir string) (files []string, omitted []agentkit.Omission) {
 		files = append(files, f)
 	}
 	return files, omitted
-}
-
-// projectSkillsOK reports whether the project's skills directory can be
-// offered: it, and every link below it, stays inside the workspace. A
-// directory with one link that leaves is left out whole, since the
-// kit takes directories, and reported.
-func projectSkillsOK(dir string) (ok bool, omitted []agentkit.Omission) {
-	skills := filepath.Join(dir, ".dax", "skills")
-	if _, err := os.Lstat(skills); err != nil {
-		return true, nil // absent: nothing to offer, nothing to refuse
-	}
-	real, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		real = dir
-	}
-	if !within(real, skills) {
-		return false, []agentkit.Omission{omission("skills", skills, "symbolic link outside the workspace")}
-	}
-	var bad string
-	filepath.WalkDir(skills, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || bad != "" {
-			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 && !within(real, p) {
-			bad = p
-		}
-		return nil
-	})
-	if bad != "" {
-		return false, []agentkit.Omission{omission("skills", skills, fmt.Sprintf("holds a symbolic link outside the workspace, %s", bad))}
-	}
-	return true, nil
 }

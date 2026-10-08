@@ -7,30 +7,35 @@ import (
 
 func TestBuild(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		extra  string
-		agents bool
-		want   []string
-		not    []string
+		name  string
+		who   string
+		extra []string
+		want  []string
+		not   []string
 	}{
 		{
-			name: "without sub-agents",
-			want: []string{"You are dax", "Read before you edit.", "Current working directory: /p"},
-			not:  []string{delegation, "explore:", "task:"},
-		},
-		{
-			name:   "with sub-agents",
-			agents: true,
-			want:   []string{"You are dax", delegation},
+			name: "the role line alone",
+			want: []string{"You are dax, a coding agent", "Keep replies short", "Current working directory: /p"},
 		},
 		{
 			name:  "the user's instructions",
-			extra: "  Use tabs.\n",
+			extra: []string{"  Use tabs.\n"},
 			want:  []string{"Use tabs.\n\nCurrent working directory: /p"},
+		},
+		{
+			name:  "the extensions' instructions in order, then the user's, empties left out",
+			extra: []string{"Prefer glob.", "", "  ", "Use deploy to ship.", "Use tabs."},
+			want:  []string{"found.\n\nPrefer glob.\n\nUse deploy to ship.\n\nUse tabs.\n\nCurrent working directory: /p"},
+		},
+		{
+			name: "a program built on dax names itself",
+			who:  "acme",
+			want: []string{"You are acme, a coding agent"},
+			not:  []string{"You are dax"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Build("/p", tc.extra, tc.agents)
+			got := Build(tc.who, "/p", tc.extra...)
 			for _, w := range tc.want {
 				if !strings.Contains(got, w) {
 					t.Errorf("prompt lacks %q:\n%s", w, got)
@@ -43,6 +48,9 @@ func TestBuild(t *testing.T) {
 			}
 			if !strings.HasSuffix(got, "Current working directory: /p") {
 				t.Errorf("prompt does not end with the working directory:\n%s", got)
+			}
+			if strings.Contains(got, "\n\n\n") {
+				t.Errorf("an empty part left a gap:\n%q", got)
 			}
 		})
 	}

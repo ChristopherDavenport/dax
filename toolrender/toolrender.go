@@ -1,14 +1,18 @@
 // Package toolrender draws dax's tool calls in the terminal client: a
-// [toolview.Renderer] for each of read, write, edit, glob, grep, ls,
-// bash, task and explore, which the client is handed through
+// [toolview.Renderer] for each of dax-coding's read, write, edit, glob,
+// grep, ls and bash (Renderers), and for dax-agents' task and explore
+// (SubAgents). Each extension hands its own through
+// extension.Extension.Renderers, and a front gives the client the
+// extensions' together (extension.Renderers) through
 // console.WithToolRenderers.
 //
 // A renderer reads the record's facts about a call, never the tool, so
 // it parses the arguments with its own structs and reads the output the
 // tool wrote: numbered lines from read, path:line:text from grep, a last
 // "[exit N]" line from bash, and "Error: …" from any tool that failed.
-// It does not import internal/tool, which the front may not reach; the
-// tests run the real tools to keep the two in step.
+// It does not import package tool, since a renderer reads the record
+// and not the tool; the tests run the real tools to keep the two in
+// step.
 //
 // Collapsed, a call is a line and a short body: an edit's diff, the end
 // of a failing command, a count for the rest. Expanded (ctrl+o), an
@@ -27,18 +31,25 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/view"
 )
 
-// Renderers are the renderers of dax's tools, which show a path inside
-// dir relative to it.
+// Renderers are the renderers of dax-coding's tools, which show a path
+// inside dir relative to it.
 func Renderers(dir string) toolview.Renderers {
 	p := paths{dir: dir}
 	return toolview.Renderers{
-		"read":    readRenderer{p},
-		"write":   writeRenderer{p},
-		"edit":    editRenderer{p},
-		"glob":    globRenderer{p},
-		"grep":    grepRenderer{p},
-		"ls":      lsRenderer{p},
-		"bash":    bashRenderer{},
+		"read":  readRenderer{p},
+		"write": writeRenderer{p},
+		"edit":  editRenderer{p},
+		"glob":  globRenderer{p},
+		"grep":  grepRenderer{p},
+		"ls":    lsRenderer{p},
+		"bash":  bashRenderer{},
+	}
+}
+
+// SubAgents are the renderers of dax-agents' task and explore calls: the
+// brief, and the start of the report.
+func SubAgents() toolview.Renderers {
+	return toolview.Renderers{
 		"task":    agentRenderer{props: []string{"input", "context", "model"}},
 		"explore": agentRenderer{props: []string{"input"}},
 	}

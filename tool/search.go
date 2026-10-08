@@ -41,7 +41,7 @@ var skipDirs = map[string]bool{
 // symbolic link to a directory is not followed, and a link whose
 // target is missing or outside the workspace is skipped. If base names
 // a file it is the only visit.
-func (w *Workspace) walk(ctx context.Context, base string, visit func(rel string) (stop bool, err error)) error {
+func (w *Files) walk(ctx context.Context, base string, visit func(rel string) (stop bool, err error)) error {
 	info, err := w.stat(base)
 	if err != nil {
 		return wrap(base, err)
@@ -101,7 +101,7 @@ func (w *Workspace) walk(ctx context.Context, base string, visit func(rel string
 
 // relBase resolves the optional path argument of a search to a name
 // relative to the root.
-func (w *Workspace) relBase(p string) (string, error) {
+func (w *Files) relBase(p string) (string, error) {
 	if p == "" || p == "." {
 		return ".", nil
 	}
@@ -120,7 +120,7 @@ type GlobArgs struct {
 // Glob returns a tool that lists files whose path matches a
 // doublestar-style pattern, sorted. It skips .git and common vendored
 // directories.
-func Glob(ws *Workspace) agenttool.Tool {
+func Glob(ws *Files) agenttool.Tool {
 	return agenttool.New("glob", "Find files by glob pattern, e.g. **/*.go. Paths are relative to the search directory and sorted. Skips .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GlobArgs) (string, error) {
 			if in.Pattern == "" {
@@ -273,7 +273,7 @@ type GrepArgs struct {
 
 // Grep returns a tool that searches files for a regular expression and
 // returns path:line:text for each matching line.
-func Grep(ws *Workspace) agenttool.Tool {
+func Grep(ws *Files) agenttool.Tool {
 	return agenttool.New("grep", "Search file contents for a regular expression. Returns path:line:text, sorted by path. Skips binary files, .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GrepArgs) (string, error) {
 			if in.Pattern == "" {
@@ -352,7 +352,7 @@ func includeMatch(globs []string, rel string) bool {
 
 // grepFile reports each matching line to emit until it returns false
 // and says whether the search is over.
-func (w *Workspace) grepFile(rel string, re *regexp.Regexp, emit func(line int, text string) bool) (stop bool) {
+func (w *Files) grepFile(rel string, re *regexp.Regexp, emit func(line int, text string) bool) (stop bool) {
 	f, err := w.open(rel)
 	if err != nil {
 		return false
@@ -392,7 +392,7 @@ type LSArgs struct {
 
 // LS returns a tool that lists one directory: names sorted, directories
 // with a trailing slash, files with their size.
-func LS(ws *Workspace) agenttool.Tool {
+func LS(ws *Files) agenttool.Tool {
 	return agenttool.New("ls", "List the entries of one directory, sorted: directories end in /, files show their size in bytes.",
 		func(_ context.Context, in LSArgs) (string, error) {
 			rel, err := ws.relBase(in.Path)

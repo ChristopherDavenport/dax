@@ -27,9 +27,9 @@ func stampOf(rendered string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// ErrChanged is what a call gets when it was allowed as a plan that
+// errChanged is what a call gets when it was allowed as a plan that
 // the command no longer analyses to.
-var ErrChanged = errors.New("the command changed since it was allowed (a file or the repository's git configuration is different now); ask again")
+var errChanged = errors.New("the command changed since it was allowed (a file or the repository's git configuration is different now); ask again")
 
 // StampArgs is the policy's side of an auto-allowed bash call: when the
 // command line analyses as Auto, the arguments come back carrying the

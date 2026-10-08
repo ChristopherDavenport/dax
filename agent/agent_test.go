@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"github.com/ChristopherDavenport/dax/workspace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +15,6 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentmemory/filestore"
-	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
@@ -23,7 +23,11 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 
-	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/ext/skills"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -93,19 +97,24 @@ func write(t *testing.T, path, content string) {
 }
 
 // options is a session in a fresh project, user directory and store,
-// on the given model, with every layer on.
+// on the given model, with every layer on but the sub-agents:
+// dax-coding, dax-skills and dax-memory.
 func options(t *testing.T, model openresponses.Streamer) Options {
 	t.Helper()
 	base := t.TempDir()
+	dir := filepath.Join(base, "project")
 	o := Options{
-		Model:     "echo",
-		Streamer:  model,
-		Dir:       filepath.Join(base, "project"),
-		Root:      filepath.Join(base, "sessions"),
-		UserDir:   filepath.Join(base, "user"),
-		MemoryDir: filepath.Join(base, "user", "memory"),
-		AgentsMD:  true,
-		Skills:    true,
+		Model:    "echo",
+		Streamer: model,
+		Dir:      dir,
+		Root:     filepath.Join(base, "sessions"),
+		UserDir:  filepath.Join(base, "user"),
+		AgentsMD: true,
+		Extensions: []extension.Extension{
+			coding.New(0),
+			skills.New(skills.Options{}),
+			memory.New(filepath.Join(base, "user", "memory")),
+		},
 	}
 	write(t, filepath.Join(o.Dir, "AGENTS.md"), "Run go test before saying done.\n")
 	write(t, filepath.Join(o.UserDir, "skills", "greet", "SKILL.md"),
@@ -115,13 +124,28 @@ func options(t *testing.T, model openresponses.Streamer) Options {
 
 // confirmPolicy is dax's shipped policy: reads run, writes and
 // commands ask.
-func confirmPolicy(t *testing.T) *agentpolicy.Policy {
+func confirmPolicy(t *testing.T) *policy.Settings {
 	t.Helper()
-	p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask"})
-	if err != nil {
-		t.Fatal(err)
+	return &policy.Settings{Builtin: true, Fallback: "ask"}
+}
+
+// withAgents adds dax-agents to o, as -agents does, on the sub-agent
+// model sub (empty: the main model).
+func withAgents(o Options, sub string) Options {
+	o.Extensions = append(slices.Clone(o.Extensions), agents.New(agents.Options{Model: sub}))
+	return o
+}
+
+// trustSkills replaces o's dax-skills with one that trusts the user's
+// skills, as -trust-skills does.
+func trustSkills(o Options) Options {
+	o.Extensions = slices.Clone(o.Extensions)
+	for i, e := range o.Extensions {
+		if e.Name == skills.Name {
+			o.Extensions[i] = skills.New(skills.Options{Trust: true})
+		}
 	}
-	return &p
+	return o
 }
 
 // projected closes the session, which releases it in the store, and
@@ -146,7 +170,7 @@ func projected(t *testing.T, o Options, s *Session) []byte {
 func TestTheKitAssemblesEveryLayer(t *testing.T) {
 	ctx := context.Background()
 	o := options(t, &echo.Adapter{})
-	mem, err := filestore.Open(o.MemoryDir)
+	mem, err := filestore.Open(filepath.Join(o.UserDir, "memory"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,19 +243,6 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 	}
 }
 
-func TestTheProjectScopeIsKebabAndPerDirectory(t *testing.T) {
-	a, b := ProjectScope("/home/u/My Project"), ProjectScope("/srv/My Project")
-	if !agentmemory.ValidScope(a) || !agentmemory.ValidScope(b) {
-		t.Fatalf("%q or %q is not a valid scope", a, b)
-	}
-	if a == b {
-		t.Errorf("two directories share the scope %q", a)
-	}
-	if !strings.HasPrefix(string(a), "project-my-project-") {
-		t.Errorf("scope %q does not name the directory", a)
-	}
-}
-
 func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
 	for _, approve := range []bool{true, false} {
 		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
@@ -286,7 +297,8 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 		{"bash", `{"command":"echo hello"}`},
 	}}
 	o := options(t, model)
-	o.Policy, o.TrustSkills = confirmPolicy(t), true
+	o = trustSkills(o)
+	o.Policy = confirmPolicy(t)
 	var asked []string
 	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Arguments)
@@ -621,8 +633,8 @@ func (m *names) CreateStream(ctx context.Context, req openresponses.Request, sin
 func TestTheSubagentRunsItsOwnModel(t *testing.T) {
 	for _, tc := range []struct{ sub, want string }{{"deepseek/flash", "deepseek/flash"}, {"", "deepseek/pro"}} {
 		model := &names{scripted: scripted{calls: [][2]string{{"explore", `{"input":"what is here?"}`}}}}
-		o := options(t, model)
-		o.Agents, o.Model, o.SubagentModel = true, "deepseek/pro", tc.sub
+		o := withAgents(options(t, model), tc.sub)
+		o.Model = "deepseek/pro"
 		s, err := New(context.Background(), o)
 		if err != nil {
 			t.Fatal(err)
@@ -673,8 +685,7 @@ func (m *sessions) CreateStream(ctx context.Context, req openresponses.Request, 
 func TestEachModelCallCarriesItsSessionID(t *testing.T) {
 	ctx := context.Background()
 	model := &sessions{scripted: scripted{calls: [][2]string{{"explore", `{"input":"what is here?"}`}}}}
-	o := options(t, model)
-	o.Agents = true
+	o := withAgents(options(t, model), "")
 	s, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
@@ -713,8 +724,7 @@ func TestEachModelCallCarriesItsSessionID(t *testing.T) {
 func TestAChildSessionIsListedAndAJSONLSessionImports(t *testing.T) {
 	ctx := context.Background()
 	model := &scripted{calls: [][2]string{{"explore", `{"input":"what is here?"}`}}}
-	o := options(t, model)
-	o.Agents = true
+	o := withAgents(options(t, model), "")
 	s, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
@@ -907,7 +917,8 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 		{"bash", `{"command":"echo hello"}`},
 	}}}
 	o := options(t, model)
-	o.Policy, o.TrustSkills, o.Agents = confirmPolicy(t), true, true
+	o = withAgents(trustSkills(o), "")
+	o.Policy = confirmPolicy(t)
 	var asked []string
 	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Name+" "+c.Arguments)
@@ -932,4 +943,19 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 	if strings.Contains(data, "revoked") || !strings.Contains(data, `"type":"link"`) {
 		t.Errorf("want the child linked and no grant revoked; notes %q", notes)
 	}
+}
+
+// localWorkspace is dir, created if need be, as a workspace.Local,
+// closed with the test.
+func localWorkspace(t *testing.T, dir string) *workspace.Local {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.NewLocal(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ws.Close() })
+	return ws
 }

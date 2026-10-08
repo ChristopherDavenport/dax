@@ -58,7 +58,7 @@ func newDiffEnv(t *testing.T) *diffEnv {
 	}
 	log := filepath.Join(dir, "log")
 	os.Mkdir(log, 0o755)
-	return &diffEnv{t: t, dir: work, probe: probe, log: log, an: &Analyzer{Dir: work, ConfigKey: func(context.Context, string, bool) (string, error) { return "", nil }}}
+	return &diffEnv{t: t, dir: work, probe: probe, log: log, an: &Analyzer{Files: newWS(t, work), ConfigKey: func(context.Context, string, bool) (string, error) { return "", nil }}}
 }
 
 // run checks one line, and reports whether it was auto-allowed and so

@@ -3,6 +3,7 @@ package toolrender
 import (
 	"context"
 	"encoding/json"
+	"github.com/ChristopherDavenport/dax/workspace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,7 +24,7 @@ var files = map[string]string{
 	"sub/c.txt": "steer here\n",
 }
 
-func project(t *testing.T) (string, *tool.Workspace) {
+func project(t *testing.T) (string, *tool.Files) {
 	t.Helper()
 	dir := t.TempDir()
 	for name, body := range files {
@@ -35,11 +36,11 @@ func project(t *testing.T) (string, *tool.Workspace) {
 			t.Fatal(err)
 		}
 	}
-	ws, err := tool.NewWorkspace(dir)
+	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dir, ws
+	return dir, tool.NewFiles(ws)
 }
 
 // run runs a call of tl and returns it as the record holds it once it
@@ -213,7 +214,7 @@ func TestACallWaitingOnAPermissionShowsWhatItWouldDo(t *testing.T) {
 }
 
 func TestASubAgentShowsItsBriefAndTheStartOfItsReport(t *testing.T) {
-	rs := Renderers("")
+	rs := SubAgents()
 	c := view.Call{Name: "task", State: view.CallRunning,
 		Args: `{"input":"Rename Steer to Nudge in internal/agent.\nKeep the tests passing.","context":"fork","model":"main"}`}
 	if got, want := head(rs["task"], c), "Rename Steer to Nudge in internal/agent. (fork, main model)"; got != want {
@@ -346,5 +347,26 @@ func TestTheLinesCarryTheirRoles(t *testing.T) {
 	failed := view.Call{Name: "read", Args: `{"path":"a.go"}`, State: view.CallEnded, Output: "Error: open a.go: no such file"}
 	if body, _ := rs["read"].Body(failed, false); len(body) != 1 || body[0][0].Role != toolview.Error {
 		t.Errorf("a failed read is not an error: %v", body)
+	}
+}
+
+// dax-coding's renderers and the sub-agents' are separate sets, for
+// two extensions, and draw no tool in common.
+func TestTheRendererSetsAreSeparate(t *testing.T) {
+	coding, agents := Renderers(""), SubAgents()
+	for name := range agents {
+		if _, ok := coding[name]; ok {
+			t.Errorf("both sets draw %s", name)
+		}
+	}
+	for _, name := range []string{"read", "write", "edit", "glob", "grep", "ls", "bash"} {
+		if coding[name] == nil {
+			t.Errorf("no renderer for %s", name)
+		}
+	}
+	for _, name := range []string{"task", "explore"} {
+		if agents[name] == nil {
+			t.Errorf("no renderer for %s", name)
+		}
 	}
 }

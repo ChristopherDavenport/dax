@@ -15,7 +15,6 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 
-	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -28,6 +27,24 @@ type wire struct {
 	hashes  []string
 	reqs    []openresponses.Request
 	efforts map[string][]openresponses.ReasoningEffort // by model
+}
+
+// taskModels is a scripted parent and a scripted task child, the child
+// told apart by the task preamble, keeping the child's requests.
+type taskModels struct {
+	parent, child scripted
+	mu            sync.Mutex
+	childReqs     []openresponses.Request
+}
+
+func (m *taskModels) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	if strings.Contains(req.Instructions, "You are a sub-agent of dax") {
+		m.mu.Lock()
+		m.childReqs = append(m.childReqs, req)
+		m.mu.Unlock()
+		return m.child.CreateStream(ctx, req, sink)
+	}
+	return m.parent.CreateStream(ctx, req, sink)
 }
 
 func (w *wire) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
@@ -113,13 +130,10 @@ func TestTheRecordIsWhatWasSent(t *testing.T) {
 			o := options(t, nil)
 			o.Streamer = modelinfo.Wrap(w, efforts{"pro": {"none"}, "flash": {"none", "high"}}, nil)
 			o.Fit = modelinfo.Of(o.Streamer).Fit
-			o.Agents, o.Model, o.SubagentModel, o.Think = true, "pro", "flash", true
+			o = withAgents(o, "flash")
+			o.Model, o.Think = "pro", true
 			o.Instructions = "Use tabs."
-			p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "allow"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			o.Policy = &p
+			o.Policy = &policy.Settings{Builtin: true, Fallback: "allow"}
 			s, err := New(ctx, o)
 			if err != nil {
 				t.Fatal(err)
@@ -383,7 +397,8 @@ func TestSubagentsFollowThinkAndModel(t *testing.T) {
 	o := options(t, nil)
 	o.Streamer = modelinfo.Wrap(m, efforts{"pro": {"none", "low"}, "other": {"none", "low"}}, nil)
 	o.Fit = modelinfo.Of(o.Streamer).Fit
-	o.Agents, o.Model, o.Think = true, "pro", true
+	o = withAgents(o, "")
+	o.Model, o.Think = "pro", true
 	s, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)

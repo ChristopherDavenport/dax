@@ -2,16 +2,20 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // confined builds a workspace beside a directory that holds a secret,
 // with symbolic links in the workspace that lead out and one that
 // stays in.
-func confined(t *testing.T) (ws *Workspace, dir, outside string) {
+func confined(t *testing.T) (ws *Files, dir, outside string) {
 	t.Helper()
 	base := t.TempDir()
 	dir = filepath.Join(base, "work")
@@ -165,7 +169,7 @@ func TestAWorkspaceReachedThroughALinkStillMatchesItsRealName(t *testing.T) {
 func TestReadOnlyArgsFollowsLinksOutOfTheWorkspace(t *testing.T) {
 	_, dir, _ := confined(t)
 	for arg, want := range map[string]bool{"inside.txt": true, "alias.txt": true, "sub": true, "linkdir": false, "linkfile": false, "linkdir/secret.txt": false, "sub/up": false} {
-		if got := inWorkspace(arg, dir); got != want {
+		if got := inWorkspace(arg, newWS(t, dir)); got != want {
 			t.Errorf("inWorkspace(%q) = %v, want %v", arg, got, want)
 		}
 	}
@@ -175,16 +179,135 @@ func TestNormalizePath(t *testing.T) {
 	for in, want := range map[string]string{
 		"x": "x", "./x": "x", "a/../x": "x", "/w/x": "x", "/w/./a//b/../x": "a/x", ".": ".", "/w": ".", "a/..": ".",
 	} {
-		if got, ok := NormalizePath("/w", "", in); !ok || got != want {
-			t.Errorf("NormalizePath(%q) = %q, %v; want %q", in, got, ok, want)
+		if got, ok := normalizePath("/w", "", in); !ok || got != want {
+			t.Errorf("normalizePath(%q) = %q, %v; want %q", in, got, ok, want)
 		}
 	}
 	for _, in := range []string{"", "..", "../x", "a/../../x", "/etc/passwd", "/wx/y", "/w/../x"} {
-		if got, ok := NormalizePath("/w", "", in); ok {
-			t.Errorf("NormalizePath(%q) = %q, want outside", in, got)
+		if got, ok := normalizePath("/w", "", in); ok {
+			t.Errorf("normalizePath(%q) = %q, want outside", in, got)
 		}
 	}
-	if got, ok := NormalizePath("/via", "/real", "/real/x"); !ok || got != "x" {
+	if got, ok := normalizePath("/via", "/real", "/real/x"); !ok || got != "x" {
 		t.Errorf("real name: %q %v", got, ok)
+	}
+}
+
+// The methods a program built on dax gives its own tools refuse the
+// same ways out as dax's file tools, and still reach what is inside,
+// through a link that stays in.
+func TestTheWorkspacesExportedMethodsRefusePathsOutside(t *testing.T) {
+	ws, dir, outside := confined(t)
+	secret := filepath.Join(outside, "secret.txt")
+	ops := map[string]func(path string) error{
+		"ReadFile":  func(p string) error { _, err := ws.ReadFile(p, 0); return err },
+		"WriteFile": func(p string) error { _, err := ws.WriteFile(p, []byte("x")); return err },
+		"Stat":      func(p string) error { _, err := ws.Stat(p); return err },
+		"ReadDir":   func(p string) error { _, err := ws.ReadDir(p); return err },
+		"Update": func(p string) error {
+			_, err := ws.Update(p, 0, func(b []byte) ([]byte, error) { return append(b, 'x'), nil })
+			return err
+		},
+	}
+	out := []string{secret, "../outside/secret.txt", "sub/../../outside/secret.txt", "linkdir/secret.txt", "linkfile", "sub/up/secret.txt", filepath.Join(dir, "linkdir", "secret.txt"), "linkdir", "linkdir/a/b.txt"}
+	for name, op := range ops {
+		for _, p := range out {
+			t.Run(name+" "+p, func(t *testing.T) {
+				err := op(p)
+				if err == nil || !errors.Is(err, ErrOutside) {
+					t.Errorf("%s(%q) = %v, want ErrOutside", name, p, err)
+				}
+			})
+		}
+	}
+	if b, err := os.ReadFile(secret); err != nil || string(b) != "hunter2\nTODO secret\n" {
+		t.Fatalf("the secret changed: %q %v", b, err)
+	}
+	if b, err := ws.ReadFile("alias.txt", 0); err != nil || string(b) != "ok\n" {
+		t.Errorf("ReadFile through a link that stays in = %q %v", b, err)
+	}
+	if _, err := ws.ReadFile("inside.txt", 2); err == nil {
+		t.Error("ReadFile over its limit succeeded")
+	}
+	if rel, err := ws.WriteFile(filepath.Join(dir, "new", "f.txt"), []byte("x")); err != nil || rel != filepath.Join("new", "f.txt") {
+		t.Errorf("WriteFile inside = %q %v", rel, err)
+	}
+	if fi, err := ws.Stat("alias.txt"); err != nil || fi.Size() != 3 {
+		t.Errorf("Stat through a link that stays in = %v %v", fi, err)
+	}
+	if es, err := ws.ReadDir("."); err != nil || len(es) == 0 {
+		t.Errorf("ReadDir of the workspace = %v %v", es, err)
+	}
+}
+
+// A FIFO or a device where a file or a directory should be is an error
+// at once, for dax's own tools and an extension's alike: nothing blocks
+// on it, and the write lock is not held hanging.
+func TestTheWorkspaceDoesNotBlockOnAFIFO(t *testing.T) {
+	ws, dir, _ := confined(t)
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("no FIFO here: %v", err)
+	}
+	for name, op := range map[string]func() error{
+		"WriteFile": func() error { _, err := ws.WriteFile("pipe", []byte("x")); return err },
+		"ReadFile":  func() error { _, err := ws.ReadFile("pipe", 0); return err },
+		"ReadDir":   func() error { _, err := ws.ReadDir("pipe"); return err },
+		"Update": func() error {
+			_, err := ws.Update("pipe", 0, func(b []byte) ([]byte, error) { return b, nil })
+			return err
+		},
+		"write tool": func() error {
+			_, err := call(context.Background(), Write(ws), `{"path":"pipe","content":"x"}`)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() { done <- op() }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Error("a FIFO was taken for a regular file or a directory")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("blocked on a FIFO")
+			}
+		})
+	}
+	// The lock was not left held: a write after them all goes through.
+	if _, err := ws.WriteFile("after.txt", []byte("ok")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Update holds the write lock across its read and its write, so an
+// update and dax's edit of one file cannot lose either change; an
+// error from its function leaves the file as it was.
+func TestUpdateIsOneStepAgainstOtherWrites(t *testing.T) {
+	ws, dir, _ := confined(t)
+	path := filepath.Join(dir, "count.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := ws.Update("count.txt", 0, func(b []byte) ([]byte, error) { return append(b, 'x'), nil }); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if b, _ := os.ReadFile(path); len(b) != 20 {
+		t.Errorf("after 20 updates the file holds %d bytes, want 20: an update was lost", len(b))
+	}
+	if _, err := ws.Update("count.txt", 0, func([]byte) ([]byte, error) { return nil, errors.New("no") }); err == nil {
+		t.Error("Update ignored its function's error")
+	}
+	if b, _ := os.ReadFile(path); len(b) != 20 {
+		t.Errorf("a failed update changed the file to %q", b)
 	}
 }

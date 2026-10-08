@@ -56,7 +56,7 @@ func readCap(opts []ReadOption) int64 {
 // file, and it scans at most the size cap, so a multi-gigabyte file
 // costs what a small one does. Past the cap, use grep to find the
 // line.
-func Read(ws *Workspace, opts ...ReadOption) agenttool.Tool {
+func Read(ws *Files, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files; only the first "+fmt.Sprint(limitBytes>>10)+" KiB of a file can be read, so use grep to find a line in a larger one.",
 		func(_ context.Context, in ReadArgs) (string, error) {
@@ -141,7 +141,7 @@ type WriteArgs struct {
 }
 
 // Write returns a tool that creates or replaces a file.
-func Write(ws *Workspace) agenttool.Tool {
+func Write(ws *Files) agenttool.Tool {
 	return agenttool.New("write", "Create or overwrite a file with the given content. Parent directories are created.",
 		func(_ context.Context, in WriteArgs) (string, error) {
 			ws.writes.Lock()
@@ -162,7 +162,7 @@ type EditArgs struct {
 }
 
 // Edit returns a tool that replaces one exact occurrence of a string.
-func Edit(ws *Workspace, opts ...ReadOption) agenttool.Tool {
+func Edit(ws *Files, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("edit", "Replace old_string with new_string in a file. old_string must appear exactly once; include enough surrounding lines to make it unique.",
 		func(_ context.Context, in EditArgs) (string, error) {

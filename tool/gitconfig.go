@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // execKeys match the git configuration keys that name a program git
@@ -18,7 +17,7 @@ import (
 // textconv or external diff, an askpass or editor, a proxy command, an
 // upload-pack or receive-pack, a credential helper, a merge driver, a
 // pack-objects hook, a pager for one command. The keys dax switches
-// off itself, in GitEnv, are not here: core.fsmonitor, core.pager,
+// off itself, in gitEnv, are not here: core.fsmonitor, core.pager,
 // core.sshCommand, core.hooksPath and the gpg programs.
 var execKeys = regexp.MustCompile(`(?i)^(` +
 	`filter\..+\.(clean|smudge|process)` +
@@ -32,7 +31,7 @@ var execKeys = regexp.MustCompile(`(?i)^(` +
 
 var boolish = map[string]bool{"true": true, "false": true, "yes": true, "no": true, "on": true, "off": true, "1": true, "0": true, "": true}
 
-// ExecConfigKey asks whether a git command run in dir could do more than
+// execConfigKey asks whether a git command run in dir could do more than
 // read this workspace's repository, and says what, or returns "" when
 // it could not. An error is returned when git could not say, which a
 // caller treats as a reason to ask. It looks for:
@@ -54,23 +53,34 @@ var boolish = map[string]bool{"true": true, "false": true, "yes": true, "no": tr
 //
 // The user's own system and global configuration is trusted: it is
 // theirs, and a git-lfs filter there is no hostile repository's.
-func ExecConfigKey(ctx context.Context, dir string, strict bool) (key string, err error) {
+//
+// Everything is asked of the workspace's own machine, through f's
+// workspace: git and the shell run there, dir is a path in its
+// namespace, and the parents of dir it walks are its parents, so a
+// repository in a container is judged by the container's files.
+func execConfigKey(ctx context.Context, f *Files, dir string, strict bool) (key string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if why := gitDirRedirected(dir); why != "" {
-		return why, nil
+	ws := f.Workspace()
+	rel, ok := f.view().rel(dir)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrOutside, dir)
 	}
-	env := append(DefaultEnv(nil), GitEnv()...)
+	exec := func(args ...string) (*workspace.Output, error) {
+		return ws.Exec(ctx, workspace.Command{Args: args, Dir: rel, Env: append(gitEnv(), "CDPATH=", "LC_ALL=C")})
+	}
+	if why, err := gitDirRedirected(exec, filepath.Clean(dir)); err != nil || why != "" {
+		return why, err
+	}
 	run := func(args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, "git", args...)
-		cmd.Dir = dir
-		cmd.Env = env
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(errb.String()))
+		out, err := exec(append([]string{"git"}, args...)...)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("git %s: %w", args[0], err)
+		case out.ExitCode != 0:
+			return nil, fmt.Errorf("git %s: exit status %d: %s", args[0], out.ExitCode, strings.TrimSpace(string(out.Stderr)))
 		}
-		return out.Bytes(), nil
+		return out.Stdout, nil
 	}
 	list, err := run("config", "--list", "-z", "--show-origin", "--show-scope")
 	if err != nil {
@@ -92,13 +102,13 @@ func ExecConfigKey(ctx context.Context, dir string, strict bool) (key string, er
 	if out, err := run("rev-parse", "--absolute-git-dir", "--show-toplevel"); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		if len(lines) == 2 {
-			if why := repoElsewhere(dir, lines[0], lines[1]); why != "" {
+			if why := repoElsewhere(exec, dir, lines[0], lines[1]); why != "" {
 				return why, nil
 			}
 		}
 		// A submodule's config is read when git descends into it.
 		if len(lines) >= 1 {
-			if why := submoduleConfigs(ctx, lines[0], run); why != "" {
+			if why := submoduleConfigs(exec, lines[0], run); why != "" {
 				return why, nil
 			}
 		}
@@ -140,38 +150,66 @@ var (
 	submoduleUpdate = regexp.MustCompile(`(?i)^submodule\..+\.update$`)
 )
 
+// execFn runs a command in the workspace, at the directory being
+// checked.
+type execFn func(args ...string) (*workspace.Output, error)
+
+// gitDirScript walks from $1 upward to the first .git and says whether
+// it is a link or a file (a gitfile naming another directory), with the
+// directory it is in. A .git directory, or none, prints nothing.
+const gitDirScript = `d=$1
+while :; do
+	if [ -L "$d/.git" ]; then printf 'link\n%s' "$d"; exit 0; fi
+	if [ -e "$d/.git" ]; then
+		[ -d "$d/.git" ] && exit 0
+		printf 'file\n%s' "$d"; exit 0
+	fi
+	p=$(dirname -- "$d")
+	[ "$p" = "$d" ] && exit 0
+	d=$p
+done`
+
 // gitDirRedirected looks for the .git git would find from dir upward
 // and says if it is a file (a gitfile naming another directory) or a
-// link.
-func gitDirRedirected(dir string) string {
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		fi, err := os.Lstat(filepath.Join(d, ".git"))
-		if err == nil {
-			switch {
-			case fi.Mode()&fs.ModeSymlink != 0:
-				return ".git in " + d + " is a symbolic link"
-			case !fi.IsDir():
-				return ".git in " + d + " is a file that points git at another directory"
-			}
-			return ""
-		}
-		if filepath.Dir(d) == d {
-			return ""
-		}
+// link. An error is a walk that could not run, which a caller treats
+// as a reason to ask.
+func gitDirRedirected(exec execFn, dir string) (string, error) {
+	out, err := exec("sh", "-c", gitDirScript, "sh", dir)
+	if err != nil {
+		return "", fmt.Errorf("looking for .git: %w", err)
 	}
+	if out.ExitCode != 0 {
+		return "", fmt.Errorf("looking for .git: exit status %d: %s", out.ExitCode, strings.TrimSpace(string(out.Stderr)))
+	}
+	kind, d, _ := strings.Cut(string(out.Stdout), "\n")
+	switch kind {
+	case "link":
+		return ".git in " + d + " is a symbolic link", nil
+	case "file":
+		return ".git in " + d + " is a file that points git at another directory", nil
+	}
+	return "", nil
 }
+
+// realScript prints each argument with its links resolved, or as it
+// is when it cannot be.
+const realScript = `for p; do
+	if r=$(cd -- "$p" 2>/dev/null && pwd -P); then printf '%s\n' "$r"; else printf '%s\n' "$p"; fi
+done`
 
 // repoElsewhere compares what git says with the workspace: the work
 // tree must contain dir, and the git directory must be that work
-// tree's .git.
-func repoElsewhere(dir, gitDir, top string) string {
-	real := func(p string) string {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return r
+// tree's .git. The paths are resolved where git runs.
+func repoElsewhere(exec execFn, dir, gitDir, top string) string {
+	reals := []string{filepath.Clean(dir), filepath.Clean(gitDir), filepath.Clean(top)}
+	if out, err := exec("sh", "-c", realScript, "sh", dir, gitDir, top); err == nil && out.ExitCode == 0 {
+		if lines := strings.Split(strings.TrimSuffix(string(out.Stdout), "\n"), "\n"); len(lines) == 3 {
+			for i, l := range lines {
+				reals[i] = filepath.Clean(l)
+			}
 		}
-		return filepath.Clean(p)
 	}
-	d, g, t := real(dir), real(gitDir), real(top)
+	d, g, t := reals[0], reals[1], reals[2]
 	if rel, err := filepath.Rel(t, d); err != nil || !local(rel) {
 		return "git's work tree " + top + " does not contain the workspace"
 	}
@@ -181,22 +219,26 @@ func repoElsewhere(dir, gitDir, top string) string {
 	return ""
 }
 
+// modulesScript lists the regular files called config under
+// $1/modules, links not followed, at most 200, in byte order.
+const modulesScript = `[ -d "$1/modules" ] || exit 0
+find "$1/modules" -type f -name config 2>/dev/null | sort | head -n 200`
+
 // submoduleConfigs reads the config of every submodule under the git
 // directory's modules/ and returns the first thing in one that runs a
 // program. They are the repository's own, and hostile ones are
 // possible: a submodule's config is as writable as the repository's.
-func submoduleConfigs(ctx context.Context, gitDir string, run func(...string) ([]byte, error)) string {
-	root := filepath.Join(gitDir, "modules")
+func submoduleConfigs(exec execFn, gitDir string, run func(...string) ([]byte, error)) string {
+	out, err := exec("sh", "-c", modulesScript, "sh", gitDir)
+	if err != nil || out.ExitCode != 0 {
+		return "the submodules' configs under " + gitDir + " could not be listed"
+	}
 	var configs []string
-	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || len(configs) >= 200 {
-			return nil
+	for _, l := range strings.Split(string(out.Stdout), "\n") {
+		if l != "" {
+			configs = append(configs, l)
 		}
-		if d.Type().IsRegular() && d.Name() == "config" {
-			configs = append(configs, p)
-		}
-		return nil
-	})
+	}
 	for _, f := range configs {
 		out, err := run("config", "--file", f, "--list", "-z")
 		if err != nil {

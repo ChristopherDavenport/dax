@@ -2,7 +2,7 @@ package agent
 
 import (
 	"context"
-	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 	"github.com/ChristopherDavenport/openresponses"
@@ -57,6 +57,13 @@ func TestSymlinksOutOfTheWorkspaceAreNotReadIntoThePrompt(t *testing.T) {
 			t.Errorf("omitted lacks %q:\n%s", want, all)
 		}
 	}
+	sources := map[string]bool{}
+	for _, om := range s.Omitted() {
+		sources[om.Source] = true
+	}
+	if !sources["dax"] || !sources[skills.Name] {
+		t.Errorf("the refusals are not each the screener's: %v", sources)
+	}
 }
 
 func TestASymlinkInsideTheWorkspaceIsRead(t *testing.T) {
@@ -79,33 +86,11 @@ func TestASymlinkInsideTheWorkspaceIsRead(t *testing.T) {
 		t.Errorf("in-workspace links should be read:\n%s", instr)
 	}
 	for _, om := range s.Omitted() {
-		if om.Source == "dax" {
+		// The session screens AGENTS.md; dax-skills screens the
+		// project's skills.
+		if om.Source == "dax" || om.Source == skills.Name {
 			t.Errorf("unexpected refusal: %+v", om)
 		}
-	}
-}
-
-func TestASkillFileLinkedOutIsRefusedWithItsDirectory(t *testing.T) {
-	ctx := context.Background()
-	o := options(t, &echo.Adapter{})
-	outside := filepath.Join(t.TempDir(), "x.md")
-	write(t, outside, "leaked\n")
-	write(t, filepath.Join(o.Dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
-	must(t, os.Symlink(outside, filepath.Join(o.Dir, ".dax", "skills", "ok", "ref.md")))
-	s, err := New(ctx, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	if strings.Contains(s.Agent.Config().Instructions, "name: ok") || strings.Contains(s.Agent.Config().Instructions, "Fine.") {
-		t.Error("the project's skills should have been refused whole")
-	}
-	found := false
-	for _, om := range s.Omitted() {
-		found = found || strings.Contains(om.Reason, "ref.md")
-	}
-	if !found {
-		t.Errorf("omitted: %+v", s.Omitted())
 	}
 }
 
@@ -144,20 +129,17 @@ func mode(t *testing.T, path string) os.FileMode {
 }
 
 // #13 of the review: the store root was created 0755.
-func TestTheStoreAndMemoryAreCreatedPrivate(t *testing.T) {
+func TestTheStoreIsCreatedPrivate(t *testing.T) {
 	var warned strings.Builder
-	stderr = &warned
-	defer func() { stderr = os.Stderr }()
+	defer CaptureWarnings(&warned)()
 	o := options(t, &echo.Adapter{})
 	s, err := New(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
-	for _, d := range []string{o.Root, o.MemoryDir} {
-		if m := mode(t, d); m != 0o700 {
-			t.Errorf("%s is %04o, want 0700", d, m)
-		}
+	if m := mode(t, o.Root); m != 0o700 {
+		t.Errorf("%s is %04o, want 0700", o.Root, m)
 	}
 	if warned.Len() != 0 {
 		t.Errorf("a fresh directory is not warned about: %q", warned.String())
@@ -166,13 +148,10 @@ func TestTheStoreAndMemoryAreCreatedPrivate(t *testing.T) {
 
 func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
 	var warned strings.Builder
-	stderr = &warned
-	defer func() { stderr = os.Stderr }()
+	defer CaptureWarnings(&warned)()
 	o := options(t, &echo.Adapter{})
 	must(t, os.MkdirAll(o.Root, 0o755))
 	must(t, os.Chmod(o.Root, 0o755))
-	must(t, os.MkdirAll(o.MemoryDir, 0o750))
-	must(t, os.Chmod(o.MemoryDir, 0o750))
 	s, err := New(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
@@ -181,13 +160,8 @@ func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
 	if m := mode(t, o.Root); m != 0o700 {
 		t.Errorf("root is %04o", m)
 	}
-	if m := mode(t, o.MemoryDir); m != 0o700 {
-		t.Errorf("memory is %04o", m)
-	}
-	for _, want := range []string{o.Root + " was readable by other users (mode 0755)", o.MemoryDir + " was readable by other users (mode 0750)"} {
-		if !strings.Contains(warned.String(), want) {
-			t.Errorf("warning lacks %q:\n%s", want, warned.String())
-		}
+	if want := o.Root + " was readable by other users (mode 0755)"; !strings.Contains(warned.String(), want) {
+		t.Errorf("warning lacks %q:\n%s", want, warned.String())
 	}
 	// Opened again, it is quiet.
 	warned.Reset()
@@ -203,49 +177,6 @@ func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
 	}
 	if m := mode(t, o.Root); m != 0o700 {
 		t.Errorf("after gc root is %04o", m)
-	}
-}
-
-// -trust-skills trusts the user's skills and never the repository's.
-func TestTrustSkillsNeverTrustsARepositorysSkill(t *testing.T) {
-	ctx := context.Background()
-	for _, tc := range []struct {
-		name      string
-		dir       func(o Options) string // where the skill is written
-		wantAsked int
-	}{
-		{"the user's own skills", func(o Options) string { return filepath.Join(o.UserDir, "skills") }, 0},
-		{"a configured skills_dirs", func(o Options) string { return o.SkillsDirs[0] }, 0},
-		{"the repository's .dax/skills", func(o Options) string { return filepath.Join(o.Dir, ".dax", "skills") }, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			model := &scripted{calls: [][2]string{
-				{"skill", `{"name":"pgreet"}`},
-				{"bash", `{"command":"echo hello"}`},
-			}}
-			o := options(t, model)
-			o.SkillsDirs = []string{filepath.Join(t.TempDir(), "configured")}
-			must(t, os.MkdirAll(o.SkillsDirs[0], 0o755))
-			write(t, filepath.Join(tc.dir(o), "pgreet", "SKILL.md"),
-				"---\nname: pgreet\ndescription: Greets.\nallowed-tools: Bash(echo:*)\n---\nSay hello.\n")
-			o.Policy, o.TrustSkills = confirmPolicy(t), true
-			var asked []string
-			o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
-				asked = append(asked, c.Arguments)
-				return true
-			}
-			s, err := New(ctx, o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
-			if _, err := s.Prompt(ctx, "greet me"); err != nil {
-				t.Fatal(err)
-			}
-			if len(asked) != tc.wantAsked {
-				t.Fatalf("asked %v, want %d question(s)", asked, tc.wantAsked)
-			}
-		})
 	}
 }
 
@@ -315,11 +246,7 @@ func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testin
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask", User: config.Rules{Allow: []string{"bash(echo:*)"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	o.Policy = &p
+	o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: []string{"bash(echo:*)"}}}
 	var asked []string
 	o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
 		asked = append(asked, reason)
@@ -383,21 +310,16 @@ func outputs(s *Session) []string {
 func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 	ctx := context.Background()
 	var lastModel *twoModels
-	run := func(t *testing.T, rules config.Rules, childCalls [][2]string, approve func(c *openresponses.FunctionCall, reason string) bool) (o Options, s *Session, asked []string) {
+	run := func(t *testing.T, rules policy.Rules, childCalls [][2]string, approve func(c *openresponses.FunctionCall, reason string) bool) (o Options, s *Session, asked []string) {
 		model := &twoModels{
 			parent: scripted{calls: [][2]string{{"explore", `{"input":"look around"}`}}},
 			child:  scripted{calls: childCalls},
 		}
 		lastModel = model
-		o = options(t, model)
+		o = withAgents(options(t, model), "")
 		write(t, filepath.Join(o.Dir, ".env"), "SECRET_TOKEN=abc123\n")
 		write(t, filepath.Join(o.Dir, "main.go"), "package main\n")
-		o.Agents = true
-		p, err := policy.Build(config.PolicySettings{Builtin: true, Fallback: "ask", User: rules})
-		if err != nil {
-			t.Fatal(err)
-		}
-		o.Policy = &p
+		o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: rules}
 		o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
 			asked = append(asked, c.Name+" "+c.Arguments+" | "+reason)
 			return approve != nil && approve(c, reason)
@@ -431,7 +353,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 	}
 
 	t.Run("a user deny holds for the child", func(t *testing.T) {
-		_, s, asked := run(t, config.Rules{Deny: []string{"read(.env)", "grep(.env)"}},
+		_, s, asked := run(t, policy.Rules{Deny: []string{"read(.env)", "grep(.env)"}},
 			[][2]string{{"read", `{"path":".env"}`}, {"grep", `{"pattern":"SECRET","path":".env"}`}}, nil)
 		if len(asked) != 0 {
 			t.Errorf("a denied call was put to the user: %v", asked)
@@ -445,7 +367,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 		}
 	})
 	t.Run("a secret-path ask from the child reaches the user", func(t *testing.T) {
-		_, s, asked := run(t, config.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return false })
+		_, s, asked := run(t, policy.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return false })
 		if len(asked) != 1 || !strings.HasPrefix(asked[0], `read {"path":".env"}`) || !strings.Contains(asked[0], "explore") {
 			t.Fatalf("questions: %q", asked)
 		}
@@ -453,7 +375,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 			t.Error("the child read .env after the user said no")
 		}
 		// Said yes, it reads.
-		_, s2, asked2 := run(t, config.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return true })
+		_, s2, asked2 := run(t, policy.Rules{}, [][2]string{{"read", `{"path":".env"}`}}, func(*openresponses.FunctionCall, string) bool { return true })
 		if len(asked2) != 1 {
 			t.Fatalf("questions: %q", asked2)
 		}
@@ -463,7 +385,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 		_ = s2
 	})
 	t.Run("what the policy allows the child does unasked, and the rest asks", func(t *testing.T) {
-		_, _, asked := run(t, config.Rules{}, [][2]string{
+		_, _, asked := run(t, policy.Rules{}, [][2]string{
 			{"read", `{"path":"main.go"}`}, {"ls", `{}`}, {"bash", `{"command":"pwd"}`}, {"bash", `{"command":"touch PWN"}`},
 		}, func(*openresponses.FunctionCall, string) bool { return false })
 		if len(asked) != 1 || !strings.Contains(asked[0], "touch PWN") {
@@ -471,7 +393,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 		}
 	})
 	t.Run("a path rule applies to the child", func(t *testing.T) {
-		_, _, asked := run(t, config.Rules{Deny: []string{"Read(docs/**)"}}, [][2]string{{"read", `{"path":"docs/../docs/x.md"}`}}, nil)
+		_, _, asked := run(t, policy.Rules{Deny: []string{"Read(docs/**)"}}, [][2]string{{"read", `{"path":"docs/../docs/x.md"}`}}, nil)
 		if len(asked) != 0 || !strings.Contains(strings.Join(childSaw(), "\n"), "denied by") {
 			t.Errorf("asked %v, the child saw %q", asked, childSaw())
 		}

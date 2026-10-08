@@ -1,7 +1,7 @@
-// Command dax is a coding agent: a REPL, or one prompt with -p, over
-// an Open Responses model, with read, write, edit, glob, grep, ls and
-// bash tools under a policy, recording every session.
-package main
+package dax
+
+// This file is the command line: the flags, the admin modes, the
+// settings, the provider, then one front.
 
 import (
 	"context"
@@ -22,21 +22,18 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/ext/skills"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/dax/internal/provider"
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/tool"
+	"github.com/ChristopherDavenport/dax/workspace"
 )
-
-func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "dax:", err)
-		if h := hint(err); h != "" {
-			fmt.Fprintln(os.Stderr, "dax:", h)
-		}
-		os.Exit(1)
-	}
-}
 
 // hint says what to do about a store error that names no remedy the
 // user can act on from dax.
@@ -59,10 +56,12 @@ func hint(err error) string {
 	return ""
 }
 
-func run() error {
-	fs := flag.NewFlagSet("dax", flag.ContinueOnError)
+// run is the program: args are the command line after the program's
+// name.
+func run(ctx context.Context, args []string, p program) error {
+	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: dax [flags]   (REPL)\n       dax -p \"prompt\" [flags]\n\nflags override ~/.config/dax/config.json and .dax/config.json; see the README.")
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -92,15 +91,15 @@ func run() error {
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
-	agents := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
+	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
 	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
-	skills := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
+	skillsFlag := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
-	memory := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
+	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
@@ -113,7 +112,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
 	switch {
 	case *list:
 		sums, err := agent.List(ctx, *root, dir)
@@ -187,13 +185,13 @@ func run() error {
 	flags.PricingFile = str("pricing-file", pricingFile)
 	flags.Effort = str("effort", effort)
 	if given["agents"] {
-		flags.Agents = agents
+		flags.Agents = agentsFlag
 	}
 	if given["think"] {
 		flags.Think = think
 	}
 	if given["memory"] {
-		m := *memory
+		m := *memoryFlag
 		if m == "off" {
 			m = ""
 		}
@@ -209,26 +207,49 @@ func run() error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: "dax/" + version()})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: p.name + "/" + p.version})
+	if err != nil {
+		return err
+	}
+	// Where the tools act: this directory. A container or a remote
+	// runtime is another workspace.Workspace, given to the session and
+	// to the extensions the same way.
+	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(settings.PassEnv, m.KeyEnv))
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	defer ws.Close()
+	// What the session offers the model: dax's extensions as the
+	// settings say, then the program's.
+	defaults := []extension.Extension{coding.New(settings.MaxReadBytes)}
+	if settings.Agents {
+		defaults = append(defaults, agents.New(agents.Options{Model: m.SubagentName}))
+	}
+	if *skillsFlag {
+		defaults = append(defaults, skills.New(skills.Options{Dirs: settings.SkillsDirs, Trust: *trustSkills}))
+	}
+	if settings.MemoryDir != "" {
+		defaults = append(defaults, memory.New(settings.MemoryDir))
+	}
+	exts, err := p.extensions(defaults)
 	if err != nil {
 		return err
 	}
 	opts := agent.Options{
-		Streamer: m.Streamer, Model: m.Name, SubagentModel: m.SubagentName, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Root: *root, Sync: policyMode,
+		Extensions: exts,
+		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Root: *root, Sync: policyMode,
 		UserDir:       agent.DefaultUserDir(),
 		AgentsMD:      *agentsMD,
-		Skills:        *skills,
-		SkillsDirs:    settings.SkillsDirs,
 		PassEnv:       settings.PassEnv,
 		KeyEnv:        m.KeyEnv,
 		MaxReadBytes:  settings.MaxReadBytes,
-		TrustSkills:   *trustSkills,
-		MemoryDir:     settings.MemoryDir,
 		Compact:       *compactAt,
 		CompactServer: *compactServer,
-		Agents:        settings.Agents,
 		Log:           func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+	}
+	if p.named {
+		opts.Name, opts.Version = p.name, p.version
 	}
 	// Every request, the explorer's and the compaction summary's too,
 	// has its reasoning effort fitted to what the vendor says the model
@@ -263,19 +284,20 @@ func run() error {
 		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "cli", Command: *mcp})
 	}
 	if !settings.Policy.Off {
-		p, err := policy.Build(settings.Policy)
-		if err != nil {
-			return err
-		}
-		opts.Policy = &p
+		opts.Policy = &settings.Policy
+	}
+	renderers, err := extension.Renderers(dir, exts)
+	if err != nil {
+		return err
 	}
 
 	// The front is chosen here: -p prints one answer, otherwise -front
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
-		Provider: settings.Provider, Model: modelNames(m, settings.Agents), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
-		Policy: policySummary(settings.Policy), Cost: cost, Verbose: *verbose,
+		Name: p.name, Renderers: renderers,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
+		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}, processEnv(*root != ""))
 	if err != nil {
 		return err
@@ -384,16 +406,24 @@ func describeUnhashed(c agent.UnhashedCause) string {
 	return fmt.Sprintf("%s; at input %d sent %s, recorded %s", c.Reason, c.Index, item(c.Sent), item(c.Recorded))
 }
 
-// policySummary says in a line what policy is in force.
-func policySummary(p config.PolicySettings) string {
+// policySummary says in a line what policy is in force: the rules each
+// extension ships, the user's and the project's.
+func policySummary(p config.PolicySettings, exts []extension.Extension) string {
 	if p.Off {
 		return "off (-no-policy): every call runs"
 	}
 	var parts []string
-	if p.Builtin {
-		parts = append(parts, "built-in allow list and secret-path asks")
-	} else {
-		parts = append(parts, "no built-in allow list")
+	for _, e := range exts {
+		allow, rest := len(e.Policy.Allow), len(e.Policy.Ask)+len(e.Policy.Deny)
+		if !p.Builtin {
+			allow = 0
+		}
+		if allow+rest > 0 {
+			parts = append(parts, fmt.Sprintf("%d rule(s) from %s", allow+rest, policy.SourceExtension(e.Name)))
+		}
+	}
+	if !p.Builtin {
+		parts = append(parts, "no shipped allow rules")
 	}
 	if n := len(p.User.Allow) + len(p.User.Ask) + len(p.User.Deny); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d rule(s) of yours", n))
@@ -422,18 +452,18 @@ func describeModel(ctx context.Context, s openresponses.Streamer, m provider.Mod
 
 // modelNames is the model for the banner, and the sub-agents' when they
 // are offered and run another.
-func modelNames(m provider.Model, agents bool) string {
-	if agents && m.SubagentName != m.Name {
+func modelNames(m provider.Model, withAgents bool) string {
+	if withAgents && m.SubagentName != m.Name {
 		return m.Name + " (explore: " + m.SubagentName + ")"
 	}
 	return m.Name
 }
 
-// version is the module version dax was built at, as `go install`
-// stamps it, else the version the session header names.
-func version() string {
+// buildVersion is the main module's version, as `go install` stamps
+// it, else fallback.
+func buildVersion(fallback string) string {
 	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		return bi.Main.Version
 	}
-	return agent.Version
+	return fallback
 }

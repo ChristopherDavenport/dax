@@ -20,7 +20,7 @@ var wd = func() string {
 func subjects(t *testing.T, cmd string) ([]subj, error) {
 	t.Helper()
 	args, _ := json.Marshal(map[string]string{"command": cmd})
-	got, err := BashSubjects(wd, 0)(args)
+	got, err := BashSubjects(newWS(t, wd), 0)(args)
 	var have []subj
 	for _, s := range got {
 		var m map[string]string
@@ -145,9 +145,9 @@ func TestSafeWords(t *testing.T) {
 		"git diff --stat=80,40 a..b c...d": {"git", "diff", "--stat=80,40", "a..b", "c...d"},
 	}
 	for cmd, want := range ok {
-		got, isSafe := SafeWords(cmd)
+		got, isSafe := safeWords(cmd)
 		if !isSafe || !reflect.DeepEqual(got, want) {
-			t.Errorf("SafeWords(%q) = %q, %v; want %q", cmd, got, isSafe, want)
+			t.Errorf("safeWords(%q) = %q, %v; want %q", cmd, got, isSafe, want)
 		}
 	}
 	for _, cmd := range []string{
@@ -156,8 +156,8 @@ func TestSafeWords(t *testing.T) {
 		"X=1 git status", "git=1 status", "a $'x'", `a $"x"`, `a "$x"`, `a "x\y"`, "a \"`x`\"", "a 'unterminated", `a "unterminated`,
 		"a \x00", "a é", "a;b", "a b", "a \"x\ny\"", "a !x", "a (b)", "git status\r",
 	} {
-		if got, isSafe := SafeWords(cmd); isSafe {
-			t.Errorf("SafeWords(%q) = %q, want not safe", cmd, got)
+		if got, isSafe := safeWords(cmd); isSafe {
+			t.Errorf("safeWords(%q) = %q, want not safe", cmd, got)
 		}
 	}
 }
@@ -181,21 +181,21 @@ func TestReadOnlyArgs(t *testing.T) {
 		"pwd -P", "pwd x", "go env", "go env -json", "go version -m x", "go env -w GOFLAGS=-x", "go env -u GOFLAGS", "go env GOFLAGS=-x", "go env -changed",
 	}
 	for _, cmd := range good {
-		w, ok := SafeWords(cmd)
+		w, ok := safeWords(cmd)
 		if !ok {
 			t.Fatalf("%q is not in the safe subset", cmd)
 		}
-		if !ReadOnlyArgs(w, wd) {
-			t.Errorf("ReadOnlyArgs(%q) = false, want true", cmd)
+		if !readOnlyArgs(w, newWS(t, wd)) {
+			t.Errorf("readOnlyArgs(%q) = false, want true", cmd)
 		}
 	}
 	for _, cmd := range bad {
-		w, ok := SafeWords(cmd)
+		w, ok := safeWords(cmd)
 		if !ok {
 			t.Fatalf("%q is not in the safe subset", cmd)
 		}
-		if ReadOnlyArgs(w, wd) {
-			t.Errorf("ReadOnlyArgs(%q) = true, want false", cmd)
+		if readOnlyArgs(w, newWS(t, wd)) {
+			t.Errorf("readOnlyArgs(%q) = true, want false", cmd)
 		}
 	}
 }
