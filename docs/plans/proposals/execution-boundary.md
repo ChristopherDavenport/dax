@@ -1,8 +1,9 @@
 # The execution boundary: everything that touches the world can run in a sandbox
 
-Repositories: dax (the executor and its two forms), agenttool (`mcpserver`
-and `mcpclient`: a facts call beside the tool calls MCP already carries),
-agentpolicy (subjects that take a context and can fail). dax's part comes
+Repositories: dax (the executor and its two forms), agenttool (facts as
+an optional per-call claim in the tool contract, carried by `mcpserver`
+and `mcpclient` beside the tool calls MCP already carries), agentpolicy
+(subjects taken from a tool's facts, with a context, able to fail). dax's part comes
 first and needs no sibling release to start: its in-process form is the
 code dax has today, reorganised.
 
@@ -183,11 +184,19 @@ what `Call` needs:
 | sequential, resource, confinement | set on the client side by option (`mcpclient/mcp.go:203`, `:224`, `:245`); MCP has no field |
 | policy | none on the server, by design: "A loop's hooks around tool calls belong to whoever hosts the loop" (`mcpserver/mcp.go`, package doc) |
 
-What MCP lacks is the facts call. Recommendation: MCP for calls, and the
-facts call as one reserved request on the same connection, served by
-`mcpserver` and called by `mcpclient` (a method of its own, or a reserved
-tool name `mcpclient` keeps out of the model's list), whose result is the
-`Facts` above as JSON. Not a new protocol: the calls, progress,
+What MCP lacks is facts. They belong first in agenttool's root contract,
+as an optional per-call claim beside `Confined` and `Replayable`
+(`agenttool/tool.go:341`, `:407`): a tool that can say what a call would
+touch implements it, in tool-call terms, so the contract needs no policy
+import. Facts are the calls this call amounts to (`read {"path": ".env"}`,
+`write {"path": "out/x"}` for a redirect, `bash {"command": "git status"}`
+for a stage), which is the shape of `agentpolicy.Subject` already, plus
+an optional rewrite (bash's stamped plan). agentpolicy then takes a
+tool's subjects from its facts. In process, dax-coding's tools implement
+the claim; over the wire, `mcpserver` answers it as one reserved request
+on the same connection (a method of its own, or a reserved tool name
+`mcpclient` keeps out of the model's list) and `mcpclient`'s tools
+implement the claim by asking. Not a new protocol: the calls, progress,
 questions, cancellation and records are what MCP already carries, and an
 executor is then also an ordinary MCP server any other host can use
 without the facts.
@@ -270,9 +279,11 @@ run, for the cases that want them apart too.
 
 ## What the siblings need
 
-- **agenttool** (`mcpserver`, `mcpclient`): the facts call on the same
-  connection, and carrying read-only, sequential and resource in the
-  listing so a client does not configure them by hand.
+- **agenttool**: facts as an optional per-call claim in the root
+  contract, in tool-call terms; `mcpserver` and `mcpclient` carry it as a
+  reserved request on the same connection, with read-only, sequential
+  and resource in the listing so a client does not configure them by
+  hand.
 - **agentpolicy**: a context on subjects (`Subjects` with a
   `context.Context`, or an engine option that supplies one), so a facts
   call can be cancelled and bounded.
