@@ -1,5 +1,7 @@
 # agentconsole: narrow to the view of the record, over agentturn's control contract
 
+Status: optional, after agentturn-control.md. The sandbox case does not need it (execution-boundary.md).
+
 Repository: agentconsole. Draft for filing after agentturn's control
 contract (agentturn-control.md) ships; it depends on it.
 

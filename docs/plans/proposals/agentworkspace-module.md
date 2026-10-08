@@ -1,5 +1,7 @@
 # agentworkspace: create the module, with Local, a remote client and server, and a long-lived process
 
+Note: the remote workspace here is the primitive cut. For a sandbox that runs the tools, execution-boundary.md cuts at tool calls instead; this module is then what the executor runs over inside the sandbox.
+
 Repository: new sibling, `github.com/ChristopherDavenport/agentworkspace`.
 Draft for filing; it creates a repository, so it is the user's call.
 

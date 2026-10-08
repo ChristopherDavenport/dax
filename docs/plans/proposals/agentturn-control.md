@@ -1,5 +1,7 @@
 # A control contract for the human plane, with questions as events, and a native front that serves it
 
+Status: optional. The sandbox case does not need it (execution-boundary.md); this is for running the human or autonomous plane apart from the turn.
+
 Repositories: agentturn (the contract, questions as events, `front/control`),
 agentkit (a helper that wraps a kit's agent as the contract). Draft for
 filing, agentturn first; agentkit's part follows its release.
