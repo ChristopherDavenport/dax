@@ -24,7 +24,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses/echo"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // forced is the echo model made to call one tool by name, then answer

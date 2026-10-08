@@ -21,11 +21,11 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
-	"github.com/ChristopherDavenport/dax/internal/policy"
 	"github.com/ChristopherDavenport/dax/internal/provider"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 func main() {

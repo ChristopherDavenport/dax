@@ -13,7 +13,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // taskModels is a scripted parent and a scripted task child, the child

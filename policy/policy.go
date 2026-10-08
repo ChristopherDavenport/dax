@@ -20,7 +20,7 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/internal/tool"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // BuiltinAllow is the allow list dax ships. The sub-agents, explore

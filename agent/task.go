@@ -13,7 +13,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/internal/prompt"
-	"github.com/ChristopherDavenport/dax/internal/tool"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // taskPreamble is what a task sub-agent is told on top of dax's own

@@ -17,7 +17,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
-	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // wire keeps the hash of every request as it reached the model, below

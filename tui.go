@@ -18,9 +18,9 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
-	"github.com/ChristopherDavenport/dax/internal/toolrender"
+	"github.com/ChristopherDavenport/dax/toolrender"
 )
 
 // tuiFront is the terminal client, agentconsole, over the kit dax

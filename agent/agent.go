@@ -39,10 +39,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/internal/policy"
 	"github.com/ChristopherDavenport/dax/internal/prompt"
 	"github.com/ChristopherDavenport/dax/internal/render"
-	"github.com/ChristopherDavenport/dax/internal/tool"
+	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // Version is what the session header names as the harness version.

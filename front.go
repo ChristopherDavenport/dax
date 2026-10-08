@@ -32,7 +32,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"golang.org/x/term"
 
-	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 

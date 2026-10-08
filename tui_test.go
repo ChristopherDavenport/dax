@@ -18,9 +18,9 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/openresponses"
 
-	"github.com/ChristopherDavenport/dax/internal/agent"
+	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/config"
-	"github.com/ChristopherDavenport/dax/internal/policy"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 type syncBuf struct {

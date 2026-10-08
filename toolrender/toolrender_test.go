@@ -13,7 +13,7 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agenttool"
 
-	"github.com/ChristopherDavenport/dax/internal/tool"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // files is the project every case's tools run in.
