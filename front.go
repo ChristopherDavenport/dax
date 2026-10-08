@@ -1,35 +1,36 @@
 package dax
 
-// This file is the seam where the front is chosen. A front is how the
-// user talks to a session: it supplies the callbacks the session asks
-// questions through (Hooks), then drives the session until the user is
-// done (Run). Everything below a front, the policy, the tools, the
-// recording, is the agent package's and does not know which front is
-// attached.
+// This file is the seam where the front is chosen. A front is the human
+// plane of a session: it drives the session's agent.Turn (prompt,
+// steer, answer, abort, the run's events and the questions asked while
+// a call runs), uses dax's own agent.Controls for its slash commands
+// and start lines, and may follow the session's record. Everything
+// below a front, the policy, the tools, the recording, is the agent
+// package's and does not know which front holds it; a front over a
+// wire to a remote session would hold the same Turn.
 //
-// There are three: the terminal client (tui.go, agentconsole over the
-// kit), the default when standard input and output are a terminal; the
-// REPL, which has the slash commands; and print, which is -p. A new
-// front implements front and gets a case in selectFront. The renderer
-// for events, internal/render, is the REPL's and print's; the terminal
-// client renders the session's record itself, drawing tool calls with
-// frontInfo.Renderers.
+// There are three: the terminal client (tui.go, agentconsole's console,
+// a view of the record, over glue that presents the Turn as
+// agentconsole's client.Backend), the default when standard input and
+// output are a terminal; the REPL, which has the slash commands; and
+// print, which is -p and an autonomous controller (agent.Drive) whose
+// rules ask on standard input. A new front implements front and gets a
+// case in selectFront. The renderer of the agent's events,
+// internal/render, is the REPL's and print's.
 
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/toolview"
-	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 	"golang.org/x/term"
@@ -67,15 +68,13 @@ type frontInfo struct {
 
 // front is a way to talk to a session.
 type front interface {
-	// Hooks returns the callbacks the session is built with: how a
-	// call the policy asked about is put to the user, and how a tool's
-	// question mid-call is.
-	Hooks() (approve func(call *openresponses.FunctionCall, reason string) bool, elicit agenttool.Elicitor)
-	// Prepare adjusts the options the session is built with: a front
-	// that drives the kit through its own backend asks for no agent, and
-	// one that takes the screen collects what would be printed.
+	// Prepare says where the session's notes go: a front that takes the
+	// screen holds them back until it gives it up. It is not how
+	// questions reach the user; those come through the Backend.
 	Prepare(o *agent.Options)
-	// Run drives the session until the user is done.
+	// Run drives the session until the user is done: the REPL and print
+	// through its Turn and Controls alone, the terminal client through
+	// the glue that shows it in agentconsole.
 	Run(ctx context.Context, sess *agent.Session) error
 }
 
@@ -112,7 +111,7 @@ func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, erro
 	}
 	switch name {
 	case "repl":
-		return &replFront{info: info, in: in, asks: make(chan *ask)}, nil
+		return &replFront{info: info, in: in}, nil
 	case "tui":
 		if !env.recording {
 			return nil, errors.New("the terminal client needs a session store; drop -sessions \"\" or use -front repl")
@@ -132,69 +131,93 @@ func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 func (f *printFront) Prepare(*agent.Options) {}
 func (f *replFront) Prepare(*agent.Options)  {}
 
-// printFront runs one prompt: approvals read stdin directly.
+// printFront runs one prompt as an autonomous controller whose rules
+// ask on standard input.
 type printFront struct {
 	info frontInfo
 	in   *bufio.Scanner
 }
 
-func (f *printFront) Hooks() (func(*openresponses.FunctionCall, string) bool, agenttool.Elicitor) {
-	approve := func(c *openresponses.FunctionCall, reason string) bool {
-		fmt.Print(question(c, reason))
-		if !f.in.Scan() {
-			fmt.Println()
-			return false
-		}
-		return yes(f.in.Text())
-	}
-	return approve, elicitor(func(q string) bool {
-		fmt.Print(q)
-		return f.in.Scan() && yes(f.in.Text())
-	})
+func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
+	return f.run(ctx, sess.Turn(), sess)
 }
 
-func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
-	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
-	abortOnInterrupt(sess)
-	showAssembly(sess)
-	showPending(sess, "resumed")
-	return turn(ctx, sess, f.info.Prompt)
+func (f *printFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) error {
+	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
+	abortOnInterrupt(t)
+	showAssembly(ctl.Info())
+	showPending(t, "resumed")
+	rules := agent.Rules{
+		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
+			fmt.Print(question(c, reason))
+			if !f.in.Scan() {
+				fmt.Println()
+				return false, ""
+			}
+			return yes(f.in.Text()), ""
+		},
+		Reply: func(q agent.Question) agent.Reply {
+			fmt.Print(questionText(q))
+			return agent.Reply{Accept: f.in.Scan() && yes(f.in.Text())}
+		},
+		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
+	}
+	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
+	if err != nil {
+		return err
+	}
+	ended(t, end)
+	return nil
 }
 
 // replFront reads lines from stdin: one goroutine reads, so a line
-// typed during a run can steer it, follow it up, or answer an
-// approval.
+// typed during a run can steer it, follow it up, or answer a question.
 type replFront struct {
 	info frontInfo
 	in   *bufio.Scanner
-	asks chan *ask
 }
 
-func (f *replFront) Hooks() (func(*openresponses.FunctionCall, string) bool, agenttool.Elicitor) {
-	approve := func(c *openresponses.FunctionCall, reason string) bool {
-		a := &ask{q: question(c, reason), reply: make(chan bool, 1)}
-		f.asks <- a
-		return <-a.reply
-	}
-	return approve, elicitor(func(q string) bool {
-		a := &ask{q: q, reply: make(chan bool, 1)}
-		f.asks <- a
-		return <-a.reply
-	})
+// waiting is something the REPL asked the user and waits on a line for:
+// a permission of a run that ended, or a question a running call asked.
+type waiting struct {
+	q string
+	// call is set for a permission, question for a question.
+	call     *openresponses.FunctionCall
+	question string
+}
+
+// result is how a run the REPL started ended.
+type result struct {
+	end *agentturn.RunEnd
+	err error
 }
 
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
-	sess.Agent.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)
-	abortOnInterrupt(sess)
+	return f.run(ctx, sess.Turn(), sess)
+}
+
+func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) error {
+	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
+	abortOnInterrupt(t)
+	info := ctl.Info()
 	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, f.info.Dir)
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
-	if id := sess.ID(); id != "" {
-		fmt.Printf("session %s\n", id)
+	if info.Recorded {
+		fmt.Printf("session %s\n", info.ID)
 	}
-	showAssembly(sess)
-	showPending(sess, "resumed")
+	showAssembly(info)
+	showPending(t, "resumed")
+	questions := make(chan agent.Question)
+	defer t.Questions(func(q agent.Question) {
+		go func() {
+			select {
+			case questions <- q:
+			case <-q.Done:
+			}
+		}()
+	})()
 	lines := make(chan string)
 	go func() {
 		defer close(lines)
@@ -202,42 +225,113 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 			lines <- f.in.Text()
 		}
 	}()
-	done := make(chan error, 1)
+	done := make(chan result, 1)
 	running := false
-	var cur *ask
+	var asks []waiting             // what waits on the user, in order
+	var answers []agentturn.Answer // the permissions answered so far
+	var steerText string           // a prompt held while held calls are answered
+	var sent string                // the prompt of the run in flight
 	prompt := func() {
-		if !running {
+		if !running && len(asks) == 0 {
 			fmt.Print("\n> ")
 		}
+	}
+	next := func() {
+		if len(asks) > 0 {
+			fmt.Print(asks[0].q)
+		}
+	}
+	start := func(run func() (*agentturn.RunEnd, error)) {
+		running = true
+		go func() {
+			end, err := run()
+			done <- result{end, err}
+		}()
+	}
+	ask := func(perms []agent.Permission) {
+		for _, pm := range perms {
+			asks = append(asks, waiting{q: question(pm.Call, pm.Reason), call: pm.Call})
+		}
+		answers = nil
+		next()
 	}
 	prompt()
 	for {
 		select {
-		case a := <-f.asks:
-			cur = a
-			fmt.Print(a.q)
-		case err := <-done:
+		case q := <-questions:
+			asks = append(asks, waiting{q: questionText(q), question: q.ID})
+			if len(asks) == 1 {
+				next()
+			}
+		case r := <-done:
 			running = false
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "\nerror:", err)
-				if h := hint(err); h != "" {
+			switch {
+			case errors.Is(r.err, agent.ErrHeld):
+				// The session stopped with calls held for approval: they
+				// are answered first, and the prompt steers that run.
+				steerText = sent
+				var perms []agent.Permission
+				for _, pc := range t.State().Pending {
+					if pc.Reason == agentturn.PendingDeferred && !pc.Dispatched {
+						perms = append(perms, agent.Permission{Call: pc.Call, Reason: "held for approval when the session stopped"})
+					}
+				}
+				ask(perms)
+				continue
+			case r.err != nil:
+				fmt.Fprintln(os.Stderr, "\nerror:", r.err)
+				if h := hint(r.err); h != "" {
 					fmt.Fprintln(os.Stderr, h)
 				}
+			case r.end.Reason == agentturn.ReasonInputRequired:
+				if perms := t.Permissions(r.end); len(perms) > 0 {
+					ask(perms)
+					continue
+				}
+				ended(t, r.end)
+			default:
+				ended(t, r.end)
 			}
 			prompt()
 		case line, ok := <-lines:
 			if !ok {
 				if running {
-					sess.Agent.Abort()
+					t.Abort()
 					<-done
 				}
 				fmt.Println()
 				return nil
 			}
 			line = strings.TrimSpace(line)
-			if cur != nil {
-				cur.reply <- yes(line)
-				cur = nil
+			if len(asks) > 0 {
+				a := asks[0]
+				asks = asks[1:]
+				switch {
+				case a.question != "":
+					t.Reply(a.question, agent.Reply{Accept: yes(line)})
+				case yes(line):
+					answers = append(answers, agentturn.Approve(a.call.CallID).WithBy(agentpolicy.ByHuman))
+				default:
+					fmt.Printf("  ✗ %s denied\n", render.Clean(a.call.Name))
+					answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(a.call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
+				}
+				if len(asks) > 0 {
+					next()
+					continue
+				}
+				if a.call != nil {
+					give, text := answers, steerText
+					answers, steerText = nil, ""
+					start(func() (*agentturn.RunEnd, error) {
+						if text != "" {
+							if err := t.Steer(ctx, openresponses.UserText(text)); err != nil {
+								return nil, err
+							}
+						}
+						return t.Answer(ctx, give...)
+					})
+				}
+				prompt()
 				continue
 			}
 			if line == "" {
@@ -247,17 +341,23 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 			if running {
 				switch {
 				case strings.HasPrefix(line, "/follow "):
-					sess.FollowUp(strings.TrimPrefix(line, "/follow "))
-					fmt.Println("[queued as follow-up]")
+					if err := t.FollowUp(ctx, openresponses.UserText(strings.TrimPrefix(line, "/follow "))); err != nil {
+						fmt.Fprintln(os.Stderr, "error:", err)
+					} else {
+						fmt.Println("[queued as follow-up]")
+					}
 				case line == "/abort":
-					sess.Agent.Abort()
+					t.Abort()
 				default:
-					sess.Steer(line)
-					fmt.Println("[queued as steering]")
+					if err := t.Steer(ctx, openresponses.UserText(line)); err != nil {
+						fmt.Fprintln(os.Stderr, "error:", err)
+					} else {
+						fmt.Println("[queued as steering]")
+					}
 				}
 				continue
 			}
-			if handled, err := command(ctx, sess, line); handled {
+			if handled, err := command(ctx, t, ctl, line); handled {
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				}
@@ -267,16 +367,14 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 				prompt()
 				continue
 			}
-			running = true
-			go func(text string) { done <- turn(ctx, sess, text) }(line)
+			sent = line
+			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(line)) })
 		}
 	}
 }
 
-type ask struct {
-	q     string
-	reply chan bool
-}
+// deniedOutput is what the model is told of a call the user refused.
+const deniedOutput = "Error: the user denied this call."
 
 // question is what the user is asked about a call the policy asked
 // about.
@@ -287,36 +385,13 @@ func question(c *openresponses.FunctionCall, reason string) string {
 	return render.Clean(fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason))
 }
 
-// elicitor puts a tool's mid-call question to the user as a yes or no.
-// dax has no form to fill in, so a question asking for one is
-// cancelled, as is one answered out of band at a URL, which is shown.
-// Questions asked together are put one at a time.
-func elicitor(confirm func(q string) bool) agenttool.Elicitor {
-	var mu sync.Mutex
-	return func(_ context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if q.URL != "" {
-			fmt.Printf("[a tool asks you to visit %s: %s]\n", render.Clean(q.URL), render.Clean(q.Message))
-			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
-		}
-		if hasFields(q.Schema) {
-			fmt.Printf("[a tool asks for a form dax cannot show: %s]\n", render.Clean(q.Message))
-			return agenttool.Answer{Action: agenttool.ActionCancel}, nil
-		}
-		if confirm("? " + render.Clean(q.Message) + " [y/N] ") {
-			return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{}`)}, nil
-		}
-		return agenttool.Answer{Action: agenttool.ActionDecline}, nil
+// questionText is what the user is asked of a question a running call
+// asked: a sub-agent's call the policy asks about, or a tool's own.
+func questionText(q agent.Question) string {
+	if q.Call != nil {
+		return question(q.Call, q.Text)
 	}
-}
-
-// hasFields reports whether a form's schema asks for any property.
-func hasFields(schema json.RawMessage) bool {
-	var s struct {
-		Properties map[string]json.RawMessage `json:"properties"`
-	}
-	return len(schema) > 0 && json.Unmarshal(schema, &s) == nil && len(s.Properties) > 0
+	return "? " + render.Clean(q.Text) + " [y/N] "
 }
 
 func yes(s string) bool {
@@ -333,24 +408,23 @@ func openSession(ctx context.Context, opts agent.Options, resume string) (*agent
 
 // abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
 // or one while idle, exits.
-func abortOnInterrupt(sess *agent.Session) {
+func abortOnInterrupt(t agent.Turn) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		for range sigs {
-			if !sess.Agent.State().Running {
+			if !t.State().Running {
 				fmt.Println()
-				sess.Close()
 				os.Exit(130)
 			}
-			sess.Agent.Abort()
+			t.Abort()
 		}
 	}()
 }
 
 // command handles a slash command while idle; handled is false for a
 // prompt.
-func command(ctx context.Context, sess *agent.Session, line string) (handled bool, err error) {
+func command(ctx context.Context, t agent.Turn, ctl agent.Controls, line string) (handled bool, err error) {
 	switch {
 	case strings.HasPrefix(line, "/mcp add "):
 		// /mcp add <name> <command line>
@@ -358,48 +432,49 @@ func command(ctx context.Context, sess *agent.Session, line string) (handled boo
 		if !ok {
 			return true, errors.New("usage: /mcp add <name> <command line>")
 		}
-		label, err := sess.AddMCP(ctx, prefix, strings.TrimSpace(cmd))
+		label, err := ctl.AddMCP(ctx, prefix, strings.TrimSpace(cmd))
 		if err == nil {
 			fmt.Printf("[%s added; its tools are offered from the next prompt]\n", label)
-			showAssembly(sess)
+			showAssembly(ctl.Info())
 		}
 		return true, err
 	case strings.HasPrefix(line, "/mcp remove "):
-		err := sess.RemoveMCP(strings.TrimSpace(strings.TrimPrefix(line, "/mcp remove ")))
+		err := ctl.RemoveMCP(strings.TrimSpace(strings.TrimPrefix(line, "/mcp remove ")))
 		if err == nil {
-			showAssembly(sess)
+			showAssembly(ctl.Info())
 		}
 		return true, err
 	case line == "/tools":
-		showAssembly(sess)
+		showAssembly(ctl.Info())
 		return true, nil
 	case line == "/quit", line == "/exit":
 		return true, nil
 	case line == "/session":
-		fmt.Println(sess.ID(), sess.Path())
+		info := ctl.Info()
+		fmt.Println(info.ID, info.Path)
 		return true, nil
 	case strings.HasPrefix(line, "/model "):
-		return true, sess.SetModel(strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
+		return true, ctl.SetModel(strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
 	case line == "/think on":
-		return true, sess.SetThink(true)
+		return true, ctl.SetThink(true)
 	case line == "/think off":
-		return true, sess.SetThink(false)
+		return true, ctl.SetThink(false)
 	case strings.HasPrefix(line, "/follow "):
-		sess.FollowUp(strings.TrimPrefix(line, "/follow "))
+		if err := t.FollowUp(ctx, openresponses.UserText(strings.TrimPrefix(line, "/follow "))); err != nil {
+			return true, err
+		}
 		fmt.Println("[queued as follow-up for the next run]")
 		return true, nil
 	}
 	return false, nil
 }
 
-func turn(ctx context.Context, sess *agent.Session, text string) error {
-	end, err := sess.Prompt(ctx, text)
-	if err != nil {
-		return err
-	}
+// ended says what a run's end leaves the user to know: the calls an
+// abort cut off, which the next prompt answers, and why a run stopped.
+func ended(t agent.Turn, end *agentturn.RunEnd) {
 	switch end.Reason {
 	case agentturn.ReasonAborted:
-		showPending(sess, "aborted")
+		showPending(t, "aborted")
 	case agentturn.ReasonInputRequired:
 		for _, p := range end.Pending {
 			fmt.Printf("[input required: %s %s]\n", render.Clean(p.Call.Name), render.Clean(p.Call.Arguments))
@@ -410,15 +485,14 @@ func turn(ctx context.Context, sess *agent.Session, text string) error {
 	if h := hint(end.Err); end.Err != nil && h != "" {
 		fmt.Printf("[%s]\n", h)
 	}
-	return nil
 }
 
 // assemblyLines are the tools the kit assembled, with the source of
 // each one that is not dax's own, and what the instruction layers left
 // out, so the user knows what the model was not given.
-func assemblyLines(sess *agent.Session) []string {
+func assemblyLines(info agent.Info) []string {
 	var names []string
-	for _, t := range sess.Tools() {
+	for _, t := range info.Tools {
 		if t.Source == "WithTools" {
 			names = append(names, t.Name)
 		} else {
@@ -426,22 +500,22 @@ func assemblyLines(sess *agent.Session) []string {
 		}
 	}
 	lines := []string{"tools: " + strings.Join(names, ", ")}
-	for _, o := range sess.Omitted() {
+	for _, o := range info.Omitted {
 		lines = append(lines, fmt.Sprintf("omitted: %s", o))
 	}
 	return lines
 }
 
-func showAssembly(sess *agent.Session) {
-	for _, l := range assemblyLines(sess) {
+func showAssembly(info agent.Info) {
+	for _, l := range assemblyLines(info) {
 		fmt.Println(render.Clean(l))
 	}
 }
 
 // showPending tells the user which calls are unanswered and why, since
 // the next prompt answers them in those terms.
-func showPending(sess *agent.Session, why string) {
-	pending := sess.Pending()
+func showPending(t agent.Turn, why string) {
+	pending := t.State().Pending
 	if len(pending) == 0 {
 		return
 	}

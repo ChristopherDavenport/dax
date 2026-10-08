@@ -149,6 +149,7 @@ func TestAnExtensionsToolsReachTheMainAgent(t *testing.T) {
 // extension's decision: the verdict in the session names its source,
 // not dax-coding's.
 func TestTheRecordSaysWhichExtensionsRuleAllowedACall(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	var runs atomic.Int32
 	o := options(t, &scripted{calls: [][2]string{{"deploy", `{"env":"staging"}`}}})
@@ -158,7 +159,7 @@ func TestTheRecordSaysWhichExtensionsRuleAllowedACall(t *testing.T) {
 		Tools:  func(extension.ToolEnv) []agenttool.Tool { return []agenttool.Tool{fn("deploy", &runs)} },
 		Policy: policy.Rules{Allow: []string{"deploy"}},
 	})
-	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+	approve = func(c *openresponses.FunctionCall, _ string) bool {
 		t.Errorf("asked about %s, which acme's rule allows", c.Name)
 		return false
 	}
@@ -166,7 +167,7 @@ func TestTheRecordSaysWhichExtensionsRuleAllowedACall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Prompt(ctx, "ship it"); err != nil {
+	if _, err := promptOn(ctx, s, "ship it", approve); err != nil {
 		t.Fatal(err)
 	}
 	if n := runs.Load(); n != 1 {
@@ -190,6 +191,7 @@ func TestTheRecordSaysWhichExtensionsRuleAllowedACall(t *testing.T) {
 // deploy(prod) blocks prod, and staging falls to the default, which
 // asks.
 func TestAnExtensionsMatcherIsThePolicys(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	var runs atomic.Int32
 	o := options(t, &scripted{calls: [][2]string{{"deploy", `{"env":"prod"}`}, {"deploy", `{"env":"staging"}`}}})
@@ -200,7 +202,7 @@ func TestAnExtensionsMatcherIsThePolicys(t *testing.T) {
 		Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": {Match: agentpolicy.GlobMatcher("env")}}),
 	})
 	var asked []string
-	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+	approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Arguments)
 		return false
 	}
@@ -209,7 +211,7 @@ func TestAnExtensionsMatcherIsThePolicys(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.Prompt(ctx, "ship it"); err != nil {
+	if _, err := promptOn(ctx, s, "ship it", approve); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 1 || !strings.Contains(asked[0], "staging") {
@@ -309,7 +311,7 @@ func TestTheSessionsInstructionsWinOverAKitOption(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	instr := s.Agent.Config().Instructions
+	instr := s.ag.Config().Instructions
 	if strings.Contains(instr, "HIJACKED") || !strings.Contains(instr, "You are dax") {
 		t.Errorf("instructions:\n%s", instr)
 	}
@@ -393,7 +395,7 @@ func TestAnExtensionsHookRunsOnlyWithAPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Prompt(context.Background(), "probe"); err != nil {
+		if _, err := promptOn(context.Background(), s, "probe", nil); err != nil {
 			t.Fatal(err)
 		}
 		s.Close()
@@ -448,7 +450,7 @@ func TestTheProgramsName(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if instr := s.Agent.Config().Instructions; !strings.Contains(instr, "You are "+tc.wantName+", a coding agent") {
+		if instr := s.ag.Config().Instructions; !strings.Contains(instr, "You are "+tc.wantName+", a coding agent") {
 			t.Errorf("%q: instructions:\n%s", tc.name, instr)
 		}
 		h := s.Kit.Session().Header()

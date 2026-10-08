@@ -138,7 +138,7 @@ func TestTheRecordIsWhatWasSent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.Prompt(ctx, "go on with the plan we settled"); err != nil {
+			if _, err := promptOn(ctx, s, "go on with the plan we settled", nil); err != nil {
 				t.Fatal(err)
 			}
 			parent := s.ID()
@@ -237,7 +237,7 @@ func TestAFoldRecordsTheEffortItSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{"one", "two", "three", "four"} {
-		if _, err := s.Prompt(ctx, p); err != nil {
+		if _, err := promptOn(ctx, s, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -289,7 +289,7 @@ func TestThinkAndModelSwitchesAreFitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	effort := func() openresponses.ReasoningEffort { return s.Agent.Config().Reasoning.Effort }
+	effort := func() openresponses.ReasoningEffort { return s.ag.Config().Reasoning.Effort }
 	if e := effort(); e != "none" {
 		t.Errorf("start on pro under -think: %q, want none", e)
 	}
@@ -308,7 +308,7 @@ func TestThinkAndModelSwitchesAreFitted(t *testing.T) {
 	if err := s.SetModel("free"); err != nil {
 		t.Fatal(err)
 	}
-	if r := s.Agent.Config().Reasoning; r.Effort != "none" || r.Summary != "" {
+	if r := s.ag.Config().Reasoning; r.Effort != "none" || r.Summary != "" {
 		t.Errorf("after /think off, a switch to an unknown model: %+v, want none kept", r)
 	}
 }
@@ -326,7 +326,7 @@ func TestTheConfiguredEffortIsAskedAndFitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	effort := func() openresponses.ReasoningEffort { return s.Agent.Config().Reasoning.Effort }
+	effort := func() openresponses.ReasoningEffort { return s.ag.Config().Reasoning.Effort }
 	if e := effort(); e != "high" {
 		t.Errorf("start on glm with effort high: %q, want high", e)
 	}
@@ -407,7 +407,7 @@ func TestSubagentsFollowThinkAndModel(t *testing.T) {
 	run := func(tool, args string) openresponses.Request {
 		t.Helper()
 		m.next(tool, args)
-		if _, err := s.Prompt(ctx, "go"); err != nil {
+		if _, err := promptOn(ctx, s, "go", nil); err != nil {
 			t.Fatal(err)
 		}
 		return m.last()
@@ -431,7 +431,7 @@ func TestSubagentsFollowThinkAndModel(t *testing.T) {
 		}
 	}
 	// The main agent's own setting holds too.
-	if r := s.Agent.Config().Reasoning; r.Effort != "none" {
+	if r := s.ag.Config().Reasoning; r.Effort != "none" {
 		t.Errorf("main agent effort %q", r.Effort)
 	}
 }

@@ -7,6 +7,22 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: the session has one agent and exposes it as `agent.Turn`, its
+  human or autonomous plane: `Prompt`, `Answer` (the policy engine's
+  release, then the loop's resume), `Permissions`, `Steer`, `FollowUp`,
+  `Abort`, `State`, `Subscribe`, and `Questions` and `Reply` for what a
+  sub-agent's call or a tool asks while it runs. `Options.Approve`,
+  `Ask`, `Elicit` and `NoAgent`, and `Session.Agent` (a field),
+  `Prompt(ctx, text)`, `Steer(text)`, `FollowUp(text)`, `Pending` and
+  `TUIConfig` are removed. Every front drives the Turn; the terminal
+  client reaches it through glue over agentconsole's backend.
+- Added: `agent.Controls` (model, reasoning, MCP servers, `Info`),
+  `agent.Drive`, a controller that answers by rule (`-p` is one), and
+  `Session.Record`. A session with no store is written to memory, so
+  every front can follow its record; `Info.Recorded` says whether it is
+  kept.
+- Changed: the policy's subject ("about: ...") is on every front's
+  question, not only the terminal client's.
 - Added: dax is a minimal core that can be extended. The session (model,
   store, policy, workspace, AGENTS.md, MCP servers, compaction) knows no
   tool; everything the model can do comes from an `extension.Extension`,

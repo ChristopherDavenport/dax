@@ -207,7 +207,7 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 			t.Errorf("parts %v lack %s", ids, id)
 		}
 	}
-	instr := s.Agent.Config().Instructions
+	instr := s.ag.Config().Instructions
 	for _, sub := range []string{"You are dax", "greet", "Short answers.", "Run go test before saying done."} {
 		if !strings.Contains(instr, sub) {
 			t.Errorf("instructions lack %q", sub)
@@ -226,7 +226,7 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 		}
 	}
 
-	end, err := s.Prompt(ctx, "go.mod")
+	end, err := promptOn(ctx, s, "go.mod", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,15 +244,16 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 }
 
 func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
-	for _, approve := range []bool{true, false} {
-		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
+	for _, allow := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "deny"}[allow], func(t *testing.T) {
 			ctx := context.Background()
 			o := options(t, &forced{name: "bash"})
 			o.Policy = confirmPolicy(t)
 			var asked []string
-			o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+			approve = func(c *openresponses.FunctionCall, reason string) bool {
 				asked = append(asked, c.Name+": "+reason)
-				return approve
+				return allow
 			}
 			s, err := New(ctx, o)
 			if err != nil {
@@ -260,7 +261,7 @@ func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
 			}
 			defer s.Close()
 
-			end, err := s.Prompt(ctx, "echo confirmed")
+			end, err := promptOn(ctx, s, "echo confirmed", approve)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -271,13 +272,13 @@ func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
 				t.Fatalf("asked %v, want one question about bash", asked)
 			}
 			var out string
-			for _, it := range s.Agent.State().Transcript {
+			for _, it := range s.ag.State().Transcript {
 				if o, ok := it.(*openresponses.FunctionCallOutput); ok {
 					out = o.Output.Text
 				}
 			}
-			if approve != strings.Contains(out, "confirmed") || approve == (out == deniedOutput) {
-				t.Errorf("approve=%v, bash output %q", approve, out)
+			if allow != strings.Contains(out, "confirmed") || allow == (out == deniedOutput) {
+				t.Errorf("approve=%v, bash output %q", allow, out)
 			}
 			data := projected(t, o, s)
 			if !strings.Contains(string(data), `"by":"human"`) {
@@ -291,6 +292,7 @@ func TestConfirmAsksAndRecordsTheHuman(t *testing.T) {
 }
 
 func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	model := &scripted{calls: [][2]string{
 		{"skill", `{"name":"greet"}`},
@@ -300,7 +302,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	o = trustSkills(o)
 	o.Policy = confirmPolicy(t)
 	var asked []string
-	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+	approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Arguments)
 		return true
 	}
@@ -310,7 +312,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	}
 	defer s.Close()
 
-	if _, err := s.Prompt(ctx, "greet me"); err != nil {
+	if _, err := promptOn(ctx, s, "greet me", approve); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 0 {
@@ -322,7 +324,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	// naming the skill instead; dax leaves bash to the default so that
 	// a user's allow rule can override it.)
 	model.calls = model.calls[1:]
-	if _, err := s.Prompt(ctx, "again"); err != nil {
+	if _, err := promptOn(ctx, s, "again", approve); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 1 || asked[0] != `{"command":"echo hello"}` {
@@ -330,7 +332,7 @@ func TestATrustedSkillGrantsItsToolsUntilTheNextMessage(t *testing.T) {
 	}
 	// Reading the skill again grants again.
 	model.calls = [][2]string{{"skill", `{"name":"greet"}`}, {"bash", `{"command":"echo again"}`}}
-	if _, err := s.Prompt(ctx, "greet me again"); err != nil {
+	if _, err := promptOn(ctx, s, "greet me again", approve); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 1 {
@@ -350,7 +352,7 @@ func TestAFoldIsNotedWhileTheSessionRecordsIt(t *testing.T) {
 	}
 	defer s.Close()
 	for _, p := range []string{"one", "two", "three", "four"} {
-		if _, err := s.Prompt(ctx, p); err != nil {
+		if _, err := promptOn(ctx, s, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -411,7 +413,7 @@ func TestASummaryLargerThanItsPrefixIsGivenUpNotFailed(t *testing.T) {
 	}
 	defer s.Close()
 	for _, p := range []string{"one", "two"} {
-		end, err := s.Prompt(ctx, p)
+		end, err := promptOn(ctx, s, p, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -445,13 +447,13 @@ func TestACallCutOffInFlightIsResumedAsAborted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Agent.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+	s.ag.Subscribe(func(_ context.Context, ev agentturn.Event) error {
 		if _, ok := ev.(*agentturn.ToolDispatch); ok {
-			go func() { time.Sleep(200 * time.Millisecond); s.Agent.Abort() }()
+			go func() { time.Sleep(200 * time.Millisecond); s.ag.Abort() }()
 		}
 		return nil
 	})
-	end, err := s.Prompt(ctx, "sleep")
+	end, err := promptOn(ctx, s, "sleep", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,15 +471,15 @@ func TestACallCutOffInFlightIsResumedAsAborted(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	pending := r.Pending()
+	pending := r.State().Pending
 	if len(pending) != 1 || pending[0].Reason != agentturn.PendingAborted || pending[0].IdempotencyKey == "" {
 		t.Fatalf("resumed pending = %+v, want one aborted bash call with its key", pending)
 	}
-	if _, err := r.Prompt(ctx, "what happened?"); err != nil {
+	if _, err := promptOn(ctx, r, "what happened?", nil); err != nil {
 		t.Fatal(err)
 	}
 	var out string
-	for _, it := range r.Agent.State().Transcript {
+	for _, it := range r.ag.State().Transcript {
 		if o, ok := it.(*openresponses.FunctionCallOutput); ok && o.CallID == pending[0].Call.CallID {
 			out = o.Output.Text
 		}
@@ -522,7 +524,7 @@ func TestASummaryIsAskedWithoutReasoning(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, p := range []string{"one", "two", "three", "four"} {
-			if _, err := s.Prompt(ctx, p); err != nil {
+			if _, err := promptOn(ctx, s, p, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -581,13 +583,13 @@ func TestAModelSwitchLeavesTheOldReasoningOutAndTheSecondResponseStillVerifies(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Prompt(ctx, "one"); err != nil {
+	if _, err := promptOn(ctx, s, "one", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetModel("b"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Prompt(ctx, "two"); err != nil {
+	if _, err := promptOn(ctx, s, "two", nil); err != nil {
 		t.Fatal(err)
 	}
 	id := s.ID()
@@ -639,7 +641,7 @@ func TestTheSubagentRunsItsOwnModel(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Prompt(context.Background(), "explore"); err != nil {
+		if _, err := promptOn(context.Background(), s, "explore", nil); err != nil {
 			t.Fatal(err)
 		}
 		s.Close()
@@ -691,7 +693,7 @@ func TestEachModelCallCarriesItsSessionID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.Prompt(ctx, "explore"); err != nil {
+	if _, err := promptOn(ctx, s, "explore", nil); err != nil {
 		t.Fatal(err)
 	}
 	sums, err := List(ctx, o.Root, o.Dir)
@@ -729,7 +731,7 @@ func TestAChildSessionIsListedAndAJSONLSessionImports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Prompt(ctx, "explore"); err != nil {
+	if _, err := promptOn(ctx, s, "explore", nil); err != nil {
 		t.Fatal(err)
 	}
 	parent := s.ID()
@@ -797,7 +799,7 @@ func TestAHeldSessionIsReadWhileItIsWritten(t *testing.T) {
 	}
 	defer s.Close()
 	for _, p := range []string{"one", "two"} {
-		if _, err := s.Prompt(ctx, p); err != nil {
+		if _, err := promptOn(ctx, s, p, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -819,7 +821,7 @@ func TestAHeldSessionIsReadWhileItIsWritten(t *testing.T) {
 	if n, err := GC(ctx, o.Root, false, time.Hour); err != nil || n == 0 {
 		t.Fatalf("pack: %d, %v", n, err)
 	}
-	if _, err := s.Prompt(ctx, "three"); err != nil {
+	if _, err := promptOn(ctx, s, "three", nil); err != nil {
 		t.Fatal(err)
 	}
 	if n, failed, err := Verify(ctx, o.Root, s.ID()); err != nil || len(failed) > 0 || n <= before {
@@ -828,8 +830,9 @@ func TestAHeldSessionIsReadWhileItIsWritten(t *testing.T) {
 }
 
 func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
-	for _, approve := range []bool{true, false} {
-		t.Run(map[bool]string{true: "approve", false: "deny"}[approve], func(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
+	for _, allow := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approve", false: "deny"}[allow], func(t *testing.T) {
 			ctx := context.Background()
 			model := &scripted{calls: [][2]string{{"bash", `{"command":"echo ran"}`}}}
 			o := options(t, model)
@@ -840,7 +843,7 @@ func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
 			}
 			// The run stops on the question and the process with it,
 			// before anyone answers.
-			end, err := s.Agent.Prompt(ctx, openresponses.UserText("run it"))
+			end, err := s.ag.Prompt(ctx, openresponses.UserText("run it"))
 			if err != nil || end.Reason != agentturn.ReasonInputRequired {
 				t.Fatalf("first run: %v, %v; want input_required", end, err)
 			}
@@ -850,19 +853,19 @@ func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
 			}
 
 			var asked []string
-			o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+			approve = func(c *openresponses.FunctionCall, reason string) bool {
 				asked = append(asked, c.Name+": "+reason)
-				return approve
+				return allow
 			}
 			model.calls = nil
 			s, err = Resume(ctx, o, id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p := s.Pending(); len(p) != 1 || !held(p[0]) {
+			if p := s.State().Pending; len(p) != 1 || !held(p[0]) {
 				t.Fatalf("resumed pending %+v, want the held bash call", p)
 			}
-			if end, err = s.Prompt(ctx, "and then?"); err != nil || end.Reason != agentturn.ReasonDone {
+			if end, err = promptOn(ctx, s, "and then?", approve); err != nil || end.Reason != agentturn.ReasonDone {
 				t.Fatalf("resumed run: %v, %v", end, err)
 			}
 			if len(asked) != 1 || !strings.HasPrefix(asked[0], "bash: ") {
@@ -870,7 +873,7 @@ func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
 			}
 			var out string
 			user := false
-			for _, it := range s.Agent.State().Transcript {
+			for _, it := range s.ag.State().Transcript {
 				switch v := it.(type) {
 				case *openresponses.FunctionCallOutput:
 					out = v.Output.Text
@@ -878,8 +881,8 @@ func TestACallHeldWhenTheSessionStoppedIsAskedAgain(t *testing.T) {
 					user = user || v.Text() == "and then?"
 				}
 			}
-			if approve != strings.Contains(out, "ran") || approve == (out == deniedOutput) || !user {
-				t.Errorf("approve=%v: bash output %q, the message in the transcript %v", approve, out, user)
+			if allow != strings.Contains(out, "ran") || allow == (out == deniedOutput) || !user {
+				t.Errorf("approve=%v: bash output %q, the message in the transcript %v", allow, out, user)
 			}
 			data := string(projected(t, o, s))
 			if !strings.Contains(data, `"by":"human"`) {
@@ -910,6 +913,7 @@ func (m *delegating) CreateStream(ctx context.Context, req openresponses.Request
 // the kit's engine, so a child run between a skill read and the call
 // the skill allows leaves the grant standing.
 func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	model := &delegating{scripted{calls: [][2]string{
 		{"skill", `{"name":"greet"}`},
@@ -920,7 +924,7 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 	o = withAgents(trustSkills(o), "")
 	o.Policy = confirmPolicy(t)
 	var asked []string
-	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+	approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Name+" "+c.Arguments)
 		return true
 	}
@@ -930,7 +934,7 @@ func TestAChildRunLeavesTheParentsSkillGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Prompt(ctx, "greet me after looking around"); err != nil {
+	if _, err := promptOn(ctx, s, "greet me after looking around", approve); err != nil {
 		t.Fatal(err)
 	}
 	// The child's own bash call is the child's to ask about: the

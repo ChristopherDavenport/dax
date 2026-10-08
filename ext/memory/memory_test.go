@@ -97,6 +97,7 @@ func TestTheExtension(t *testing.T) {
 // The memory tools are offered; a search runs unasked, and a save, a
 // patch and a forget ask.
 func TestASearchRunsUnaskedAndAChangeAsks(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	for _, tc := range []struct {
 		tool, args string
 		asked      bool
@@ -110,7 +111,7 @@ func TestASearchRunsUnaskedAndAChangeAsks(t *testing.T) {
 			ctx := context.Background()
 			o, _ := session(t, &scripted{calls: [][2]string{{tc.tool, tc.args}}})
 			var asked []string
-			o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+			approve = func(c *openresponses.FunctionCall, _ string) bool {
 				asked = append(asked, c.Name)
 				return false
 			}
@@ -128,7 +129,7 @@ func TestASearchRunsUnaskedAndAChangeAsks(t *testing.T) {
 					t.Errorf("tools %v lack %s", names, n)
 				}
 			}
-			if _, err := s.Prompt(ctx, "remember"); err != nil {
+			if _, err := prompt(ctx, s, "remember", approve); err != nil {
 				t.Fatal(err)
 			}
 			if got := len(asked) == 1 && asked[0] == tc.tool; got != tc.asked || !tc.asked && len(asked) > 0 {

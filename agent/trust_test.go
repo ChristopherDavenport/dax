@@ -37,7 +37,7 @@ func TestSymlinksOutOfTheWorkspaceAreNotReadIntoThePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	instr := s.Agent.Config().Instructions
+	instr := s.ag.Config().Instructions
 	for _, bad := range []string{"secret-key-material", "PRIVATE KEY", "evil", "secret-skill-body"} {
 		if strings.Contains(instr, bad) {
 			t.Errorf("instructions contain %q:\n%s", bad, instr)
@@ -81,7 +81,7 @@ func TestASymlinkInsideTheWorkspaceIsRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	instr := s.Agent.Config().Instructions
+	instr := s.ag.Config().Instructions
 	if !strings.Contains(instr, "Use tabs.") || !strings.Contains(instr, "greet2") {
 		t.Errorf("in-workspace links should be read:\n%s", instr)
 	}
@@ -183,6 +183,7 @@ func TestAnExistingWorldReadableStoreIsMadePrivateWithAWarning(t *testing.T) {
 // The hook that stamps an auto-allowed bash call, end to end: the
 // model's own stamp is removed, an allowed call is stamped and runs.
 func TestAnAutoAllowedBashCallRunsStampedThroughASession(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	model := &scripted{calls: [][2]string{
 		{"bash", `{"command":"pwd","dax_stamp":"forged"}`},
@@ -191,7 +192,7 @@ func TestAnAutoAllowedBashCallRunsStampedThroughASession(t *testing.T) {
 	o := options(t, model)
 	o.Policy = confirmPolicy(t)
 	var asked []string
-	o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+	approve = func(c *openresponses.FunctionCall, _ string) bool {
 		asked = append(asked, c.Arguments)
 		return false
 	}
@@ -200,11 +201,11 @@ func TestAnAutoAllowedBashCallRunsStampedThroughASession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.Prompt(ctx, "go"); err != nil {
+	if _, err := promptOn(ctx, s, "go", approve); err != nil {
 		t.Fatal(err)
 	}
 	var outputs []string
-	for _, it := range s.Agent.State().Transcript {
+	for _, it := range s.ag.State().Transcript {
 		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
 			outputs = append(outputs, o.Output.Text)
 		}
@@ -223,6 +224,7 @@ func TestAnAutoAllowedBashCallRunsStampedThroughASession(t *testing.T) {
 // R4-1 through a session: git status && echo hi in a repository whose
 // fsmonitor is a script asks, and the script does not run.
 func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
@@ -248,7 +250,7 @@ func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testin
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: []string{"bash(echo:*)"}}}
 	var asked []string
-	o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+	approve = func(c *openresponses.FunctionCall, reason string) bool {
 		asked = append(asked, reason)
 		return false
 	}
@@ -257,7 +259,7 @@ func TestAMixedBashLineInAHostileRepositoryAsksAndDoesNotRunTheProgram(t *testin
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.Prompt(ctx, "go"); err != nil {
+	if _, err := promptOn(ctx, s, "go", approve); err != nil {
 		t.Fatal(err)
 	}
 	if len(asked) != 2 || !strings.Contains(asked[0], "core.fsmonitor") {
@@ -297,7 +299,7 @@ func (m *twoModels) CreateStream(ctx context.Context, req openresponses.Request,
 // outputs are the function-call outputs in a transcript, in order.
 func outputs(s *Session) []string {
 	var out []string
-	for _, it := range s.Agent.State().Transcript {
+	for _, it := range s.ag.State().Transcript {
 		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
 			out = append(out, o.Output.Text)
 		}
@@ -320,7 +322,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 		write(t, filepath.Join(o.Dir, ".env"), "SECRET_TOKEN=abc123\n")
 		write(t, filepath.Join(o.Dir, "main.go"), "package main\n")
 		o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: rules}
-		o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+		ask := func(c *openresponses.FunctionCall, reason string) bool {
 			asked = append(asked, c.Name+" "+c.Arguments+" | "+reason)
 			return approve != nil && approve(c, reason)
 		}
@@ -330,7 +332,7 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 			t.Fatal(err2)
 		}
 		t.Cleanup(func() { s.Close() })
-		if _, err := s.Prompt(ctx, "go"); err != nil {
+		if _, err := promptOn(ctx, s, "go", ask); err != nil {
 			t.Fatal(err)
 		}
 		return o, s, asked

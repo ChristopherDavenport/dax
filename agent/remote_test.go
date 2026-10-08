@@ -71,7 +71,7 @@ func TestASessionInAContainerIsRecordedAsOne(t *testing.T) {
 	if !strings.Contains(s.systemPrompt(), "Current working directory: /workspace") {
 		t.Errorf("the model is not told the workspace's root:\n%s", s.systemPrompt())
 	}
-	if _, err := s.Prompt(ctx, "write it"); err != nil {
+	if _, err := promptOn(ctx, s, "write it", nil); err != nil {
 		t.Fatal(err)
 	}
 	if b, err := os.ReadFile(filepath.Join(files, "hello.txt")); err != nil || string(b) != "hi\n" {

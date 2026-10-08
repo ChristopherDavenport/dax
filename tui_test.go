@@ -175,23 +175,12 @@ func startRig(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Opti
 		tweakFront(f)
 	}
 	// Nothing reads standard input once the client has the terminal:
-	// there is no approver that would prompt on it, and the elicitor and
-	// the sub-agents' Ask put their questions on the client's screen.
-	a, e := f.Hooks()
-	if a != nil {
-		t.Fatal("the terminal client answers on its screen, not through a prompt on standard input")
-	}
-	o.Approve, o.Elicit = a, e
+	// every question reaches the client's screen through the session's
+	// Turn, which the client's glue holds.
 	f.Prepare(&o)
-	if o.Ask == nil {
-		t.Fatal("the sub-agents' questions have no way to the screen")
-	}
 	sess, err := agent.New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if sess.Agent != nil {
-		t.Fatal("the session must not build an agent of its own; the client builds one")
 	}
 	r.sess = sess
 	t.Cleanup(func() { sess.Close() })

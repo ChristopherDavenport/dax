@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentkit"
-	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
@@ -136,19 +135,6 @@ type Options struct {
 	// decides which calls run, ask or are refused. nil lets every call
 	// run, and the extensions' BeforeToolCall hooks are not run.
 	Policy *policy.Settings
-	// Approve decides a call the policy asked about; reason is the
-	// policy's. nil denies every call.
-	Approve func(call *openresponses.FunctionCall, reason string) bool
-	// Ask puts a sub-agent's call the policy asks about to the user from
-	// inside the running call, and is preferred to Approve there: allow,
-	// and the note the user typed with a refusal. Its context is the
-	// call's, so an abort gives the question up. An error means nobody
-	// could be asked. Nil falls back to Approve.
-	Ask func(ctx context.Context, call *openresponses.FunctionCall, reason string) (allow bool, note string, err error)
-	// Elicit answers a question a tool asks mid-call: an MCP server's
-	// elicitation, or a nested call the policy asked about. nil leaves
-	// every such question unasked, which the tool takes as a cancel.
-	Elicit agenttool.Elicitor
 	// MCP are stdio MCP servers started with the session, each offering
 	// its tools as mcp__<Name>__<tool>. Their stderr is dax's.
 	MCP []MCPServer
@@ -165,12 +151,6 @@ type Options struct {
 	// removed from the same environments even when its name does not
 	// look like a credential's, unless PassEnv names it.
 	KeyEnv string
-	// NoAgent builds the kit and no agent over it: a front that drives
-	// the kit through its own backend (the terminal client) builds the
-	// agent itself, and two agents on one recorder would both write
-	// the session. Session.Agent is nil, and Prompt, Steer and the
-	// other methods that drive it must not be called.
-	NoAgent bool
 	// Log receives dax's own notes: compactions, denials, skill grants.
 	// nil discards them.
 	Log func(format string, args ...any)
@@ -197,10 +177,10 @@ func DefaultUserDir() string {
 func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 
 // Session is one dax conversation: the kit that assembled it, the
-// agent running it and, when recording, the store it is written to.
+// in-process human plane over it (Backend), dax's own controls
+// (Controls), and the store it is written to.
 type Session struct {
-	Agent *agentturn.Agent
-	Kit   *agentkit.Kit
+	Kit *agentkit.Kit
 
 	opts    Options
 	live    live
@@ -212,7 +192,16 @@ type Session struct {
 	tools   []agenttool.Tool // the extensions', which the session closes
 	store   agentsession.Store
 	own     bool // the session opened store, and closes it
-	detach  func()
+	// recorded is false when the store is one the session made in
+	// memory because nothing was to be kept.
+	recorded bool
+
+	ag     *agentturn.Agent // the one agent, which the Turn drives
+	detach func()
+	asks   asks // the questions asked while a call runs
+
+	mu      sync.Mutex
+	lastEnd *agentturn.RunEnd // how the last run ended, for the engine
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -239,13 +228,12 @@ func Describe(p agentturn.PendingCall) string {
 	return s
 }
 
-// TUIConfig is the adjustment a terminal client makes to the kit's
-// agent configuration (kitbackend.WithConfig): a call the policy defers
-// has what the policy was asking about added to its reason, since the
-// reason is what the permission panel shows. The kit's engine says it
-// in the verdict's subject: the part of a command line, the file a
-// link leads to, the git config key.
-func (s *Session) TUIConfig(cfg agentturn.Config) agentturn.Config {
+// withSubjects is the session's adjustment to the agent's configuration
+// (kitbackend.WithConfig): a call the policy defers has what the policy
+// was asking about added to its reason, since the reason is the question
+// every front shows: the rule, the secret path, the git config key, the
+// part of a command line, from the verdict's subject.
+func (s *Session) withSubjects(cfg agentturn.Config) agentturn.Config {
 	inner := cfg.BeforeToolCall
 	eng := s.Kit.Engine()
 	if inner == nil || eng == nil {
@@ -263,12 +251,6 @@ func (s *Session) TUIConfig(cfg agentturn.Config) agentturn.Config {
 	}
 	return cfg
 }
-
-// Pending lists the calls awaiting outputs, in transcript order. The
-// next Prompt answers them ahead of the user's message. A resumed
-// session's calls carry what its record says of them, since the kit
-// seeds the agent with the pending calls at the leaf.
-func (s *Session) Pending() []agentturn.PendingCall { return s.Agent.State().Pending }
 
 // output is what the model is told about an unanswered call.
 func output(p agentturn.PendingCall) string {
@@ -435,9 +417,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
 	}
-	if o.Elicit != nil {
-		kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, o.Elicit))
-	}
+	// A tool's question mid-call goes to whoever holds the Backend.
+	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
 	for _, m := range o.MCP {
@@ -509,9 +490,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		engine.Store(e)
 	}
-	if !o.NoAgent {
-		s.Agent = agentturn.New(kit.Config(), kit.AgentOptions()...)
-		s.detach = kit.Attach(s.Agent)
+	s.ag = agentturn.New(s.withSubjects(kit.Config()), kit.AgentOptions()...)
+	// The kit's recorder subscribes first, so an entry is in the store
+	// before any front sees the event that wrote it.
+	s.detach = kit.Attach(s.ag)
+	if rec := kit.Recorder(); rec != nil {
+		// The inputs a stopped session accepted and no run took are
+		// handed to the agent, which takes them after the next prompt.
+		rec.Requeue(ctx, s.ag)
 	}
 	ok = true
 	return s, nil
@@ -547,7 +533,14 @@ func New(ctx context.Context, o Options) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	recorded := store != nil
+	if !recorded {
+		store, own = memoryStore(), true
+	}
 	s, err := open(ctx, o, store, own, "")
+	if s != nil {
+		s.recorded = recorded
+	}
 	if err != nil {
 		if c, ok := store.(io.Closer); ok && own {
 			c.Close()
@@ -573,6 +566,10 @@ func (o Options) openStore() (store agentsession.Store, own bool, err error) {
 	return nil, false, nil
 }
 
+// memoryStore is the store of a session nothing is kept of: the
+// backend follows a record, so there is one, in memory, gone at Close.
+func memoryStore() agentsession.Store { return agentsession.NewMemoryStore() }
+
 // Resume reopens a recorded session and continues it from its leaf.
 // Calls an earlier run left unanswered become pending on the agent,
 // each with the reason the file's dispatch records give it, and are
@@ -586,6 +583,9 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 		return nil, errors.New("resume needs a session store")
 	}
 	s, err := open(ctx, o, store, own, id)
+	if s != nil {
+		s.recorded = true
+	}
 	if err != nil {
 		if c, ok := store.(io.Closer); ok && own {
 			c.Close()
@@ -629,111 +629,11 @@ func (s *Session) Omitted() []agentkit.Omission {
 // Tools lists the tools the kit assembled, each with its source.
 func (s *Session) Tools() []agentkit.ToolOrigin { return s.Kit.Tools() }
 
-// Prompt sends one user message and runs until the agent is idle. Calls
-// an abort left pending are answered ahead of the message, in the same
-// model call; a call a resumed session left held for approval is put to
-// Approve first. Calls the policy asked about are put to Approve, the
-// calls it held beside them are released by the engine, and the run is
-// resumed until it ends for another reason.
-func (s *Session) Prompt(ctx context.Context, text string) (*agentturn.RunEnd, error) {
-	// Memory written during the run names this session, and so does
-	// each model call, for a server that groups calls by session; the
-	// kit cannot put the ID on a context that is the host's.
-	ctx = agentmemory.WithSession(ctx, s.ID())
-	if id := s.ID(); id != "" {
-		ctx = session.ContextWithSessionID(ctx, id)
-	}
-	var end *agentturn.RunEnd
-	var err error
-	if pending := s.Pending(); s.opts.Approve != nil && slices.ContainsFunc(pending, held) {
-		// A call held for approval when the last process stopped never
-		// ran and was never answered, so the user is asked about it
-		// again, and the message follows its answer in the same run.
-		s.Agent.Steer(openresponses.UserText(text))
-		end, err = s.Agent.Resume(ctx, s.reanswer(pending)...)
-	} else {
-		var items openresponses.Items
-		for _, p := range pending {
-			items = append(items, openresponses.NewFunctionCallOutput(p.Call.CallID, output(p)))
-		}
-		items = append(items, openresponses.UserText(text))
-		end, err = s.Agent.Prompt(ctx, items...)
-	}
-	for err == nil && end.Reason == agentturn.ReasonInputRequired {
-		var answers []agentturn.Answer
-		if answers, err = s.answer(ctx, end); err != nil {
-			break
-		}
-		end, err = s.Agent.Resume(ctx, answers...)
-	}
-	return end, err
-}
-
 // held reports a call held for approval before its dispatch: it never
 // ran, and a person may still allow it.
 func held(p agentturn.PendingCall) bool {
 	return p.Reason == agentturn.PendingDeferred && !p.Dispatched
 }
-
-// reanswer answers the calls a resumed session left pending: each held
-// one as the user decides now, the rest with what the model is told of
-// them.
-func (s *Session) reanswer(pending []agentturn.PendingCall) []agentturn.Answer {
-	answers := make([]agentturn.Answer, 0, len(pending))
-	for _, p := range pending {
-		switch {
-		case !held(p):
-			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))))
-		case s.opts.Approve(p.Call, "held for approval when the session stopped"):
-			answers = append(answers, agentturn.Approve(p.Call.CallID).WithBy(agentpolicy.ByHuman))
-		default:
-			s.opts.log("  ✗ %s denied", p.Call.Name)
-			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
-		}
-	}
-	return answers
-}
-
-// answer asks the user about each call the policy asked about and lets
-// the engine release the ones it only held. Every answer the user gave
-// is recorded as a person's.
-func (s *Session) answer(ctx context.Context, end *agentturn.RunEnd) ([]agentturn.Answer, error) {
-	eng := s.Kit.Engine()
-	answers := make([]agentturn.Answer, 0, len(end.Pending))
-	for _, p := range end.Pending {
-		reason := ""
-		if eng != nil {
-			v, ok := eng.Deferred(end.RunID, p.Call.CallID)
-			if ok && v.Held {
-				continue
-			}
-			reason = v.Reason
-			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
-				// A compound command's question names the part it is
-				// about, which is also where the policy says why.
-				reason += "; about: " + v.Subject
-			}
-		}
-		if s.opts.Approve != nil && s.opts.Approve(p.Call, reason) {
-			answers = append(answers, agentturn.Approve(p.Call.CallID).WithBy(agentpolicy.ByHuman))
-			continue
-		}
-		s.opts.log("  ✗ %s denied", p.Call.Name)
-		answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
-	}
-	if eng == nil {
-		return answers, nil
-	}
-	return eng.Release(ctx, end, answers...)
-}
-
-// Steer queues a user message for the next model call of the run in
-// flight; idle, it is queued for the next run.
-func (s *Session) Steer(text string) { s.Agent.Steer(openresponses.UserText(text)) }
-
-// FollowUp queues a user message the run picks up when it would
-// otherwise end.
-func (s *Session) FollowUp(text string) { s.Agent.FollowUp(openresponses.UserText(text)) }
 
 // SetModel changes the model name for later runs, with the reasoning
 // fitted to it. The loop leaves the reasoning items another model
@@ -748,10 +648,11 @@ func (s *Session) SetModel(name string) error {
 	think, _ := s.now()
 	o := s.opts
 	o.Think = think
-	cfg := s.Agent.Config()
+	a := s.ag
+	cfg := a.Config()
 	cfg.ModelName = name
 	cfg.Reasoning = o.reasoningFor(context.Background(), name)
-	if err := s.Agent.SetConfig(cfg); err != nil {
+	if err := a.SetConfig(cfg); err != nil {
 		return err
 	}
 	s.live.mu.Lock()
@@ -799,9 +700,10 @@ func (s *Session) SetThink(on bool) error {
 	s.live.mu.Unlock()
 	o := s.opts
 	o.Think = on
-	cfg := s.Agent.Config()
+	a := s.ag
+	cfg := a.Config()
 	cfg.Reasoning = o.reasoningFor(context.Background(), cfg.ModelName)
-	return s.Agent.SetConfig(cfg)
+	return a.SetConfig(cfg)
 }
 
 // Close detaches the recorder and releases the MCP server and the
@@ -1013,7 +915,7 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 // dax-coding stamped say), and a call either asks about is put to the
 // user. With no one to ask, it is refused. A policy that is off governs
 // nothing, the child included.
-func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		e := eng.Load()
 		if e == nil {
@@ -1039,7 +941,7 @@ func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine
 			if v.Action != agentturn.Defer {
 				why, subject = h.Reason, ""
 			}
-			return o.askChild(ctx, name, info, why, subject), nil
+			return s.askChild(ctx, name, info, why, subject), nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -1053,41 +955,28 @@ func (o Options) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine
 }
 
 // askChild puts a sub-agent's call the policy or a hook asks about to
-// the user, from inside the sub-agent's run.
-func (o Options) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string) *agentturn.ToolDecision {
+// whoever holds the session's Turn, from inside the sub-agent's run: a
+// Question, answered with Reply. Its context is the call's, so an abort
+// gives the question up. With nobody to ask, the call is refused, and
+// the model is told to make it itself, where it can be put to the user.
+func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string) *agentturn.ToolDecision {
 	reason := "the " + name + " sub-agent asks: " + why
 	if subject != "" && !strings.Contains(reason, subject) {
 		reason += "; about: " + subject
 	}
-	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
-	if o.Ask != nil {
-		allow, note, err := o.Ask(ctx, info.Call, reason)
-		switch {
-		case err != nil && ctx.Err() != nil:
-			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
-		case err != nil:
-			return cannot
-		case !allow:
-			o.log("  ✗ %s denied (%s)", info.Call.Name, name)
-			out := deniedOutput
-			if note != "" {
-				out += " Reason: " + note
-			}
-			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
+	r, err := s.asks.put(ctx, info.Call, reason)
+	switch {
+	case errors.Is(err, errNoOne):
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
+	case err != nil:
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
+	case !r.Accept:
+		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
+		out := deniedOutput
+		if r.Note != "" {
+			out += " Reason: " + r.Note
 		}
-		return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}
-	}
-	if o.Approve == nil {
-		// A front with no way to put a question from inside a
-		// sub-agent's run (the terminal client answers the calls a run
-		// leaves pending, and a sub-agent's run is not the parent's)
-		// refuses, and says what to do: make the call from the main
-		// agent, where it can be asked.
-		return cannot
-	}
-	if !o.Approve(info.Call, reason) {
-		o.log("  ✗ %s denied (%s)", info.Call.Name, name)
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: deniedOutput, By: agentpolicy.ByHuman}
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
 	}
 	return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}
 }

@@ -823,7 +823,14 @@ program keeps the flags, the config files, the providers, the session
 store, MCP, and the three fronts.
 
 For a front of your own, build the session with `agent.New` and
-`Options.Extensions`, and hand the terminal client
+`Options.Extensions`, and drive its `Turn` (`Session.Turn`): prompt,
+steer, answer the permissions a run stops on (`Turn.Permissions`,
+`Turn.Answer`), reply to the questions asked while a call runs
+(`Turn.Questions`, `Turn.Reply`), and subscribe to the agent's events.
+`Session` is also `agent.Controls` (model, reasoning, MCP servers,
+`Info`) and `Session.Record` is the store to follow for a view.
+`agent.Drive` is a controller that answers by rule, for running without
+a person. The terminal client is agentconsole; hand it
 `extension.Renderers(dir, exts)`. The public packages are `dax`,
 `agent`, `extension`, `policy`, `tool`, `toolrender`, `workspace` and
 the four under `ext/`; the configuration, providers, model metadata, prompt frame and
@@ -879,7 +886,8 @@ What is not there yet:
   waits for agentsession's remote client. `Session.Path` is empty for a
   store that is not local.
 - A front over a wire (the terminal client driving a session elsewhere,
-  ACP) is not built.
+  ACP) is not built. The contract it would carry is the session's
+  `agent.Turn`, which dax proposes for agentturn.
 
 ## Develop
 

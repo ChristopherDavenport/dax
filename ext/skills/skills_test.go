@@ -116,9 +116,10 @@ func TestTheExtension(t *testing.T) {
 // The skill tool is offered, the user's skill is in the catalogue, and
 // reading a skill runs unasked.
 func TestASkillIsOfferedAndReadUnasked(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	o := session(t, &scripted{calls: [][2]string{{"skill", `{"name":"greet"}`}}}, skills.Options{})
-	o.Approve = func(c *openresponses.FunctionCall, reason string) bool {
+	approve = func(c *openresponses.FunctionCall, reason string) bool {
 		t.Errorf("asked about %s: %s", c.Name, reason)
 		return false
 	}
@@ -134,14 +135,14 @@ func TestASkillIsOfferedAndReadUnasked(t *testing.T) {
 	if !slices.Contains(names, "skill") {
 		t.Errorf("tools %v lack skill", names)
 	}
-	if !strings.Contains(s.Agent.Config().Instructions, "greet") {
-		t.Errorf("the user's skill is not in the catalogue:\n%s", s.Agent.Config().Instructions)
+	if !strings.Contains(s.Agent().Config().Instructions, "greet") {
+		t.Errorf("the user's skill is not in the catalogue:\n%s", s.Agent().Config().Instructions)
 	}
-	if _, err := s.Prompt(ctx, "greet me"); err != nil {
+	if _, err := prompt(ctx, s, "greet me", approve); err != nil {
 		t.Fatal(err)
 	}
 	var out string
-	for _, it := range s.Agent.State().Transcript {
+	for _, it := range s.Agent().State().Transcript {
 		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
 			out = o.Output.String() // the skill tool answers in parts
 		}
@@ -185,7 +186,7 @@ func TestAProjectsSkillsLinkedOutAreLeftOut(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			instr := s.Agent.Config().Instructions
+			instr := s.Agent().Config().Instructions
 			for _, bad := range []string{"evil", "secret-skill-body", "Fine.", "leaked"} {
 				if strings.Contains(instr, bad) {
 					t.Errorf("instructions contain %q", bad)
@@ -212,6 +213,7 @@ func TestAProjectsSkillsLinkedOutAreLeftOut(t *testing.T) {
 
 // -trust-skills trusts the user's skills and never the repository's.
 func TestTrustSkillsNeverTrustsARepositorysSkill(t *testing.T) {
+	var approve func(*openresponses.FunctionCall, string) bool
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name      string
@@ -234,7 +236,7 @@ func TestTrustSkillsNeverTrustsARepositorysSkill(t *testing.T) {
 			write(t, filepath.Join(tc.dir(o, configured), "pgreet", "SKILL.md"),
 				"---\nname: pgreet\ndescription: Greets.\nallowed-tools: Bash(echo:*)\n---\nSay hello.\n")
 			var asked []string
-			o.Approve = func(c *openresponses.FunctionCall, _ string) bool {
+			approve = func(c *openresponses.FunctionCall, _ string) bool {
 				asked = append(asked, c.Arguments)
 				return true
 			}
@@ -243,7 +245,7 @@ func TestTrustSkillsNeverTrustsARepositorysSkill(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if _, err := s.Prompt(ctx, "greet me"); err != nil {
+			if _, err := prompt(ctx, s, "greet me", approve); err != nil {
 				t.Fatal(err)
 			}
 			if len(asked) != tc.wantAsked {
