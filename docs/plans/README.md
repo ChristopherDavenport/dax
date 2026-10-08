@@ -109,6 +109,13 @@ before the dax step that uses them, as the workspace's rules require.
 6. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 
+## Decided
+
+- **Memory stays with control.** It is the user's knowledge across
+  projects, not the sandbox's: dax-memory's store and tools run where
+  control runs, never in the executor, so a sandboxed session cannot
+  read or write the user's memory directly.
+
 ## Decisions still open
 
 - **Facts' shape in agenttool.** Tool-call terms (the calls a call
@@ -121,8 +128,5 @@ before the dax step that uses them, as the workspace's rules require.
   The plan keeps rules and decisions with control and facts with
   execution; the engine's fast allows and denies then cost a round trip
   for facts on every call that has a matcher.
-- **Memory.** It is the user's knowledge, not the project's: with
-  control or the record, not the executor. Confirm when the executor is
-  built.
 - **Who answers a peer's own asks.** The callee's controller by default;
   escalation to the caller only where the callee enables it.
