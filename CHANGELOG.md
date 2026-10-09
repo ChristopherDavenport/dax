@@ -7,6 +7,8 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Security: golang.org/x/net is v0.60.0, which fixes GO-2026-6617 and
+  GO-2026-6612 in the HTTP/2 code the provider clients use.
 - Changed: the session has one agent and exposes it as `agent.Turn`, its
   human or autonomous plane: `Prompt`, `Answer` (the policy engine's
   release, then the loop's resume), `Permissions`, `Steer`, `FollowUp`,
