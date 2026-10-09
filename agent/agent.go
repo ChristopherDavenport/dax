@@ -105,6 +105,17 @@ type Options struct {
 	// scrubbed of credentials (PassEnv, KeyEnv), which the session
 	// closes; one given here is the caller's to close.
 	Workspace workspace.Workspace
+	// Executor runs the extensions' tools elsewhere, in `dax execute`
+	// (DialExecutor), in place of building them in this process over a
+	// workspace: their calls, facts and stamps are the executor's, and
+	// the session records its workspace. Setting both Executor and
+	// Workspace is an error. Every extension with Tools must be one the
+	// executor runs, no extension's matcher may give a served tool's
+	// subjects (the policy reads the executor only through the tools'
+	// facts), and MCP servers are refused, since they would run on
+	// this machine. The project's files are not read with one yet. It
+	// is the caller's to close, after the session.
+	Executor *Executor
 	// Store records the session: a store the caller opened, which it
 	// closes after the session; a remote one (agentsession RFC 0003)
 	// fits here as a local one does. Nil opens the content-addressed
@@ -352,6 +363,15 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, errors.New("no model")
 	}
 	ws, ownWS := o.Workspace, false
+	if o.Executor != nil {
+		switch {
+		case ws != nil:
+			return nil, errors.New("both an executor and a workspace: the executor's tools act in its own")
+		case len(o.MCP) > 0:
+			return nil, errors.New("MCP servers cannot run with an executor yet: they would run on this machine, not where the tools act; remove them or the executor")
+		}
+		ws = o.Executor.Workspace()
+	}
 	if ws == nil {
 		local, err := workspace.NewLocal(o.Dir, tool.DefaultEnv(o.PassEnv, o.KeyEnv))
 		if err != nil {
@@ -390,6 +410,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// The extensions' tools run in the executor; the session decides
 	// on their calls and runs them through it.
 	s.x = o.executor
+	if s.x == nil && o.Executor != nil {
+		if err := o.Executor.runs(o.Extensions); err != nil {
+			return nil, err
+		}
+		s.x = keepOpen{o.Executor.r}
+	}
 	if s.x == nil {
 		x, err := executor.InProcess(o.Extensions, te)
 		if err != nil {
@@ -397,11 +423,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		s.x = x
 	}
-	a, err := buildFrom(ctx, o.Extensions, te, s.x)
+	a, err := buildFrom(ctx, o.Extensions, te, s.x, o.Executor != nil)
 	if err != nil {
 		return nil, err
 	}
 	s.set = a.set
+	if o.Executor != nil {
+		s.refused = append(s.refused, omission("", ws.Root(), "the project's files (AGENTS.md, .dax/skills, .dax/config.json) are not read with an executor yet"))
+	}
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -413,7 +442,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		// The chain is read through the workspace, screened first so
 		// that a file that is a link out of it is left out and
 		// reported rather than failing the session (trust.go).
-		mdOpts, refused := agentsMDOptions(ws, o.Dir, o.UserDir, o.AgentsMDGlobal)
+		// With an executor, no directory of this machine is the
+		// workspace's, whatever its descriptor says.
+		dir := o.Dir
+		if o.Executor != nil {
+			dir = ""
+		}
+		mdOpts, refused := agentsMDOptions(ws, dir, o.UserDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
@@ -734,6 +769,9 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
+	if s.opts.Executor != nil {
+		return "", errors.New("MCP servers cannot run with an executor yet: they would run on this machine, not where the tools act")
+	}
 	prefix, err := mcpPrefix(name)
 	if err != nil {
 		return "", err

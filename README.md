@@ -294,6 +294,7 @@ names the file and the field.
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
+| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools in `dax execute` started by that command, split on spaces (see below); not with `mcp_servers` |
 | `policy` | see below |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -304,7 +305,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file` or `mcp_servers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `mcp_servers` or `executor`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -318,6 +319,7 @@ keys somewhere; a repository does not get to make them.)
 | `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
+| `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split on spaces; `""` clears it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
@@ -378,9 +380,12 @@ your own config can say that.
 output, from inside the place they should act: a container, a VM,
 another host. It runs no model, no policy and no session. A session
 elsewhere decides each call under its own policy and sends it there to
-run. The session's side, `-executor`, is not built yet, so today a
-session runs its tools in process; any MCP client that takes
-agenttool's claims (mcpclient's `WithClaims`) can drive it.
+run: start that session with `-executor` (or `"executor"` in your
+config) set to the command that starts `dax execute`.
+
+```sh
+dax -executor 'docker exec -i box dax execute -root /work -kind container -ref box'
+```
 
 ```sh
 docker exec -i box dax execute -root /work -kind container -ref box
@@ -422,6 +427,29 @@ experimental capability `io.github.christopherdavenport.dax/executor`
 with the descriptor, the extensions, and each tool in order with its
 extension, read-only, facts and strict. A running command's output
 arrives as progress, and a tool's question reaches the session.
+
+With `-executor`, the session starts the command with this machine's
+environment less its credentials (the model's key's variable among
+them, unless `pass_env` names it), so the key stays here. It refuses a
+program that is not a dax executor (no facts method, no capability, a
+capability of another version, or tools the capability does not name),
+and checks the tools against what it would have built: every extension
+with tools must be one the executor runs. Each call is decided here, on
+what the executor says it would touch; when the executor cannot say (its
+claim fails, a reading takes longer than 30 seconds, the executor is
+gone) the call is blocked, never allowed. The banner and the record name
+the executor's workspace, and the model is told its root.
+
+What `-executor` does not do yet:
+
+- MCP servers: a session with `-executor` and any MCP server
+  (`mcp_servers`, `-mcp`, `/mcp add`) refuses to start, since the
+  server would run on this machine rather than where the tools act.
+- The project's files: `AGENTS.md`, `.dax/skills` and `.dax/config.json`
+  are neither read from the executor nor from this directory; the start
+  lines say so with an `omitted:` line. Your own `~/.dax/AGENTS.md`,
+  `agents_md_global` and skills are read as usual.
+- Only a command: an `http:`, `https:` or `unix:` address is refused.
 
 Standard output carries MCP and nothing else. While it serves,
 `os.Stdout` is standard error, so a stray print from a tool cannot
@@ -949,7 +977,10 @@ interface, and the rest of dax cannot tell them apart:
   working directory.
 
 `agent.Options.Workspace` takes one; without it the session opens a
-`workspace.Local` over `Dir` and closes it. `agent.Options.Store` takes
+`workspace.Local` over `Dir` and closes it. `agent.Options.Executor`
+takes an executor in its place (`agent.DialExecutor`, which starts `dax
+execute` as `-executor` does), whose tools act where it runs; the
+caller closes it. `agent.Options.Store` takes
 the session store the same way: an `agentsession.Store` the caller
 opened and closes, or, without it, the content-addressed store at
 `Root`. A remote store client (agentsession's RFC 0003) is meant to fit
@@ -959,8 +990,9 @@ What is not there yet:
 
 - dax uses only `workspace.Local`; a container or remote workspace is
   a program's to provide until agentworkspace ships one. `dax execute`
-  serves the tools from inside a sandbox, but the session's client for
-  it is not built yet.
+  serves the tools from inside a sandbox and `-executor`
+  (`agent.Options.Executor`, `agent.DialExecutor`) runs a session's
+  tools there, without MCP servers or the project's files yet.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs
   handling. `Options.Store` takes today's interface; the lease handling

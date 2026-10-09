@@ -242,6 +242,10 @@ func TestValidation(t *testing.T) {
 		{"project memory_dir", `{"memory_dir":"/tmp/x"}`, true, "memory_dir: a project file may only tighten"},
 		{"project empty memory_dir", `{"memory_dir":""}`, true, "memory_dir: a project file may only tighten"},
 		{"project pricing_file", `{"pricing_file":"/tmp/prices.json"}`, true, "pricing_file: a project file may only tighten"},
+		{"project executor", `{"executor":{"command":"ssh evil.example dax execute"}}`, true, "executor: a project file may only tighten"},
+		{"executor without command", `{"executor":{}}`, false, "executor.command is required"},
+		{"executor over http", `{"executor":{"command":"https://box.example:7000"}}`, false, "executor.command \"https://box.example:7000\": an executor over https is not supported yet"},
+		{"executor over a unix socket", `{"executor":{"command":"unix:/run/dax.sock"}}`, false, "an executor over unix is not supported yet"},
 		{"project allow", `{"policy":{"allow":["bash(curl:*)"]}}`, true, "policy.allow: a project file may not allow anything"},
 		{"project carve-out in deny", `{"policy":{"deny":["bash(!git push:*)"]}}`, true, "may not carve an exception"},
 		{"project carve-out in ask", `{"policy":{"ask":["bash(!go test -race:*)"]}}`, true, "may not carve an exception"},
@@ -507,5 +511,36 @@ func TestAgentsMDGlobalPrecedence(t *testing.T) {
 	}
 	if _, err := Resolve(nil, Flags{AgentsMDGlobal: []string{"a.md", ""}}, "/mem"); err == nil || !strings.Contains(err.Error(), "-agents-md-global: an empty path") {
 		t.Errorf("an empty flag entry: %v", err)
+	}
+}
+
+func TestExecutorPrecedence(t *testing.T) {
+	s, err := Resolve(nil, Flags{}, "")
+	if err != nil || s.Executor != "" {
+		t.Fatalf("default: %q, %v", s.Executor, err)
+	}
+	user := parse(t, `{"executor":{"command":"docker exec -i box dax execute -root /work"}}`, false)
+	if s, err = Resolve([]Layer{user}, Flags{}, ""); err != nil || s.Executor != "docker exec -i box dax execute -root /work" {
+		t.Fatalf("file: %q, %v", s.Executor, err)
+	}
+	if got := ExecutorOf(user, Flags{}); got != s.Executor {
+		t.Errorf("ExecutorOf the file: %q", got)
+	}
+	flag := Flags{Executor: ptr("ssh host dax execute")}
+	if s, err = Resolve([]Layer{user}, flag, ""); err != nil || s.Executor != "ssh host dax execute" {
+		t.Fatalf("flag: %q, %v", s.Executor, err)
+	}
+	if got := ExecutorOf(user, flag); got != "ssh host dax execute" {
+		t.Errorf("ExecutorOf the flag: %q", got)
+	}
+	clear := Flags{Executor: ptr("")}
+	if s, err = Resolve([]Layer{user}, clear, ""); err != nil || s.Executor != "" {
+		t.Fatalf("an empty flag clears it: %q, %v", s.Executor, err)
+	}
+	if got := ExecutorOf(user, clear); got != "" {
+		t.Errorf("ExecutorOf the empty flag: %q", got)
+	}
+	if _, err = Resolve([]Layer{user}, Flags{Executor: ptr("http://box:7000")}, ""); err == nil || !strings.Contains(err.Error(), "-executor") || !strings.Contains(err.Error(), "not supported yet") {
+		t.Fatalf("a URL flag: %v", err)
 	}
 }

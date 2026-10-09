@@ -4,12 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
+	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/provider"
 )
@@ -298,5 +300,57 @@ func TestIsTerminalIsNotJustACharacterDevice(t *testing.T) {
 	}
 	if got := processEnv(true); got.stdinTTY && got.stdoutTTY && !isTerminal(os.Stdin) {
 		t.Error("processEnv disagrees with isTerminal")
+	}
+}
+
+// With an executor the project is where it runs, so this directory's
+// .dax/config.json is not read, until it is read through the executor;
+// without one it is.
+func TestTheProjectConfigIsNotReadHereWithAnExecutor(t *testing.T) {
+	h := home(t)
+	proj := t.TempDir()
+	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(make:*)"]}}`)
+	s, err := loadSettings(local(t, proj), "", config.Flags{Executor: str("ssh host dax execute")})
+	if err != nil || s.Executor != "ssh host dax execute" || len(s.Policy.Project.Deny) != 0 {
+		t.Fatalf("with -executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
+	}
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"executor":{"command":"docker exec -i box dax execute"}}`)
+	if s, err = loadSettings(local(t, proj), "", config.Flags{}); err != nil || s.Executor == "" || len(s.Policy.Project.Deny) != 0 {
+		t.Fatalf("with the config's executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
+	}
+	if s, err = loadSettings(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || s.Executor != "" || len(s.Policy.Project.Deny) != 1 {
+		t.Fatalf("with -executor '': %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
+	}
+}
+
+// -executor refuses what it cannot do yet before it starts anything: an
+// address in place of a command, and an MCP server beside it.
+func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
+	home(t)
+	t.Chdir(t.TempDir())
+	p := program{name: "dax", version: "test"}
+	for _, tc := range []struct {
+		args  []string
+		wants string
+	}{
+		{[]string{"-executor", "https://box.example:7000"}, "an executor over https is not supported yet"},
+		{[]string{"-executor", "unix:/run/dax.sock"}, "an executor over unix is not supported yet"},
+		{[]string{"-executor", "/nonexistent/dax execute", "-mcp", "/nonexistent/server"}, "MCP servers cannot run with an executor yet"},
+	} {
+		err := run(context.Background(), append(tc.args, "-sessions", "", "-p", "hi"), p)
+		if err == nil || !strings.Contains(err.Error(), tc.wants) {
+			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.wants)
+		}
+	}
+}
+
+// The banner names the executor and where it acts.
+func TestTheBannerNamesTheExecutor(t *testing.T) {
+	lines := banner(frontInfo{Name: "dax", Provider: "ollama", Model: "m", Dir: "/work", Executor: "dax v1 · container box · /work"}, agent.Info{})
+	if !slices.Contains(lines, "executor: dax v1 · container box · /work") || !strings.HasSuffix(lines[0], "· /work") {
+		t.Errorf("banner %q", lines)
+	}
+	if executorLine(nil) != "" {
+		t.Error("a line for no executor")
 	}
 }

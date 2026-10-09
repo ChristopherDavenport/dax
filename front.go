@@ -51,7 +51,10 @@ type frontInfo struct {
 	// ModelInfo is a line about what the model takes; empty when its
 	// vendor says nothing.
 	ModelInfo string
-	Think     bool
+	// Executor names the executor the tools run in and where it acts;
+	// empty when they run in this process.
+	Executor string
+	Think    bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
@@ -203,6 +206,9 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, f.info.Dir)
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
+	}
+	if f.info.Executor != "" {
+		fmt.Printf("executor: %s\n", render.Clean(f.info.Executor))
 	}
 	if info.Recorded {
 		fmt.Printf("session %s\n", info.ID)
