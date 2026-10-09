@@ -7,6 +7,26 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax execute`, the tools served over MCP on standard input
+  and output from inside the place they should act, for a session
+  elsewhere to drive: `docker exec -i box dax execute -root /work`,
+  `ssh host dax execute`, `kubectl exec -i ...`. The pipe is the
+  credential, so there is no listener and no token. It serves the
+  tools of every extension with `Tools` (dax-coding, and a program's
+  own as `<name> execute`), the real tools, so their facts claims,
+  replay claims and stamps are made and checked there, under that
+  process's key: a stamp minted anywhere else is refused. Besides
+  agenttool's facts method and `_meta`, it says under the experimental
+  capability `io.github.christopherdavenport.dax/executor` what MCP
+  cannot carry: the workspace's descriptor (`-kind`, `-ref`, the
+  root), the extensions, and each tool in the order it runs in process
+  with its extension, read-only, facts and strict. It reads no config
+  file (the sandbox holds those files, and the policy is the
+  session's): `-root`, `-max-read-bytes` and `-pass-env` are flags.
+  Standard output carries MCP alone; while it serves, `os.Stdout` is
+  standard error. The session's client for it (`-executor`) is the
+  next step; until then a session runs its tools in process as before.
+- Dependencies: agenttool/mcpserver v0.0.20, for `dax execute`.
 - Changed: package `workspace` is removed; dax runs over the
   agentworkspace module (`github.com/ChristopherDavenport/agentworkspace`),
   which began as that package. The names are the same (`Workspace`,
