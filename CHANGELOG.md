@@ -7,6 +7,21 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Security: an auto-allowed bash line runs only on the facts it was
+  decided on, as a file tool's call does. Its stamp signed the plan
+  alone, which is text, so `cat notes.txt`, decided as a read of
+  `notes.txt`, still ran and printed `.env` to the model once
+  `notes.txt` became a link to `.env` inside the workspace: made by a
+  `ln -sf .env notes.txt` the person approved in the same batch while
+  `cat` was held beside it, by another process, or while a rule's
+  question about the line was open; a `cd` into a directory that
+  became a link did the same. The stamp now signs the plan and the
+  claim's calls (each stage, what it reads with the links on its way
+  followed, the subjects no rule names) from the one analysis the
+  claim makes, and the tool analyses the line again and refuses it
+  with "ask again" if either differs. A line outside the analysis that
+  a person approves runs as written, as before. Affects v0.0.5 and
+  earlier (#45).
 - Changed: package `workspace` is removed; dax runs over the
   agentworkspace module (`github.com/ChristopherDavenport/agentworkspace`),
   which began as that package. The names are the same (`Workspace`,

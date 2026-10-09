@@ -212,10 +212,12 @@ executor. Gaps the sketch has to close:
    the reader's context and not kept, and an entry goes with its last
    pin. The engine still reads the rewrite's arguments afresh.
 2. **Facts and effects happen at different moments.** Between them the
-   sandbox can change. For bash this is already handled: the tool
-   re-checks and refuses a plan that no longer analyses to its stamp
-   (`errChanged`, `tool/stamp.go`). The file tools' facts stamp does
-   the same (`errTouched`): a call runs only if its facts, recomputed
+   sandbox can change. For bash this is handled: its stamp signs the
+   plan and the facts together, and the tool re-checks and refuses a
+   line that no longer analyses to that plan on those facts
+   (`errChanged`, `tool/stamp.go`); a plan alone did not catch a path
+   that became a link inside the workspace (#45). The file tools' facts
+   stamp does the same (`errTouched`): a call runs only if its facts, recomputed
    at the call, are the stamped ones, whether the policy allowed it or
    a person approved it, in the main agent or a sub-agent. Two windows
    are left. One is the moment between that recompute and the tool's
@@ -321,9 +323,10 @@ and is listed above.
   already runs; nothing it reports can widen what control allows,
   because the rules, the asks and the decisions are control's.
 - **The stamp.** The key stays in the executor (`tool/stamp.go:14`, a
-  per-process random key). Facts return the plan and its stamp; control
-  allows the call carrying the stamp; the executor runs only that plan
-  and refuses one that changed. Control cannot forge a stamp, and does
+  per-process random key). Facts return the plan and its stamp, of the
+  plan and the facts; control allows the call carrying the stamp; the
+  executor runs only that plan on those facts and refuses one that
+  changed. Control cannot forge a stamp, and does
   not need to.
 - **Confinement is a claim with a consequence.** agentpolicy skips a bare
   ask rule for a call that `ConfinedBy` says runs in a sandbox
