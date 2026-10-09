@@ -26,11 +26,11 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // Extension is one part of a dax session. Every field is optional but

@@ -3,7 +3,6 @@ package toolrender
 import (
 	"context"
 	"encoding/json"
-	"github.com/ChristopherDavenport/dax/workspace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +12,7 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/tool"
 )

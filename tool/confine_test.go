@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ChristopherDavenport/dax/workspace"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // confined builds a workspace beside a directory that holds a secret,

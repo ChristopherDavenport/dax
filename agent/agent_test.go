@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"github.com/ChristopherDavenport/dax/workspace"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +19,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
 

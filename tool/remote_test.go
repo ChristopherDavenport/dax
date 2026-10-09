@@ -15,10 +15,10 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // mapped stands in for a container: its processes and its files see

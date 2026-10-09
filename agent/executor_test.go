@@ -9,13 +9,13 @@ import (
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/policy"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // elsewhere is an executor that is not this process, as the session

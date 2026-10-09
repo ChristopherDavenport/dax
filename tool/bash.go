@@ -14,9 +14,8 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
-
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 const (

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/provider"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 func write(t *testing.T, path, content string) {

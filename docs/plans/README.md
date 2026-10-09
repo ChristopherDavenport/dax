@@ -52,9 +52,9 @@ After #35 and #36, in dax:
   `extension.Extension`, dax's own included (dax-coding, dax-agents,
   dax-skills, dax-memory). Each extension's rules are a policy source of
   their own and may name only its own tools.
-- The tools and every policy check act through `workspace.Workspace`;
-  the session takes its workspace and its store as values and records
-  which workspace it ran in.
+- The tools and every policy check act through `workspace.Workspace`,
+  agentworkspace's since its v0.0.1; the session takes its workspace
+  and its store as values and records which workspace it ran in.
 - The human or autonomous plane is `agent.Turn`; every front, and a
   controller with no front, drives a session through it.
 - `Extension` already splits along the execution boundary: `Tools`,
@@ -63,7 +63,9 @@ After #35 and #36, in dax:
   `Renderers` are control.
 
 What still touches the machine dax runs on, and belongs in the executor:
-MCP stdio servers, project skills, AGENTS.md and the project config.
+MCP stdio servers in a workspace that cannot start a process (in one
+that can, `workspace.Starter`, they start there), project skills,
+AGENTS.md and the project config.
 
 ## Changes by repository
 
@@ -115,9 +117,13 @@ before the dax step that uses them, as the workspace's rules require.
      forwarded by `Wrap`), and dax's tools make it; the MCP carriage is
      still to come.
    - agentpolicy: subjects from facts, with a context.
-   - agentworkspace: the module, `Local`, `Start`.
+   - agentworkspace: the module, `Local`, `Start`. **Done** in
+     agentworkspace v0.0.1, from dax's `workspace` package; dax has
+     moved to it (its `workspace` package is gone, the import renamed).
    - dax: `dax execute` and the remote executor; MCP servers started in
-     the workspace.
+     the workspace. The MCP servers are **done**: a stdio server starts
+     through `Start` when the session's workspace is a
+     `workspace.Starter`, and on this machine when it is not.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.

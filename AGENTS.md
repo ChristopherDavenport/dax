@@ -7,8 +7,8 @@ be extended: the session knows no tool, and everything the model can do
 comes from an `extension.Extension`. dax's own capabilities are
 extensions like any other (dax-coding, dax-agents, dax-skills,
 dax-memory), and a Go program runs `dax.Main` with its own. Where the
-tools act is a `workspace.Workspace`, and this machine's directory is
-one implementation of it: dax should behave the same whether its tools
+tools act is a `workspace.Workspace` (the agentworkspace module), and
+this machine's directory is one implementation of it: dax should behave the same whether its tools
 act here or elsewhere. The design,
 who owns what and the extension points are in `docs/design.md`; read it
 before changing the shape.
@@ -25,8 +25,10 @@ before changing the shape.
   provider adapters, pinned to the versions the adapters require.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
-  `tool`, `toolrender`, `workspace`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
+  `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
+  `ext/memory`. Where the tools act is agentworkspace's
+  `Workspace`, which the public API names directly (imported as
+  `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
   it small: export what a program built on dax needs, and say why in the
   doc comment.
@@ -65,10 +67,11 @@ before changing the shape.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`.
 - `ext/memory` (dax-memory): the store, the scopes, the memory tools.
-- `workspace`: the `Workspace` interface the session and every tool act
-  through (root, file system, writes, environment, `Exec`, descriptor),
-  shaped after the agentworkspace study so dax moves to that module by
-  a rename, and `Local`, this machine's directory over an `os.Root`.
+- The workspace is not a package here: the `Workspace` interface the
+  session and every tool act through (root, file system, writes,
+  environment, `Exec`, descriptor), `Starter` for a long-lived process
+  with pipes, and `Local`, this machine's directory over an `os.Root`,
+  are the agentworkspace module's, imported as `workspace`.
 - `tool`: dax-coding's tools; `Files` (`tool/workspace.go`), the tools'
   view of a workspace for model-written paths, with the write lock;
   `view.go`, the workspace as the policy's checks read it (links
@@ -111,6 +114,7 @@ an `Unreleased` changelog line:
 - `../agentpolicy`, `../agentsession`, `../agentskill`, `../agentsmd`,
   `../agentmemory`.
 - `../agentconsole`: the terminal client, a dependency.
+- `../agentworkspace`: where the tools act, `Workspace` and `Local`.
 
 ## Conventions
 
@@ -136,8 +140,9 @@ an `Unreleased` changelog line:
   `Stat`, `ReadDir`) and its `Exec`; never `os` or `os/exec` on a
   model-supplied path or command, so the tool runs on any workspace. A
   read-modify-write uses `Update`, which holds the lock dax's `write`
-  and `edit` hold. A new file tool, or a new exported `Files` or
-  `workspace.Local` method, gets a case in the confinement test.
+  and `edit` hold. A new file tool, or a new exported `Files` method,
+  gets a case in the confinement test; `workspace.Local`'s own
+  confinement is agentworkspace's, whose tables every backend runs.
 - A check the policy makes of a call is the tool's facts claim
   (`agenttool.Factual`, set with `agenttool.WithFacts`): the tool says what the call would touch, and the
   policy decides on that and reads no machine itself. The claim

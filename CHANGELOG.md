@@ -5,6 +5,38 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: package `workspace` is removed; dax runs over the
+  agentworkspace module (`github.com/ChristopherDavenport/agentworkspace`),
+  which began as that package. The names are the same (`Workspace`,
+  `Local`, `NewLocal`, `Command`, `Output`, `Descriptor`, the `Kind*`
+  constants, `ErrOutside`, `Read`), so a program built on dax changes
+  its import to `workspace "github.com/ChristopherDavenport/agentworkspace"`
+  and nothing else. dax keeps no alias package: a program that writes
+  an extension already imports the siblings dax's API names
+  (agenttool, agentpolicy), and a container or remote workspace it
+  passes in comes from agentworkspace too, so a second name for the
+  same types would only be one more thing to keep in step. What
+  differs from dax's package: every file operation and `WriteFile` and
+  `Remove` refuse a name that is not `fs.ValidPath` (absolute or
+  climbing out is `ErrOutside` everywhere, any other is
+  `fs.ErrInvalid`); a `Command.Dir` is checked through the root, so one
+  that leads out through a link is `ErrOutside` and one that is not a
+  directory is an error; `Local.Close` ends the processes it started.
+  `tool.Files` hands the workspace cleaned names, so dax's tools and
+  every decision are as before.
+- Changed: an MCP stdio server starts in the session's workspace when
+  the workspace can start a long-lived process (`workspace.Starter`,
+  which `Local` is), at its root and with its environment, over the
+  process's pipes; it ends when the session closes it, or with the
+  workspace. For the `Local` the session opens itself that is the same
+  scrubbed environment as before, so only its working directory moves,
+  from dax's to the workspace's root. In a workspace that cannot start
+  a process, a server runs on this machine as before.
+  `agent.Options.MCP`'s and `PassEnv`'s comments say so.
+- Dependencies: agentworkspace v0.0.1.
+
 ## v0.0.5 - 2026-10-09
 
 - Changed: an extension's `Tools` are the session's execution and run

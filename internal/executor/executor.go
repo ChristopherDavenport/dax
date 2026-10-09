@@ -22,10 +22,10 @@ import (
 	"sync"
 
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // Executor runs the extensions' tools on behalf of a session, wherever

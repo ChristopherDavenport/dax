@@ -10,7 +10,8 @@ plugin system; at run time the user adds tools only as MCP servers.
 
 Where the tools act is no more special than which tools there are. dax
 should feel the same whether its tools act on this machine or elsewhere:
-the session runs over one `workspace.Workspace`, every tool and every
+the session runs over one `workspace.Workspace` (the agentworkspace
+module's), every tool and every
 check the policy makes goes through it, and this machine's directory is
 one implementation of it (see Workspaces).
 
@@ -66,8 +67,10 @@ Where dax does not keep to this yet, and what each needs:
   its glue fakes or drops.
 - The execution plane: the executor is in process only; there is no
   remote form yet (`dax execute` and its client), and replay hints do
-  not cross MCP. MCP stdio servers start where the turn runs, not in
-  the workspace (it needs a long-lived process with pipes).
+  not cross MCP. An MCP stdio server starts in the workspace only when
+  the workspace can start a long-lived process with pipes
+  (`workspace.Starter`); in one that cannot, it starts where the turn
+  runs.
 - Peers: a call to one is not linked in the caller's record as a
   sub-agent's session is, an abort does not cancel the remote task,
   and `front/a2a` has no authentication.
@@ -81,7 +84,7 @@ Where dax does not keep to this yet, and what each needs:
 | Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
-| Where the tools act | dax, until the agentworkspace module exists | `workspace`: the `Workspace` interface and `Local`, this machine's directory |
+| Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
 | Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, and `Set`, the tools bound as the kit's, with each decision's facts pinned |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
@@ -291,14 +294,15 @@ system whose opens never block, `WriteFile` and `Remove`, the
 environment its processes start with, `Exec` of one command to
 completion with an optional stream of its output, a `Descriptor`
 (kind, ref, root) and `Close`. A name that leaves it is an error that
-is `ErrOutside`. The interface follows the agentworkspace study
-(`examples/openhands-workspace`) so that dax moves to that sibling
-module by a rename once it exists; it adds the stream, which `bash`
-needs to report progress, and leaves the persistent shell out until a
-tool needs one. dax ships `workspace.Local`: this machine's directory
-as an `os.Root`, each command in its own process group, killed with it.
-A container or a remote runtime implements the same interface; dax has
-none yet.
+is `ErrOutside`, and a name that is not `fs.ValidPath` is refused. The
+interface is the agentworkspace module's, which began as dax's own
+`workspace` package and which dax imports under that name; the
+persistent shell stays out until a tool needs one. A workspace that
+can run a process for longer than one call, with pipes to it, is also
+a `workspace.Starter`. dax uses `workspace.Local`: this machine's
+directory as an `os.Root`, each command in its own process group,
+killed with it, and a `Starter`. A container or a remote runtime
+implements the same interface; agentworkspace has none yet.
 
 Equal means nothing in the session or in dax-coding asks which one it
 is:
@@ -344,7 +348,11 @@ What is not equal yet, and why:
 - A workspace whose root is below its repository's root sees no
   AGENTS.md above its root unless it is this machine's `Dir`: its file
   system ends at the root.
-- MCP stdio servers run on this machine.
+- An MCP stdio server runs in the workspace only when it is a
+  `workspace.Starter`, over the process's pipes (the MCP SDK's
+  `IOTransport`), at its root and with its environment; in a workspace
+  that cannot start a process, it runs on this machine, with this
+  machine's environment scrubbed.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
   `Store`: opening takes a lease, an append returns a new result, and a
@@ -434,8 +442,9 @@ every source, the confined workspace, the name checks, the record's
 header) are its to keep, and the layer below is agentkit itself. A
 function that returns the options the session would pass the kit, for a
 program to build on and own, could come later. `config`, `provider`,
-`modelinfo`, `prompt`, `render`, `private` and `executor` stay internal (`workspace`
-is public, as an extension's tools need it): they are
+`modelinfo`, `prompt`, `render`, `private` and `executor` stay internal
+(the workspace is agentworkspace's, public there, as an extension's
+tools need it): they are
 the command line's and the session's, and `modelinfo` is a trial meant to
 move to openresponses.
 
@@ -444,7 +453,8 @@ move to openresponses.
 Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
 tree to navigate; an RPC mode and ACP for editors; a container or
-remote workspace (the interface is here, an implementation is not);
+remote workspace (agentworkspace has the interface and `Local`, not
+those);
 prompt templates
 (`/name args`); a model catalogue with context windows; extension points
 for slash commands, the REPL's renderer, or the config's schema. Each

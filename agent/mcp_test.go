@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses/echo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -161,6 +162,101 @@ func TestAnMCPServersStderrIsCleaned(t *testing.T) {
 		if r != '\n' && r != '\t' && (r < 0x20 || r == 0x7f || r == 0x202e) {
 			t.Errorf("control character %U in %q", r, out)
 		}
+	}
+}
+
+// starter is a workspace.Local that records the processes it starts.
+type starter struct {
+	*workspace.Local
+	mu      sync.Mutex
+	started []workspace.Command
+	procs   []workspace.Process
+}
+
+func (s *starter) Start(ctx context.Context, c workspace.Command) (workspace.Process, error) {
+	p, err := s.Local.Start(ctx, c)
+	if err == nil {
+		s.mu.Lock()
+		s.started = append(s.started, c)
+		s.procs = append(s.procs, p)
+		s.mu.Unlock()
+	}
+	return p, err
+}
+
+// The plan's step 3: an MCP server runs in the workspace when the
+// workspace can start a process, with the workspace's environment,
+// and ends with the session.
+func TestAnMCPServerStartsInTheWorkspace(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	t.Setenv("PLAIN", "this machine")
+	ctx := context.Background()
+	o := options(t, &echo.Adapter{})
+	local, err := workspace.NewLocal(o.Dir, []string{"DAX_TEST_MCP_SERVER=1", "PLAIN=the workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	ws := &starter{Local: local}
+	o.Workspace = ws
+	o.MCP = []MCPServer{{Name: "ws", Command: os.Args[0]}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := leak(t, s, "mcp__ws__leak"); got != "key=[] token=[] plain=[the workspace]" {
+		t.Errorf("environment: %s", got)
+	}
+	if _, err := s.AddMCP(ctx, "added", os.Args[0]); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(toolNames(s), "mcp__added__leak") {
+		t.Errorf("tools after /mcp add: %v", toolNames(s))
+	}
+	ws.mu.Lock()
+	started, procs := slices.Clone(ws.started), slices.Clone(ws.procs)
+	ws.mu.Unlock()
+	if len(started) != 2 || strings.Join(started[0].Args, "|") != os.Args[0] || started[0].Dir != "" || started[0].Stream == nil {
+		t.Fatalf("started: %+v", started)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range procs {
+		done := make(chan struct{})
+		go func() { p.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("an MCP server outlived its session")
+		}
+	}
+}
+
+// A workspace that cannot start a process leaves the server on this
+// machine, as before, with the scrubbed environment.
+func TestAnMCPServerRunsHereWhenTheWorkspaceCannotStartIt(t *testing.T) {
+	ws := localWorkspace(t, t.TempDir())
+	env := []string{"PATH=/bin"}
+	tr, err := mcpServer(struct{ workspace.Workspace }{ws}, "server arg", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, ok := tr.(*mcp.CommandTransport)
+	if !ok {
+		t.Fatalf("transport: %T", tr)
+	}
+	if strings.Join(ct.Command.Args, "|") != "server|arg" || strings.Join(ct.Command.Env, " ") != "PATH=/bin" {
+		t.Errorf("command: %v %v", ct.Command.Args, ct.Command.Env)
+	}
+	if tr, err := mcpServer(ws, "server arg", env); err != nil {
+		t.Fatal(err)
+	} else if _, ok := tr.(*startTransport); !ok {
+		t.Errorf("a workspace.Local's transport: %T", tr)
+	}
+	if _, err := mcpServer(ws, "  ", env); err == nil {
+		t.Error("an empty command should be an error")
 	}
 }
 

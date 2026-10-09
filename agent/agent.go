@@ -35,6 +35,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -44,7 +45,6 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // Version is what the session header names as the harness version.
@@ -149,16 +149,21 @@ type Options struct {
 	// run, and the extensions' BeforeToolCall hooks are not run.
 	Policy *policy.Settings
 	// MCP are stdio MCP servers started with the session, each offering
-	// its tools as mcp__<Name>__<tool>. Their stderr is dax's.
+	// its tools as mcp__<Name>__<tool>. Each runs in the workspace when
+	// it can start a process (workspace.Starter), at its root and with
+	// its environment, and otherwise on this machine. Their stderr is
+	// dax's.
 	MCP []MCPServer
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
 	MaxReadBytes int64
-	// PassEnv names credential-looking variables MCP servers, and the
-	// processes of the workspace.Local the session opens when Workspace
-	// is nil, may still inherit; every other credential is removed from
-	// their environment. A workspace given in Workspace carries its own
-	// (Workspace.Env).
+	// PassEnv names credential-looking variables the processes of the
+	// workspace.Local the session opens when Workspace is nil, MCP
+	// servers among them, may still inherit; every other credential is
+	// removed from their environment. A workspace given in Workspace
+	// carries its own (Workspace.Env), and an MCP server that cannot
+	// start in it runs on this machine with an environment scrubbed the
+	// same way.
 	PassEnv []string
 	// KeyEnv is the variable the provider's key was read from. It is
 	// removed from the same environments even when its name does not
@@ -203,7 +208,7 @@ type Session struct {
 
 	opts    Options
 	live    live
-	env     []string            // what bash and MCP servers start with
+	env     []string            // what an MCP server outside the workspace starts with
 	refused []agentkit.Omission // repository files screened out before the kit
 	ws      workspace.Workspace
 	ownWS   bool // the session opened ws, and closes it
@@ -376,8 +381,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}()
 	model := o.Streamer
 	var engine atomic.Pointer[agentpolicy.Engine]
-	// MCP servers run on this machine, whatever the workspace, and start
-	// with this machine's environment scrubbed.
+	// An MCP server runs in the workspace when it can start one, and
+	// otherwise on this machine, with this machine's environment
+	// scrubbed (mcpServer).
 	env := tool.DefaultEnv(o.PassEnv, o.KeyEnv)
 	s.env = env
 	te := extension.ToolEnv{Workspace: ws, Files: s.files, MaxReadBytes: o.MaxReadBytes}
@@ -457,7 +463,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if err != nil {
 			return nil, err
 		}
-		t, err := mcpTransport(m.Command, env)
+		t, err := mcpServer(ws, m.Command, env)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
@@ -732,7 +738,7 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 	if err != nil {
 		return "", err
 	}
-	t, err := mcpTransport(command, s.env)
+	t, err := mcpServer(s.ws, command, s.env)
 	if err != nil {
 		return "", err
 	}
@@ -945,10 +951,60 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 	return store.Repair(ctx, id, cas.RepairOptions{})
 }
 
-// mcpTransport starts an MCP server from a command line, split on
-// spaces, with env as its whole environment and its diagnostics on
-// dax's stderr. The kit's own command transport would hand the server
-// dax's environment, keys included.
+// mcpServer is the transport of an MCP server started from a command
+// line, split on spaces, with its diagnostics on dax's stderr. In a
+// workspace that can start a process (workspace.Starter) the server
+// runs there, at its root, with the workspace's environment, over the
+// process's pipes; in one that cannot, it runs on this machine
+// (mcpTransport), with env as its whole environment.
+func mcpServer(ws workspace.Workspace, command string, env []string) (mcp.Transport, error) {
+	if _, ok := ws.(workspace.Starter); !ok {
+		return mcpTransport(command, env)
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return nil, errors.New("empty command")
+	}
+	// A server's diagnostics are text from a program the model may have
+	// chosen; they get the same cleaning as its output.
+	return &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(stderr)}}, nil
+}
+
+// startTransport starts an MCP server in a workspace when the client
+// connects, and speaks to it over the process's standard input and
+// output.
+type startTransport struct {
+	ws  workspace.Workspace
+	cmd workspace.Command
+}
+
+func (t *startTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	// The server lives as long as the connection, not the context it
+	// was connected under (a command's, say), as one the command
+	// transport starts does; closing the connection ends it, and so
+	// does closing the workspace.
+	p, err := workspace.Start(context.WithoutCancel(ctx), t.ws, t.cmd)
+	if err != nil {
+		return nil, err
+	}
+	pipes := processPipes{p}
+	return (&mcp.IOTransport{Reader: pipes, Writer: pipes}).Connect(ctx)
+}
+
+// processPipes is a started process's output to read and input to
+// write. Closing it, as the connection does when it closes, ends the
+// process the way the MCP stdio shutdown asks: its input closed, a
+// moment to leave, then SIGTERM, then SIGKILL (Process.Close).
+type processPipes struct{ p workspace.Process }
+
+func (r processPipes) Read(b []byte) (int, error)  { return r.p.Stdout().Read(b) }
+func (r processPipes) Write(b []byte) (int, error) { return r.p.Stdin().Write(b) }
+func (r processPipes) Close() error                { return r.p.Close() }
+
+// mcpTransport starts an MCP server on this machine from a command
+// line, split on spaces, with env as its whole environment and its
+// diagnostics on dax's stderr. The kit's own command transport would
+// hand the server dax's environment, keys included.
 func mcpTransport(command string, env []string) (mcp.Transport, error) {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
