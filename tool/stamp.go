@@ -41,6 +41,12 @@ var errTouched = errors.New("what this call touches changed since it was allowed
 // left out; it says nothing about what is touched. The "facts" prefix
 // keeps it from ever equalling a plan's stamp.
 func factsStamp(name string, calls []agenttool.FactCall) string {
+	return stampOf(factsText(name, calls))
+}
+
+// factsText is what factsStamp signs. No part holds a NUL (a tool's
+// name, JSON arguments), so the parts it joins are read back one way.
+func factsText(name string, calls []agenttool.FactCall) string {
 	var b strings.Builder
 	b.WriteString("facts\x00")
 	b.WriteString(name)
@@ -50,8 +56,23 @@ func factsStamp(name string, calls []agenttool.FactCall) string {
 		b.WriteString("\x00")
 		b.Write(c.Args)
 	}
-	return stampOf(b.String())
+	return b.String()
 }
+
+// planStamp signs an auto-allowed bash line: the plan it runs
+// (rendered) and the facts the policy decided it on (calls, what each
+// stage reads with the links on its way followed), so the line runs
+// only while both are what was allowed. A plan alone is text, and the
+// same text reads .env once notes.txt is a link to it. The "plan"
+// prefix keeps it from equalling a facts stamp; a rendered plan holds
+// no NUL (parsePlan refuses control bytes).
+func planStamp(rendered string, calls []agenttool.FactCall) string {
+	return stampOf("plan\x00" + rendered + "\x00" + factsText("bash", calls))
+}
+
+// stampOfCheck is the stamp of an auto-allowed line's analysis c: its
+// plan and the calls its claim gives (parsedCalls), from c alone.
+func stampOfCheck(c *Check) string { return planStamp(c.Render(), parsedCalls(c)) }
 
 // withStamp is args with the dax_stamp field set to stamp, replacing
 // any the model supplied.
@@ -65,14 +86,15 @@ func withStamp(args json.RawMessage, stamp string) (json.RawMessage, error) {
 	return json.Marshal(m)
 }
 
-// errChanged is what a call gets when it was allowed as a plan that
-// the command no longer analyses to.
-var errChanged = errors.New("the command changed since it was allowed (a file or the repository's git configuration is different now); ask again")
+// errChanged is what a call gets when it was allowed as a plan, on
+// facts, that the command no longer analyses to.
+var errChanged = errors.New("the command changed since it was allowed (a file, where a path leads or the repository's git configuration is different now); ask again")
 
 // StampArgs is the policy's side of an auto-allowed bash call: when the
 // command line analyses as Auto, the arguments come back carrying the
-// stamp of the plan that was approved, and the bash tool will run only
-// that plan. Any other call comes back with a stamp the model supplied,
+// stamp of the plan that was approved and of the facts it was approved
+// on (planStamp), and the bash tool will run only that plan on those
+// facts. Any other call comes back with a stamp the model supplied,
 // which is not valid, removed. changed says the arguments differ.
 // Arguments with a key that is command or dax_stamp in another case are
 // an error (exactKeys).
@@ -98,8 +120,9 @@ func StampArgs(ctx context.Context, an *Analyzer, args json.RawMessage) (out jso
 }
 
 // stampWith is StampArgs given the analysis of the call's command: the
-// arguments with the stamp of c's plan when c is Auto, or with a stamp
-// the model supplied taken off; nil when they would not change.
+// arguments with the stamp of c's plan and facts when c is Auto
+// (stampOfCheck), or with a stamp the model supplied taken off; nil
+// when they would not change.
 func stampWith(c *Check, args json.RawMessage) (json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(args, &m); err != nil {
@@ -108,7 +131,7 @@ func stampWith(c *Check, args json.RawMessage) (json.RawMessage, error) {
 	_, had := m["dax_stamp"]
 	delete(m, "dax_stamp")
 	if c.Auto {
-		s, _ := json.Marshal(stampOf(c.Render()))
+		s, _ := json.Marshal(stampOfCheck(c))
 		m["dax_stamp"] = s
 	} else if !had {
 		return nil, nil

@@ -25,7 +25,12 @@ import (
 
 // scripted makes one call per step of a run, the step being the number
 // of tool outputs since the last user message, then answers "done".
-type scripted struct{ calls [][2]string }
+// scripted makes its calls one per response, or, with batch, all of
+// them in its first.
+type scripted struct {
+	calls [][2]string
+	batch bool
+}
 
 func (m *scripted) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
 	step := 0
@@ -40,17 +45,26 @@ func (m *scripted) CreateStream(_ context.Context, req openresponses.Request, si
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
-	if step < len(m.calls) {
-		call, err := em.FunctionCall("", m.calls[step][0])
+	calls := m.calls
+	switch {
+	case m.batch && step > 0, step >= len(calls):
+		calls = nil
+	case !m.batch:
+		calls = calls[step : step+1]
+	}
+	for _, c := range calls {
+		call, err := em.FunctionCall("", c[0])
 		if err != nil {
 			return err
 		}
-		if err := call.Arguments(m.calls[step][1]); err != nil {
+		if err := call.Arguments(c[1]); err != nil {
 			return err
 		}
 		if err := call.Close(); err != nil {
 			return err
 		}
+	}
+	if len(calls) > 0 {
 		return em.Complete()
 	}
 	msg, err := em.Message(openresponses.PhaseFinalAnswer)

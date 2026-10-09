@@ -57,8 +57,9 @@ func WithMaxFile(n int64) BashOption { return func(c *bashConfig) { c.maxFile = 
 //
 // Its facts claim is what a call would touch, from the same analysis the
 // policy's bash rules read (BashSubjects), and, for a line the analysis
-// allows unasked, the arguments carrying the stamp of that plan: the
-// tool then runs only that plan (command).
+// allows unasked, the arguments carrying the stamp of that plan and of
+// those facts: the tool then runs only that plan, and only while the
+// line still touches what it was allowed on (command).
 func Bash(f *Files, opts ...BashOption) agenttool.Tool {
 	var cfg bashConfig
 	for _, o := range opts {
@@ -149,21 +150,26 @@ func (w *progressWriter) Write(p []byte) (int, error) {
 
 // command is what runs a bash call, and in which environment.
 //
-// A call the policy allowed without asking carries the stamp of the plan
-// it approved (StampArgs). It runs only if the line still analyses to
-// that plan: as the plan rendered, every word quoted and --no-ext-diff
-// --no-textconv added to git diff, log and show, in an environment with
-// autoEnv added. If the line has changed since, because a file is
-// different or the repository's git config now names a program, the
-// call fails with errChanged, and the original line is never run
-// instead. A call without a stamp, one a person approved or one run with
+// A line the analysis allows unasked carries the stamp of its plan and
+// of the facts the policy decided it on (StampArgs, planStamp), whether
+// the policy then allowed it or a person approved it when a rule asked.
+// It runs only if the line, analysed again now, is still auto-allowed
+// to that plan on those facts: as the plan rendered, every word quoted
+// and --no-ext-diff --no-textconv added to git diff, log and show, in an
+// environment with autoEnv added. If the line has changed since,
+// because a file is different, a path it reads or cds into leads
+// somewhere else (notes.txt is a link to .env now) or the repository's
+// git config now names a program, the call fails with errChanged, and
+// the original line is never run instead. What is left is the moment
+// between this analysis and bash's own opens. A call without a stamp,
+// a line outside the analysis that a person approved or one run with
 // no policy, is bash -c exactly as given, in the workspace's
 // environment, the user's minus credentials: their hooks, their
 // sshCommand and their GIT_CONFIG_* are theirs.
 func command(ctx context.Context, an *Analyzer, in BashArgs) (workspace.Command, error) {
 	if in.Stamp != "" {
 		c := an.Check(ctx, in.Command)
-		if !c.Auto || !hmac.Equal([]byte(stampOf(c.Render())), []byte(in.Stamp)) {
+		if !c.Auto || !hmac.Equal([]byte(stampOfCheck(c)), []byte(in.Stamp)) {
 			return workspace.Command{}, errChanged
 		}
 		return workspace.Command{Args: []string{"bash", "-c", c.Render()}, Env: autoEnv()}, nil

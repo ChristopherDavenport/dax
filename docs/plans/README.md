@@ -193,10 +193,15 @@ before the dax step that uses them, as the workspace's rules require.
   `.env` being inside) does not run, whether the policy allowed it or a
   person approved it, in the main agent or a sub-agent. A stamp the
   model supplied is replaced by the rewrite, or refused at the call; a
-  call with no stamp, with the policy off, is not checked. Bash keeps its plan stamp: re-analysing the line
-  at the call already binds an unasked line to its plan and its reads,
-  so a facts stamp would add nothing there; a line a person approved
-  runs as written, unconfined, as before. One window is left: between
+  call with no stamp, with the policy off, is not checked. Bash's stamp
+  signs its plan and its facts together (#45): re-analysing the line at
+  the call bound it only to its plan, which is text, so `cat notes.txt`
+  decided as a read of `notes.txt` still ran once `notes.txt` was a link
+  to `.env`; the analysis saw the new read and nothing compared it. A
+  line the analysis allows carries the stamp whether the policy allowed
+  it or a person approved it when a rule asked; a line outside the
+  analysis that a person approved runs as written, unconfined, as
+  before. One window is left: between
   the executor's recompute and its own open of the path. The one
   between the policy's reading of a call's facts and the stamped one
   is closed by the per-decision pin (step 2).
