@@ -121,7 +121,7 @@ func options(t *testing.T, model openresponses.Streamer, sub *agents.Options) ag
 // outputs are the function-call outputs in a transcript, in order.
 func outputs(s *agent.Session) []string {
 	var out []string
-	for _, it := range s.Agent.State().Transcript {
+	for _, it := range s.Agent().State().Transcript {
 		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
 			out = append(out, o.Output.Text)
 		}
@@ -175,14 +175,13 @@ func runTask(t *testing.T, childCalls [][2]string, rules policy.Rules, fallback 
 	o := options(t, model, &agents.Options{Model: "flash"})
 	o.Model = "pro"
 	o.Instructions = "Use tabs."
-	o.Approve = approve
 	o.Policy = &policy.Settings{Builtin: true, Fallback: fallback, User: rules}
 	s, err := agent.New(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+	if _, err := prompt(context.Background(), s, "go", approve); err != nil {
 		t.Fatal(err)
 	}
 	return o, model, s
@@ -217,7 +216,7 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 			t.Errorf("child instructions carry %q", not)
 		}
 	}
-	if !strings.Contains(s.Agent.Config().Instructions, "let sub-agents do") {
+	if !strings.Contains(s.Agent().Config().Instructions, "let sub-agents do") {
 		t.Error("the main agent's instructions lack the guide to its sub-agents")
 	}
 	if got := requestTools(req); got != "read,write,edit,glob,grep,ls,bash" {
@@ -333,7 +332,7 @@ func TestTaskArgumentsAreChecked(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		if _, err := prompt(context.Background(), s, "go", nil); err != nil {
 			t.Fatal(err)
 		}
 		out := outputs(s)
@@ -349,11 +348,11 @@ func TestTaskArgumentsAreChecked(t *testing.T) {
 	}
 }
 
-// Ask, the question a running call puts to the user, is how a front
-// that can ask one answers a sub-agent's held call; it is preferred to
-// Approve, a refusal's note reaches the sub-agent, and a front that
-// cannot ask refuses with a reason the model can act on.
-func TestASubagentsHeldCallGoesToAsk(t *testing.T) {
+// A sub-agent's held call is a question to whoever holds the Turn's
+// questions, not a permission; a refusal's note reaches the sub-agent,
+// and with nobody holding the questions the call is refused with a
+// reason the model can act on.
+func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 	type outcome struct {
 		allow bool
 		note  string
@@ -375,24 +374,31 @@ func TestASubagentsHeldCallGoesToAsk(t *testing.T) {
 			}
 			o := options(t, model, &agents.Options{})
 			o.Policy = &policy.Settings{Builtin: true, Fallback: "ask"}
-			o.Approve = func(*openresponses.FunctionCall, string) bool {
-				t.Error("Approve was asked while Ask is set")
-				return true
-			}
 			var asked []string
-			o.Ask = func(_ context.Context, call *openresponses.FunctionCall, reason string) (bool, string, error) {
-				asked = append(asked, call.Name+": "+reason)
-				return tc.ask.allow, tc.ask.note, tc.ask.err
+			rules := agent.Rules{Permit: func(*openresponses.FunctionCall, string) (bool, string) {
+				t.Error("a permission was asked about a sub-agent's call, which is a question")
+				return true, ""
+			}}
+			if tc.ask.err == nil {
+				rules.Reply = func(q agent.Question) agent.Reply {
+					asked = append(asked, q.Call.Name+": "+q.Text)
+					return agent.Reply{Accept: tc.ask.allow, Note: tc.ask.note}
+				}
 			}
 			s, err := agent.New(context.Background(), o)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if _, err := s.Prompt(context.Background(), "go"); err != nil {
+			if _, err := agent.Drive(context.Background(), s.Turn(), rules, openresponses.UserText("go")); err != nil {
 				t.Fatal(err)
 			}
-			if len(asked) != 1 || !strings.HasPrefix(asked[0], "write: the task sub-agent asks") {
+			switch {
+			case tc.ask.err != nil && len(asked) != 0:
+				// Nobody holds the questions: nothing is asked, and the
+				// sub-agent is told to have the main agent make the call.
+				t.Errorf("asked %q with nobody holding the questions", asked)
+			case tc.ask.err == nil && (len(asked) != 1 || !strings.HasPrefix(asked[0], "write: the task sub-agent asks")):
 				t.Errorf("asked %q", asked)
 			}
 			_, err = os.Stat(filepath.Join(o.Dir, "hello.txt"))
@@ -476,7 +482,7 @@ func TestTheSubagentsTakeEveryExtensionsTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+	if _, err := prompt(context.Background(), s, "go", nil); err != nil {
 		t.Fatal(err)
 	}
 	model.mu.Lock()

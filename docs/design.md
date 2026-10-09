@@ -30,14 +30,21 @@ makes no difference to the turn.
 |---|---|---|---|---|
 | AI | inference | `openresponses.Streamer` | Ollama on this host | any provider, any host |
 | Execution | acts on files, processes and the world, through the tools | `workspace.Workspace`, and the extensions' tools over it | `workspace.Local` | a container or a remote runtime (agentworkspace) |
-| Human or autonomous | prompts, steers, answers permissions and questions | agentconsole's `client.Backend`: Control in, Live and Record out | the terminal client over `kitbackend` | a front over a wire, or a controller that answers by rule |
+| Human or autonomous | prompts, steers, answers permissions and questions | the turn's contract, agentturn's to own (`agent.Turn` until it does); a view follows the record (agentconsole) | the REPL, `-p` (`agent.Drive`), the terminal client over glue | a front over a wire (an agentturn front beside `front/a2a`), or a controller that answers by rule |
 | The record | what the planes agree happened | `agentsession.Store` | the local content-addressed store | a store over the wire (agentsession RFC 0003) |
 
 So running dax on a laptop, in a container with the user attached from
 elsewhere, or headless under a controller are one system with the
 planes in different places, not three modes. A person at a terminal and
 a controller that answers by rule are the same plane: whoever holds the
-Backend.
+Turn. The plane's control contract is the turn's, in agentturn's terms
+(prompt, steer, answer, abort, the run's events, the questions asked
+while a call runs), so it belongs with agentturn, beside its A2A and
+Responses fronts; `agent.Turn` is the shape dax proposes for it, and the
+session is its in-process implementation. What a view shows is the
+record, which leaves through agentsession (a Follower; RFC 0003 later);
+agentconsole is such a view, and the terminal client reaches the Turn
+through glue in `tuiadapter.go` that says what it fakes.
 
 A2A is not a plane. It is the boundary between two such systems, each
 with its own turn, planes and record: to the caller the other system is
@@ -45,18 +52,18 @@ part of its execution plane, a tool call its policy decides
 (`agentturn/tools/a2a`); to the callee the caller is its human or
 autonomous plane, the controller that prompts it (`agentturn/front/a2a`).
 A peer sees tasks and artifacts, never the other's transcript, which is
-why a front uses the Backend and not A2A. A call the callee's policy asks
+why a front uses the Turn and not A2A. A call the callee's policy asks
 about is answered by the callee's own human plane; the caller's tools it
 was lent come back to the caller to run.
 
 Where dax does not keep to this yet, and what each needs:
 
-- The human plane: `agent.Options.Approve`, `Ask` and `Elicit` are
-  hooks a front supplies, the REPL and print fronts drive the session
-  directly, and `/model`, `/think` and `/mcp` exist only as session
-  methods. Each question should be a Backend event and each answer a
-  Control call, with dax's own controls behind an interface a wire can
-  carry.
+- The human plane: the contract is dax's `agent.Turn` until agentturn
+  has one, and there is no wire for it yet (an agentturn front). dax's
+  own controls (`agent.Controls`: model, reasoning, MCP, the session's
+  assembly) need a channel beside it on that wire. agentconsole's
+  `client.Backend` cannot carry a Turn whole; `tuiadapter.go` lists what
+  its glue fakes or drops.
 - The execution plane: MCP stdio servers start where the turn runs, not
   in the workspace (it needs a long-lived process with pipes), and
   AGENTS.md, project skills and the project config are read from this
@@ -246,10 +253,16 @@ skills, memory or MCP servers. See the README for the schema.
 
 ## Fronts
 
-A front implements `Hooks()` (how a question reaches the user) and
-`Run(ctx, session)`. `front.go` is where one is chosen. Today
-there is the REPL and print (`-p`). A terminal UI is a third front that
-subscribes to the same events and answers the same two hooks.
+A front is the human plane: it drives the session's `agent.Turn` and
+uses `agent.Controls` for its commands and start lines. `front.go` is
+where one is chosen. The REPL renders the agent's events and answers
+permissions and questions on standard input; print (`-p`) is
+`agent.Drive`, a controller whose rules ask on standard input; the
+terminal client, agentconsole, is a view of the record that drives the
+Turn through the glue in `tuiadapter.go`. The session asks nothing of a
+front it was built with: every permission is a run that ended for input,
+answered with `Turn.Answer`, and every question asked while a call runs
+goes to whoever holds `Turn.Questions`, refused when nobody does.
 
 ## Workspaces
 

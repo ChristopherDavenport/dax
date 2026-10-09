@@ -193,7 +193,7 @@ func (e *sessionEnv) ChildPolicy(name string) func(context.Context, agentturn.To
 	if e.s.opts.Policy == nil {
 		return nil
 	}
-	return e.s.opts.childPolicy(name, e.eng, e.a.hook())
+	return e.s.childPolicy(name, e.eng, e.a.hook())
 }
 
 // systemPrompt is the main agent's part of the system prompt: dax's
