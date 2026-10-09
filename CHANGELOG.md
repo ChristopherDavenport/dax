@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.7 - 2026-10-09
 
 - Added: with `-executor`, the project's files are the executor's,
   read through it: the root's `AGENTS.md`, `.dax/skills` and
