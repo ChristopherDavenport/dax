@@ -228,24 +228,20 @@ func TestTheFactsMethodAnswersAsTheToolDoesInProcess(t *testing.T) {
 	}
 }
 
-// The stamp is checked where the tool runs. A read of notes.txt is
-// decided, its facts are stamped by the executor, notes.txt becomes a
-// link to .env, and the call with the stamped arguments is refused by
-// the executor. A bash plan likewise, once the line no longer analyses
-// to it: notes.txt becomes a link out of the workspace. Unswapped, both
-// run. A link to .env inside the workspace would not do for bash: its
-// stamp signs the rendered plan alone, which such a swap leaves as it
-// was, so the call runs, in process too. That gap is bash's, with a
-// fix of its own, not the executor's.
+// The stamp is checked where the tool runs. A read of notes.txt, or a
+// bash line that cats it, is decided and its facts are stamped by the
+// executor; notes.txt becomes a link to .env inside the workspace, and
+// the call with the stamped arguments is refused by the executor. For
+// bash the plan's text is unchanged by the swap; its stamp signs the
+// claim's facts too (what each stage reads, links followed), which the
+// swap changes. Unswapped, both run.
 func TestAStampIsCheckedInTheExecutor(t *testing.T) {
 	ctx := context.Background()
-	outside := filepath.Join(t.TempDir(), "secret")
-	os.WriteFile(outside, []byte("SECRET=2\n"), 0o644)
 	for _, tc := range []struct {
-		tool, args, ran, link string
+		tool, args, ran string
 	}{
-		{"read", `{"path":"notes.txt"}`, "notes", ".env"},
-		{"bash", `{"command":"cat notes.txt"}`, "notes", outside},
+		{"read", `{"path":"notes.txt"}`, "notes"},
+		{"bash", `{"command":"cat notes.txt"}`, "notes"},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			setup := func(t *testing.T) (executorServer, agenttool.Tool, string) {
@@ -271,7 +267,7 @@ func TestAStampIsCheckedInTheExecutor(t *testing.T) {
 
 			s, tl, stamped := setup(t)
 			os.Remove(filepath.Join(s.dir, "notes.txt"))
-			if err := os.Symlink(tc.link, filepath.Join(s.dir, "notes.txt")); err != nil {
+			if err := os.Symlink(".env", filepath.Join(s.dir, "notes.txt")); err != nil {
 				t.Fatal(err)
 			}
 			res, err = tl.Execute(ctx, agenttool.Call{ID: "c2", Args: json.RawMessage(stamped)})
