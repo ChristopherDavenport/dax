@@ -29,7 +29,7 @@ makes no difference to the turn.
 | Plane | What it does | What the turn sees | In process | Elsewhere |
 |---|---|---|---|---|
 | AI | inference | `openresponses.Streamer` | Ollama on this host | any provider, any host |
-| Execution | acts on files, processes and the world, through the tools | `workspace.Workspace`, and the extensions' tools over it | `workspace.Local` | a container or a remote runtime (agentworkspace) |
+| Execution | acts on files, processes and the world, through the tools | the executor (`internal/executor`): the extensions' tools, their facts and their calls, over a `workspace.Workspace` | `executor.InProcess` over `workspace.Local` | a container or a remote runtime (agentworkspace), an executor served there |
 | Human or autonomous | prompts, steers, answers permissions and questions | the turn's contract, agentturn's to own (`agent.Turn` until it does); a view follows the record (agentconsole) | the REPL, `-p` (`agent.Drive`), the terminal client over glue | a front over a wire (an agentturn front beside `front/a2a`), or a controller that answers by rule |
 | The record | what the planes agree happened | `agentsession.Store` | the local content-addressed store | a store over the wire (agentsession RFC 0003) |
 
@@ -64,8 +64,10 @@ Where dax does not keep to this yet, and what each needs:
   assembly) need a channel beside it on that wire. agentconsole's
   `client.Backend` cannot carry a Turn whole; `tuiadapter.go` lists what
   its glue fakes or drops.
-- The execution plane: MCP stdio servers start where the turn runs, not
-  in the workspace (it needs a long-lived process with pipes).
+- The execution plane: the executor is in process only; there is no
+  remote form yet (`dax execute` and its client), and replay hints do
+  not cross MCP. MCP stdio servers start where the turn runs, not in
+  the workspace (it needs a long-lived process with pipes).
 - Peers: a call to one is not linked in the caller's record as a
   sub-agent's session is, an abort does not cancel the remote task,
   and `front/a2a` has no authentication.
@@ -80,6 +82,7 @@ Where dax does not keep to this yet, and what each needs:
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | dax, until the agentworkspace module exists | `workspace`: the `Workspace` interface and `Local`, this machine's directory |
+| Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, and `Set`, the tools bound as the kit's, with each decision's facts pinned |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
 | AGENTS.md | `agentsmd` | the session: the chain's extent, reading it through the workspace, screening and budget |
@@ -385,9 +388,25 @@ returns agentkit options (skills, memory, child agents, guards) over an
 `explore` a read-only tool an extension listed after it adds. The
 session's own options go after the extensions', so where an option
 replaces, the session's is in force; a `Kit` that sets a policy on a
-session whose policy is off is an error. The session closes the tools it
-built. One tool value is shared by every agent that has it, possibly at
-once, so a tool that keeps state guards it, as agenttool's contract asks.
+session whose policy is off is an error. One tool value is shared by
+every agent that has it, possibly at once, so a tool that keeps state
+guards it, as agenttool's contract asks.
+
+An extension's `Tools` are execution; the tools its `Kit` adds
+(memory, explore and task, skill) are control and run where the
+session does. The session runs the execution through an executor
+(`internal/executor`): today `InProcess`, every extension's `Tools`
+built once over the `ToolEnv`, and later one served from a sandbox.
+What the kit, the policy and `Env.Tools` hold are adapters with the
+tool's definition, scheduling and annotations, whose calls, facts
+claims and replay claims go to the executor; a request carries the
+same bytes either way. The executor owns the tools and the session
+closes it. Each decision about a call pins the call's facts (`Set.Pin`):
+the main agent's for the length of its `BeforeToolCall`, a sub-agent's
+from its verdict to the hooks' rewrite, so every reading in between is
+one reading, made under the call's context, and the stamp a call runs
+with is of the facts its verdict was decided on. The rewrite's own
+arguments are another call, read afresh when the engine decides them.
 
 Each claim is checked at start, across the session and without regard
 to case: an extension's name, its tools, the names it `Owns` (tools its
@@ -415,7 +434,7 @@ every source, the confined workspace, the name checks, the record's
 header) are its to keep, and the layer below is agentkit itself. A
 function that returns the options the session would pass the kit, for a
 program to build on and own, could come later. `config`, `provider`,
-`modelinfo`, `prompt`, `render` and `private` stay internal (`workspace`
+`modelinfo`, `prompt`, `render`, `private` and `executor` stay internal (`workspace`
 is public, as an extension's tools need it): they are
 the command line's and the session's, and `modelinfo` is a trial meant to
 move to openresponses.

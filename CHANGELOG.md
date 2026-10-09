@@ -7,6 +7,26 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: an extension's `Tools` are the session's execution and run
+  through its executor (`internal/executor`), which today builds them
+  in this process as before; the tools an extension adds through `Kit`
+  stay with control. What the kit, the policy and `Env.Tools` and
+  `Env.ReadOnlyTools` hold are now adapters that stand in for an
+  extension's tools: the same definition, scheduling, annotations,
+  facts claim and replay claim, with calls, claims and closing going
+  to the executor, but not the extension's own values, and not an
+  `io.Closer`. Requests carry the same bytes, and every decision is the
+  same. `Extension.Tools`'s comment says so.
+- Fixed: a sub-agent's call could run with a stamp of facts its verdict
+  was not decided on. The sub-agents' policy check read a call's facts
+  claim three times (the policy's subjects, its folded hook, then the
+  hook again for the arguments to run) and took the rewrite from the
+  last, without deciding it again, so a path or a claim that changed
+  between the second and third readings was stamped and run. Each
+  decision now pins its call's facts, so every reading in it is one
+  reading, made under the call's context; the main agent's decision
+  reads them once too.
+
 - Changed: package `facts` is removed in favour of agenttool's facts
   claim (v0.0.19), in its names: `facts.Call`, `facts.Facts`,
   `facts.Claimer`, `facts.Of` and `facts.Claims` are

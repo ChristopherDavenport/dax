@@ -31,7 +31,6 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
-	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
@@ -41,6 +40,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -167,6 +167,12 @@ type Options struct {
 	// Log receives dax's own notes: compactions, denials, skill grants.
 	// nil discards them.
 	Log func(format string, args ...any)
+
+	// executor runs the extensions' tools in place of the session's
+	// in-process one, which builds them over the workspace; the session
+	// closes it. It is the seam the tests use to stand in for an
+	// executor elsewhere.
+	executor executor.Executor
 }
 
 // MCPServer is a stdio MCP server to start.
@@ -202,7 +208,8 @@ type Session struct {
 	ws      workspace.Workspace
 	ownWS   bool // the session opened ws, and closes it
 	files   *tool.Files
-	tools   []agenttool.Tool // the extensions', which the session closes
+	x       executor.Executor // runs the extensions' tools; the session closes it
+	set     *executor.Set     // x's tools as the kit has them
 	store   agentsession.Store
 	own     bool // the session opened store, and closes it
 	// recorded is false when the store is one the session made in
@@ -242,19 +249,25 @@ func Describe(p agentturn.PendingCall) string {
 }
 
 // withSubjects is the session's adjustment to the agent's configuration
-// (kitbackend.WithConfig): a call the policy defers has what the policy
-// was asking about added to its reason, since the reason is the question
-// every front shows: the rule, the secret path, the git config key, the
-// part of a command line, from the verdict's subject.
+// (kitbackend.WithConfig). The call's facts are pinned for the length
+// of its decision (executor.Set.Pin), so the policy's subjects and the
+// rewrite it runs with come from one reading of its claim. A call the
+// policy defers has what the policy was asking about added to its
+// reason, since the reason is the question every front shows: the rule,
+// the secret path, the git config key, the part of a command line, from
+// the verdict's subject.
 func (s *Session) withSubjects(cfg agentturn.Config) agentturn.Config {
 	inner := cfg.BeforeToolCall
-	eng := s.Kit.Engine()
-	if inner == nil || eng == nil {
+	if inner == nil {
 		return cfg
 	}
+	eng := s.Kit.Engine()
+	set := s.set
 	cfg.BeforeToolCall = func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+		unpin := set.Pin(ctx, info)
+		defer unpin()
 		d, err := inner(ctx, info)
-		if err != nil || d == nil || d.Action != agentturn.Defer || info.Call == nil {
+		if eng == nil || err != nil || d == nil || d.Action != agentturn.Defer || info.Call == nil {
 			return d, err
 		}
 		if v, ok := eng.Deferred(info.RunID, info.Call.CallID); ok && v.Subject != "" && !strings.Contains(d.Reason, v.Subject) {
@@ -368,11 +381,21 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	env := tool.DefaultEnv(o.PassEnv, o.KeyEnv)
 	s.env = env
 	te := extension.ToolEnv{Workspace: ws, Files: s.files, MaxReadBytes: o.MaxReadBytes}
-	a, err := build(o.Extensions, te)
+	// The extensions' tools run in the executor; the session decides
+	// on their calls and runs them through it.
+	s.x = o.executor
+	if s.x == nil {
+		x, err := executor.InProcess(o.Extensions, te)
+		if err != nil {
+			return nil, err
+		}
+		s.x = x
+	}
+	a, err := buildFrom(ctx, o.Extensions, te, s.x)
 	if err != nil {
 		return nil, err
 	}
-	s.tools = a.tools
+	s.set = a.set
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -527,8 +550,9 @@ func (s *Session) header() agentsession.Header {
 // last one on the path, so a session that stays in one workspace holds
 // one entry and a resume in another says so.
 func (s *Session) envOption() session.Option {
+	x := s.x
 	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
-		d := s.ws.Descriptor()
+		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
 		e.SetWorkspace(d.Kind, d.Ref)
 		return e, nil
@@ -753,10 +777,12 @@ func (s *Session) Close() error {
 	return err
 }
 
-// closeTools closes the extensions' tools that hold something, once.
+// closeTools closes the executor of the extensions' tools, once.
 func (s *Session) closeTools() {
-	agenttool.Set(s.tools).Close()
-	s.tools = nil
+	if s.x != nil {
+		s.x.Close()
+		s.x = nil
+	}
 }
 
 // readOnly opens the store for reading, without the session locks, so
@@ -943,21 +969,30 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 // dax-coding stamped say), and a call either asks about is put to the
 // user, and runs rewritten too if they approve. With no one to ask, it
 // is refused. A policy that is off governs nothing, the child included.
-func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+//
+// The call's facts are pinned in set from the verdict to the hooks'
+// rewrite (executor.Set.Pin), so the arguments it runs with come from
+// the reading the verdict was decided on; the pin is let go before the
+// question, so a person's slow answer holds nothing open.
+func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error), set *executor.Set) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		e := eng.Load()
 		if e == nil {
 			return nil, nil
 		}
+		unpin := set.Pin(ctx, info)
+		defer unpin() // a no-op after the unpin below, which comes before the question
 		v, err := e.Would(ctx, info)
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
 		}
 		var h *agentturn.ToolDecision
 		if hook != nil {
-			if h, err = hook(ctx, info); err != nil {
-				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "a hook could not decide this call: " + err.Error()}, nil
-			}
+			h, err = hook(ctx, info)
+		}
+		unpin()
+		if err != nil {
+			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "a hook could not decide this call: " + err.Error()}, nil
 		}
 		switch {
 		case v.Action == agentturn.Block:

@@ -51,6 +51,15 @@ type Extension struct {
 
 	// Tools are offered to the main agent, and to a sub-agent built
 	// from Env.Tools, task's say, in this order.
+	//
+	// They are the session's execution: what touches the world. The
+	// session runs them through its executor, which today is these
+	// tools in this process and may be another machine, so what the
+	// kit, the policy and Env.Tools hold are stand-ins whose calls,
+	// facts claims and replay claims go to the executor; a tool's own
+	// value is the executor's, which closes it. Tools an extension
+	// adds through Kit (memory, the sub-agents, skill) are control: they
+	// run where the session does, and never go to the executor.
 	Tools func(ToolEnv) []agenttool.Tool
 	// ReadOnly names the Tools that only look, which a sub-agent built
 	// from Env.ReadOnlyTools gets too, explore's say: a tool none of
