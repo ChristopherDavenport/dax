@@ -1,0 +1,529 @@
+package dax
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"maps"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ChristopherDavenport/agentconsole/client"
+	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/openresponses"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/policy"
+)
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// steps is a model that makes one call per step of a run (the number of
+// tool outputs since the last user message), then answers. The explore
+// child is told by its instructions and has steps of its own; what it
+// was shown is kept.
+type steps struct {
+	parent, child [][2]string
+	mu            sync.Mutex
+	childSaw      map[string]string
+}
+
+func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	calls := m.parent
+	isChild := strings.Contains(req.Instructions, "read-only explorer") || strings.Contains(req.Instructions, "You are a sub-agent of dax")
+	if isChild {
+		calls = m.child
+	}
+	step := 0
+	m.mu.Lock()
+	if m.childSaw == nil {
+		m.childSaw = map[string]string{}
+	}
+	m.mu.Unlock()
+	for _, it := range req.Input {
+		switch v := it.(type) {
+		case *openresponses.Message:
+			if v.Role == openresponses.RoleUser {
+				step = 0
+			}
+		case *openresponses.FunctionCallOutput:
+			step++
+			if isChild {
+				m.mu.Lock()
+				m.childSaw[v.CallID] = v.Output.Text
+				m.mu.Unlock()
+			}
+		}
+	}
+	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
+	if step < len(calls) {
+		call, err := em.FunctionCall("", calls[step][0])
+		if err != nil {
+			return err
+		}
+		if err := call.Arguments(calls[step][1]); err != nil {
+			return err
+		}
+		if err := call.Close(); err != nil {
+			return err
+		}
+		return em.Complete()
+	}
+	msg, err := em.Message(openresponses.PhaseFinalAnswer)
+	if err != nil {
+		return err
+	}
+	if err := msg.Text("all done"); err != nil {
+		return err
+	}
+	if err := msg.Close(); err != nil {
+		return err
+	}
+	return em.Complete()
+}
+
+func (m *steps) sawInChild() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var all []string
+	for _, v := range m.childSaw {
+		all = append(all, v)
+	}
+	return strings.Join(all, "\n")
+}
+
+// tuiRig is dax's terminal client over a scripted model, on a pipe.
+type tuiRig struct {
+	f    *tuiFront
+	t    *testing.T
+	dir  string
+	in   *io.PipeWriter
+	out  *syncBuf
+	pre  *syncBuf // the start lines
+	done chan error
+	sess *agent.Session
+}
+
+func startTUI(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options)) *tuiRig {
+	return startRig(t, m, rules, tweak, nil, true)
+}
+
+// startFront builds the front and its session without running it.
+func startFront(t *testing.T, m *steps, tweak func(*tuiFront)) *tuiRig {
+	return startRig(t, m, policy.Rules{}, nil, tweak, false)
+}
+
+func startRig(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options), tweakFront func(*tuiFront), run bool) *tuiRig {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	base := t.TempDir()
+	dir := filepath.Join(base, "project")
+	o := agent.Options{
+		Model: "scripted", Streamer: m, Dir: dir, Root: filepath.Join(base, "sessions"),
+		UserDir:    filepath.Join(base, "user"),
+		Extensions: []extension.Extension{coding.New(0), agents.New(agents.Options{}), memory.New(filepath.Join(base, "user", "memory"))},
+	}
+	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(o.Dir, ".env"), []byte("SECRET_TOKEN=abc123\n"), 0o644)
+	os.WriteFile(filepath.Join(o.Dir, "main.go"), []byte("package main\n"), 0o644)
+	o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: rules}
+	if tweak != nil {
+		tweak(&o)
+	}
+	renderers, err := extension.Renderers(o.Dir, o.Extensions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	r := &tuiRig{t: t, dir: o.Dir, in: pw, out: &syncBuf{}, pre: &syncBuf{}, done: make(chan error, 1)}
+	f := &tuiFront{
+		info:    frontInfo{Name: "dax", Renderers: renderers, Provider: "test", Model: "scripted", Dir: o.Dir, Policy: policySummary(policy.Settings{Builtin: true, Fallback: "ask"}, o.Extensions)},
+		out:     r.pre,
+		console: []console.Option{console.WithInput(pr), console.WithOutput(r.out), console.WithoutSignalHandler(), console.WithWindowSize(220, 50)},
+	}
+	r.f = f
+	if tweakFront != nil {
+		tweakFront(f)
+	}
+	// Nothing reads standard input once the client has the terminal:
+	// every question reaches the client's screen through the session's
+	// Turn, which the client's glue holds.
+	f.Prepare(&o)
+	sess, err := agent.New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.sess = sess
+	t.Cleanup(func() { sess.Close() })
+	if run {
+		go func() { r.done <- f.Run(ctx, sess) }()
+	}
+	return r
+}
+
+func (r *tuiRig) type_(s string) {
+	r.t.Helper()
+	if _, err := r.in.Write([]byte(s)); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// waitOutput waits for sub on the screen. The match is against the
+// output with its escape sequences removed: the renderer may draw a
+// line in pieces, as "a" then insert mode then "ll done".
+func (r *tuiRig) waitOutput(sub string) {
+	r.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(ansi.Strip(r.out.String()), sub) {
+		if time.Now().After(deadline) {
+			r.t.Fatalf("%q never shown; output:\n%q", sub, r.out.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (r *tuiRig) waitFile(name string, want bool) {
+	r.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, err := os.Stat(filepath.Join(r.dir, name))
+		if (err == nil) == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			r.t.Fatalf("file %s: exists=%v, want %v", name, err == nil, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// quit presses ctrl+c until the client returns. A run can still be
+// ending after the output a test waited for is on the screen, and ctrl+c
+// during a run aborts it rather than quitting, so one press is not
+// always enough; the next press, after the abort, quits.
+func (r *tuiRig) quit() {
+	r.t.Helper()
+	deadline := time.After(20 * time.Second)
+	for {
+		r.type_("\x03")
+		select {
+		case err := <-r.done:
+			if err != nil {
+				r.t.Errorf("Run: %v", err)
+			}
+			return
+		case <-time.After(500 * time.Millisecond):
+		case <-deadline:
+			r.t.Fatal("the client did not return")
+		}
+	}
+}
+
+// waitPanel waits for the permission panel. A call's row shows the
+// policy's reason as soon as the record has it, which can be before the
+// live permission reaches the panel, and a key pressed before the panel
+// is up goes to the prompt instead.
+func (r *tuiRig) waitPanel() {
+	r.t.Helper()
+	r.waitOutput("[y] approve")
+}
+
+// With -v the start lines are printed before the client takes the
+// screen; without it, the client leaves only the command that resumes
+// the session.
+func TestTheTUIShowsTheStartLinesOnlyWhenVerbose(t *testing.T) {
+	for _, verbose := range []bool{true, false} {
+		r := startRig(t, &steps{}, policy.Rules{}, nil, func(f *tuiFront) { f.info.Verbose = verbose }, true)
+		r.quit()
+		pre := r.pre.String()
+		for _, want := range []string{"dax · test scripted · ", "session ", "policy: ", "rule(s) from extension:dax-coding", "tools: read, write, edit, glob, grep, ls, bash", "explore"} {
+			if verbose != strings.Contains(pre, want) {
+				t.Errorf("verbose=%v: start lines have %q: %v\n%s", verbose, want, !verbose, pre)
+			}
+		}
+		resume := "To resume this session: dax -resume " + r.sess.ID() + "\n"
+		if !strings.HasSuffix(pre, resume) {
+			t.Errorf("verbose=%v: the output does not end with %q:\n%s", verbose, resume, pre)
+		}
+		if !verbose && pre != resume {
+			t.Errorf("without -v the output is %q, want only %q", pre, resume)
+		}
+	}
+}
+
+func TestAPolicyAskIsAnsweredOnTheScreen(t *testing.T) {
+	m := &steps{parent: [][2]string{{"read", `{"path":"main.go"}`}, {"bash", `{"command":"touch APPROVED"}`}}}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	// The read is allowed and shown; the touch is a permission, with the
+	// policy's reason.
+	r.waitOutput("touch APPROVED")
+	r.waitOutput("no rule allows bash")
+	r.waitPanel()
+	r.waitFile("APPROVED", false)
+	r.type_("y")
+	r.waitFile("APPROVED", true)
+	r.waitOutput("all done")
+	r.quit()
+
+	// Refused, it does not run.
+	m2 := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+	r2 := startTUI(t, m2, policy.Rules{}, nil)
+	r2.type_("go\r")
+	r2.waitOutput("no rule allows bash")
+	r2.waitPanel()
+	r2.type_("n")
+	r2.waitOutput("Reason for refusing")
+	r2.type_("not now\r")
+	// An ended call's row hides its output, the refusal text with it;
+	// the policy's verdict stays on the row. The renderer writes only the
+	// cells that change, so "policy: hold" becomes "policy: reject" by
+	// "reject" written over "hold"; nothing else on the screen says reject.
+	r2.waitOutput("policy: hold")
+	r2.waitOutput("reject")
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(r2.dir, "REFUSED")); err == nil {
+		t.Error("a refused call ran")
+	}
+	r2.quit()
+}
+
+// The client draws dax's calls with dax's renderers: an edit's row
+// counts the lines it adds and removes, "−" being a minus sign that
+// neither the arguments nor the permission panel holds.
+func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
+	m := &steps{parent: [][2]string{{"edit", `{"path":"main.go","old_string":"package main","new_string":"package main\n\nfunc helper() {}"}`}}}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("−0")
+	r.quit()
+}
+
+func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
+	m := &steps{parent: [][2]string{{"bash", `{"command":"cat .ENV"}`}}}
+	os.Setenv("DAX_TEST", "1")
+	r := startTUI(t, m, policy.Rules{}, func(o *agent.Options) {
+		os.WriteFile(filepath.Join(o.Dir, ".ENV"), []byte("SECRET_TOKEN=upper\n"), 0o644)
+	})
+	r.type_("go\r")
+	r.waitOutput("cat .ENV")
+	// The question says what is being asked about, from the read rule.
+	r.waitOutput("reads .ENV")
+	r.waitPanel()
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("\r")
+	time.Sleep(300 * time.Millisecond)
+	if strings.Contains(r.out.String(), "SECRET_TOKEN=upper") {
+		t.Error("the secret was shown after the user refused")
+	}
+	r.quit()
+}
+
+func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
+	m := &steps{parent: [][2]string{{"bash", `{"command":"git status && echo hi"}`}}}
+	r := startTUI(t, m, policy.Rules{Allow: []string{"bash(echo:*)"}}, func(o *agent.Options) {
+		for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "/bin/true-not-bool"}} {
+			if err := gitIn(o.Dir, args...); err != nil {
+				t.Skip("no git")
+			}
+		}
+	})
+	r.type_("go\r")
+	r.waitOutput("core.fsmonitor")
+	r.waitPanel()
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("\r")
+	r.quit()
+}
+
+// The explore child's held calls are questions on the screen, one at a
+// time, while the run goes; refused, nothing runs and the child is told
+// so. They were refused unasked before the client could ask a running
+// call's question.
+func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"explore", `{"input":"look"}`}},
+		child:  [][2]string{{"bash", `{"command":"touch CHILD"}`}, {"read", `{"path":".env"}`}},
+	}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): bash")
+	r.waitOutput("the explore sub-agent asks")
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("\r")
+	r.waitOutput("Question (1/1): read")
+	r.type_("n\r")
+	r.waitOutput("all done")
+	r.quit()
+	if _, err := os.Stat(filepath.Join(r.dir, "CHILD")); err == nil {
+		t.Error("the child's touch ran")
+	}
+	saw := m.sawInChild()
+	if strings.Count(saw, "the user denied this call") != 2 {
+		t.Errorf("the child saw %q, want both calls denied", saw)
+	}
+	if strings.Contains(saw, "abc123") {
+		t.Error("the child read .env")
+	}
+}
+
+func TestANoteDaxMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {
+	r := startTUI(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
+		o.Compact = 1
+	})
+	r.quit()
+	// Nothing was written to the terminal during the run through dax's
+	// own Log; what was noted is printed once the client lets go.
+	if strings.Contains(r.out.String(), "compacted") {
+		t.Error("a log line reached the screen")
+	}
+}
+
+func gitIn(dir string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	return cmd.Run()
+}
+
+// A panic in the client does not lose the resume command, nor with -v
+// what dax noted, and the panic goes on. Without -v the notes (a skill's
+// grants, say) are not printed.
+func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
+	for _, verbose := range []bool{true, false} {
+		for _, panics := range []bool{false, true} {
+			out := &syncBuf{}
+			r := startFront(t, &steps{}, func(f *tuiFront) {
+				f.out = out
+				f.info.Verbose = verbose
+				f.run = func(context.Context, client.Backend, ...console.Option) error {
+					f.log = append(f.log, "[compaction failed after 2 call(s): boom]")
+					if panics {
+						panic("the client fell over")
+					}
+					return nil
+				}
+			})
+			func() {
+				defer func() {
+					got := recover()
+					if panics != (got != nil) {
+						t.Errorf("panics=%v but recovered %v", panics, got)
+					}
+				}()
+				r.f.Run(context.Background(), r.sess)
+			}()
+			got := out.String()
+			if verbose != strings.Contains(got, "compaction failed after 2 call(s): boom") {
+				t.Errorf("verbose=%v panics=%v: the notes printed: %v\n%s", verbose, panics, !verbose, got)
+			}
+			if !strings.HasSuffix(got, "To resume this session: dax -resume "+r.sess.ID()+"\n") {
+				t.Errorf("verbose=%v panics=%v: no resume command at the end:\n%s", verbose, panics, got)
+			}
+		}
+	}
+}
+
+// If the session cannot be opened after the front held warnings back, they
+// are shown before the error.
+func TestWarningsHeldBackAreShownWhenTheSessionCannotOpen(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "sessions")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(root, 0o755)
+	var errOut syncBuf
+	f := &tuiFront{errOut: &errOut}
+	o := agent.Options{Model: "x", Streamer: &steps{}, Dir: filepath.Join(base, "does-not-exist"), Root: root, UserDir: base}
+	f.Prepare(&o)
+	_, err := agent.New(context.Background(), o)
+	if err == nil {
+		t.Fatal("opening a session in a missing directory should fail")
+	}
+	f.Abandon()
+	if !strings.Contains(errOut.String(), "was readable by other users") {
+		t.Errorf("the held-back warning was dropped: %q", errOut.String())
+	}
+	// The capture is undone: later warnings go to standard error again.
+	var w syncBuf
+	undo := agent.CaptureWarnings(&w)
+	undo()
+}
+
+// A sub-agent's call the policy asks about is asked on the screen while
+// the run goes, and the answer reaches the call: it was refused, with a
+// reason telling the model to make the call itself, before the client
+// could ask a running call's question.
+func TestASubagentsAskIsAnsweredOnTheScreen(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"FROM_TASK","content":"x"}`}},
+	}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): write")
+	r.waitOutput("the task sub-agent asks")
+	r.waitFile("FROM_TASK", false)
+	r.type_("y")
+	r.waitFile("FROM_TASK", true)
+	r.waitOutput("all done")
+	r.quit()
+}
+
+func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"REFUSED","content":"x"}`}},
+	}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): write")
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("wrong file\r")
+	r.waitOutput("all done")
+	if _, err := os.Stat(filepath.Join(r.dir, "REFUSED")); err == nil {
+		t.Error("a refused call ran")
+	}
+	m.mu.Lock()
+	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
+	m.mu.Unlock()
+	if !strings.Contains(saw, "Reason: wrong file") {
+		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
+	}
+	r.quit()
+}

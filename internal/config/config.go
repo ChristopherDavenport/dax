@@ -24,6 +24,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/ChristopherDavenport/dax/policy"
 	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -438,19 +440,12 @@ type Settings struct {
 // MCP is one server to start.
 type MCP struct{ Name, Command string }
 
-// PolicySettings is the policy folded across layers. The user's rules
-// and the project's are kept apart because the project's are not
-// trusted.
-type PolicySettings struct {
-	Off      bool
-	Builtin  bool
-	Fallback string
-	User     Rules
-	Project  Rules
-}
+// PolicySettings is the policy folded across layers; policy.Build
+// reads it.
+type PolicySettings = policy.Settings
 
 // Rules are rule lists in the policy grammar, one string per entry.
-type Rules struct{ Allow, Ask, Deny []string }
+type Rules = policy.Rules
 
 // Resolve folds the layers in order, user first, then the flags.
 // defaultMemory is the memory directory when no layer names one.

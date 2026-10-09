@@ -2,28 +2,93 @@
 
 dax is a coding agent built as one session that owns the conversation's
 state, a loop that emits fine-grained events, and fronts that are thin
-subscribers. There is no runtime extension system. What the model can
-do is a fixed set of built-in tools plus MCP servers the user
-configures.
+subscribers. It is a minimal core, meant to be extended. The session
+knows no tool: everything the model can do comes from an extension, and
+dax's own capabilities are extensions like any other (see Extending). A
+Go program built on dax adds its own at compile time. There is no runtime
+plugin system; at run time the user adds tools only as MCP servers.
+
+Where the tools act is no more special than which tools there are. dax
+should feel the same whether its tools act on this machine or elsewhere:
+the session runs over one `workspace.Workspace`, every tool and every
+check the policy makes goes through it, and this machine's directory is
+one implementation of it (see Workspaces).
 
 Most of the machinery is not in this repository. dax is the product that
 assembles sibling libraries, each independently versioned, and keeps
 only what is specific to a coding agent. This document says what that is
 and the rules the assembly keeps.
 
+## Planes
+
+A turn is where three planes meet, and dax is built so that each is
+reached through an interface whose in-process implementation is only
+the case with the wire left out. Which machine provides any of them
+makes no difference to the turn.
+
+| Plane | What it does | What the turn sees | In process | Elsewhere |
+|---|---|---|---|---|
+| AI | inference | `openresponses.Streamer` | Ollama on this host | any provider, any host |
+| Execution | acts on files, processes and the world, through the tools | `workspace.Workspace`, and the extensions' tools over it | `workspace.Local` | a container or a remote runtime (agentworkspace) |
+| Human or autonomous | prompts, steers, answers permissions and questions | the turn's contract, agentturn's to own (`agent.Turn` until it does); a view follows the record (agentconsole) | the REPL, `-p` (`agent.Drive`), the terminal client over glue | a front over a wire (an agentturn front beside `front/a2a`), or a controller that answers by rule |
+| The record | what the planes agree happened | `agentsession.Store` | the local content-addressed store | a store over the wire (agentsession RFC 0003) |
+
+So running dax on a laptop, in a container with the user attached from
+elsewhere, or headless under a controller are one system with the
+planes in different places, not three modes. A person at a terminal and
+a controller that answers by rule are the same plane: whoever holds the
+Turn. The plane's control contract is the turn's, in agentturn's terms
+(prompt, steer, answer, abort, the run's events, the questions asked
+while a call runs), so it belongs with agentturn, beside its A2A and
+Responses fronts; `agent.Turn` is the shape dax proposes for it, and the
+session is its in-process implementation. What a view shows is the
+record, which leaves through agentsession (a Follower; RFC 0003 later);
+agentconsole is such a view, and the terminal client reaches the Turn
+through glue in `tuiadapter.go` that says what it fakes.
+
+A2A is not a plane. It is the boundary between two such systems, each
+with its own turn, planes and record: to the caller the other system is
+part of its execution plane, a tool call its policy decides
+(`agentturn/tools/a2a`); to the callee the caller is its human or
+autonomous plane, the controller that prompts it (`agentturn/front/a2a`).
+A peer sees tasks and artifacts, never the other's transcript, which is
+why a front uses the Turn and not A2A. A call the callee's policy asks
+about is answered by the callee's own human plane; the caller's tools it
+was lent come back to the caller to run.
+
+Where dax does not keep to this yet, and what each needs:
+
+- The human plane: the contract is dax's `agent.Turn` until agentturn
+  has one, and there is no wire for it yet (an agentturn front). dax's
+  own controls (`agent.Controls`: model, reasoning, MCP, the session's
+  assembly) need a channel beside it on that wire. agentconsole's
+  `client.Backend` cannot carry a Turn whole; `tuiadapter.go` lists what
+  its glue fakes or drops.
+- The execution plane: MCP stdio servers start where the turn runs, not
+  in the workspace (it needs a long-lived process with pipes), and
+  AGENTS.md, project skills and the project config are read from this
+  machine (agentkit, agentsmd and agentskill take local paths).
+- Peers: a call to one is not linked in the caller's record as a
+  sub-agent's session is, an abort does not cancel the remote task,
+  and `front/a2a` has no authentication.
+
 ## Who owns what
 
 | Concern | Owner | dax's part |
 |---|---|---|
 | Wire types, the provider client | `openresponses` and its `providers/anthropic`, `providers/gemini` | `internal/provider` picks one from the config; `vertex` routes each request by model family to the anthropic or the gemini adapter over Vertex AI clients |
-| The agent loop, events, steering, follow-ups, retry | `agentturn` | `internal/agent` configures and drives it |
-| Tool contract, MCP client | `agenttool` | `internal/tool`: read, write, edit, glob, grep, ls, bash |
-| Assembling a loop from parts | `agentkit` | `internal/agent.open` is one `agentkit.New` call |
-| Allow, ask, deny | `agentpolicy` | `internal/policy`: the default rules, the bash splitter's use |
-| The session record | `agentsession` | the store, `-list`, `-verify`, `-resume`, `-gc` |
-| AGENTS.md, skills, memory | `agentsmd`, `agentskill`, `agentmemory` | directories and budgets |
+| The agent loop, events, steering, follow-ups, retry | `agentturn` | `agent` configures and drives it |
+| Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
+| What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
+| Tool contract, MCP client | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, and `Files`, the tools' view of a workspace |
+| Where the tools act | dax, until the agentworkspace module exists | `workspace`: the `Workspace` interface and `Local`, this machine's directory |
+| Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
+| The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
+| AGENTS.md | `agentsmd` | the session: screening and budget |
+| Skills, memory | `agentskill`, `agentmemory` | dax-skills and dax-memory: directories, trust, scopes |
 | Settings | dax | `internal/config` |
-| Presentation | dax (REPL); agentconsole (the terminal client) | `cmd/dax/front.go`, `internal/render`; `internal/toolrender` draws dax's tool calls in the terminal client |
+| Presentation | dax (REPL); agentconsole (the terminal client) | `front.go`, `internal/render`; `toolrender` draws dax-coding's and dax-agents' calls in the terminal client |
+| The command line | dax | `dax.Main`; `cmd/dax` calls it with no options |
 
 ## Rules that hold
 
@@ -75,33 +140,38 @@ run; it never reached its tool; it was denied.
 
 ## The prompt
 
-dax's part of the system prompt is a role line, a nudge toward glob,
-grep and ls over shell commands, the user's `instructions_file`, and the
-working directory. `agentkit` renders and joins the rest in a fixed
+The session's part of the system prompt is a role line, each
+extension's instructions in order (dax-coding's nudge toward glob, grep
+and ls over shell commands; dax-agents' guide to the sub-agents), the
+user's `instructions_file`, and the working directory. `agentkit` renders and joins the rest in a fixed
 order: the skill catalogue, the memory block, then the AGENTS.md chain
 (`~/.dax/AGENTS.md`, then every `AGENTS.md` from `/` down to the working
 directory, nearest last). What a layer left out, a file over the budget
 or a skill that would not load, is printed at start as `omitted:`.
 
-When the session offers sub-agents, the main agent's prompt adds a guide
-to them: its context lasts the session, so broad reading goes to
+When dax-agents is on, the main agent's prompt carries its guide to the
+sub-agents: its context lasts the session, so broad reading goes to
 `explore` and a change it can brief completely to `task`, while a known
 file, a small change or code it must see to decide stays with it. It
 checks a report before building on it and passes the findings on in its
 reply, since a front shows only the start of a report. The tools'
 descriptions say how each works; the guide says how to divide the work.
-A `task` sub-agent is told dax's prompt without the guide, having no
-sub-agents of its own.
+A `task` sub-agent is told the main prompt without the guide
+(`Env.SystemPrompt` leaving dax-agents out), having no sub-agents of its
+own.
 
 ## Tools
 
-`read`, `write`, `edit`, `glob`, `grep` and `ls` go through a
-`tool.Workspace`, an `os.Root` over the working directory. A path that is
-absolute outside it, climbs out with `..`, or reaches out through a
-symbolic link is refused with the same error, because the root refuses
-the name before the file system follows it. `bash` runs in the directory
-but is not confined; a shell reaches whatever the user does, and the
-policy is what stands in front of it.
+The tools below are dax-coding's. `read`, `write`, `edit`, `glob`,
+`grep` and `ls` go through `tool.Files` over the session's workspace,
+and `bash` runs through the workspace's `Exec`; none uses `os` or
+`os/exec` itself. On `workspace.Local`, an `os.Root` over the working
+directory, a path that is absolute outside it, climbs out with `..`, or
+reaches out through a symbolic link is refused with the same error,
+because the root refuses the name before the file system follows it.
+`bash` runs at the workspace's root but is not confined; a shell reaches
+whatever the workspace's processes can, and the policy is what stands in
+front of it.
 
 A running `bash` command reports its output as progress as it arrives,
 the window since the last report, so a front shows the command working
@@ -116,11 +186,25 @@ as the search root is searched even if it is one of those.
 ## Policy
 
 Rules are agentpolicy's: a tool name or `tool(specifier)`. Precedence is
-deny, then ask, then allow, then the default. The shipped allow list is
-the read-only tools and a few commands that only look; the default asks.
-Rules in the user's config add to it. A project's config is tighten-only:
-it may add ask and deny rules (no allow, no carve-outs), and its source
-ranks below the user's so it cannot cancel their rules.
+deny, then ask, then allow, then the default, whatever the source. Each
+extension's rules are a source of their own, `extension:<name>`, which
+the record of every verdict one decides names; dax-coding's allow list
+is the read-only tools and a few commands that only look, and the
+default asks. A shipped rule may name only its extension's tools and
+aliases, not a pattern and not a carve-out, so one extension cannot
+loosen another's tools or cancel its rules.
+
+Sources rank for carve-outs: the user's config above the extensions,
+the extensions above the project's config. Rules in the user's config
+add to the extensions'; an extension's ask or deny holds against a plain
+allow of the user's, and a carve-out in the user's config lifts it, as
+does an allow with a specifier for a tool the extension lists in
+`Lifts` (dax-coding's file tools: `read(.env)` opens `.env`). A
+project's config is tighten-only: it may add ask and deny rules (no
+allow, no carve-outs), and its source ranks below the others so it
+cannot cancel their rules. `"builtin": false` drops the extensions'
+allow rules and keeps their asks and denies, so a repository that sets
+it loosens nothing.
 
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
@@ -141,8 +225,11 @@ sandbox:
    with git's effective config read first; the splitter that reads
    anything else is for the question and for deny and ask rules, and never
    allows.
-2. File tools go through an `os.Root`; a name that leaves is refused by
-   the system, not by a string test.
+2. File tools go through the workspace; on this machine that is an
+   `os.Root`, and a name that leaves is refused by the system, not by a
+   string test. The policy's checks read the workspace the command runs
+   in, not this machine, and a check that cannot follow links there
+   asks.
 3. A project config can only tighten; its source ranks below the user's,
    so it cannot cancel a user's rule, and the fields that send data or
    start programs are refused.
@@ -166,15 +253,151 @@ skills, memory or MCP servers. See the README for the schema.
 
 ## Fronts
 
-A front implements `Hooks()` (how a question reaches the user) and
-`Run(ctx, session)`. `cmd/dax/front.go` is where one is chosen. Today
-there is the REPL and print (`-p`). A terminal UI is a third front that
-subscribes to the same events and answers the same two hooks.
+A front is the human plane: it drives the session's `agent.Turn` and
+uses `agent.Controls` for its commands and start lines. `front.go` is
+where one is chosen. The REPL renders the agent's events and answers
+permissions and questions on standard input; print (`-p`) is
+`agent.Drive`, a controller whose rules ask on standard input; the
+terminal client, agentconsole, is a view of the record that drives the
+Turn through the glue in `tuiadapter.go`. The session asks nothing of a
+front it was built with: every permission is a run that ended for input,
+answered with `Turn.Answer`, and every question asked while a call runs
+goes to whoever holds `Turn.Questions`, refused when nobody does.
+
+## Workspaces
+
+A `workspace.Workspace` is where a session's tools act: a root (the
+working directory as the workspace's own processes see it), a file
+system whose opens never block, `WriteFile` and `Remove`, the
+environment its processes start with, `Exec` of one command to
+completion with an optional stream of its output, a `Descriptor`
+(kind, ref, root) and `Close`. A name that leaves it is an error that
+is `ErrOutside`. The interface follows the agentworkspace study
+(`examples/openhands-workspace`) so that dax moves to that sibling
+module by a rename once it exists; it adds the stream, which `bash`
+needs to report progress, and leaves the persistent shell out until a
+tool needs one. dax ships `workspace.Local`: this machine's directory
+as an `os.Root`, each command in its own process group, killed with it.
+A container or a remote runtime implements the same interface; dax has
+none yet.
+
+Equal means nothing in the session or in dax-coding asks which one it
+is:
+
+- `tool.Files` turns a path the model wrote, absolute in the root or
+  relative to it, into the workspace's name, and holds the lock that
+  keeps one write from landing between another's read and write. The
+  file tools and an extension's tools go through it; `bash` goes
+  through `Exec`.
+- The policy's checks read the workspace the call acts in. A path
+  matcher resolves links through the workspace's file system
+  (`fs.ReadLinkFS`); the bash analyzer stats the paths a command names,
+  follows their links and expands its globs there, and the git-config
+  check finds `.git` and runs `git config` through `Exec`, passing paths
+  as arguments. A workspace whose file system cannot read links leaves
+  these checks unable to follow them, and they ask: a path subject no
+  rule names, a bash stage that is not read-only.
+- The session records the workspace: the header's `cwd`, the env
+  entry's `cwd` and its `workspace` kind and ref come from the
+  descriptor, so a resume into another workspace is recorded as a
+  substitution. The model is told the root as the working directory.
+
+`agent.Options.Workspace` is the caller's workspace, which the caller
+closes; without one the session opens a `workspace.Local` over `Dir`,
+with the scrubbed environment, and closes it. `Options.Store` is the
+same for the record: an `agentsession.Store` the caller opened and
+closes, or, without it, the content-addressed store at `Root`.
+
+What is not equal yet, and why:
+
+- AGENTS.md, the project's skills and its config are read from `Dir` on
+  this machine, because agentkit, agentsmd and agentskill take local
+  paths. Reading them through a workspace needs those libraries to take
+  an `fs.FS` first.
+- MCP stdio servers run on this machine.
+- agentsession's RFC 0003 puts a store behind HTTP, and its client is
+  meant for `Options.Store`, but it is not a drop-in for today's
+  `Store`: opening takes a lease, an append returns a new result, and a
+  lost lease is the harness's to handle. The seam takes today's
+  interface; the rest waits for `agentsession/remote`. `Session.Path`
+  and the store's admin functions (`-list`, `-verify`, `-gc`) are the
+  local store's.
+- A front driving a session elsewhere (agentconsole's backend over a
+  wire, ACP) is not built.
+
+## Extending
+
+The session owns the model, the store, the policy engine, the workspace
+and the scrubbed environment, the prompt frame, AGENTS.md, MCP servers
+and compaction. Everything else is an `extension.Extension`, and dax's
+own are built from the same fields a program's are:
+
+| Extension | Package | Offers |
+|---|---|---|
+| dax-coding | `ext/coding` | read, write, edit, glob, grep, ls, bash; their rules, matchers, aliases, the bash stamp, the prompt's nudge, renderers |
+| dax-agents | `ext/agents` | explore and task, from every extension's tools; the delegation guide |
+| dax-skills | `ext/skills` | the skill tool and catalogue; grants under `-trust-skills` |
+| dax-memory | `ext/memory` | the memory tools and block |
+
+`dax.Main` builds dax-coding always and the others as the settings say,
+less those `WithoutExtension` names, then the program's from
+`WithExtension`.
+
+A session builds its extensions in two phases. First every extension's
+`Tools`, over an `extension.ToolEnv`: the session's `Workspace`, the
+`tool.Files` over it that a path from the model goes through
+(`ReadFile`, `WriteFile`, `Update`, `Stat`, `ReadDir`, `Rel`; `Update`
+and `WriteFile` hold the lock dax-coding's `write` and `edit` hold),
+and the read limit. A process runs through `Workspace.Exec` with
+`Workspace.Env()`, the environment with credentials removed, a copy
+each call. A tool is built over that rather than over the kit
+(`agentkit.WithDeferredTools`) because what a dax tool needs is dax's,
+which the kit does not hold. Then each extension's `Kit`, which
+returns agentkit options (skills, memory, child agents, guards) over an
+`extension.Env` that sees every extension's tools, so dax-agents gives
+`explore` a read-only tool an extension listed after it adds. The
+session's own options go after the extensions', so where an option
+replaces, the session's is in force; a `Kit` that sets a policy on a
+session whose policy is off is an error. The session closes the tools it
+built. One tool value is shared by every agent that has it, possibly at
+once, so a tool that keeps state guards it, as agenttool's contract asks.
+
+Each claim is checked at start, across the session and without regard
+to case: an extension's name, its tools, the names it `Owns` (tools its
+kit options add, such as `skill`) and its aliases are unique; `mcp__` is
+an MCP server's; an alias may differ from its own tool only in case
+(`Bash` and `bash`); a `ReadOnly` tool, a matcher, an alias target and a
+`Lifts` entry name only the extension's own tools; a read-only tool
+annotated destructive is refused. `BeforeToolCall` hooks fold with the
+policy, deny over ask over allow, for the main agent and, through
+`Env.ChildPolicy`, every sub-agent; with the policy off they are not
+run. `extension.Renderers` merges the extensions' renderers for the
+terminal client; two that draw one tool are an error, and a renderer
+declines a call it was not written for, such as one an older version
+recorded.
+
+The rules above hold for every extension: its tools are chosen before a
+front runs (rule 4), its calls, results and verdicts are recorded and
+name it (rule 5), and it fails toward asking (rule 8). A program that
+wants a front of its own builds the session with `agent.New` and the
+same `Options.Extensions`. A program that wants to supply its own
+agentkit kit is not supported: the session's guarantees (one policy over
+every source, the confined workspace, the name checks, the record's
+header) are its to keep, and the layer below is agentkit itself. A
+function that returns the options the session would pass the kit, for a
+program to build on and own, could come later. `config`, `provider`,
+`modelinfo`, `prompt`, `render` and `private` stay internal (`workspace`
+is public, as an extension's tools need it): they are
+the command line's and the session's, and `modelinfo` is a trial meant to
+move to openresponses.
 
 ## Not built
 
 Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
-tree to navigate; an RPC mode and ACP for editors; prompt templates
-(`/name args`); a model catalogue with context windows. Each would be a
-front or an assembly option, not a change to the rules above.
+tree to navigate; an RPC mode and ACP for editors; a container or
+remote workspace (the interface is here, an implementation is not);
+prompt templates
+(`/name args`); a model catalogue with context windows; extension points
+for slash commands, the REPL's renderer, or the config's schema. Each
+would be a front or an assembly option, not a change to the rules above.

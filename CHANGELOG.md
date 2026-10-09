@@ -7,6 +7,94 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Security: golang.org/x/net is v0.60.0, which fixes GO-2026-6617 and
+  GO-2026-6612 in the HTTP/2 code the provider clients use.
+- Changed: the session has one agent and exposes it as `agent.Turn`, its
+  human or autonomous plane: `Prompt`, `Answer` (the policy engine's
+  release, then the loop's resume), `Permissions`, `Steer`, `FollowUp`,
+  `Abort`, `State`, `Subscribe`, and `Questions` and `Reply` for what a
+  sub-agent's call or a tool asks while it runs. `Options.Approve`,
+  `Ask`, `Elicit` and `NoAgent`, and `Session.Agent` (a field),
+  `Prompt(ctx, text)`, `Steer(text)`, `FollowUp(text)`, `Pending` and
+  `TUIConfig` are removed. Every front drives the Turn; the terminal
+  client reaches it through glue over agentconsole's backend.
+- Added: `agent.Controls` (model, reasoning, MCP servers, `Info`),
+  `agent.Drive`, a controller that answers by rule (`-p` is one), and
+  `Session.Record`. A session with no store is written to memory, so
+  every front can follow its record; `Info.Recorded` says whether it is
+  kept.
+- Changed: the policy's subject ("about: ...") is on every front's
+  question, not only the terminal client's.
+- Added: dax is a minimal core that can be extended. The session (model,
+  store, policy, workspace, AGENTS.md, MCP servers, compaction) knows no
+  tool; everything the model can do comes from an `extension.Extension`,
+  and dax's own are extensions like any other: `dax-coding` (the file
+  tools and bash), `dax-agents` (explore and task), `dax-skills` and
+  `dax-memory`, in `ext/`. A Go program runs `dax.Main` with
+  `WithExtension` to add its own (tools, read-only tools for explore,
+  matchers, aliases, policy rules, a BeforeToolCall hook, prompt text,
+  agentkit options, renderers), `WithoutExtension` to leave one of dax's
+  out, and `WithName` to name itself. Tool, alias and owned names are
+  checked across the session without regard to case; `mcp__` is MCP's.
+  See the README's Building on dax.
+- Added: the public packages `dax`, `agent`, `extension`, `policy`,
+  `tool`, `toolrender`, `workspace` and `ext/coding`, `ext/agents`,
+  `ext/skills`, `ext/memory`, for a program built on dax or a front of
+  its own. `tool.Files` is the tools' view of the session's workspace
+  for paths the model writes: `ReadFile`, `WriteFile`, `Update`, `Stat`,
+  `ReadDir` and `Rel`, confined as dax's file tools are; `Update` and
+  `WriteFile` hold the lock `write` and `edit` hold. The API is pre-1.0
+  and may change in a minor version.
+- Added: where the tools act is a value. `workspace.Workspace` is the
+  interface every tool and every check of the policy goes through (a
+  root, a file system that never blocks, writes, an environment, `Exec`
+  with streamed output, a descriptor), shaped after the agentworkspace
+  study so dax can move to that module by a rename; `workspace.Local`,
+  this machine's directory over an `os.Root`, is one implementation.
+  dax-coding's tools act through it, `bash` through `Exec`, and the
+  path matchers, the bash analyzer and the git-config check read the
+  workspace the call acts in; one whose file system cannot read links
+  makes them ask. `agent.Options.Workspace` takes a workspace and
+  `agent.Options.Store` an `agentsession.Store`, each the caller's to
+  close, for a container, a remote runtime or a remote store (RFC 0003)
+  once one exists; without them the session opens a local workspace
+  over `Dir` and the store at `Root`, as before. dax ships no container
+  or remote workspace yet. AGENTS.md, project skills and the project
+  config are still read from `Dir` on this machine, and MCP servers run
+  here.
+- Changed: the session header's and the env entry's `cwd`, the env
+  entry's workspace kind and ref, and the working directory the model is
+  told come from the session's workspace. `Options.Dir` is the directory
+  on this machine instructions are read from. `extension.ToolEnv` is
+  `{Workspace, Files, MaxReadBytes}`: a tool's processes run through
+  `Workspace.Exec` with `Workspace.Env()`, a copy each call. An
+  extension's `Matchers` and `BeforeToolCall` are built over that
+  `ToolEnv`, as its tools are, so the policy inspects the workspace the
+  tools act in and no other (`extension.FixedMatchers` and
+  `extension.FixedHook` wrap ones that need nothing of the session);
+  `coding.New` takes only `maxRead`. `tool.Workspace` is replaced by
+  `tool.Files`, and the tool constructors and `tool.Analyzer` take a
+  `*Files`.
+- Changed: each extension's policy rules are a source of their own,
+  `extension:<name>`, which the record of every verdict one decides
+  names; dax's own rules are recorded as `extension:dax-coding` (and
+  `extension:dax-agents`, `-skills`, `-memory`), no longer `dax:builtin`.
+  A shipped rule may name only its extension's tools and aliases, and
+  may not be a pattern or a carve-out. The start line's policy summary
+  counts each extension's rules.
+- Changed (security): `"builtin": false` drops the shipped allow rules
+  only; the shipped asks and denies, the secret-path asks among them,
+  stay. Before, a repository's `.dax/config.json` could set it and drop
+  the secret-path asks along with the allow list. Lift a shipped ask
+  with a carve-out in your config, or for the file tools an allow that
+  names the path.
+- Changed: the write tool no longer blocks on a FIFO or device; a target
+  that is not a regular file is refused.
+- Fixed (security): a bash glob through a link out of the workspace
+  (`ls out/*`, `out` a link to a directory outside) matched nothing, so
+  the line passed the read-only check and ran unasked while bash
+  followed the link. The analyzer now refuses a glob whose expansion
+  cannot read a directory, and the line asks.
 - Changed: with sub-agents on, the main agent's system prompt guides it
   to keep its own context for decisions: broad searches go to `explore`,
   changes it can brief completely go to `task`, and it works directly

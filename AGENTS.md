@@ -1,50 +1,94 @@
 # dax
 
-A coding agent: a REPL and a one-shot `-p` mode over an Open Responses
-model, with read, write, edit, glob, grep, ls and bash tools under a
-policy, recording every session. It is a product that assembles the
-sibling libraries; the design and who owns what is in
-`docs/design.md`; read it before changing the shape.
+A coding agent: a terminal client, a REPL and a one-shot `-p` mode over
+an Open Responses model, under a policy, recording every session. It is a
+product that assembles the sibling libraries, and a minimal core meant to
+be extended: the session knows no tool, and everything the model can do
+comes from an `extension.Extension`. dax's own capabilities are
+extensions like any other (dax-coding, dax-agents, dax-skills,
+dax-memory), and a Go program runs `dax.Main` with its own. Where the
+tools act is a `workspace.Workspace`, and this machine's directory is
+one implementation of it: dax should behave the same whether its tools
+act here or elsewhere. The design,
+who owns what and the extension points are in `docs/design.md`; read it
+before changing the shape.
 
 ## Module
 
 - Module path: `github.com/ChristopherDavenport/dax`.
 - Go 1.26 is the floor (agentconsole, on Bubble Tea v2, needs it; `os.Root`
   and its `MkdirAll`, `ReadFile` and `WriteFile` need 1.25). The binary
-  is `./cmd/dax`.
+  is `./cmd/dax`, which is `dax.Main` with no options.
 - This is a product, so unlike the siblings it has no dependency
   boundary: it depends on every sibling it assembles, and on
   `anthropic-sdk-go` and `google.golang.org/genai` through the
   provider adapters, pinned to the versions the adapters require.
-- The code is in `internal/`: nothing is a public API.
+- Public API: the root package `dax` (`Main`, `Option`, `WithName`,
+  `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
+  `tool`, `toolrender`, `workspace`, and `ext/coding`, `ext/agents`, `ext/skills`,
+  `ext/memory`. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
+  version; a change to it gets a `Changed:` line in the changelog. Keep
+  it small: export what a program built on dax needs, and say why in the
+  doc comment.
 
 ## Layout
 
-- `cmd/dax/main.go`: flags, the admin modes (`-list`, `-verify`, `-project`,
-  `-import`, `-gc`, `-repair`), settings, then one front.
-  `cmd/dax/front.go`: the `front` interface, `selectFront`, the REPL and
-  print fronts. `cmd/dax/tui.go`: the terminal client, `console.Run` over a
-  `kitbackend` on the session's kit; the default front on a terminal. The
-  session for it is built with `Options.NoAgent` (the client builds its
-  own agent over the kit).
+- `dax.go`: `Main` and its options, the default extensions,
+  the package doc. `cli.go`: flags, the admin modes (`-list`, `-verify`,
+  `-project`, `-import`, `-gc`, `-repair`), settings, the extensions the
+  settings choose, then one front. `front.go`: the `front` interface,
+  `selectFront`, the REPL and print fronts, which drive the session's
+  `agent.Turn`. `tui.go`: the terminal client, agentconsole's
+  `console.Run`, the default front on a terminal; `tuiadapter.go`: the
+  glue that presents the Turn as agentconsole's `client.Backend` over
+  the session's one agent, with what it fakes listed at its top.
+  `cmd/dax/main.go`: `dax.Main`, nothing else.
+- `extension`: the `Extension` type, `ToolEnv` (what tools are built
+  over), `Env` (the session as kit options see it) and `Renderers`.
+- `agent`: one `agentkit.New` per session; the two-phase build of the
+  extensions and their checks (`agent/extension.go`), the policy built
+  from them, the sub-agents' policy hook, and the session-store
+  helpers. It names no tool. `agent/plane.go`: the human plane, the
+  session's one agent as `Turn` (the contract dax proposes for
+  agentturn), its questions hub, `Controls`, and `Drive`, the controller
+  that answers by rule. Nothing asks a front through a hook: a new
+  question goes through the Turn.
+- `policy`: generic. Merges one source per extension
+  (`extension:<name>`) with the user's and the project's rules, and
+  refuses a shipped rule that names another extension's tool, a pattern
+  or a carve-out.
+- `ext/coding` (dax-coding): the coding tools, their rules, matchers,
+  aliases and bash stamp, the prompt's nudge, and the policy tests:
+  `exploit_test.go`, `widen_test.go`, `gitconfig_test.go`.
+- `ext/agents` (dax-agents): explore and task, built from every
+  extension's tools; the delegation guide.
+- `ext/skills` (dax-skills): skill directories, the screening of the
+  project's, grants under `-trust-skills`.
+- `ext/memory` (dax-memory): the store, the scopes, the memory tools.
+- `workspace`: the `Workspace` interface the session and every tool act
+  through (root, file system, writes, environment, `Exec`, descriptor),
+  shaped after the agentworkspace study so dax moves to that module by
+  a rename, and `Local`, this machine's directory over an `os.Root`.
+- `tool`: dax-coding's tools; `Files` (`tool/workspace.go`), the tools'
+  view of a workspace for model-written paths, with the write lock;
+  `view.go`, the workspace as the policy's checks read it (links
+  through `fs.ReadLinkFS`); `BashSubjects` and `Analyzer`, which
+  dax-coding's policy uses, and the git-config check, run through
+  `Exec`.
+- `toolrender`: the terminal client's renderers of dax-coding's and
+  dax-agents' calls (`toolview.Renderer`s), from the record's arguments
+  and output alone. It does not import `tool`; its tests run the real
+  tools, so a change to a tool's output format fails them.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/provider`: provider setting to `openresponses.Streamer`, and
   the vendor's `modelinfo.Describer`.
 - `internal/modelinfo`: asks the vendor what a model takes and fits each
   request's reasoning effort to it; a trial of a shape meant to move to
   openresponses.
-- `internal/policy`: the default rules, matchers, merge of the user's and
-  the project's.
-- `internal/tool`: the tools, the `Workspace` they are confined to, and
-  `BashSubjects`, the command splitter the policy uses.
-- `internal/agent`: one `agentkit.New` per session, prompt and approval
-  plumbing, and the session-store helpers.
-- `internal/prompt`, `internal/render`: dax's part of the system prompt;
-  the REPL's event printer.
-- `internal/toolrender`: the terminal client's renderers of dax's tool
-  calls (`toolview.Renderer`s), from the record's arguments and output
-  alone. It does not import `internal/tool`; its tests run the real tools,
-  so a change to a tool's output format fails them.
+- `internal/prompt`: the session's part of the system prompt (role line,
+  extensions' and user's instructions, working directory).
+  `internal/render`: the REPL's event printer. `internal/private`: the
+  private-directory check and its warnings.
 
 ## Siblings
 
@@ -72,15 +116,33 @@ an `Unreleased` changelog line:
   repository could abuse is refused in the project layer.
 - Keys come from the environment and are never printed, logged or
   written to a config file.
-- A bash command is auto-allowed only through `tool.SafeWords` and
-  `tool.ReadOnlyArgs`; widening either needs a test with the review's
-  exploit strings (internal/policy/exploit_test.go) and a reason.
+- A bash command is auto-allowed only through the Analyzer's safe
+  subset, package tool's unexported `safeWords` and `readOnlyArgs`;
+  widening either needs a test with the review's exploit strings
+  (ext/coding/exploit_test.go) and a reason.
 - A project config field is refused unless it can only tighten.
-- File tools go through `tool.Workspace`; never `os.ReadFile` a
-  model-supplied path. A new file tool gets a case in the confinement
-  test.
-- A new default allow rule needs a policy test that says what a
-  compound command with it does.
+- Tools, dax's and any extension's, act through `tool.Files` over the
+  session's `workspace.Workspace` (`ReadFile`, `WriteFile`, `Update`,
+  `Stat`, `ReadDir`) and its `Exec`; never `os` or `os/exec` on a
+  model-supplied path or command, so the tool runs on any workspace. A
+  read-modify-write uses `Update`, which holds the lock dax's `write`
+  and `edit` hold. A new file tool, or a new exported `Files` or
+  `workspace.Local` method, gets a case in the confinement test.
+- A check the policy makes of a call inspects the workspace the call
+  acts in, through its file system and `Exec`, never this machine's;
+  where the workspace cannot answer (a file system that cannot read
+  links), the check fails toward asking. The cross-workspace table in
+  `tool/remote_test.go` runs a new check on `Local` and on a stand-in
+  container.
+- Nothing is special: a capability dax ships is an extension built only
+  from what package `extension` offers any extension. If dax's own needs
+  something more, add it to `extension` for everyone.
+- An extension is compile-time and goes through the same policy, record
+  and workspace as any other: its tools ask by default, its rules are its
+  own source and name only its own tools (no patterns, no carve-outs),
+  and nothing a repository's config says can add one.
+- A new shipped allow rule, dax's or any extension's, needs a policy
+  test that says what a compound command with it does.
 - `CHANGELOG.md` keeps an `## Unreleased` section in Keep a Changelog
   form; `make release VERSION=vX.Y.Z` dates it, runs `make check`,
   commits, guards and writes an annotated tag whose message is the
