@@ -113,7 +113,7 @@ func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Confi
 			"Use it for broad searches so their output stays out of this conversation.",
 		Model:     env.Model(),
 		ModelName: model,
-		Instructions: "You are a read-only explorer working in " + env.Dir() + ". Answer the question using the " + list(names) + " tools; " +
+		Instructions: "You are a read-only explorer working in " + env.ToolEnv().Workspace.Root() + ". Answer the question using the " + list(names) + " tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",
 		Tools:          tools,
 		Reasoning:      env.Reasoning(ctx, model, think),

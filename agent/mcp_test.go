@@ -17,8 +17,15 @@ import (
 )
 
 // TestMain lets the test binary be the MCP server the tests start: one
-// tool, leak, that says what its environment holds.
+// tool, leak, that says what its environment holds; or, with
+// executorRoot set, `dax execute` over that directory.
 func TestMain(m *testing.M) {
+	if dir := os.Getenv(executorRoot); dir != "" {
+		if err := serveExecutor(dir); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("DAX_TEST_MCP_SERVER") == "1" {
 		if os.Getenv("DAX_TEST_MCP_NOISE") == "1" {
 			os.Stderr.WriteString("start \x1b[2K\x1b]0;pwned\x07\r\u202eshout\n")

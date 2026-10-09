@@ -78,6 +78,9 @@ func banner(info frontInfo, si agent.Info) []string {
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
+	if info.Executor != "" {
+		lines = append(lines, "executor: "+info.Executor)
+	}
 	if si.Recorded {
 		lines = append(lines, "session "+si.ID)
 	}

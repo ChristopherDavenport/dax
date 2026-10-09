@@ -94,8 +94,11 @@ before changing the shape.
   `Set`, the tools bound as adapters for the kit, which pins each
   decision's facts so one reading decides and stamps a call; and
   `NewServer` (`serve.go`), the in-process tools served over MCP for
-  `execute`, with what MCP cannot carry in a capability. Kit tools
-  are control and never go through it.
+  `execute`, with what MCP cannot carry in a capability; `Remote`
+  (`remote.go`), the client of such a server, which refuses one that
+  does not give the claims (`agent/executor.go` wraps it as the public
+  `agent.Executor` for `-executor`). Kit tools are control and never
+  go through it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/provider`: provider setting to `openresponses.Streamer`, and
   the vendor's `modelinfo.Describer`.

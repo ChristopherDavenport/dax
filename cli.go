@@ -93,6 +93,7 @@ func run(ctx context.Context, args []string, p program) error {
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
+	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split on spaces; the tools run there; \"\" clears the config's")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
 	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md, the agents_md_global files and the AGENTS.md files from the repository's root down to this directory in the instructions")
@@ -192,6 +193,7 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 	}
 	flags.SubagentModel = str("subagent-model", subModel)
+	flags.Executor = str("executor", executorCmd)
 	flags.PricingFile = str("pricing-file", pricingFile)
 	flags.Effort = str("effort", effort)
 	if given["agents"] {
@@ -231,14 +233,35 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
-	// Where the tools act: this directory. A container or a remote
-	// runtime is another workspace.Workspace, given to the session and
-	// to the extensions the same way.
-	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(settings.PassEnv, m.KeyEnv))
-	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
+	// Where the tools act: this directory, or an executor elsewhere
+	// whose tools act where it runs. A container or a remote runtime
+	// is another workspace.Workspace, given to the session and to the
+	// extensions the same way.
+	var (
+		ws     workspace.Workspace
+		ex     *agent.Executor
+		wsRoot = dir
+	)
+	if settings.Executor != "" {
+		if len(settings.MCP) > 0 || *mcp != "" {
+			return errors.New("-executor: MCP servers cannot run with an executor yet, since they would run on this machine; leave out mcp_servers and -mcp, or clear the executor with -executor=''")
+		}
+		// The command that starts it gets this machine's environment
+		// without credentials, the model's key's variable among them.
+		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv})
+		if err != nil {
+			return fmt.Errorf("-executor: %w", err)
+		}
+		defer ex.Close()
+		wsRoot = ex.Workspace().Root()
+	} else {
+		local, err := workspace.NewLocal(dir, tool.DefaultEnv(settings.PassEnv, m.KeyEnv))
+		if err != nil {
+			return fmt.Errorf("workspace: %w", err)
+		}
+		defer local.Close()
+		ws = local
 	}
-	defer ws.Close()
 	// What the session offers the model: dax's extensions as the
 	// settings say, then the program's.
 	exts, err := p.selected(choice{
@@ -253,7 +276,7 @@ func run(ctx context.Context, args []string, p program) error {
 	opts := agent.Options{
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Executor: ex, Root: *root, Sync: policyMode,
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
 		AgentsMDGlobal: settings.AgentsMDGlobal,
@@ -302,7 +325,7 @@ func run(ctx context.Context, args []string, p program) error {
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy
 	}
-	renderers, err := extension.Renderers(dir, exts)
+	renderers, err := extension.Renderers(wsRoot, exts)
 	if err != nil {
 		return err
 	}
@@ -312,7 +335,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	f, err := selectFront(*frontName, *once, frontInfo{
 		Name: p.name, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: dir, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex), Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}, processEnv(*root != ""))
 	if err != nil {
@@ -350,11 +373,23 @@ func loadSettings(project workspace.Workspace, userPath string, flags config.Fla
 	if err != nil {
 		return config.Settings{}, err
 	}
-	proj, err := config.LoadProject(project)
-	if err != nil {
-		return config.Settings{}, err
+	// With an executor the project is where it runs, not this
+	// directory, and its .dax/config.json is not read yet.
+	var proj config.Layer
+	if strings.TrimSpace(config.ExecutorOf(user, flags)) == "" {
+		if proj, err = config.LoadProject(project); err != nil {
+			return config.Settings{}, err
+		}
 	}
 	return config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
+}
+
+// executorLine is the banner's line about the executor, "" for none.
+func executorLine(ex *agent.Executor) string {
+	if ex == nil {
+		return ""
+	}
+	return ex.String()
 }
 
 // pricing loads the terminal client's price source. It is empty without

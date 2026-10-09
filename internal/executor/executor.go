@@ -89,6 +89,23 @@ func InProcess(exts []extension.Extension, env extension.ToolEnv) (Executor, err
 	return x, nil
 }
 
+// toolOf is t, a tool of the extension ext, as the session sees it:
+// what InProcess reads off its own tools and Remote off the tools an
+// executor lists, alike.
+func toolOf(ext string, t agenttool.Tool, readOnly bool) Tool {
+	_, replayable := t.(agenttool.Replayable)
+	return Tool{
+		Extension:   ext,
+		Definition:  agenttool.Definition(t),
+		Annotations: agenttool.AnnotationsOf(t),
+		ReadOnly:    readOnly,
+		Sequential:  agenttool.IsSequential(t),
+		Resource:    agenttool.ResourceOf(t),
+		Factual:     agenttool.IsFactual(t),
+		Replayable:  replayable,
+	}
+}
+
 // inProcessOf is InProcess as its own type, which NewServer serves.
 func inProcessOf(exts []extension.Extension, env extension.ToolEnv) (*inProcess, error) {
 	x := &inProcess{ws: env.Workspace, byName: map[string]agenttool.Tool{}}
@@ -102,17 +119,7 @@ func inProcessOf(exts []extension.Extension, env extension.ToolEnv) (*inProcess,
 				return nil, fmt.Errorf("extension %s: a nil tool", e.Name)
 			}
 			x.inner = append(x.inner, t)
-			_, replayable := t.(agenttool.Replayable)
-			x.tools = append(x.tools, Tool{
-				Extension:   e.Name,
-				Definition:  agenttool.Definition(t),
-				Annotations: agenttool.AnnotationsOf(t),
-				ReadOnly:    slices.Contains(e.ReadOnly, t.Name()),
-				Sequential:  agenttool.IsSequential(t),
-				Resource:    agenttool.ResourceOf(t),
-				Factual:     agenttool.IsFactual(t),
-				Replayable:  replayable,
-			})
+			x.tools = append(x.tools, toolOf(e.Name, t, slices.Contains(e.ReadOnly, t.Name())))
 			// Two tools of one name are the session's to refuse, with a
 			// message that names both extensions; the first is the one
 			// that runs until it does.

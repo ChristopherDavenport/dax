@@ -46,7 +46,7 @@ func build(exts []extension.Extension, env extension.ToolEnv) (*assembly, error)
 	if err != nil {
 		return nil, err
 	}
-	a, err := buildFrom(context.Background(), exts, env, x)
+	a, err := buildFrom(context.Background(), exts, env, x, false)
 	if err != nil {
 		x.Close()
 		return nil, err
@@ -61,8 +61,12 @@ func build(exts []extension.Extension, env extension.ToolEnv) (*assembly, error)
 // extension's own tools; a call a tool's facts claim names that is not
 // one of them asks (factspolicy.SubjectsOf); a tool names an extension
 // of the session. The extensions' matchers and hooks are built over
-// env. It closes nothing: x is the caller's.
-func buildFrom(ctx context.Context, exts []extension.Extension, env extension.ToolEnv, x executor.Executor) (*assembly, error) {
+// env. With remote, x runs the tools elsewhere and env is this
+// machine's view of it, so a matcher that gives a tool's subjects,
+// which would read env, is refused: what a served call touches is the
+// executor's to say, through the tool's facts claim. It closes nothing:
+// x is the caller's.
+func buildFrom(ctx context.Context, exts []extension.Extension, env extension.ToolEnv, x executor.Executor, remote bool) (*assembly, error) {
 	set, err := executor.Bind(ctx, x)
 	if err != nil {
 		return nil, err
@@ -159,9 +163,12 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 		if e.Matchers != nil {
 			ms = e.Matchers(env)
 		}
-		for name := range ms {
+		for name, m := range ms {
 			if !own[name] {
 				return nil, fmt.Errorf("extension %s: matcher for %q, which is not one of its tools", e.Name, name)
+			}
+			if remote && m.Subjects != nil && slices.ContainsFunc(tools, func(t executor.Bound) bool { return t.Name() == name }) {
+				return nil, fmt.Errorf("extension %s: the matcher for %q gives its subjects, which would read this machine; with an executor a served tool's subjects come from its facts claim", e.Name, name)
 			}
 		}
 		// What a call of a tool that claims is matched as comes from its

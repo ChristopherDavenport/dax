@@ -110,6 +110,18 @@ type Config struct {
 	// PricingFile is a JSON file of model prices, for the terminal
 	// client's session cost. The user sets it; a project cannot.
 	PricingFile string `json:"pricing_file,omitempty"`
+	// Executor runs the tools elsewhere: the command that starts `dax
+	// execute` where they are to act. The user sets it; a project
+	// cannot, since it says where the session's commands run.
+	Executor *Executor `json:"executor,omitempty"`
+}
+
+// Executor is how to start the executor.
+type Executor struct {
+	// Command is the command line, split on spaces, that starts `dax
+	// execute` and speaks MCP on its standard input and output:
+	// "docker exec -i box dax execute -root /work".
+	Command string `json:"command"`
 }
 
 // MCPServer is how to start one MCP server.
@@ -283,11 +295,19 @@ func (l *Layer) validate() error {
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
 			}
+		}
+	}
+	if c.Executor != nil {
+		if strings.TrimSpace(c.Executor.Command) == "" {
+			return errors.New("executor.command is required")
+		}
+		if err := checkExecutor("executor.command", c.Executor.Command); err != nil {
+			return err
 		}
 	}
 	for name, s := range c.MCPServers {
@@ -325,6 +345,37 @@ func (l *Layer) validate() error {
 		}
 	}
 	return nil
+}
+
+// executorSchemes are the forms of an executor's address that are not
+// commands, and are not supported yet: an executor is a command whose
+// standard input and output are the connection.
+var executorSchemes = []string{"http:", "https:", "unix:"}
+
+// checkExecutor refuses an executor given as an address rather than a
+// command.
+func checkExecutor(field, command string) error {
+	c := strings.ToLower(strings.TrimSpace(command))
+	for _, p := range executorSchemes {
+		if strings.HasPrefix(c, p) {
+			return fmt.Errorf("%s %q: an executor over %s is not supported yet; give the command that starts dax execute (docker exec -i box dax execute, ssh host dax execute)", field, command, strings.TrimSuffix(p, ":"))
+		}
+	}
+	return nil
+}
+
+// ExecutorOf is the executor command the user's layer and the flags
+// set, "" for none: what decides, before the project's layer is read,
+// whether the project is this machine's directory at all. A project's
+// layer cannot set it.
+func ExecutorOf(user Layer, f Flags) string {
+	if f.Executor != nil {
+		return *f.Executor
+	}
+	if user.Executor != nil {
+		return user.Executor.Command
+	}
+	return ""
 }
 
 // checkKeyCommand refuses a key command with no program or an empty
@@ -456,7 +507,9 @@ type Flags struct {
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
 	SessionHeader, ClientHeader      *string
-	Think, Agents                    *bool
+	// Executor replaces the config's executor command; "" clears it.
+	Executor      *string
+	Think, Agents *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -485,6 +538,7 @@ type Settings struct {
 	AgentsMDGlobal   []string // the user's own instruction files, absolute
 	MemoryDir        string   // empty: off; Resolve fills the default in
 	PricingFile      string   // empty: no terminal-client cost
+	Executor         string   // empty: the tools run in this process
 	MCP              []MCP
 	PassEnv          []string
 	MaxReadBytes     int64
@@ -574,6 +628,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.PricingFile != "" {
 			s.PricingFile = l.PricingFile
+		}
+		if l.Executor != nil {
+			s.Executor = l.Executor.Command
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
@@ -684,6 +741,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
+	}
+	if f.Executor != nil {
+		if err := checkExecutor("-executor", *f.Executor); err != nil {
+			return s, err
+		}
+		s.Executor = strings.TrimSpace(*f.Executor)
 	}
 	if f.AgentsMDGlobal != nil {
 		if err := checkPaths("-agents-md-global", f.AgentsMDGlobal); err != nil {

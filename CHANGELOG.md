@@ -24,8 +24,34 @@ versions may break flags and the config file.
   file (the sandbox holds those files, and the policy is the
   session's): `-root`, `-max-read-bytes` and `-pass-env` are flags.
   Standard output carries MCP alone; while it serves, `os.Stdout` is
-  standard error. The session's client for it (`-executor`) is the
-  next step; until then a session runs its tools in process as before.
+  standard error.
+- Added: `-executor 'command ...'` and the user config's
+  `"executor": {"command": "..."}` (refused in a project's file): the
+  session starts that command, which runs `dax execute` where the tools
+  are to act (`docker exec -i box dax execute -root /work`), and runs
+  every extension's tools there over its standard input and output.
+  Each call is still decided here, under this session's policy, on the
+  facts the executor reads; a reading that fails, takes longer than 30
+  seconds or finds the executor gone blocks the call. The command gets
+  this machine's environment less its credentials, the model's key's
+  variable among them. A program that does not give the claims (no
+  facts method, no executor capability, another version, tools the
+  capability does not name, or a tool whose facts claim is missing) is
+  refused, as is an extension with tools the executor does not run.
+  Not yet: MCP servers (a session with `-executor` and any MCP server,
+  from the config, `-mcp` or `/mcp add`, refuses to start), the
+  project's files (AGENTS.md, `.dax/skills`, `.dax/config.json` are not
+  read, and an `omitted:` line says so), and an `http:`, `https:` or
+  `unix:` address (refused). The banner names the executor and its
+  workspace, and the model, the record and explore are told its root.
+- Added: `agent.Executor`, `agent.DialExecutor` and
+  `agent.Options.Executor`, so a program built on dax can run its
+  session's tools in `dax execute` as `-executor` does. Setting both
+  `Options.Executor` and `Options.Workspace` is an error.
+- Changed: the explore sub-agent's instructions name the workspace's
+  root, where its tools act, rather than the directory dax started in
+  (`extension.Env.Dir`); the two differ in a container or with
+  `-executor`.
 - Dependencies: agenttool/mcpserver v0.0.20, for `dax execute`.
 - Changed: package `workspace` is removed; dax runs over the
   agentworkspace module (`github.com/ChristopherDavenport/agentworkspace`),
