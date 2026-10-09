@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.5 - 2026-10-09
 
 - Changed: an extension's `Tools` are the session's execution and run
   through its executor (`internal/executor`), which today builds them
