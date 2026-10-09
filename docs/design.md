@@ -30,7 +30,7 @@ makes no difference to the turn.
 | Plane | What it does | What the turn sees | In process | Elsewhere |
 |---|---|---|---|---|
 | AI | inference | `openresponses.Streamer` | Ollama on this host | any provider, any host |
-| Execution | acts on files, processes and the world, through the tools | the executor (`internal/executor`): the extensions' tools, their facts and their calls, over a `workspace.Workspace` | `executor.InProcess` over `workspace.Local` | a container or a remote runtime (agentworkspace), an executor served there |
+| Execution | acts on files, processes and the world, through the tools | the executor (`internal/executor`): the extensions' tools, their facts and their calls, over a `workspace.Workspace` | `executor.InProcess` over `workspace.Local` | `dax execute` in a container or on a host: the same tools served over stdio MCP (`executor.NewServer`), their facts, replay claims and stamps made there |
 | Human or autonomous | prompts, steers, answers permissions and questions | the turn's contract, agentturn's to own (`agent.Turn` until it does); a view follows the record (agentconsole) | the REPL, `-p` (`agent.Drive`), the terminal client over glue | a front over a wire (an agentturn front beside `front/a2a`), or a controller that answers by rule |
 | The record | what the planes agree happened | `agentsession.Store` | the local content-addressed store | a store over the wire (agentsession RFC 0003) |
 
@@ -65,9 +65,9 @@ Where dax does not keep to this yet, and what each needs:
   assembly) need a channel beside it on that wire. agentconsole's
   `client.Backend` cannot carry a Turn whole; `tuiadapter.go` lists what
   its glue fakes or drops.
-- The execution plane: the executor is in process only; there is no
-  remote form yet (`dax execute` and its client), and replay hints do
-  not cross MCP. An MCP stdio server starts in the workspace only when
+- The execution plane: `dax execute` serves the tools over stdio MCP,
+  but the session's client for it (`-executor`) is not built, so a
+  session still runs its executor in process. An MCP stdio server starts in the workspace only when
   the workspace can start a long-lived process with pipes
   (`workspace.Starter`); in one that cannot, it starts where the turn
   runs.
@@ -85,7 +85,7 @@ Where dax does not keep to this yet, and what each needs:
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
-| Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, and `Set`, the tools bound as the kit's, with each decision's facts pinned |
+| Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each decision's facts pinned, and `NewServer`, the tools served over MCP by `dax execute` (`execute.go`) |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
 | AGENTS.md | `agentsmd` | the session: the chain's extent, reading it through the workspace, screening and budget |
@@ -405,7 +405,16 @@ An extension's `Tools` are execution; the tools its `Kit` adds
 session does. The session runs the execution through an executor
 (`internal/executor`): today `InProcess`, every extension's `Tools`
 built once over the `ToolEnv`, and later one served from a sandbox.
-What the kit, the policy and `Env.Tools` hold are adapters with the
+`dax execute` serves the same tools, built the same way over a
+`workspace.Local` where it runs, through `executor.NewServer`: the
+tools themselves go to agenttool's mcpserver, so their facts and
+replay claims are answered and bash's and the file tools' stamps are
+made and checked in that process, under its key, and a stamp made
+elsewhere is refused. What MCP cannot carry (the descriptor, the
+extensions, the in-process order, each tool's extension, `ReadOnly`
+and strictness) is in the experimental capability
+`io.github.christopherdavenport.dax/executor`. It reads no config and
+runs no policy; the pipe that started it is its one client. What the kit, the policy and `Env.Tools` hold are adapters with the
 tool's definition, scheduling and annotations, whose calls, facts
 claims and replay claims go to the executor; a request carries the
 same bytes either way. The executor owns the tools and the session

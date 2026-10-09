@@ -82,6 +82,15 @@ type Call struct {
 // extension's Tools, called once over env. A nil tool is refused, and
 // what was built is closed when anything is.
 func InProcess(exts []extension.Extension, env extension.ToolEnv) (Executor, error) {
+	x, err := inProcessOf(exts, env)
+	if err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// inProcessOf is InProcess as its own type, which NewServer serves.
+func inProcessOf(exts []extension.Extension, env extension.ToolEnv) (*inProcess, error) {
 	x := &inProcess{ws: env.Workspace, byName: map[string]agenttool.Tool{}}
 	for _, e := range exts {
 		if e.Tools == nil {

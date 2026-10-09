@@ -38,7 +38,9 @@ before changing the shape.
 - `dax.go`: `Main` and its options, the default extensions,
   the package doc. `cli.go`: flags, the admin modes (`-list`, `-verify`,
   `-project`, `-import`, `-gc`, `-repair`), settings, the extensions the
-  settings choose, then one front. `front.go`: the `front` interface,
+  settings choose, then one front. `execute.go`: `execute`, the
+  extensions' tools served over stdio MCP (`executor.NewServer`), with
+  flags of its own and no config read. `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session's
   `agent.Turn`. `tui.go`: the terminal client, agentconsole's
   `console.Run`, the default front on a terminal; `tuiadapter.go`: the
@@ -90,7 +92,9 @@ before changing the shape.
   session runs the extensions' `Tools` through (facts, replay, calls,
   descriptor, close), `InProcess` (the tools in this process), and
   `Set`, the tools bound as adapters for the kit, which pins each
-  decision's facts so one reading decides and stamps a call. Kit tools
+  decision's facts so one reading decides and stamps a call; and
+  `NewServer` (`serve.go`), the in-process tools served over MCP for
+  `execute`, with what MCP cannot carry in a capability. Kit tools
   are control and never go through it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/provider`: provider setting to `openresponses.Streamer`, and

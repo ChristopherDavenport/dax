@@ -24,9 +24,6 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
-	"github.com/ChristopherDavenport/dax/ext/coding"
-	"github.com/ChristopherDavenport/dax/ext/memory"
-	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
@@ -59,9 +56,14 @@ func hint(err error) string {
 // run is the program: args are the command line after the program's
 // name.
 func run(ctx context.Context, args []string, p program) error {
+	// execute is a mode of its own with flags of its own, read before
+	// the session's: it serves the tools and runs no session.
+	if len(args) > 0 && args[0] == "execute" {
+		return runExecute(ctx, args[1:], p)
+	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over stdio MCP; %[1]s execute -h)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -239,17 +241,12 @@ func run(ctx context.Context, args []string, p program) error {
 	defer ws.Close()
 	// What the session offers the model: dax's extensions as the
 	// settings say, then the program's.
-	defaults := []extension.Extension{coding.New(settings.MaxReadBytes)}
-	if settings.Agents {
-		defaults = append(defaults, agents.New(agents.Options{Model: m.SubagentName}))
-	}
-	if *skillsFlag {
-		defaults = append(defaults, skills.New(skills.Options{Dirs: settings.SkillsDirs, Trust: *trustSkills}))
-	}
-	if settings.MemoryDir != "" {
-		defaults = append(defaults, memory.New(settings.MemoryDir))
-	}
-	exts, err := p.extensions(defaults)
+	exts, err := p.selected(choice{
+		MaxReadBytes: settings.MaxReadBytes,
+		Agents:       settings.Agents, SubagentModel: m.SubagentName,
+		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
+		MemoryDir: settings.MemoryDir,
+	})
 	if err != nil {
 		return err
 	}

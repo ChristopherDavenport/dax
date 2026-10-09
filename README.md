@@ -372,6 +372,62 @@ A command that needs a scrubbed variable (`gh`, a private module proxy)
 gets it by name from your config: `"pass_env": ["GITHUB_TOKEN"]`. Only
 your own config can say that.
 
+## The tools in a sandbox: `dax execute`
+
+`dax execute` serves dax's tools over MCP on its standard input and
+output, from inside the place they should act: a container, a VM,
+another host. It runs no model, no policy and no session. A session
+elsewhere decides each call under its own policy and sends it there to
+run. The session's side, `-executor`, is not built yet, so today a
+session runs its tools in process; any MCP client that takes
+agenttool's claims (mcpclient's `WithClaims`) can drive it.
+
+```sh
+docker exec -i box dax execute -root /work -kind container -ref box
+ssh build-host dax execute -root /home/me/src/app
+kubectl exec -i pod/agent -- dax execute -root /work -kind container -ref pod/agent
+```
+
+The pipe is the credential: whoever started the process is its one
+client. There is no listener, no port and no token. Since no policy
+runs in it, anyone who can start it can run whatever its tools run,
+which is no more than anyone who can already `docker exec` or `ssh`
+there.
+
+| Flag | Default | |
+|---|---|---|
+| `-root` | the current directory | where the tools act |
+| `-max-read-bytes` | 2 MiB | as `max_read_bytes` |
+| `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
+| `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
+| `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod |
+
+It reads no config file: the sandbox holds the files it would read,
+and the policy is the session's. Commands get its environment with
+credentials removed, as under a session; the model's key is never sent
+to it.
+
+It serves the tools of every extension that has them: dax-coding's,
+and a program built on `dax.Main` serves its own as `<name> execute`,
+less those it leaves out with `WithoutExtension`. Sub-agents, skills
+and memory are the session's and stay where it runs. The tools served
+are the tools themselves, so what a call would touch is read there, in
+the sandbox's files, and the stamp that holds an allowed call to what
+was decided is made and checked there, under that process's own key: a
+stamp made anywhere else is refused, and a file tool's path that
+became a link since the decision is caught where the file is. What MCP has no field for
+crosses beside the tools: agenttool's `_meta` (facts and replay claims,
+sequential, resource), its `execution/facts` method, and the
+experimental capability `io.github.christopherdavenport.dax/executor`
+with the descriptor, the extensions, and each tool in order with its
+extension, read-only, facts and strict. A running command's output
+arrives as progress, and a tool's question reaches the session.
+
+Standard output carries MCP and nothing else. While it serves,
+`os.Stdout` is standard error, so a stray print from a tool cannot
+corrupt the stream; commands get no standard input and their output is
+captured. Logs and errors go to standard error.
+
 ## Policy
 
 Each tool call is decided by rules: **deny**, then **ask**, then
@@ -902,7 +958,9 @@ there.
 What is not there yet:
 
 - dax uses only `workspace.Local`; a container or remote workspace is
-  a program's to provide until agentworkspace ships one.
+  a program's to provide until agentworkspace ships one. `dax execute`
+  serves the tools from inside a sandbox, but the session's client for
+  it is not built yet.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs
   handling. `Options.Store` takes today's interface; the lease handling

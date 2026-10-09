@@ -128,6 +128,40 @@ func (p program) extensions(defaults []extension.Extension) ([]extension.Extensi
 	return append(out, p.ext...), nil
 }
 
+// choice is what the settings choose of dax's own extensions.
+// dax-coding is always built; the zero value is it alone.
+type choice struct {
+	// MaxReadBytes is dax-coding's read limit; zero is the default.
+	MaxReadBytes int64
+	// Agents builds dax-agents, its sub-agents on SubagentModel.
+	Agents        bool
+	SubagentModel string
+	// Skills builds dax-skills over SkillsDirs, trusting their
+	// allowed-tools when TrustSkills.
+	Skills      bool
+	SkillsDirs  []string
+	TrustSkills bool
+	// MemoryDir builds dax-memory over it when not empty.
+	MemoryDir string
+}
+
+// selected are dax's extensions as c chooses them, less those the
+// program left out, then the program's: what a session offers the
+// model, and, of those with Tools, what `execute` serves.
+func (p program) selected(c choice) ([]extension.Extension, error) {
+	defaults := []extension.Extension{coding.New(c.MaxReadBytes)}
+	if c.Agents {
+		defaults = append(defaults, agents.New(agents.Options{Model: c.SubagentModel}))
+	}
+	if c.Skills {
+		defaults = append(defaults, skills.New(skills.Options{Dirs: c.SkillsDirs, Trust: c.TrustSkills}))
+	}
+	if c.MemoryDir != "" {
+		defaults = append(defaults, memory.New(c.MemoryDir))
+	}
+	return p.extensions(defaults)
+}
+
 // hasExtension reports whether exts holds the one called name.
 func hasExtension(exts []extension.Extension, name string) bool {
 	return slices.ContainsFunc(exts, func(e extension.Extension) bool { return e.Name == name })
