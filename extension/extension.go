@@ -67,7 +67,7 @@ type Extension struct {
 	// extension's tools: bash(git status:*) is dax-coding's bash matcher
 	// reading the command. A tool without one is matched by name alone.
 	// What a call is matched as, its subjects, is the tool's own facts
-	// claim (package facts) when it makes one: the session reads the
+	// claim (agenttool.Factual) when it makes one: the session reads the
 	// claim, so a matcher for a claiming tool supplies Match alone, and
 	// one that brings Subjects too is an error at start. A tool with no
 	// claim is matched on its arguments as given, or on a matcher's own

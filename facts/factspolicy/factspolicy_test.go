@@ -10,18 +10,13 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
-
-	"github.com/ChristopherDavenport/dax/facts"
 )
 
-func tool(name string, fx func(context.Context, json.RawMessage) (facts.Facts, error)) agenttool.Tool {
-	t := agenttool.NewFunc(name, "A tool.", nil, func(context.Context, agenttool.Call) (agenttool.Result, error) {
+func tool(name string, fx func(context.Context, json.RawMessage) (agenttool.Facts, error)) agenttool.Tool {
+	// A nil fx makes no claim.
+	return agenttool.NewFunc(name, "A tool.", nil, func(context.Context, agenttool.Call) (agenttool.Result, error) {
 		return agenttool.Text("ran"), nil
-	})
-	if fx == nil {
-		return t
-	}
-	return facts.With(t, fx)
+	}, agenttool.WithFacts(fx))
 }
 
 func decide(t *testing.T, ms map[string]agentpolicy.ToolMatcher, rules []agentpolicy.Rule, name, args string) agentpolicy.Verdict {
@@ -51,20 +46,20 @@ func TestSubjectsComeFromTheClaim(t *testing.T) {
 	allowA := []agentpolicy.Rule{{Tool: "t", Spec: "a"}}
 	for _, tc := range []struct {
 		name string
-		fx   func(context.Context, json.RawMessage) (facts.Facts, error)
+		fx   func(context.Context, json.RawMessage) (agenttool.Facts, error)
 		args string
 		want agentturn.ToolAction
 	}{
 		{"no claim: its own arguments", nil, `{"path":"a"}`, agentturn.Allow},
-		{"a claim of nil calls: the call itself", func(context.Context, json.RawMessage) (facts.Facts, error) { return facts.Facts{}, nil }, `{"path":"a"}`, agentturn.Allow},
-		{"the claim's calls, not the arguments", func(context.Context, json.RawMessage) (facts.Facts, error) {
-			return facts.Facts{Calls: []facts.Call{{Args: json.RawMessage(`{"path":"b"}`)}}}, nil
+		{"a claim of nil calls: the call itself", func(context.Context, json.RawMessage) (agenttool.Facts, error) { return agenttool.Facts{}, nil }, `{"path":"a"}`, agentturn.Allow},
+		{"the claim's calls, not the arguments", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+			return agenttool.Facts{Calls: []agenttool.FactCall{{Args: json.RawMessage(`{"path":"b"}`)}}}, nil
 		}, `{"path":"a"}`, agentturn.Defer},
-		{"every call must be allowed", func(context.Context, json.RawMessage) (facts.Facts, error) {
-			return facts.Facts{Calls: []facts.Call{{Args: json.RawMessage(`{"path":"a"}`)}, {Args: json.RawMessage(`{"path":"c"}`)}}}, nil
+		{"every call must be allowed", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+			return agenttool.Facts{Calls: []agenttool.FactCall{{Args: json.RawMessage(`{"path":"a"}`)}, {Args: json.RawMessage(`{"path":"c"}`)}}}, nil
 		}, `{"path":"a"}`, agentturn.Defer},
-		{"a claim of no calls is refused", func(context.Context, json.RawMessage) (facts.Facts, error) {
-			return facts.Facts{Calls: []facts.Call{}}, nil
+		{"a claim of no calls is refused", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+			return agenttool.Facts{Calls: []agenttool.FactCall{}}, nil
 		}, `{"path":"a"}`, agentturn.Block},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,7 +79,7 @@ func TestSubjectsComeFromTheClaim(t *testing.T) {
 }
 
 func TestAMatcherMayNotBringSubjectsForAClaimingTool(t *testing.T) {
-	tl := tool("t", func(context.Context, json.RawMessage) (facts.Facts, error) { return facts.Facts{}, nil })
+	tl := tool("t", func(context.Context, json.RawMessage) (agenttool.Facts, error) { return agenttool.Facts{}, nil })
 	_, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": {
 		Match:    agentpolicy.GlobMatcher("path"),
 		Subjects: func(a json.RawMessage) ([]agentpolicy.Subject, error) { return []agentpolicy.Subject{{Args: a}}, nil },
@@ -97,13 +92,13 @@ func TestAMatcherMayNotBringSubjectsForAClaimingTool(t *testing.T) {
 // The hook applies a claim's rewrite as an allow and blocks a call
 // whose claim fails; no claim or no rewrite decides nothing.
 func TestTheHookAppliesARewriteAndDecidesNothingElse(t *testing.T) {
-	rw := func(_ context.Context, args json.RawMessage) (facts.Facts, error) {
+	rw := func(_ context.Context, args json.RawMessage) (agenttool.Facts, error) {
 		if string(args) == `"bad"` {
-			return facts.Facts{}, json.Unmarshal([]byte("x"), &struct{}{})
+			return agenttool.Facts{}, json.Unmarshal([]byte("x"), &struct{}{})
 		}
-		return facts.Facts{Rewrite: json.RawMessage(`{"stamped":true}`)}, nil
+		return agenttool.Facts{Rewrite: json.RawMessage(`{"stamped":true}`)}, nil
 	}
-	none := func(context.Context, json.RawMessage) (facts.Facts, error) { return facts.Facts{}, nil }
+	none := func(context.Context, json.RawMessage) (agenttool.Facts, error) { return agenttool.Facts{}, nil }
 	if Hook([]agenttool.Tool{tool("plain", nil)}) != nil {
 		t.Error("a hook with no tool that claims")
 	}
@@ -148,8 +143,8 @@ func TestAClaimNamesOnlyItsOwnExtensionsTools(t *testing.T) {
 		{"a tool nobody has", "fetch", []string{"upload"}, agentturn.Defer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			up := tool("upload", func(context.Context, json.RawMessage) (facts.Facts, error) {
-				return facts.Facts{Calls: []facts.Call{{Tool: tc.claim, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload README.md"}}}, nil
+			up := tool("upload", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+				return agenttool.Facts{Calls: []agenttool.FactCall{{Tool: tc.claim, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload README.md"}}}, nil
 			})
 			ms, err := Matchers([]agenttool.Tool{up}, tc.own, map[string]agentpolicy.ToolMatcher{"upload": glob})
 			if err != nil {

@@ -1,9 +1,8 @@
-// Package factspolicy is the policy's side of the facts claim: the
-// subjects agentpolicy decides a call on, taken from what the tool says
-// the call would touch, and the rewrite a tool asks for, applied as a
-// hook folded under the policy's verdict. It is where facts meet
-// agentpolicy, kept apart so package facts imports no policy, as the
-// claim's home in agenttool could not.
+// Package factspolicy is the policy's side of agenttool's facts claim
+// (agenttool.Factual): the subjects agentpolicy decides a call on, taken
+// from what the tool says the call would touch, and the rewrite a tool
+// asks for, applied as a hook folded under the policy's verdict. It is
+// where the claim meets agentpolicy, which agenttool does not import.
 package factspolicy
 
 import (
@@ -15,8 +14,6 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
-
-	"github.com/ChristopherDavenport/dax/facts"
 )
 
 // outside is the tool a claimed call is decided as when it names a
@@ -39,11 +36,11 @@ const outside = "dax:outside-its-extension"
 // about one call more than once; that is the plan's gap (agentpolicy:
 // subjects with a context; until then, fetch once per call and cache).
 func Subjects(t agenttool.Tool, own []string) agentpolicy.Subjects {
-	if !facts.Claims(t) {
+	if !agenttool.IsFactual(t) {
 		return nil
 	}
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
-		f, _, err := facts.Of(context.Background(), t, args)
+		f, _, err := agenttool.FactsOf(context.Background(), t, args)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +53,7 @@ func Subjects(t agenttool.Tool, own []string) agentpolicy.Subjects {
 // another of its extension's tools, own (bash's claim of a read of what
 // cat reads); one that names any other tool is decided as a tool no
 // rule names, so it asks, whatever the rules for the tool it named say.
-func SubjectsOf(calls []facts.Call, args json.RawMessage, own []string) []agentpolicy.Subject {
+func SubjectsOf(calls []agenttool.FactCall, args json.RawMessage, own []string) []agentpolicy.Subject {
 	if calls == nil {
 		return []agentpolicy.Subject{{Args: args}}
 	}
@@ -111,7 +108,7 @@ func Matchers(tools []agenttool.Tool, own []string, match map[string]agentpolicy
 func Hook(tools []agenttool.Tool) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	byName := map[string]agenttool.Tool{}
 	for _, t := range tools {
-		if facts.Claims(t) {
+		if agenttool.IsFactual(t) {
 			byName[t.Name()] = t
 		}
 	}
@@ -126,7 +123,7 @@ func Hook(tools []agenttool.Tool) func(context.Context, agentturn.ToolCallInfo) 
 		if !ok {
 			return nil, nil
 		}
-		f, _, err := facts.Of(ctx, t, info.Args)
+		f, _, err := agenttool.FactsOf(ctx, t, info.Args)
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "what this call would touch cannot be read: " + err.Error(), By: agentpolicy.ByPolicy}, nil
 		}

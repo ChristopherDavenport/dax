@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
-
-	"github.com/ChristopherDavenport/dax/facts"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/workspace"
@@ -68,13 +66,13 @@ func Bash(f *Files, opts ...BashOption) agenttool.Tool {
 		o(&cfg)
 	}
 	an := &Analyzer{Files: f, MaxFile: cfg.maxFile}
-	return facts.With(exactArgs[BashArgs](bashTool(f, cfg)), func(ctx context.Context, args json.RawMessage) (facts.Facts, error) {
+	return exactArgs[BashArgs](bashTool(f, cfg, agenttool.WithFacts(func(ctx context.Context, args json.RawMessage) (agenttool.Facts, error) {
 		calls, rewrite, err := bashFacts(ctx, an, args, true)
-		return facts.Facts{Calls: calls, Rewrite: rewrite}, err
-	})
+		return agenttool.Facts{Calls: calls, Rewrite: rewrite}, err
+	})))
 }
 
-func bashTool(f *Files, cfg bashConfig) agenttool.Tool {
+func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 	return agenttool.New("bash", "Run a bash command in the working directory and return its combined output and exit code.",
 		func(ctx context.Context, in BashArgs) (string, error) {
 			if strings.TrimSpace(in.Command) == "" {
@@ -110,7 +108,7 @@ func bashTool(f *Files, cfg bashConfig) agenttool.Tool {
 				fmt.Fprintf(&b, "[exit %d]", res.ExitCode)
 			}
 			return b.String(), nil
-		}, agenttool.WithSequential())
+		}, agenttool.WithSequential(), claim)
 }
 
 // progressWriter reports a command's output as it arrives: as

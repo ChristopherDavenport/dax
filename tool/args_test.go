@@ -9,8 +9,6 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agenttool"
-
-	"github.com/ChristopherDavenport/dax/facts"
 )
 
 // A key that names a field in another case is read by the tool's
@@ -46,7 +44,7 @@ func TestAKeyInAnotherCaseIsRefusedByTheClaimAndTheTool(t *testing.T) {
 			os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o644)
 			f := newWS(t, dir)
 			tl := tc.tool(f)
-			if _, _, err := facts.Of(ctx, tl, json.RawMessage(tc.args)); err == nil || !strings.Contains(err.Error(), "another case") {
+			if _, _, err := agenttool.FactsOf(ctx, tl, json.RawMessage(tc.args)); err == nil || !strings.Contains(err.Error(), "another case") {
 				t.Errorf("the claim = %v, want refused", err)
 			}
 			out, err := call(ctx, tl, tc.args)

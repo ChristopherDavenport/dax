@@ -10,7 +10,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ChristopherDavenport/dax/facts"
+	"github.com/ChristopherDavenport/agenttool"
 )
 
 // stampKey signs the plans the policy approves. It lives as long as the
@@ -40,7 +40,7 @@ var errTouched = errors.New("what this call touches changed since it was allowed
 // amounts to, in order, its tool and its arguments. A question's text is
 // left out; it says nothing about what is touched. The "facts" prefix
 // keeps it from ever equalling a plan's stamp.
-func factsStamp(name string, calls []facts.Call) string {
+func factsStamp(name string, calls []agenttool.FactCall) string {
 	var b strings.Builder
 	b.WriteString("facts\x00")
 	b.WriteString(name)

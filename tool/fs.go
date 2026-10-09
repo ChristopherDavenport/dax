@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
-
-	"github.com/ChristopherDavenport/dax/facts"
 )
 
 const (
@@ -62,10 +60,10 @@ func readCap(opts []ReadOption) int64 {
 // costs what a small one does. Past the cap, use grep to find the
 // line.
 func Read(ws *Files, opts ...ReadOption) agenttool.Tool {
-	return facts.With(exactArgs[ReadArgs](readTool(ws, opts...)), pathFacts(ws, "read", "path", ""))
+	return exactArgs[ReadArgs](readTool(ws, agenttool.WithFacts(pathFacts(ws, "read", "path", "")), opts...))
 }
 
-func readTool(ws *Files, opts ...ReadOption) agenttool.Tool {
+func readTool(ws *Files, claim agenttool.Option, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files; only the first "+fmt.Sprint(limitBytes>>10)+" KiB of a file can be read, so use grep to find a line in a larger one.",
 		func(_ context.Context, in ReadArgs) (string, error) {
@@ -116,7 +114,7 @@ func readTool(ws *Files, opts ...ReadOption) agenttool.Tool {
 				fmt.Fprintf(&b, "... (stopped after the first %d of %d bytes; use grep to find a line later in the file)\n", limitBytes, size)
 			}
 			return truncate(b.String(), maxReadBytes+maxLineBytes), nil
-		})
+		}, claim)
 }
 
 // readLine reads one line without its newline, keeping at most
@@ -157,10 +155,10 @@ type WriteArgs struct {
 
 // Write returns a tool that creates or replaces a file.
 func Write(ws *Files) agenttool.Tool {
-	return facts.With(exactArgs[WriteArgs](writeTool(ws)), pathFacts(ws, "write", "path", ""))
+	return exactArgs[WriteArgs](writeTool(ws, agenttool.WithFacts(pathFacts(ws, "write", "path", ""))))
 }
 
-func writeTool(ws *Files) agenttool.Tool {
+func writeTool(ws *Files, claim agenttool.Option) agenttool.Tool {
 	return agenttool.New("write", "Create or overwrite a file with the given content. Parent directories are created.",
 		func(_ context.Context, in WriteArgs) (string, error) {
 			if err := ws.checkTouched("write", "", in.Path, in.Stamp); err != nil {
@@ -173,7 +171,7 @@ func writeTool(ws *Files) agenttool.Tool {
 				return "", err
 			}
 			return fmt.Sprintf("wrote %d bytes to %s", len(in.Content), rel), nil
-		})
+		}, claim)
 }
 
 // EditArgs are the arguments of the edit tool.
@@ -188,10 +186,10 @@ type EditArgs struct {
 
 // Edit returns a tool that replaces one exact occurrence of a string.
 func Edit(ws *Files, opts ...ReadOption) agenttool.Tool {
-	return facts.With(exactArgs[EditArgs](editTool(ws, opts...)), pathFacts(ws, "edit", "path", ""))
+	return exactArgs[EditArgs](editTool(ws, agenttool.WithFacts(pathFacts(ws, "edit", "path", "")), opts...))
 }
 
-func editTool(ws *Files, opts ...ReadOption) agenttool.Tool {
+func editTool(ws *Files, claim agenttool.Option, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("edit", "Replace old_string with new_string in a file. old_string must appear exactly once; include enough surrounding lines to make it unique.",
 		func(_ context.Context, in EditArgs) (string, error) {
@@ -221,5 +219,5 @@ func editTool(ws *Files, opts ...ReadOption) agenttool.Tool {
 				return "", err
 			}
 			return fmt.Sprintf("edited %s", rel), nil
-		})
+		}, claim)
 }

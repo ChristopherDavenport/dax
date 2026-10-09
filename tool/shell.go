@@ -8,8 +8,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
-
-	"github.com/ChristopherDavenport/dax/facts"
+	"github.com/ChristopherDavenport/agenttool"
 )
 
 // sentinel prefixes a subject no rule names, so a call that carries it
@@ -56,7 +55,7 @@ func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
 // the command is given without surrounding space, as the model writes
 // it; otherwise the stamp is of the line exactly as given, which is
 // what the tool checks again before it runs.
-func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bool) (calls []facts.Call, rewrite json.RawMessage, err error) {
+func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bool) (calls []agenttool.FactCall, rewrite json.RawMessage, err error) {
 	if err := exactKeys(args, "command", "dax_stamp"); err != nil {
 		return nil, nil, err
 	}
@@ -66,9 +65,9 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, nil, err
 	}
-	mk := func(tool, field, match, text string) facts.Call {
+	mk := func(tool, field, match, text string) agenttool.FactCall {
 		a, _ := json.Marshal(map[string]string{field: match})
-		return facts.Call{Args: a, Tool: tool, Text: text}
+		return agenttool.FactCall{Args: a, Tool: tool, Text: text}
 	}
 	cmd := strings.TrimSpace(in.Command)
 	if cmd == "" {
@@ -77,7 +76,7 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 	c := an.Check(ctx, cmd)
 	// Never nil: a line that analyses to nothing is no calls, which a
 	// policy refuses, and not the call itself, which a rule could allow.
-	calls = []facts.Call{}
+	calls = []agenttool.FactCall{}
 	if c.Parsed {
 		for _, st := range c.Stages {
 			calls = append(calls, mk("", "command", st.Match, st.Text))
@@ -115,7 +114,7 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 }
 
 // subjectsOf is calls as agentpolicy's subjects, nil for nil.
-func subjectsOf(calls []facts.Call) []agentpolicy.Subject {
+func subjectsOf(calls []agenttool.FactCall) []agentpolicy.Subject {
 	if calls == nil {
 		return nil
 	}
@@ -360,7 +359,7 @@ func PathSubjects(f *Files, field, def string) agentpolicy.Subjects {
 
 // pathCalls is what a file tool's call would touch: the path in field,
 // normalised, and what its links lead to (see PathSubjects).
-func pathCalls(v view, field, def string, args json.RawMessage) ([]facts.Call, error) {
+func pathCalls(v view, field, def string, args json.RawMessage) ([]agenttool.FactCall, error) {
 	if err := exactKeys(args, field); err != nil {
 		return nil, err
 	}
@@ -382,14 +381,14 @@ func pathCalls(v view, field, def string, args json.RawMessage) ([]facts.Call, e
 		rel = sentinel + raw
 	}
 	a, _ := json.Marshal(map[string]string{"path": rel})
-	calls := []facts.Call{{Args: a, Text: raw}}
+	calls := []agenttool.FactCall{{Args: a, Text: raw}}
 	if ok {
 		switch target, r := v.resolve(rel); {
 		case r == inside && target != rel:
 			ta, _ := json.Marshal(map[string]string{"path": target})
-			calls = append(calls, facts.Call{Args: ta, Text: raw + " -> " + target})
+			calls = append(calls, agenttool.FactCall{Args: ta, Text: raw + " -> " + target})
 		case r == unknown:
-			calls = append(calls, facts.Call{Args: a, Tool: unresolvedTool, Text: raw + " (where its links lead cannot be read)"})
+			calls = append(calls, agenttool.FactCall{Args: a, Tool: unresolvedTool, Text: raw + " (where its links lead cannot be read)"})
 		}
 	}
 	return calls, nil
@@ -399,18 +398,18 @@ func pathCalls(v view, field, def string, args json.RawMessage) ([]facts.Call, e
 // def when the call names none, and the arguments carrying the stamp of
 // those facts (factsStamp), which the tool checks when it runs. A key
 // that is field or dax_stamp in another case is an error (exactKeys).
-func pathFacts(f *Files, name, field, def string) func(context.Context, json.RawMessage) (facts.Facts, error) {
+func pathFacts(f *Files, name, field, def string) func(context.Context, json.RawMessage) (agenttool.Facts, error) {
 	v := f.view()
-	return func(_ context.Context, args json.RawMessage) (facts.Facts, error) {
+	return func(_ context.Context, args json.RawMessage) (agenttool.Facts, error) {
 		if err := exactKeys(args, "dax_stamp"); err != nil {
-			return facts.Facts{}, err
+			return agenttool.Facts{}, err
 		}
 		calls, err := pathCalls(v, field, def, args)
 		if err != nil {
-			return facts.Facts{}, err
+			return agenttool.Facts{}, err
 		}
 		rewrite, err := withStamp(args, factsStamp(name, calls))
-		return facts.Facts{Calls: calls, Rewrite: rewrite}, err
+		return agenttool.Facts{Calls: calls, Rewrite: rewrite}, err
 	}
 }
 

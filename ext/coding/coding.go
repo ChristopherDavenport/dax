@@ -35,7 +35,7 @@ const instructions = "Use the tools to inspect and change files and run commands
 //
 // Its tools are built over the session's ToolEnv, on its tool.Files,
 // whose write lock every writing tool of the session shares. Each makes
-// the facts claim (package facts): what a call would touch, read in the
+// the facts claim (agenttool.Factual): what a call would touch, read in the
 // workspace the tools act in, and for bash the stamped plan. The session
 // takes the policy's subjects and the stamp from those claims; dax-coding
 // ships only how its rules match (matchers), so the policy reads no

@@ -75,11 +75,10 @@ before changing the shape.
   through `fs.ReadLinkFS`); `BashSubjects`, `PathSubjects` and
   `Analyzer`, the analysis each tool's facts claim makes, and the
   git-config check, run through `Exec`.
-- `facts`: a tool's facts claim, what a call would touch and the
-  rewrite it runs with if allowed (bash's stamped plan), dax's draft of
-  an optional per-call claim for agenttool, with no policy import;
-  `facts/factspolicy`, where claims become agentpolicy's subjects and
-  the session's one rewrite hook.
+- `facts/factspolicy`: where a tool's facts claim (agenttool's
+  `Factual`: what a call would touch and the rewrite it runs with if
+  allowed, bash's stamped plan) becomes agentpolicy's subjects and the
+  session's one rewrite hook.
 - `toolrender`: the terminal client's renderers of dax-coding's and
   dax-agents' calls (`toolview.Renderer`s), from the record's arguments
   and output alone. It does not import `tool`; its tests run the real
@@ -134,7 +133,7 @@ an `Unreleased` changelog line:
   and `edit` hold. A new file tool, or a new exported `Files` or
   `workspace.Local` method, gets a case in the confinement test.
 - A check the policy makes of a call is the tool's facts claim
-  (package `facts`): the tool says what the call would touch, and the
+  (`agenttool.Factual`, set with `agenttool.WithFacts`): the tool says what the call would touch, and the
   policy decides on that and reads no machine itself. The claim
   inspects the workspace the call acts in, through its file system and
   `Exec`, never this machine's; where the workspace cannot answer (a
