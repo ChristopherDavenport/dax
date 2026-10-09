@@ -7,6 +7,18 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: package `facts` is removed in favour of agenttool's facts
+  claim (v0.0.19), in its names: `facts.Call`, `facts.Facts`,
+  `facts.Claimer`, `facts.Of` and `facts.Claims` are
+  `agenttool.FactCall`, `agenttool.Facts`, `agenttool.Factual`,
+  `agenttool.FactsOf` and `agenttool.IsFactual`, and `facts.With(t, fn)`
+  is the `agenttool.WithFacts(fn)` option of `agenttool.New` and
+  `NewFunc`; a tool built otherwise claims by having the `Facts`
+  method. `agenttool.Wrap` forwards the claim, so nothing looks through
+  wrappers any more. `facts/factspolicy`, the policy's side, keeps its
+  path and API, and every decision is the same.
+- Dependencies: agenttool and agenttool/mcpclient v0.0.19, for the
+  facts claim.
 - Changed: AGENTS.md, the project's skills (`.dax/skills`) and its
   config (`.dax/config.json`) are read through the session's workspace,
   as the tools read the project, and not from this machine's directory.
@@ -72,16 +84,16 @@ versions may break flags and the config file.
   `agentsmd.Options.FS`, through which the AGENTS.md chain is read.
 - Security: golang.org/x/net is v0.60.0, which fixes GO-2026-6617 and
   GO-2026-6612 in the HTTP/2 code the provider clients use.
-- Added: `facts`, a tool's claim of what a call would touch, said before
-  it runs: the calls it amounts to (`read` of what `cat` reads, `write`
-  of a redirect's target) and the arguments it runs with if allowed
-  (bash's stamped plan). dax-coding's tools make it; the session takes
-  the policy's subjects from claims and applies a claim's rewrite as one
+- Added: the facts claim (`agenttool.Factual` since agenttool
+  v0.0.19), a tool's claim of what a call would touch, said before it
+  runs: the calls it amounts to (`read` of what `cat` reads, `write` of
+  a redirect's target) and the arguments it runs with if allowed (bash's
+  stamped plan). dax-coding's tools make it; the session takes the
+  policy's subjects from claims and applies a claim's rewrite as one
   hook folded under the policy's verdict, so the policy reads no machine
-  but through the tools. It is dax's draft of an optional per-call claim
-  for agenttool. An extension's matcher for a claiming tool supplies
-  `Match` only; one that brings `Subjects` too is refused at start. A
-  claim that fails blocks the call.
+  but through the tools. An extension's matcher for a claiming tool
+  supplies `Match` only; one that brings `Subjects` too is refused at
+  start. A claim that fails blocks the call.
   dax-coding ships no `BeforeToolCall` and no subjects of its own.
 - Security: a claim may name only its own extension's tools (bash's
   claims of `read` and `write` are dax-coding's). A call that names

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
-	"github.com/ChristopherDavenport/dax/facts"
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 )
 
@@ -66,7 +66,7 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	// The policy reads the machine only through the tools: each claims
 	// its facts, and dax-coding brings no subjects and no hook of its own.
 	for _, tl := range e.Tools(env) {
-		if !facts.Claims(tl) {
+		if !agenttool.IsFactual(tl) {
 			t.Errorf("%s makes no facts claim", tl.Name())
 		}
 	}

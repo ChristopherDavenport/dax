@@ -5,9 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/ChristopherDavenport/agenttool"
-	"github.com/ChristopherDavenport/dax/facts"
-	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -16,9 +13,11 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
+	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"github.com/ChristopherDavenport/dax/workspace"
 )
 
@@ -211,7 +210,7 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				}
 				// bash's claim stamps exactly the lines that run unasked.
 				args, _ := json.Marshal(map[string]string{"command": cmd})
-				fx, _, err := facts.Of(ctx, Bash(f), args)
+				fx, _, err := agenttool.FactsOf(ctx, Bash(f), args)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -232,7 +231,7 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 func stampedIn(t *testing.T, f *Files, cmd string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"command": cmd})
-	fx, _, err := facts.Of(context.Background(), Bash(f), raw)
+	fx, _, err := agenttool.FactsOf(context.Background(), Bash(f), raw)
 	if err != nil || fx.Rewrite == nil {
 		t.Fatalf("%q was not stamped: %v", cmd, err)
 	}

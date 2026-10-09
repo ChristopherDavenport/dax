@@ -16,8 +16,6 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
-
-	"github.com/ChristopherDavenport/dax/facts"
 )
 
 const (
@@ -126,10 +124,10 @@ type GlobArgs struct {
 // doublestar-style pattern, sorted. It skips .git and common vendored
 // directories.
 func Glob(ws *Files) agenttool.Tool {
-	return facts.With(exactArgs[GlobArgs](globTool(ws)), pathFacts(ws, "glob", "path", "."))
+	return exactArgs[GlobArgs](globTool(ws, agenttool.WithFacts(pathFacts(ws, "glob", "path", "."))))
 }
 
-func globTool(ws *Files) agenttool.Tool {
+func globTool(ws *Files, claim agenttool.Option) agenttool.Tool {
 	return agenttool.New("glob", "Find files by glob pattern, e.g. **/*.go. Paths are relative to the search directory and sorted. Skips .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GlobArgs) (string, error) {
 			if err := ws.checkTouched("glob", ".", in.Path, in.Stamp); err != nil {
@@ -187,7 +185,7 @@ func globTool(ws *Files) agenttool.Tool {
 				out += fmt.Sprintf("\n... (stopped at %d results; narrow the pattern or path)", limit)
 			}
 			return out, nil
-		})
+		}, claim)
 }
 
 // matchGlob matches a slash-separated name against a pattern whose
@@ -289,10 +287,10 @@ type GrepArgs struct {
 // Grep returns a tool that searches files for a regular expression and
 // returns path:line:text for each matching line.
 func Grep(ws *Files) agenttool.Tool {
-	return facts.With(exactArgs[GrepArgs](grepTool(ws)), pathFacts(ws, "grep", "path", "."))
+	return exactArgs[GrepArgs](grepTool(ws, agenttool.WithFacts(pathFacts(ws, "grep", "path", "."))))
 }
 
-func grepTool(ws *Files) agenttool.Tool {
+func grepTool(ws *Files, claim agenttool.Option) agenttool.Tool {
 	return agenttool.New("grep", "Search file contents for a regular expression. Returns path:line:text, sorted by path. Skips binary files, .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GrepArgs) (string, error) {
 			if err := ws.checkTouched("grep", ".", in.Path, in.Stamp); err != nil {
@@ -354,7 +352,7 @@ func grepTool(ws *Files) agenttool.Tool {
 				out += fmt.Sprintf("\n... (stopped at %d matches; narrow the pattern or path)", limit)
 			}
 			return out, nil
-		})
+		}, claim)
 }
 
 func includeMatch(globs []string, rel string) bool {
@@ -418,10 +416,10 @@ type LSArgs struct {
 // LS returns a tool that lists one directory: names sorted, directories
 // with a trailing slash, files with their size.
 func LS(ws *Files) agenttool.Tool {
-	return facts.With(exactArgs[LSArgs](lsTool(ws)), pathFacts(ws, "ls", "path", "."))
+	return exactArgs[LSArgs](lsTool(ws, agenttool.WithFacts(pathFacts(ws, "ls", "path", "."))))
 }
 
-func lsTool(ws *Files) agenttool.Tool {
+func lsTool(ws *Files, claim agenttool.Option) agenttool.Tool {
 	return agenttool.New("ls", "List the entries of one directory, sorted: directories end in /, files show their size in bytes.",
 		func(_ context.Context, in LSArgs) (string, error) {
 			if err := ws.checkTouched("ls", ".", in.Path, in.Stamp); err != nil {
@@ -471,5 +469,5 @@ func lsTool(ws *Files) agenttool.Tool {
 				}
 			}
 			return strings.TrimSuffix(b.String(), "\n"), nil
-		})
+		}, claim)
 }

@@ -78,7 +78,7 @@ Where dax does not keep to this yet, and what each needs:
 | The agent loop, events, steering, follow-ups, retry | `agentturn` | `agent` configures and drives it |
 | Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
-| Tool contract, MCP client | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, and `Files`, the tools' view of a workspace |
+| Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | dax, until the agentworkspace module exists | `workspace`: the `Workspace` interface and `Local`, this machine's directory |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
@@ -395,9 +395,9 @@ kit options add, such as `skill`) and its aliases are unique; `mcp__` is
 an MCP server's; an alias may differ from its own tool only in case
 (`Bash` and `bash`); a `ReadOnly` tool, a matcher, an alias target and a
 `Lifts` entry name only the extension's own tools; a read-only tool
-annotated destructive is refused. A tool's facts claim, what a call
-would touch, may name only its extension's tools: a call it names of
-another's is decided as one no rule names, so it asks. `BeforeToolCall` hooks fold with the
+annotated destructive is refused. A tool's facts claim
+(`agenttool.Factual`), what a call would touch, may name only its
+extension's tools: a call it names of another's is decided as one no rule names, so it asks. `BeforeToolCall` hooks fold with the
 policy, deny over ask over allow, for the main agent and, through
 `Env.ChildPolicy`, every sub-agent; with the policy off they are not
 run. `extension.Renderers` merges the extensions' renderers for the

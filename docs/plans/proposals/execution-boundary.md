@@ -106,8 +106,8 @@ type Call struct {
 	Args json.RawMessage
 }
 
-// Facts is the claim dax's package facts defines (built; see below).
-type Facts = facts.Facts
+// Facts is agenttool's facts claim (built; see below).
+type Facts = agenttool.Facts
 ```
 
 The session wraps it for the loop: each `Tool` becomes an
@@ -120,7 +120,11 @@ and lifts are configuration.
 
 ### The claim, as built
 
-dax builds the in-process half now, as the draft of agenttool's claim:
+dax built the in-process half as the draft of agenttool's claim, and
+agenttool v0.0.19 took it in its own names: `Call` is `FactCall`,
+`Claimer` is `Factual`, `Of` is `FactsOf`, `Claims` is `IsFactual`, and
+`With` is the `WithFacts` option of `New` and `NewFunc`, with `Wrap`
+forwarding the claim. dax's draft was:
 
 ```go
 // package facts: agenttool and the standard library only.
@@ -350,9 +354,10 @@ run, for the cases that want them apart too.
 
 ## What the siblings need
 
-- **agenttool**: the claim as built in dax's `facts` (`Claimer`, `Facts`,
-  `Call`, `FactsOf`), beside `Confined` and `Replayable`, with `Wrap`
-  forwarding it; `mcpserver` and `mcpclient` carry it as a reserved
+- **agenttool**: the claim as built in dax's `facts`, beside `Confined`
+  and `Replayable`, with `Wrap` forwarding it (done in v0.0.19:
+  `Factual`, `Facts`, `FactCall`, `FactsOf`); `mcpserver` and
+  `mcpclient` carry it as a reserved
   request on the same connection, with read-only, sequential and
   resource in the listing so a client does not configure them by hand.
 - **agentpolicy**: subjects taken from a tool's claim, what dax's

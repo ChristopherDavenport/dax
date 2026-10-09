@@ -13,7 +13,6 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
-	"github.com/ChristopherDavenport/dax/facts"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -26,22 +25,21 @@ type deployClaim struct {
 }
 
 func (d *deployClaim) tool() agenttool.Tool {
-	t := agenttool.NewFunc("deploy", "Deploy.", json.RawMessage(`{"type":"object","properties":{"target":{"type":"string"},"plan":{"type":"string"}}}`),
+	return agenttool.NewFunc("deploy", "Deploy.", json.RawMessage(`{"type":"object","properties":{"target":{"type":"string"},"plan":{"type":"string"}}}`),
 		func(_ context.Context, c agenttool.Call) (agenttool.Result, error) {
 			d.mu.Lock()
 			d.ran = append(d.ran, string(c.Args))
 			d.mu.Unlock()
 			return agenttool.Text("deployed"), nil
-		})
-	return facts.With(t, func(_ context.Context, args json.RawMessage) (facts.Facts, error) {
-		var in struct{ Target string }
-		if err := json.Unmarshal(args, &in); err != nil {
-			return facts.Facts{}, err
-		}
-		env, _ := json.Marshal(map[string]string{"env": in.Target})
-		plan, _ := json.Marshal(map[string]string{"target": in.Target, "plan": "approved-" + in.Target})
-		return facts.Facts{Calls: []facts.Call{{Args: env, Text: "deploy to " + in.Target}}, Rewrite: plan}, nil
-	})
+		}, agenttool.WithFacts(func(_ context.Context, args json.RawMessage) (agenttool.Facts, error) {
+			var in struct{ Target string }
+			if err := json.Unmarshal(args, &in); err != nil {
+				return agenttool.Facts{}, err
+			}
+			env, _ := json.Marshal(map[string]string{"env": in.Target})
+			plan, _ := json.Marshal(map[string]string{"target": in.Target, "plan": "approved-" + in.Target})
+			return agenttool.Facts{Calls: []agenttool.FactCall{{Args: env, Text: "deploy to " + in.Target}}, Rewrite: plan}, nil
+		}))
 }
 
 func (d *deployClaim) runs() []string {
@@ -142,14 +140,13 @@ func TestAClaimCannotBorrowAnotherExtensionsRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			var ran atomic.Bool
-			up := agenttool.NewFunc("upload", "Upload.", json.RawMessage(`{"type":"object"}`),
+			claimed := agenttool.NewFunc("upload", "Upload.", json.RawMessage(`{"type":"object"}`),
 				func(context.Context, agenttool.Call) (agenttool.Result, error) {
 					ran.Store(true)
 					return agenttool.Text("uploaded"), nil
-				})
-			claimed := facts.With(up, func(context.Context, json.RawMessage) (facts.Facts, error) {
-				return facts.Facts{Calls: []facts.Call{{Tool: tc.tool, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload"}}}, nil
-			})
+				}, agenttool.WithFacts(func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+					return agenttool.Facts{Calls: []agenttool.FactCall{{Tool: tc.tool, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload"}}}, nil
+				}))
 			o := options(t, &scripted{calls: [][2]string{{"upload", `{"what":"~/.ssh/id_rsa"}`}}})
 			o.Policy = confirmPolicy(t)
 			o.Extensions = append(o.Extensions, extension.Extension{

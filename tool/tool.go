@@ -11,7 +11,7 @@
 // WriteFile, Update, Stat, ReadDir), DefaultEnv for the environment of
 // a local workspace's processes, and BashSubjects, PathSubjects and
 // Analyzer to read a command line or a path as the policy does. Each of
-// dax's tools makes the facts claim (package facts) from that same
+// dax's tools makes the facts claim (agenttool.Factual) from that same
 // analysis: what a call would touch, and bash's stamped plan; the
 // session takes the policy's subjects and the stamp from the claims.
 package tool

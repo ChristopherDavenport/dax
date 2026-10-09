@@ -105,7 +105,10 @@ before the dax step that uses them, as the workspace's rules require.
      repository's root as https://agents.md has it, is in review
      (branch `workspace-instructions`).
 3. **The sandbox**, the goal's first case:
-   - agenttool: the facts claim and its MCP carriage.
+   - agenttool: the facts claim and its MCP carriage. The claim is
+     **done** in agenttool v0.0.19 (`Factual`, `FactsOf`, `WithFacts`,
+     forwarded by `Wrap`), and dax's tools make it; the MCP carriage is
+     still to come.
    - agentpolicy: subjects from facts, with a context.
    - agentworkspace: the module, `Local`, `Start`.
    - dax: `dax execute` and the remote executor; MCP servers started in
@@ -123,13 +126,14 @@ before the dax step that uses them, as the workspace's rules require.
   control runs, never in the executor, so a sandboxed session cannot
   read or write the user's memory directly.
 
-- **The shape of facts**, settled by building it (`facts`, dax's draft
-  for agenttool). A tool claims `Facts(ctx, args) (Facts, error)`, an
+- **The shape of facts**, settled by building it (dax's draft, now
+  agenttool's `Factual` since v0.0.19). A tool claims `Facts(ctx, args) (Facts, error)`, an
   optional per-call claim beside `Confined` and `Replayable`. `Facts`
   is `Calls`, the calls this call amounts to in tool-call terms
   (`{Tool, Args, Text}`: a `read` of what `cat` reads, a `write` of a
   redirect's target, a call no rule names for what cannot be read), and
-  `Rewrite`, the arguments the call runs with if the policy allows it.
+  `Rewrite`, the arguments the call runs with if the policy allows it
+  (agenttool's names: `FactCall` for a call, `FactsOf` to read a claim).
   Nil `Calls` is the call itself; empty is nothing readable, which the
   policy refuses. The policy's subjects are the claim's calls
   (`facts/factspolicy`), so a matcher supplies only `Match`; the
@@ -158,8 +162,8 @@ before the dax step that uses them, as the workspace's rules require.
     refuse such arguments too, on their own.
   - **Why it belongs in agenttool.** `agenttool.Wrap` forwards only the
     claims agenttool knows, so a claim defined elsewhere is lost on a
-    wrapped tool; dax's `facts.Of` looks through wrappers until it
-    moves.
+    wrapped tool; dax's `facts.Of` looked through wrappers until the
+    claim moved there in v0.0.19, and `Wrap` now forwards it.
   - Every policy, exploit and confinement test passes through the
     claims with its expectations unchanged.
 - **Facts cross the wire as an MCP method of their own**
