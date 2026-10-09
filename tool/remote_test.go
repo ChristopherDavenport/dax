@@ -169,7 +169,7 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				"out/secret": {sentinel + "out/secret"},
 			} {
 				args, _ := json.Marshal(map[string]string{"path": raw})
-				got, err := subj(args)
+				got, err := subj(t.Context(), args)
 				if err != nil {
 					t.Fatal(err)
 				}

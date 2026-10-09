@@ -61,10 +61,10 @@ func TestAKeyInAnotherCaseIsRefusedByTheClaimAndTheTool(t *testing.T) {
 	}
 	// The exported splitters refuse them too.
 	f := newWS(t, t.TempDir())
-	if _, err := PathSubjects(f, "path", "")(json.RawMessage(`{"path":"a","Path":"b"}`)); err == nil {
+	if _, err := PathSubjects(f, "path", "")(t.Context(), json.RawMessage(`{"path":"a","Path":"b"}`)); err == nil {
 		t.Error("PathSubjects read a key in another case")
 	}
-	if _, err := BashSubjects(f, 0)(json.RawMessage(`{"command":"pwd","COMMAND":"rm x"}`)); err == nil {
+	if _, err := BashSubjects(f, 0)(t.Context(), json.RawMessage(`{"command":"pwd","COMMAND":"rm x"}`)); err == nil {
 		t.Error("BashSubjects read a key in another case")
 	}
 	if _, _, err := StampArgs(context.Background(), &Analyzer{Files: f}, json.RawMessage(`{"command":"pwd","Command":"rm x"}`)); err == nil {

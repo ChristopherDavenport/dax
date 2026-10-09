@@ -124,7 +124,10 @@ func (s *Set) ByName(name string) (Bound, bool) {
 
 // facts is the claim for a call of the tool named name with args: the
 // pinned reading while a decision about that call holds a pin, else a
-// reading of its own, which is not kept.
+// reading of its own under ctx, which is not kept. The policy's
+// subjects read under the context of the decision that asks
+// (agentpolicy passes it), so a call no decision has pinned, a sibling
+// the batch hold reads, is read under the held decision's context.
 func (s *Set) facts(ctx context.Context, name string, args json.RawMessage) (agenttool.Facts, error) {
 	s.mu.Lock()
 	e := s.pins[key{name, string(args)}]
