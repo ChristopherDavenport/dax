@@ -17,6 +17,7 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
@@ -197,10 +198,13 @@ func (r *tuiRig) type_(s string) {
 	}
 }
 
+// waitOutput waits for sub on the screen. The match is against the
+// output with its escape sequences removed: the renderer may draw a
+// line in pieces, as "a" then insert mode then "ll done".
 func (r *tuiRig) waitOutput(sub string) {
 	r.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
-	for !strings.Contains(r.out.String(), sub) {
+	for !strings.Contains(ansi.Strip(r.out.String()), sub) {
 		if time.Now().After(deadline) {
 			r.t.Fatalf("%q never shown; output:\n%q", sub, r.out.String())
 		}

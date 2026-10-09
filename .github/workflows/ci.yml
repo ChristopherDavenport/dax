@@ -40,6 +40,9 @@ jobs:
           # data (dominikh/go-tools#1832). Back to stable once a release
           # with the fix is out.
           go-version: "1.26.x"
+          # The runner's cached 1.26 can lag a security release, which
+          # govulncheck then reports.
+          check-latest: true
       - name: Check formatting
         run: make fmt
       - name: Check go.mod and go.sum are tidy
