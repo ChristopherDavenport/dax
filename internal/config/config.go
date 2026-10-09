@@ -20,12 +20,14 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/workspace"
 	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -85,6 +87,11 @@ type Config struct {
 	// SkillsDirs are further directories of skills, searched after
 	// .dax/skills and ~/.dax/skills.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
+	// AgentsMDGlobal are instruction files of your own that apply to
+	// every session, whatever the repository holds: read on this
+	// machine after ~/.dax/AGENTS.md and before the repository's
+	// AGENTS.md chain, in order, a missing one skipped.
+	AgentsMDGlobal []string `json:"agents_md_global,omitempty"`
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
 	MemoryDir *string `json:"memory_dir,omitempty"`
@@ -138,8 +145,11 @@ func Path() string {
 	return filepath.Join(home, ".config", "dax", "config.json")
 }
 
-// ProjectPath is the project's file for a working directory.
-func ProjectPath(dir string) string { return filepath.Join(dir, ".dax", "config.json") }
+// ProjectName is the project's file, as a name in its workspace.
+const ProjectName = ".dax/config.json"
+
+// MaxProjectBytes bounds the project's file, which a repository writes.
+const MaxProjectBytes = 1 << 20
 
 // Layer is a Config and where it came from.
 type Layer struct {
@@ -160,6 +170,28 @@ func Load(path string, project, must bool) (Layer, error) {
 		return l, fmt.Errorf("config: %w", err)
 	}
 	return Parse(data, path, project)
+}
+
+// LoadProject reads the project's file through the workspace the
+// session's tools act in, w, so it is read where the project is and a
+// link out of the workspace is refused as a tool's read of it would be:
+// the file is a repository's, and dax reads no repository file from
+// this machine's directory. A file that is not there is an empty
+// layer; one that is a link out, a FIFO, a device or over
+// MaxProjectBytes is an error, since leaving it out would drop rules
+// that only tighten. Its errors name it as w.Root() joined with
+// ProjectName.
+func LoadProject(w workspace.Workspace) (Layer, error) {
+	shown := path.Join(w.Root(), ProjectName)
+	l := Layer{Path: shown, Project: true}
+	data, err := workspace.Read(w, ProjectName, MaxProjectBytes)
+	if errors.Is(err, fs.ErrNotExist) {
+		return l, nil
+	}
+	if err != nil {
+		return l, fmt.Errorf("config %s: %w", shown, err)
+	}
+	return Parse(data, shown, true)
 }
 
 // Parse reads a file's contents; path is for the error messages and
@@ -210,6 +242,9 @@ func (l *Layer) validate() error {
 			return fmt.Errorf("pass_env: %q is not a variable name", v)
 		}
 	}
+	if err := checkPaths("agents_md_global", c.AgentsMDGlobal); err != nil {
+		return err
+	}
 	if c.Effort != "" && !slices.Contains(Efforts, c.Effort) {
 		return fmt.Errorf(`effort %q: want one of %s`, c.Effort, strings.Join(Efforts, ", "))
 	}
@@ -245,7 +280,7 @@ func (l *Layer) validate() error {
 			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
-			{"skills_dirs", len(c.SkillsDirs) > 0}, {"memory_dir", c.MemoryDir != nil},
+			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
 			{"pricing_file", c.PricingFile != ""},
@@ -370,29 +405,47 @@ func (l *Layer) resolvePaths() {
 		// .dax/config.json: relative paths are the project's.
 		base = filepath.Dir(base)
 	}
-	fix := func(p string) string {
-		if p == "" {
-			return p
-		}
-		if p == "~" || strings.HasPrefix(p, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				p = filepath.Join(home, strings.TrimPrefix(p, "~"))
-			}
-		}
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(base, p)
-		}
-		return filepath.Clean(p)
-	}
+	fix := func(p string) string { return resolvePath(p, base) }
 	l.InstructionsFile = fix(l.InstructionsFile)
 	for i, d := range l.SkillsDirs {
 		l.SkillsDirs[i] = fix(d)
+	}
+	for i, f := range l.AgentsMDGlobal {
+		l.AgentsMDGlobal[i] = fix(f)
 	}
 	if l.MemoryDir != nil && *l.MemoryDir != "" {
 		m := fix(*l.MemoryDir)
 		l.MemoryDir = &m
 	}
 	l.PricingFile = fix(l.PricingFile)
+}
+
+// resolvePath expands a leading ~ to the home directory and makes p
+// absolute against base. "" stays "".
+func resolvePath(p, base string) string {
+	if p == "" {
+		return p
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	return filepath.Clean(p)
+}
+
+// checkPaths refuses an empty entry in a list of paths, which would
+// otherwise name the directory the list is relative to.
+func checkPaths(field string, paths []string) error {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("%s: an empty path", field)
+		}
+	}
+	return nil
 }
 
 // Flags are the settings the command line can override. A nil field
@@ -404,6 +457,10 @@ type Flags struct {
 	APIKeyLogin, PricingFile, Effort *string
 	SessionHeader, ClientHeader      *string
 	Think, Agents                    *bool
+	// AgentsMDGlobal replaces the config's agents_md_global; nil was
+	// not given and empty clears it. A relative path is the working
+	// directory's.
+	AgentsMDGlobal []string
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
 }
@@ -425,8 +482,9 @@ type Settings struct {
 	Agents           bool
 	InstructionsFile string
 	SkillsDirs       []string
-	MemoryDir        string // empty: off; Resolve fills the default in
-	PricingFile      string // empty: no terminal-client cost
+	AgentsMDGlobal   []string // the user's own instruction files, absolute
+	MemoryDir        string   // empty: off; Resolve fills the default in
+	PricingFile      string   // empty: no terminal-client cost
 	MCP              []MCP
 	PassEnv          []string
 	MaxReadBytes     int64
@@ -504,6 +562,11 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		for _, d := range l.SkillsDirs {
 			if !slices.Contains(s.SkillsDirs, d) {
 				s.SkillsDirs = append(s.SkillsDirs, d)
+			}
+		}
+		for _, f := range l.AgentsMDGlobal {
+			if !slices.Contains(s.AgentsMDGlobal, f) {
+				s.AgentsMDGlobal = append(s.AgentsMDGlobal, f)
 			}
 		}
 		if l.MemoryDir != nil {
@@ -621,6 +684,21 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
+	}
+	if f.AgentsMDGlobal != nil {
+		if err := checkPaths("-agents-md-global", f.AgentsMDGlobal); err != nil {
+			return s, err
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			return s, err
+		}
+		s.AgentsMDGlobal = []string{}
+		for _, p := range f.AgentsMDGlobal {
+			if p = resolvePath(p, wd); !slices.Contains(s.AgentsMDGlobal, p) {
+				s.AgentsMDGlobal = append(s.AgentsMDGlobal, p)
+			}
+		}
 	}
 	s.Policy.Off = f.NoPolicy
 	for _, n := range sortedKeys(servers) {

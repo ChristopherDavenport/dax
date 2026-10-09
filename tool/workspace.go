@@ -72,6 +72,35 @@ func (w *Files) Rel(path string) (string, error) {
 	return rel, nil
 }
 
+// Resolve is the name, relative to the workspace's root, that path
+// leads to with every link on its way followed, read through the
+// workspace's file system, as the policy's checks follow them. A path
+// or a link that leads out of the workspace is ErrOutside; a workspace
+// whose file system cannot read links, or a chain of links too long to
+// follow, is ErrLinksUnknown, so a caller that must know where a name
+// leads fails toward refusing. A name that does not exist is judged by
+// where its directory leads. An extension that offers a project's
+// files through a tool other than the file tools (dax-skills) uses it
+// to keep a link from reaching past what it offers.
+func (w *Files) Resolve(path string) (string, error) {
+	rel, err := w.Rel(path)
+	if err != nil {
+		return "", err
+	}
+	real, r := w.view().resolve(rel)
+	switch r {
+	case outside:
+		return "", fmt.Errorf("%w: %s", ErrOutside, path)
+	case unknown:
+		return "", fmt.Errorf("%w: %s", ErrLinksUnknown, path)
+	}
+	return filepath.Clean(real), nil
+}
+
+// ErrLinksUnknown is Resolve's error where the workspace cannot say
+// where a link leads.
+var ErrLinksUnknown = errors.New("the workspace cannot say where its links lead")
+
 // normalizePath turns path, absolute or relative to dir, into a cleaned
 // name relative to dir ("." for dir itself), without touching the file
 // system: ./x, a/../x and the absolute path of x all come out as x. ok

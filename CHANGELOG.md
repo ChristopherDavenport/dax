@@ -7,6 +7,69 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: AGENTS.md, the project's skills (`.dax/skills`) and its
+  config (`.dax/config.json`) are read through the session's workspace,
+  as the tools read the project, and not from this machine's directory.
+  A container or a remote workspace now gives its own instructions,
+  skills and config, and nothing from the directory dax started in.
+  For a session on this machine the files read and the files refused
+  are the same, with the exceptions below.
+- Changed: the AGENTS.md chain follows the convention
+  (https://agents.md): it runs from the repository's root, the nearest
+  directory at or above the start that holds a `.git` (a worktree's
+  `.git` file counts), down to where dax starts, and never above the
+  repository. A file in a directory above the repository, such as a
+  parent directory that holds several checkouts, is no longer read.
+  With no repository only the start directory's `AGENTS.md` is read.
+  `~/.dax/AGENTS.md` is read first, as before.
+- Changed: in the system prompt, a project `AGENTS.md` is named by its
+  path in the workspace (`<project_instructions path="AGENTS.md">`)
+  rather than its absolute path on this machine, since agentkit renders
+  the chain as the workspace names it; the prompt's working directory
+  line gives the root. The user's file, and the files between the
+  repository's root and a start below it, keep their absolute paths.
+  The `omitted:` lines still name a file by its absolute path.
+- Changed (security): screening is now the workspace's confinement, not
+  a walk of this machine's directory. A project `AGENTS.md` or
+  `.dax/skills` that is a link out of the workspace, or to nothing, is
+  still left out and reported; an `AGENTS.md` that is a FIFO or a
+  device is now left out too, where reading it would have waited. A
+  `.dax/config.json` that is a link out of the workspace, a FIFO, a
+  device or over 1 MiB is now an error naming the file, where it was
+  read: the file only tightens, so leaving it out would loosen the
+  policy.
+- Security: a `.dax/skills` that holds a symbolic link leading outside
+  it is left out whole and reported ("holds a symbolic link outside the
+  skills directory"), even when the link stays in the workspace:
+  `.dax/skills/x/notes.md -> ../../../.env` would otherwise let the
+  skill tool, which runs unasked, read `.env` without the question
+  `read(.env)` gets. Links are followed through the workspace, chains,
+  relative and absolute; a link between two skills is still read. On
+  a workspace whose file system cannot read links, a skills directory
+  with any link is refused. On main a skill with such a link was
+  offered and the skill tool refused the one file.
+- Added: `tool.Files.Resolve`, where a path leads with its links
+  followed through the workspace (`ErrOutside` out of it,
+  `tool.ErrLinksUnknown` where the workspace cannot say), for an
+  extension that offers a project's files through a tool of its own.
+- Changed: a skill in `.dax/skills` is listed at the workspace's root
+  joined with `.dax/skills`, and is never trusted under
+  `-trust-skills`, whatever this machine's paths say. The project's
+  skills still shadow the user's, which shadow `skills_dirs`.
+- Added: `agents_md_global` in your config, and `-agents-md-global`,
+  your own instruction files for every session whatever the repository
+  holds, such as an `AGENTS.md` above your checkouts that the chain no
+  longer reaches. They are read on this machine after
+  `~/.dax/AGENTS.md` and before the repository's chain, in order, a
+  missing one skipped and none screened, as your own files; a container
+  session reads them too. A relative path in the config is relative to
+  the file, `~` is your home directory; the flag is split on `:` as
+  `PATH` is, replaces the config's list, and `""` clears it.
+  `-agents-md=false` turns them off with the rest. A project's
+  `.dax/config.json` may not set it. `agent.Options.AgentsMDGlobal`
+  carries them for a program built on dax.
+- Dependencies: agentkit v0.0.8 and agentsmd v0.0.3, for
+  `agentsmd.Options.FS`, through which the AGENTS.md chain is read.
 - Security: golang.org/x/net is v0.60.0, which fixes GO-2026-6617 and
   GO-2026-6612 in the HTTP/2 code the provider clients use.
 - Added: `facts`, a tool's claim of what a call would touch, said before

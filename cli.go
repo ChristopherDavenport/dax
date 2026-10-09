@@ -93,7 +93,8 @@ func run(ctx context.Context, args []string, p program) error {
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
-	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md and the AGENTS.md files from / down to this directory in the instructions")
+	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md, the agents_md_global files and the AGENTS.md files from the repository's root down to this directory in the instructions")
+	agentsMDGlobal := fs.String("agents-md-global", "", "your own instruction files for every session, separated by "+string(filepath.ListSeparator)+" as in PATH; overrides agents_md_global, \"\" clears it")
 	skillsFlag := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
@@ -181,6 +182,13 @@ func run(ctx context.Context, args []string, p program) error {
 			flags.APIKeyCommand = []string{}
 		}
 	}
+	if given["agents-md-global"] {
+		// A list of paths, split as PATH is, so a path may hold a space.
+		flags.AgentsMDGlobal = filepath.SplitList(*agentsMDGlobal)
+		if flags.AgentsMDGlobal == nil {
+			flags.AgentsMDGlobal = []string{}
+		}
+	}
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.PricingFile = str("pricing-file", pricingFile)
 	flags.Effort = str("effort", effort)
@@ -198,7 +206,17 @@ func run(ctx context.Context, args []string, p program) error {
 		flags.MemoryDir = &m
 	}
 	flags.NoPolicy = *noPolicy
-	settings, err := loadSettings(dir, *cfgPath, flags)
+	// The project's config is the repository's, so it is read through
+	// a workspace over the project, as the session reads AGENTS.md and
+	// the project's skills, and not from this machine's directory. The
+	// session's workspace is opened below, once the settings say what
+	// its processes may inherit; this one only reads, and runs nothing.
+	proj, err := workspace.NewLocal(dir, nil)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	settings, err := loadSettings(proj, *cfgPath, flags)
+	proj.Close()
 	if err != nil {
 		return err
 	}
@@ -239,14 +257,15 @@ func run(ctx context.Context, args []string, p program) error {
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
 		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Root: *root, Sync: policyMode,
-		UserDir:       agent.DefaultUserDir(),
-		AgentsMD:      *agentsMD,
-		PassEnv:       settings.PassEnv,
-		KeyEnv:        m.KeyEnv,
-		MaxReadBytes:  settings.MaxReadBytes,
-		Compact:       *compactAt,
-		CompactServer: *compactServer,
-		Log:           func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+		UserDir:        agent.DefaultUserDir(),
+		AgentsMD:       *agentsMD,
+		AgentsMDGlobal: settings.AgentsMDGlobal,
+		PassEnv:        settings.PassEnv,
+		KeyEnv:         m.KeyEnv,
+		MaxReadBytes:   settings.MaxReadBytes,
+		Compact:        *compactAt,
+		CompactServer:  *compactServer,
+		Log:            func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
 	if p.named {
 		opts.Name, opts.Version = p.name, p.version
@@ -323,9 +342,9 @@ func run(ctx context.Context, args []string, p program) error {
 	return f.Run(ctx, sess)
 }
 
-// loadSettings reads the user's and the project's files and folds
-// them with the flags.
-func loadSettings(dir, userPath string, flags config.Flags) (config.Settings, error) {
+// loadSettings reads the user's file and the project's, through the
+// workspace the project is in, and folds them with the flags.
+func loadSettings(project workspace.Workspace, userPath string, flags config.Flags) (config.Settings, error) {
 	explicit := userPath != ""
 	if !explicit {
 		userPath = config.Path()
@@ -334,7 +353,7 @@ func loadSettings(dir, userPath string, flags config.Flags) (config.Settings, er
 	if err != nil {
 		return config.Settings{}, err
 	}
-	proj, err := config.Load(config.ProjectPath(dir), true, false)
+	proj, err := config.LoadProject(project)
 	if err != nil {
 		return config.Settings{}, err
 	}

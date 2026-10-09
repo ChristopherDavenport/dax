@@ -11,6 +11,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/provider"
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 func write(t *testing.T, path, content string) {
@@ -34,12 +35,98 @@ func home(t *testing.T) string {
 
 func str(s string) *string { return &s }
 
+// local is this machine's directory as a workspace, closed with the
+// test.
+func local(t *testing.T, dir string) workspace.Workspace {
+	t.Helper()
+	ws, err := workspace.NewLocal(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ws.Close() })
+	return ws
+}
+
+// boxed stands in for a container: its root is /workspace, its files a
+// directory here.
+type boxed struct{ *workspace.Local }
+
+func (b boxed) Root() string { return "/workspace" }
+func (b boxed) Descriptor() workspace.Descriptor {
+	return workspace.Descriptor{Kind: workspace.KindContainer, Ref: "sha256:abc", Root: "/workspace"}
+}
+
+// The project's config is the workspace's file, read through it: a
+// workspace elsewhere gives its own file, named by its own root, and a
+// link out of the workspace is refused, not followed; leaving the file
+// out would drop rules that only tighten.
+func TestTheProjectConfigIsReadThroughTheWorkspace(t *testing.T) {
+	home(t)
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, files, outside string)
+		box     bool
+		deny    string // the project rule read; empty: none
+		wantErr string // in the error; empty: none
+	}{
+		{"a local project's file", func(t *testing.T, files, _ string) {
+			write(t, filepath.Join(files, ".dax", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
+		}, false, "bash(git push:*)", ""},
+		{"a container's file", func(t *testing.T, files, _ string) {
+			write(t, filepath.Join(files, ".dax", "config.json"), `{"policy":{"deny":["bash(rm:*)"]}}`)
+		}, true, "bash(rm:*)", ""},
+		{"a container's file names its root in errors", func(t *testing.T, files, _ string) {
+			write(t, filepath.Join(files, ".dax", "config.json"), `{"model":"from-project"}`)
+		}, true, "", "/workspace/.dax/config.json: model: a project file may only tighten"},
+		{"no file", func(*testing.T, string, string) {}, true, "", ""},
+		{"a link out of the workspace", func(t *testing.T, files, outside string) {
+			write(t, filepath.Join(outside, "config.json"), `{"policy":{"deny":["bash(curl:*)"]}}`)
+			must(t, os.MkdirAll(filepath.Join(files, ".dax"), 0o755))
+			must(t, os.Symlink(filepath.Join(outside, "config.json"), filepath.Join(files, ".dax", "config.json")))
+		}, false, "", "outside the workspace"},
+		{"a link inside it", func(t *testing.T, files, _ string) {
+			write(t, filepath.Join(files, "conf", "dax.json"), `{"policy":{"deny":["bash(make:*)"]}}`)
+			must(t, os.MkdirAll(filepath.Join(files, ".dax"), 0o755))
+			must(t, os.Symlink(filepath.Join("..", "conf", "dax.json"), filepath.Join(files, ".dax", "config.json")))
+		}, false, "bash(make:*)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, outside := t.TempDir(), t.TempDir()
+			tc.setup(t, files, outside)
+			var ws workspace.Workspace = local(t, files)
+			if tc.box {
+				ws = boxed{ws.(*workspace.Local)}
+			}
+			s, err := loadSettings(ws, "", config.Flags{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(s.Policy.Project.Deny, ","); got != tc.deny {
+				t.Errorf("project deny = %q, want %q", got, tc.deny)
+			}
+		})
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	h := home(t)
 	proj := t.TempDir()
 	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"anthropic","model":"from-user","think":false}`)
 
-	s, err := loadSettings(proj, "", config.Flags{})
+	s, err := loadSettings(local(t, proj), "", config.Flags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,15 +136,15 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 
 	// A project file tightens the policy and cannot set the model.
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"model":"from-project"}`)
-	if _, err = loadSettings(proj, "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
+	if _, err = loadSettings(local(t, proj), "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
 		t.Fatalf("project model: %v", err)
 	}
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
-	if s, err = loadSettings(proj, "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
+	if s, err = loadSettings(local(t, proj), "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("project over user: %+v, %v", s, err)
 	}
 
-	s, err = loadSettings(proj, "", config.Flags{Model: str("from-flag"), Provider: str("openai")})
+	s, err = loadSettings(local(t, proj), "", config.Flags{Model: str("from-flag"), Provider: str("openai")})
 	if err != nil || s.Model != "from-flag" || s.Provider != "openai" {
 		t.Fatalf("flags over files: %+v, %v", s, err)
 	}
@@ -67,11 +154,11 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 
 	// -config names another user file, which must exist.
 	other := filepath.Join(h, "other.json")
-	if _, err := loadSettings(proj, other, config.Flags{}); err == nil {
+	if _, err := loadSettings(local(t, proj), other, config.Flags{}); err == nil {
 		t.Error("a missing -config file should be an error")
 	}
 	write(t, other, `{"provider":"gemini"}`)
-	if s, err = loadSettings(proj, other, config.Flags{}); err != nil || s.Provider != "gemini" {
+	if s, err = loadSettings(local(t, proj), other, config.Flags{}); err != nil || s.Provider != "gemini" {
 		t.Fatalf("-config: %+v, %v", s, err)
 	}
 }
@@ -80,7 +167,7 @@ func TestABrokenConfigFileIsAClearError(t *testing.T) {
 	h := home(t)
 	path := filepath.Join(h, ".config", "dax", "config.json")
 	write(t, path, `{"provider":"ollama","modle":"x"}`)
-	_, err := loadSettings(t.TempDir(), "", config.Flags{})
+	_, err := loadSettings(local(t, t.TempDir()), "", config.Flags{})
 	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "modle") {
 		t.Fatalf("err = %v, want the file and the field named", err)
 	}
@@ -118,7 +205,7 @@ func TestPricingParsesAndPrices(t *testing.T) {
 func TestSelectedProviderWithoutItsKeyFailsBeforeAnyRequest(t *testing.T) {
 	home(t)
 	t.Setenv("OPENAI_API_KEY", "")
-	s, err := loadSettings(t.TempDir(), "", config.Flags{Provider: str("openai")})
+	s, err := loadSettings(local(t, t.TempDir()), "", config.Flags{Provider: str("openai")})
 	if err != nil {
 		t.Fatal(err)
 	}

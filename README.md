@@ -239,7 +239,7 @@ call by call by the same policy.
 Settings come from three layers, each overriding the one before:
 
 1. `~/.config/dax/config.json` (`$XDG_CONFIG_HOME/dax/config.json`; `-config path` names another)
-2. `.dax/config.json` in the working directory, which can only tighten the policy
+2. `.dax/config.json` in the working directory, read through the workspace, which can only tighten the policy
 3. flags
 
 ```json
@@ -288,6 +288,7 @@ names the file and the field.
 | `client_header` | the header each model call carries `dax/<version>` in, for a server that records which client called |
 | `instructions_file` | your own instructions, added to the system prompt after dax's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
+| `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
@@ -303,7 +304,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `memory_dir`, `pricing_file` or `mcp_servers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file` or `mcp_servers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -321,7 +322,8 @@ keys somewhere; a repository does not get to make them.)
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only warnings before and the resume command after |
-| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md chain, skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
+| `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
+| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
@@ -552,9 +554,13 @@ machine matters.
   tighten the policy; it cannot choose the provider, model or endpoint,
   add instructions, skills, memory or MCP servers, or allow anything.
   Its `"builtin": false` drops only allow rules, never an ask or a deny.
-  `AGENTS.md` files and `.dax/skills` that are symbolic links out of the
-  workspace are not read into the prompt. Path rules match the path
-  after normalisation, so `docs/../.git/x` is not under `docs/**`.
+  Its `AGENTS.md`, `.dax/skills` and `.dax/config.json` are read through
+  the workspace, so one that is a symbolic link out of it is refused as
+  a tool's read would be: an `AGENTS.md` or `.dax/skills` is left out
+  and reported, and a `.dax/config.json` is an error. A `.dax/skills`
+  holding a link that leads outside it, even into the workspace, is left
+  out too, since the skill tool reads without asking. Path rules match
+  the path after normalisation, so `docs/../.git/x` is not under `docs/**`.
 - **Keeps credentials away from what it starts.** Bash commands and MCP
   servers get your environment without `*_API_KEY`, `*_TOKEN`,
   `*_SECRET` and the like unless your config names a variable. Keys are
@@ -715,7 +721,14 @@ beside a running dax. `-sessions ""` disables recording.
 
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
 `skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
-are read too.
+are read too, through the workspace. The `AGENTS.md` chain follows the
+convention (https://agents.md): from the repository's root, the nearest
+directory at or above the start that holds a `.git`, down to where dax
+starts, the nearest file last; a directory above the repository is not
+read. With no repository only the start directory's file is read. A
+file you want in every session whatever the repository, such as one in a
+directory above your checkouts, goes in your config's
+`agents_md_global`.
 
 ## Building on dax
 
@@ -857,6 +870,13 @@ cannot tell them apart:
   through `Exec`, with paths passed as arguments). A workspace whose
   file system cannot tell a link from its target leaves those checks
   unable to follow links, and they ask.
+- The project's instructions are read through it: the `AGENTS.md`
+  chain (agentsmd's `Options.FS`), `.dax/skills` (an `agentskill.Source`
+  over its file system) and `.dax/config.json`, each screened there, so
+  a container gives its own and nothing comes from the directory dax
+  started in. Only when the workspace is that directory on this machine
+  and dax started below its repository's root are the `AGENTS.md` files
+  between the two read from this machine, screened the same way.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
@@ -875,10 +895,6 @@ What is not there yet:
 
 - dax ships only `workspace.Local`; a container or remote workspace is
   a program's to provide until the agentworkspace module exists.
-- AGENTS.md, the project's skills (`.dax/skills`) and its config
-  (`.dax/config.json`) are read from `Dir` on this machine, because
-  agentkit, agentsmd and agentskill take local paths. Reading them
-  through a workspace needs changes in those libraries first.
 - MCP servers run on this machine, with its environment scrubbed.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs

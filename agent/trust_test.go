@@ -2,9 +2,15 @@ package agent
 
 import (
 	"context"
+	"io/fs"
+	"path"
+	"syscall"
+
+	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
+	"github.com/ChristopherDavenport/dax/workspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
@@ -400,4 +406,324 @@ func TestTheExploreChildIsGovernedByTheParentsPolicy(t *testing.T) {
 			t.Errorf("asked %v, the child saw %q", asked, childSaw())
 		}
 	})
+}
+
+// The AGENTS.md chain follows the convention (https://agents.md): from
+// the repository's root, the nearest directory holding a .git, down to
+// where the session starts, never above the repository, and the start
+// directory's file alone without one. The user's file comes first and
+// the nearest file last.
+func TestTheAGENTSmdChainRunsFromTheRepositoryRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		git   string // where .git is, under base; "" none
+		file  bool   // .git is a file, as in a worktree
+		start string // the session's directory, under base
+		want  []string
+		not   []string
+	}{
+		{"started below the root", "repo", false, "repo/sub/pkg", []string{"USER-RULE", "REPO-RULE", "SUB-RULE", "PKG-RULE"}, []string{"ABOVE-RULE"}},
+		{"in a worktree", "repo", true, "repo/sub/pkg", []string{"USER-RULE", "REPO-RULE", "SUB-RULE", "PKG-RULE"}, []string{"ABOVE-RULE"}},
+		{"started at the root", "repo/sub/pkg", false, "repo/sub/pkg", []string{"USER-RULE", "PKG-RULE"}, []string{"ABOVE-RULE", "REPO-RULE", "SUB-RULE"}},
+		{"no repository", "", false, "repo/sub/pkg", []string{"USER-RULE", "PKG-RULE"}, []string{"ABOVE-RULE", "REPO-RULE", "SUB-RULE"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := options(t, &echo.Adapter{})
+			base := filepath.Join(filepath.Dir(o.Dir), "tree")
+			o.Dir = filepath.Join(base, tc.start)
+			write(t, filepath.Join(base, "AGENTS.md"), "ABOVE-RULE\n")
+			write(t, filepath.Join(base, "repo", "AGENTS.md"), "REPO-RULE\n")
+			write(t, filepath.Join(base, "repo", "sub", "AGENTS.md"), "SUB-RULE\n")
+			write(t, filepath.Join(base, "repo", "sub", "pkg", "AGENTS.md"), "PKG-RULE\n")
+			write(t, filepath.Join(o.UserDir, "AGENTS.md"), "USER-RULE\n")
+			switch {
+			case tc.git != "" && tc.file:
+				write(t, filepath.Join(base, tc.git, ".git"), "gitdir: /elsewhere\n")
+			case tc.git != "":
+				must(t, os.MkdirAll(filepath.Join(base, tc.git, ".git"), 0o755))
+			}
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			instr := s.ag.Config().Instructions
+			at := -1
+			for _, w := range tc.want {
+				i := strings.Index(instr, w)
+				if i < 0 {
+					t.Errorf("instructions lack %s", w)
+				} else if i < at {
+					t.Errorf("%s is out of order", w)
+				}
+				at = i
+			}
+			for _, n := range tc.not {
+				if strings.Contains(instr, n) {
+					t.Errorf("instructions hold %s", n)
+				}
+			}
+		})
+	}
+}
+
+// What the screening refused, each case still refused through the
+// workspace, the session started and the file reported with its path
+// in the workspace's root: a link out of the workspace, a link to
+// nothing, a FIFO, which a read would wait on, and a link between the
+// repository's root and a session started below it.
+func TestAnAGENTSmdTheWorkspaceRefusesIsLeftOut(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		setup  func(t *testing.T, o *Options, outside string) (refused string)
+		reason string
+	}{
+		{"a link out", func(t *testing.T, o *Options, outside string) string {
+			write(t, filepath.Join(outside, "id_rsa"), "SECRET-KEY\n")
+			os.Remove(filepath.Join(o.Dir, "AGENTS.md"))
+			must(t, os.Symlink(filepath.Join(outside, "id_rsa"), filepath.Join(o.Dir, "AGENTS.md")))
+			return filepath.Join(o.Dir, "AGENTS.md")
+		}, "symbolic link to "},
+		{"a relative link out", func(t *testing.T, o *Options, outside string) string {
+			write(t, filepath.Join(outside, "id_rsa"), "SECRET-KEY\n")
+			os.Remove(filepath.Join(o.Dir, "AGENTS.md"))
+			rel, err := filepath.Rel(o.Dir, filepath.Join(outside, "id_rsa"))
+			must(t, err)
+			must(t, os.Symlink(rel, filepath.Join(o.Dir, "AGENTS.md")))
+			return filepath.Join(o.Dir, "AGENTS.md")
+		}, "outside the workspace"},
+		{"a link to nothing", func(t *testing.T, o *Options, _ string) string {
+			os.Remove(filepath.Join(o.Dir, "AGENTS.md"))
+			must(t, os.Symlink("gone", filepath.Join(o.Dir, "AGENTS.md")))
+			return filepath.Join(o.Dir, "AGENTS.md")
+		}, "symbolic link to a missing file"},
+		{"a FIFO", func(t *testing.T, o *Options, _ string) string {
+			os.Remove(filepath.Join(o.Dir, "AGENTS.md"))
+			must(t, syscall.Mkfifo(filepath.Join(o.Dir, "AGENTS.md"), 0o644))
+			return filepath.Join(o.Dir, "AGENTS.md")
+		}, "not a regular file"},
+		{"a link above the start, in the repository", func(t *testing.T, o *Options, outside string) string {
+			repo := filepath.Dir(o.Dir)
+			must(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+			write(t, filepath.Join(outside, "id_rsa"), "SECRET-KEY\n")
+			must(t, os.Symlink(filepath.Join(outside, "id_rsa"), filepath.Join(repo, "AGENTS.md")))
+			return filepath.Join(repo, "AGENTS.md")
+		}, "symbolic link to "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &echo.Adapter{})
+			refused := tc.setup(t, &o, t.TempDir())
+			s, err := New(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if instr := s.ag.Config().Instructions; strings.Contains(instr, "SECRET-KEY") {
+				t.Errorf("instructions hold the file:\n%s", instr)
+			}
+			var got []string
+			for _, om := range s.Omitted() {
+				if om.Source == "dax" {
+					got = append(got, om.What+" "+om.Reason)
+				}
+			}
+			if len(got) != 1 || !strings.HasPrefix(got[0], refused+" ") || !strings.Contains(got[0], tc.reason) {
+				t.Errorf("omitted %q, want %s refused for %q", got, refused, tc.reason)
+			}
+		})
+	}
+}
+
+// noLinks is a workspace whose file system cannot tell a link from
+// what it leads to, as one over a plain file API may not.
+type noLinks struct{ *workspace.Local }
+
+func (n noLinks) FS() fs.FS { return struct{ fs.FS }{n.Local.FS()} }
+
+// A session in a workspace that is not this machine's directory reads
+// AGENTS.md, the project's skills and nothing else from the workspace:
+// not the directory the session was started in here, nor its
+// repository. A link out of the workspace is refused there as it is on
+// this machine, and named by the workspace's root; a workspace that
+// cannot read links refuses it too.
+func TestAContainersInstructionsComeFromItsFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		wrap  func(*workspace.Local) workspace.Workspace
+		root  string
+		links bool // the FS reads links, so the omission names the target
+	}{
+		{"a container", func(l *workspace.Local) workspace.Workspace { return &boxed{Local: l} }, "/workspace", true},
+		{"a file system without links", func(l *workspace.Local) workspace.Workspace { return noLinks{l} }, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := options(t, &echo.Adapter{})
+			// The host's directory and its repository, which the
+			// session must not read.
+			must(t, os.MkdirAll(filepath.Join(o.Dir, ".git"), 0o755))
+			write(t, filepath.Join(o.Dir, "AGENTS.md"), "HOST-RULE\n")
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "hostskill", "SKILL.md"), "---\nname: hostskill\ndescription: From the host.\n---\nHost.\n")
+			// The workspace's files.
+			files := filepath.Join(t.TempDir(), "box")
+			write(t, filepath.Join(files, "AGENTS.md"), "BOX-RULE\n")
+			write(t, filepath.Join(files, ".dax", "skills", "boxskill", "SKILL.md"), "---\nname: boxskill\ndescription: From the box.\n---\nBox.\n")
+			local, err := workspace.NewLocal(files, nil)
+			must(t, err)
+			t.Cleanup(func() { local.Close() })
+			o.Workspace = tc.wrap(local)
+			// The user's global file is on this machine, and read
+			// whatever the workspace.
+			global := filepath.Join(t.TempDir(), "global.md")
+			write(t, global, "GLOBAL-RULE\n")
+			o.AgentsMDGlobal = []string{global}
+			root := tc.root
+			if root == "" {
+				root = local.Root()
+			}
+
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instr := s.ag.Config().Instructions
+			s.Close()
+			for _, w := range []string{"BOX-RULE", "GLOBAL-RULE", `<project_instructions path="AGENTS.md">`, "boxskill", path.Join(root, ".dax", "skills", "boxskill")} {
+				if !strings.Contains(instr, w) {
+					t.Errorf("instructions lack %q:\n%s", w, instr)
+				}
+			}
+			for _, n := range []string{"HOST-RULE", "hostskill"} {
+				if strings.Contains(instr, n) {
+					t.Errorf("instructions hold the host's %q", n)
+				}
+			}
+
+			// A link out of the workspace, in the workspace.
+			secret := filepath.Join(t.TempDir(), "id_rsa")
+			write(t, secret, "SECRET-KEY\n")
+			must(t, os.Remove(filepath.Join(files, "AGENTS.md")))
+			must(t, os.Symlink(secret, filepath.Join(files, "AGENTS.md")))
+			s, err = New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if strings.Contains(s.ag.Config().Instructions, "SECRET-KEY") {
+				t.Error("the link out was read")
+			}
+			want := path.Join(root, "AGENTS.md") + " outside the workspace"
+			if tc.links {
+				want = path.Join(root, "AGENTS.md") + " symbolic link to " + secret + ", outside the workspace"
+			}
+			var got []string
+			for _, om := range s.Omitted() {
+				if om.Source == "dax" {
+					got = append(got, om.What+" "+om.Reason)
+				}
+			}
+			if len(got) != 1 || got[0] != want {
+				t.Errorf("omitted %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// The kit names a file of the chain it leaves out by its name in the
+// workspace's file system; the session reports it by its path in the
+// workspace's root, as the start lines show it.
+func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
+	o := options(t, &echo.Adapter{})
+	write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat("x", 33<<10))
+	s, err := New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var got []string
+	for _, om := range s.Omitted() {
+		if om.Part == agentsmd.PartID {
+			got = append(got, om.What+" "+om.Reason)
+		}
+	}
+	if want := filepath.Join(o.Dir, "AGENTS.md") + " over budget"; len(got) != 1 || got[0] != want {
+		t.Errorf("omitted %q, want %q", got, want)
+	}
+}
+
+// agents_md_global: the user's own files, read on this machine after
+// ~/.dax/AGENTS.md and before the repository's chain, in order, a
+// missing one skipped and none screened, since they are the user's;
+// one that is also a file of the chain is read once; -agents-md=false
+// turns them off with the rest.
+func TestTheGlobalAGENTSmdFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		off    bool
+		extra  func(t *testing.T, o *Options, base string) []string // more global files
+		want   []string                                             // in order
+		not    []string
+		onceOf string // text that must appear once
+	}{
+		{"in order, after the user's and before the chain", false, nil,
+			[]string{"USER-RULE", "GLOBAL-ONE", "GLOBAL-TWO", "REPO-RULE", "PKG-RULE"}, nil, ""},
+		{"a link anywhere is read, being the user's", false, func(t *testing.T, o *Options, base string) []string {
+			target := filepath.Join(t.TempDir(), "kept.md")
+			write(t, target, "GLOBAL-LINKED\n")
+			link := filepath.Join(base, "linked.md")
+			must(t, os.Symlink(target, link))
+			return []string{link}
+		}, []string{"GLOBAL-TWO", "GLOBAL-LINKED", "REPO-RULE"}, nil, ""},
+		{"one that is the chain's is read once", false, func(t *testing.T, o *Options, base string) []string {
+			return []string{filepath.Join(o.Dir, "AGENTS.md"), filepath.Join(base, "repo", "AGENTS.md")}
+		}, []string{"GLOBAL-TWO", "REPO-RULE", "PKG-RULE"}, nil, "PKG-RULE"},
+		{"-agents-md=false", true, nil, nil, []string{"USER-RULE", "GLOBAL-ONE", "GLOBAL-TWO", "PKG-RULE"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &echo.Adapter{})
+			base := filepath.Join(filepath.Dir(o.Dir), "tree")
+			o.Dir = filepath.Join(base, "repo", "pkg")
+			must(t, os.MkdirAll(filepath.Join(base, "repo", ".git"), 0o755))
+			write(t, filepath.Join(base, "repo", "AGENTS.md"), "REPO-RULE\n")
+			write(t, filepath.Join(o.Dir, "AGENTS.md"), "PKG-RULE\n")
+			write(t, filepath.Join(o.UserDir, "AGENTS.md"), "USER-RULE\n")
+			write(t, filepath.Join(base, "one.md"), "GLOBAL-ONE\n")
+			write(t, filepath.Join(base, "two.md"), "GLOBAL-TWO\n")
+			o.AgentsMDGlobal = []string{filepath.Join(base, "one.md"), filepath.Join(base, "missing.md"), filepath.Join(base, "two.md")}
+			if tc.extra != nil {
+				o.AgentsMDGlobal = append(o.AgentsMDGlobal, tc.extra(t, &o, base)...)
+			}
+			o.AgentsMD = !tc.off
+			s, err := New(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			instr := s.ag.Config().Instructions
+			at := -1
+			for _, w := range tc.want {
+				i := strings.Index(instr, w)
+				if i < 0 {
+					t.Errorf("instructions lack %s", w)
+				} else if i < at {
+					t.Errorf("%s is out of order", w)
+				}
+				at = i
+			}
+			for _, n := range tc.not {
+				if strings.Contains(instr, n) {
+					t.Errorf("instructions hold %s", n)
+				}
+			}
+			if tc.onceOf != "" && strings.Count(instr, tc.onceOf) != 1 {
+				t.Errorf("%s appears %d times", tc.onceOf, strings.Count(instr, tc.onceOf))
+			}
+			for _, om := range s.Omitted() {
+				if om.Source == "dax" {
+					t.Errorf("a global file was screened: %+v", om)
+				}
+			}
+		})
+	}
 }

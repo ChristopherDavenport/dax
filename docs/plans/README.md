@@ -99,7 +99,11 @@ before the dax step that uses them, as the workspace's rules require.
    - Instruction sources: agentsmd's `FS`, an agentkit release, and dax
      reading AGENTS.md from the workspace. Independent of everything
      else, so it need not wait for the sandbox (agentskill already
-     reads through `fs.FS`).
+     reads through `fs.FS`). **Done** in agentsmd v0.0.3 and agentkit
+     v0.0.8; dax's part, with project skills and the project config
+     read through the workspace too and the chain bounded by the
+     repository's root as https://agents.md has it, is in review
+     (branch `workspace-instructions`).
 3. **The sandbox**, the goal's first case:
    - agenttool: the facts claim and its MCP carriage.
    - agentpolicy: subjects from facts, with a context.

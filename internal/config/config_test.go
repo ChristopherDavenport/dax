@@ -212,6 +212,8 @@ func TestValidation(t *testing.T) {
 		{"mcp without command", `{"mcp_servers":{"a":{}}}`, false, "mcp_servers.a: command is required"},
 		{"mcp bad name", `{"mcp_servers":{"a b":{"command":"x"}}}`, false, `name "a b"`},
 		{"project mcp", `{"mcp_servers":{"a":{"command":"x"}}}`, true, "mcp_servers: a project file may only tighten"},
+		{"project agents_md_global", `{"agents_md_global":["~/.ssh/id_rsa"]}`, true, "agents_md_global: a project file may only tighten"},
+		{"agents_md_global with an empty path", `{"agents_md_global":["a.md",""]}`, false, "agents_md_global: an empty path"},
 		{"project provider", `{"provider":"gemini"}`, true, "provider: a project file may only tighten"},
 		{"project model", `{"model":"x"}`, true, "model: a project file may only tighten"},
 		{"project base_url", `{"base_url":"http://127.0.0.1:1/v1"}`, true, "base_url: a project file may only tighten"},
@@ -317,9 +319,6 @@ func TestLoad(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/xdg")
 	if Path() != "/xdg/dax/config.json" {
 		t.Fatalf("Path = %s", Path())
-	}
-	if ProjectPath("/p") != "/p/.dax/config.json" {
-		t.Fatalf("ProjectPath = %s", ProjectPath("/p"))
 	}
 }
 
@@ -474,5 +473,39 @@ func TestAPIKeyCommandPrecedence(t *testing.T) {
 	s, err = Resolve([]Layer{user}, Flags{Provider: ptr("openai")}, "")
 	if err != nil || len(s.APIKeyCommand) != 2 {
 		t.Fatalf("same provider: %q, %v", s.APIKeyCommand, err)
+	}
+}
+
+// agents_md_global: the user's file names paths, resolved as its other
+// paths are (~ and relative to the file), in order; the flag replaces
+// the list, relative to the working directory, and "" (no entries)
+// clears it; a duplicate is kept once.
+func TestAgentsMDGlobalPrecedence(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	wd, _ := os.Getwd()
+	user := parse(t, `{"agents_md_global":["~/coding/AGENTS.md","team.md","/abs/a.md","/abs/a.md"]}`, false)
+	for _, tc := range []struct {
+		name   string
+		layers []Layer
+		flag   []string
+		want   []string
+	}{
+		{"none", nil, nil, nil},
+		{"the user's file", []Layer{user}, nil, []string{filepath.Join(home, "coding", "AGENTS.md"), "/home/u/.config/dax/team.md", "/abs/a.md"}},
+		{"the flag replaces it", []Layer{user}, []string{"/f/one.md", "two.md", "~/three.md"}, []string{"/f/one.md", filepath.Join(wd, "two.md"), filepath.Join(home, "three.md")}},
+		{"an empty flag clears it", []Layer{user}, []string{}, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Resolve(tc.layers, Flags{AgentsMDGlobal: tc.flag}, "/mem")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(s.AgentsMDGlobal, "|") != strings.Join(tc.want, "|") {
+				t.Errorf("agents_md_global = %q, want %q", s.AgentsMDGlobal, tc.want)
+			}
+		})
+	}
+	if _, err := Resolve(nil, Flags{AgentsMDGlobal: []string{"a.md", ""}}, "/mem"); err == nil || !strings.Contains(err.Error(), "-agents-md-global: an empty path") {
+		t.Errorf("an empty flag entry: %v", err)
 	}
 }

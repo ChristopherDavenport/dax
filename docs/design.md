@@ -65,9 +65,7 @@ Where dax does not keep to this yet, and what each needs:
   `client.Backend` cannot carry a Turn whole; `tuiadapter.go` lists what
   its glue fakes or drops.
 - The execution plane: MCP stdio servers start where the turn runs, not
-  in the workspace (it needs a long-lived process with pipes), and
-  AGENTS.md, project skills and the project config are read from this
-  machine (agentkit, agentsmd and agentskill take local paths).
+  in the workspace (it needs a long-lived process with pipes).
 - Peers: a call to one is not linked in the caller's record as a
   sub-agent's session is, an abort does not cancel the remote task,
   and `front/a2a` has no authentication.
@@ -84,7 +82,7 @@ Where dax does not keep to this yet, and what each needs:
 | Where the tools act | dax, until the agentworkspace module exists | `workspace`: the `Workspace` interface and `Local`, this machine's directory |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
-| AGENTS.md | `agentsmd` | the session: screening and budget |
+| AGENTS.md | `agentsmd` | the session: the chain's extent, reading it through the workspace, screening and budget |
 | Skills, memory | `agentskill`, `agentmemory` | dax-skills and dax-memory: directories, trust, scopes |
 | Settings | dax | `internal/config` |
 | Presentation | dax (REPL); agentconsole (the terminal client) | `front.go`, `internal/render`; `toolrender` draws dax-coding's and dax-agents' calls in the terminal client |
@@ -140,14 +138,27 @@ run; it never reached its tool; it was denied.
 
 ## The prompt
 
-The session's part of the system prompt is a role line, each
-extension's instructions in order (dax-coding's nudge toward glob, grep
-and ls over shell commands; dax-agents' guide to the sub-agents), the
-user's `instructions_file`, and the working directory. `agentkit` renders and joins the rest in a fixed
-order: the skill catalogue, the memory block, then the AGENTS.md chain
-(`~/.dax/AGENTS.md`, then every `AGENTS.md` from `/` down to the working
-directory, nearest last). What a layer left out, a file over the budget
-or a skill that would not load, is printed at start as `omitted:`.
+The session's part of the system prompt is a role line, each extension's
+instructions in order (dax-coding's nudge toward glob, grep and ls over
+shell commands; dax-agents' guide to the sub-agents), the user's
+`instructions_file`, and the working directory. `agentkit` renders and
+joins the rest in a fixed order: the skill catalogue, the memory block,
+then the AGENTS.md chain (`~/.dax/AGENTS.md`, then every `AGENTS.md`
+from the repository's root down to the working directory, nearest last).
+The chain follows the convention (https://agents.md), which places files
+at the repository's root and below it: the repository's root is the
+nearest directory at or above the start holding a `.git`, nothing above
+it is read, and with no repository the chain is the start directory's
+file alone. The project's files are named in the prompt by their names
+in the workspace (`AGENTS.md`), as agentkit renders the chain it reads
+through the workspace's file system; the user's file keeps its absolute
+path. Between the user's file and the chain come the files the user
+names in `agents_md_global`, for every session whatever the repository
+holds; like `~/.dax/AGENTS.md` they are the user's, not the project's,
+so they are read on this machine whatever the workspace, a container's
+included, and are not screened. A project's config may not set it.
+What a layer left out, a file over the budget or a skill that
+would not load, is printed at start as `omitted:`.
 
 When dax-agents is on, the main agent's prompt carries its guide to the
 sub-agents: its context lasts the session, so broad reading goes to
@@ -233,8 +244,12 @@ sandbox:
 3. A project config can only tighten; its source ranks below the user's,
    so it cannot cancel a user's rule, and the fields that send data or
    start programs are refused.
-4. Files from the repository that go into the prompt are screened for
-   links out of the workspace.
+4. Files from the repository that go into the prompt or the settings
+   (AGENTS.md, `.dax/skills`, `.dax/config.json`) are read through the
+   workspace, whose file system refuses a link out, and screened there
+   first, so a file that would be refused is left out and reported
+   rather than failing the session; a config that would be refused is
+   an error, since it only tightens.
 5. Children get a scrubbed environment; resource use is bounded; the
    store is private; terminal output is cleaned.
 
@@ -245,11 +260,12 @@ unconfined, prompt injection can still ask, the user's own allow rules,
 ## Settings
 
 Three layers, each overriding the one below: the user's
-`~/.config/dax/config.json`, the project's `.dax/config.json`, the
-flags. The files are strict JSON: an unknown field is an error naming
-the file. A project file comes from a repository, so it may only tighten
-the policy: it may not set the provider, model, endpoint, instructions,
-skills, memory or MCP servers. See the README for the schema.
+`~/.config/dax/config.json`, the project's `.dax/config.json`, read
+through a workspace over the project, the flags. The files are strict
+JSON: an unknown field is an error naming the file. A project file comes
+from a repository, so it may only tighten the policy: it may not set the
+provider, model, endpoint, instructions, skills, memory or MCP servers.
+See the README for the schema.
 
 ## Fronts
 
@@ -297,6 +313,18 @@ is:
   as arguments. A workspace whose file system cannot read links leaves
   these checks unable to follow them, and they ask: a path subject no
   rule names, a bash stage that is not read-only.
+- The project's instructions are read through the workspace. The
+  session reads the AGENTS.md chain through its file system
+  (`agentsmd.Options.FS`), screening each file there first; dax-skills
+  offers `.dax/skills` as an `agentskill.Source` over it, screened by
+  walking it there, every link required to lead inside `.dax/skills`
+  (`tool.Files.Resolve`), since the skill tool runs unasked; the command line reads `.dax/config.json` through a
+  `workspace.Local` over the project. One exception reads this machine:
+  when the workspace's descriptor says it is `Dir` on this machine and
+  the session started below its repository's root, the AGENTS.md files
+  between the two are outside the workspace and are read from `Dir`'s
+  ancestors, a link that leaves `Dir` left out. A workspace elsewhere
+  gives only its own files.
 - The session records the workspace: the header's `cwd`, the env
   entry's `cwd` and its `workspace` kind and ref come from the
   descriptor, so a resume into another workspace is recorded as a
@@ -310,10 +338,9 @@ closes, or, without it, the content-addressed store at `Root`.
 
 What is not equal yet, and why:
 
-- AGENTS.md, the project's skills and its config are read from `Dir` on
-  this machine, because agentkit, agentsmd and agentskill take local
-  paths. Reading them through a workspace needs those libraries to take
-  an `fs.FS` first.
+- A workspace whose root is below its repository's root sees no
+  AGENTS.md above its root unless it is this machine's `Dir`: its file
+  system ends at the root.
 - MCP stdio servers run on this machine.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
