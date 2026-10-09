@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ChristopherDavenport/dax/workspace"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // ErrOutside is what a path that leaves the workspace gets, whether it

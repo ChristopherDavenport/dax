@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
-
-	"github.com/ChristopherDavenport/dax/workspace"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // call runs one tool with raw arguments and returns the text the model

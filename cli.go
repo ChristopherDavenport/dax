@@ -19,6 +19,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentturn/session"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -32,7 +33,6 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/provider"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // hint says what to do about a store error that names no remedy the

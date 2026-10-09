@@ -12,11 +12,11 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/tool"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // toolEnv is a local workspace in a fresh directory, and the tools'

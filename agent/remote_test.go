@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentsession/cas"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // boxed is a workspace that is a container to the session: its root is

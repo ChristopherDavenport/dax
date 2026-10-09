@@ -10,7 +10,6 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
-	"github.com/ChristopherDavenport/dax/workspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"os"
@@ -21,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses/echo"
 )
 

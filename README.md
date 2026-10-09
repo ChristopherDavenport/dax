@@ -819,7 +819,9 @@ and `edit` take, so a tool's change and an `edit` beside it cannot lose
 each other's; a FIFO or a device is refused rather than waited on. A
 tool that runs a process uses `Workspace.Exec`, whose processes start
 with `Workspace.Env()`, the environment with credentials removed (a
-copy each call). Written that way, a tool runs unchanged wherever the
+copy each call); the workspace types are the agentworkspace module's
+(`github.com/ChristopherDavenport/agentworkspace`, which dax imports
+as `workspace`). Written that way, a tool runs unchanged wherever the
 session's workspace is. A tool is built over `ToolEnv` rather than
 agentkit's kit because what it needs is dax's, the workspace and its
 confinement, which the kit does not hold.
@@ -845,21 +847,23 @@ steer, answer the permissions a run stops on (`Turn.Permissions`,
 `agent.Drive` is a controller that answers by rule, for running without
 a person. The terminal client is agentconsole; hand it
 `extension.Renderers(dir, exts)`. The public packages are `dax`,
-`agent`, `extension`, `policy`, `tool`, `toolrender`, `workspace` and
-the four under `ext/`; the configuration, providers, model metadata, prompt frame and
+`agent`, `extension`, `policy`, `tool`, `toolrender` and the four
+under `ext/`, over the agentworkspace module's `Workspace`; the configuration, providers, model metadata, prompt frame and
 renderer for the REPL stay internal. Everything is pre-1.0: the exported
 API may change in a minor version, and the changelog says when.
 
 ### Where the tools act
 
-A session acts in one `workspace.Workspace`: a root, a file system that
-never blocks on a FIFO or a device, writes and removes, an environment,
-one-shot execution with its output streamed as it arrives, and a
-descriptor the session records. `workspace.Local` is this machine's
-directory, opened as an `os.Root` so no name leaves it, with each
-command in its own process group. A container or a remote runtime is
-another implementation of the same interface, and the rest of dax
-cannot tell them apart:
+A session acts in one `workspace.Workspace`, from the agentworkspace
+module (`github.com/ChristopherDavenport/agentworkspace`): a root, a
+file system that never blocks on a FIFO or a device, writes and
+removes, an environment, one-shot execution with its output streamed as
+it arrives, and a descriptor the session records; a workspace that can
+also run a long-lived process with pipes is a `workspace.Starter`.
+`workspace.Local` is this machine's directory, opened as an `os.Root`
+so no name leaves it, with each command in its own process group. A
+container or a remote runtime is another implementation of the same
+interface, and the rest of dax cannot tell them apart:
 
 - dax-coding's tools act through it: `read`, `write`, `edit`, `glob`,
   `grep` and `ls` through `tool.Files`, and `bash` through
@@ -877,6 +881,10 @@ cannot tell them apart:
   started in. Only when the workspace is that directory on this machine
   and dax started below its repository's root are the `AGENTS.md` files
   between the two read from this machine, screened the same way.
+- MCP stdio servers run in it when it is a `Starter` (`Local` is), at
+  its root and with its environment, and end with the session; in a
+  workspace that cannot start a process they run on this machine, with
+  its environment scrubbed.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
@@ -887,15 +895,12 @@ cannot tell them apart:
 the session store the same way: an `agentsession.Store` the caller
 opened and closes, or, without it, the content-addressed store at
 `Root`. A remote store client (agentsession's RFC 0003) is meant to fit
-there. The interface follows the agentworkspace study in this
-workspace (`examples/openhands-workspace`), so dax moves to that module
-by a rename once it exists.
+there.
 
 What is not there yet:
 
-- dax ships only `workspace.Local`; a container or remote workspace is
-  a program's to provide until the agentworkspace module exists.
-- MCP servers run on this machine, with its environment scrubbed.
+- dax uses only `workspace.Local`; a container or remote workspace is
+  a program's to provide until agentworkspace ships one.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs
   handling. `Options.Store` takes today's interface; the lease handling

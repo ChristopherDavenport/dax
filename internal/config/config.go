@@ -27,10 +27,10 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/dax/policy"
-	"github.com/ChristopherDavenport/dax/workspace"
 	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // Providers are the model providers dax can talk to.

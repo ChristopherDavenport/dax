@@ -10,11 +10,11 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // changelogTool reads the project's CHANGELOG.md through the session's

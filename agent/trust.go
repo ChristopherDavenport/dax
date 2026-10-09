@@ -11,8 +11,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentsmd"
-
-	"github.com/ChristopherDavenport/dax/workspace"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // What AGENTS.md files go into the prompt, and from where.

@@ -9,9 +9,8 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
-
-	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // counting is an executor of one claiming tool, claim, whose facts
