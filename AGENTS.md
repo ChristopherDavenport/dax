@@ -72,9 +72,14 @@ before changing the shape.
 - `tool`: dax-coding's tools; `Files` (`tool/workspace.go`), the tools'
   view of a workspace for model-written paths, with the write lock;
   `view.go`, the workspace as the policy's checks read it (links
-  through `fs.ReadLinkFS`); `BashSubjects` and `Analyzer`, which
-  dax-coding's policy uses, and the git-config check, run through
-  `Exec`.
+  through `fs.ReadLinkFS`); `BashSubjects`, `PathSubjects` and
+  `Analyzer`, the analysis each tool's facts claim makes, and the
+  git-config check, run through `Exec`.
+- `facts`: a tool's facts claim, what a call would touch and the
+  rewrite it runs with if allowed (bash's stamped plan), dax's draft of
+  an optional per-call claim for agenttool, with no policy import;
+  `facts/factspolicy`, where claims become agentpolicy's subjects and
+  the session's one rewrite hook.
 - `toolrender`: the terminal client's renderers of dax-coding's and
   dax-agents' calls (`toolview.Renderer`s), from the record's arguments
   and output alone. It does not import `tool`; its tests run the real
@@ -128,10 +133,19 @@ an `Unreleased` changelog line:
   read-modify-write uses `Update`, which holds the lock dax's `write`
   and `edit` hold. A new file tool, or a new exported `Files` or
   `workspace.Local` method, gets a case in the confinement test.
-- A check the policy makes of a call inspects the workspace the call
-  acts in, through its file system and `Exec`, never this machine's;
-  where the workspace cannot answer (a file system that cannot read
-  links), the check fails toward asking. The cross-workspace table in
+- A check the policy makes of a call is the tool's facts claim
+  (package `facts`): the tool says what the call would touch, and the
+  policy decides on that and reads no machine itself. The claim
+  inspects the workspace the call acts in, through its file system and
+  `Exec`, never this machine's; where the workspace cannot answer (a
+  file system that cannot read links), the claim says so with a call
+  no rule names, and the policy asks. A rewrite a tool needs when
+  allowed (bash's stamp) is in its claim, never in a hook of the
+  extension's. A claim names only its own extension's tools (one that
+  names another's asks). A claim that reads a field of the arguments
+  refuses a key that is that field in another case, which the tool's
+  decoder would take (package tool's `exactKeys`), and the tool refuses
+  it again when it runs. The cross-workspace table in
   `tool/remote_test.go` runs a new check on `Local` and on a stand-in
   container.
 - Nothing is special: a capability dax ships is an extension built only

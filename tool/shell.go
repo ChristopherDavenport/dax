@@ -2,11 +2,14 @@ package tool
 
 import (
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+
+	"github.com/ChristopherDavenport/dax/facts"
 )
 
 // sentinel prefixes a subject no rule names, so a call that carries it
@@ -33,53 +36,94 @@ const sentinel = "$(...) "
 //     a parser, and nothing is allowed because of it.
 //
 // A command with an unterminated quote is an error, which blocks the
-// call.
+// call, and so are arguments with a key that is command or dax_stamp
+// in another case (exactKeys), which the tool would read and the
+// analysis would not.
 func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
 	an := &Analyzer{Files: f, MaxFile: maxFile}
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
-		var in struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal(args, &in); err != nil {
-			return nil, err
-		}
-		mk := func(tool, field, match, text string) agentpolicy.Subject {
-			a, _ := json.Marshal(map[string]string{field: match})
-			return agentpolicy.Subject{Args: a, Tool: tool, Text: text}
-		}
-		cmd := strings.TrimSpace(in.Command)
-		if cmd == "" {
-			return nil, errors.New("command is empty")
-		}
-		if c := an.Check(context.Background(), cmd); c.Parsed {
-			var out []agentpolicy.Subject
-			for _, st := range c.Stages {
-				out = append(out, mk("", "command", st.Match, st.Text))
-				// What a stage reads is also a read of that path, so the
-				// rules for secret-looking files and the user's own path
-				// rules apply to cat, head, grep and git show as to read.
-				for _, r := range st.Reads {
-					out = append(out, mk("read", "path", r, st.Text+"  [reads "+r+"]"))
-				}
-				if st.Governed && !st.OK {
-					out = append(out, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
-				}
-			}
-			return out, nil
-		}
-		parts, targets, _, err := splitShell(cmd)
+		calls, _, err := bashFacts(context.Background(), an, args, false)
 		if err != nil {
 			return nil, err
 		}
-		var out []agentpolicy.Subject
+		return subjectsOf(calls), nil
+	}
+}
+
+// bashFacts is what a bash call would touch: the calls BashSubjects
+// describes, and, with stamp, the arguments the call runs with if the
+// policy allows it unasked (StampArgs). One analysis serves both when
+// the command is given without surrounding space, as the model writes
+// it; otherwise the stamp is of the line exactly as given, which is
+// what the tool checks again before it runs.
+func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bool) (calls []facts.Call, rewrite json.RawMessage, err error) {
+	if err := exactKeys(args, "command", "dax_stamp"); err != nil {
+		return nil, nil, err
+	}
+	var in struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, nil, err
+	}
+	mk := func(tool, field, match, text string) facts.Call {
+		a, _ := json.Marshal(map[string]string{field: match})
+		return facts.Call{Args: a, Tool: tool, Text: text}
+	}
+	cmd := strings.TrimSpace(in.Command)
+	if cmd == "" {
+		return nil, nil, errors.New("command is empty")
+	}
+	c := an.Check(ctx, cmd)
+	// Never nil: a line that analyses to nothing is no calls, which a
+	// policy refuses, and not the call itself, which a rule could allow.
+	calls = []facts.Call{}
+	if c.Parsed {
+		for _, st := range c.Stages {
+			calls = append(calls, mk("", "command", st.Match, st.Text))
+			// What a stage reads is also a read of that path, so the
+			// rules for secret-looking files and the user's own path
+			// rules apply to cat, head, grep and git show as to read.
+			for _, r := range st.Reads {
+				calls = append(calls, mk("read", "path", r, st.Text+"  [reads "+r+"]"))
+			}
+			if st.Governed && !st.OK {
+				calls = append(calls, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
+			}
+		}
+	} else {
+		parts, targets, _, err := splitShell(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
 		for _, p := range parts {
-			out = append(out, mk("", "command", p, p))
+			calls = append(calls, mk("", "command", p, p))
 		}
 		for _, t := range targets {
-			out = append(out, mk("write", "path", t, t))
+			calls = append(calls, mk("write", "path", t, t))
 		}
-		return append(out, mk("", "command", sentinel+cmd, cmd)), nil
+		calls = append(calls, mk("", "command", sentinel+cmd, cmd))
 	}
+	if !stamp {
+		return calls, nil, nil
+	}
+	if in.Command != cmd {
+		c = an.Check(ctx, in.Command)
+	}
+	rewrite, err = stampWith(c, args)
+	return calls, rewrite, err
+}
+
+// subjectsOf is calls as agentpolicy's subjects, nil for nil.
+func subjectsOf(calls []facts.Call) []agentpolicy.Subject {
+	if calls == nil {
+		return nil
+	}
+	out := make([]agentpolicy.Subject, 0, len(calls))
+	for _, c := range calls {
+		out = append(out, agentpolicy.Subject{Args: c.Args, Tool: c.Tool, Text: c.Text})
+	}
+	return out
 }
 
 // splitShell cuts a command line the way a reader would, for the
@@ -300,38 +344,93 @@ const unresolvedTool = "dax:links-unknown"
 // that cannot read links adds a subject no rule allows, so the call
 // asks. A path that leaves the workspace gets a subject no rule names,
 // so it asks. When the field is absent the subject is def, which is the
-// directory a search defaults to.
+// directory a search defaults to. Arguments with a key that is field in
+// another case are an error, which blocks the call (exactKeys): the
+// tool would decode that key, and this reads field.
 func PathSubjects(f *Files, field, def string) agentpolicy.Subjects {
 	v := f.view()
 	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(args, &m); err != nil {
+		calls, err := pathCalls(v, field, def, args)
+		if err != nil {
 			return nil, err
 		}
-		var raw string
-		if val, ok := m[field]; ok {
-			if err := json.Unmarshal(val, &raw); err != nil {
-				return nil, err
-			}
-		}
-		if raw == "" {
-			raw = def
-		}
-		rel, ok := v.rel(raw)
-		if !ok {
-			rel = sentinel + raw
-		}
-		a, _ := json.Marshal(map[string]string{"path": rel})
-		subjects := []agentpolicy.Subject{{Args: a, Text: raw}}
-		if ok {
-			switch target, r := v.resolve(rel); {
-			case r == inside && target != rel:
-				ta, _ := json.Marshal(map[string]string{"path": target})
-				subjects = append(subjects, agentpolicy.Subject{Args: ta, Text: raw + " -> " + target})
-			case r == unknown:
-				subjects = append(subjects, agentpolicy.Subject{Args: a, Tool: unresolvedTool, Text: raw + " (where its links lead cannot be read)"})
-			}
-		}
-		return subjects, nil
+		return subjectsOf(calls), nil
 	}
+}
+
+// pathCalls is what a file tool's call would touch: the path in field,
+// normalised, and what its links lead to (see PathSubjects).
+func pathCalls(v view, field, def string, args json.RawMessage) ([]facts.Call, error) {
+	if err := exactKeys(args, field); err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(args, &m); err != nil {
+		return nil, err
+	}
+	var raw string
+	if val, ok := m[field]; ok {
+		if err := json.Unmarshal(val, &raw); err != nil {
+			return nil, err
+		}
+	}
+	if raw == "" {
+		raw = def
+	}
+	rel, ok := v.rel(raw)
+	if !ok {
+		rel = sentinel + raw
+	}
+	a, _ := json.Marshal(map[string]string{"path": rel})
+	calls := []facts.Call{{Args: a, Text: raw}}
+	if ok {
+		switch target, r := v.resolve(rel); {
+		case r == inside && target != rel:
+			ta, _ := json.Marshal(map[string]string{"path": target})
+			calls = append(calls, facts.Call{Args: ta, Text: raw + " -> " + target})
+		case r == unknown:
+			calls = append(calls, facts.Call{Args: a, Tool: unresolvedTool, Text: raw + " (where its links lead cannot be read)"})
+		}
+	}
+	return calls, nil
+}
+
+// pathFacts is a file tool's facts claim over f: the path in field, or
+// def when the call names none, and the arguments carrying the stamp of
+// those facts (factsStamp), which the tool checks when it runs. A key
+// that is field or dax_stamp in another case is an error (exactKeys).
+func pathFacts(f *Files, name, field, def string) func(context.Context, json.RawMessage) (facts.Facts, error) {
+	v := f.view()
+	return func(_ context.Context, args json.RawMessage) (facts.Facts, error) {
+		if err := exactKeys(args, "dax_stamp"); err != nil {
+			return facts.Facts{}, err
+		}
+		calls, err := pathCalls(v, field, def, args)
+		if err != nil {
+			return facts.Facts{}, err
+		}
+		rewrite, err := withStamp(args, factsStamp(name, calls))
+		return facts.Facts{Calls: calls, Rewrite: rewrite}, err
+	}
+}
+
+// checkTouched is a file tool's side of its stamp: a call that carries
+// one runs only if the facts of path, read now, are the facts it was
+// allowed on, so a path that became a link to somewhere else since is
+// refused (errTouched). A call with no stamp, one run with the policy
+// off, is not checked. What is left is the moment between this reading
+// and the tool's own open.
+func (f *Files) checkTouched(name, def, path, stamp string) error {
+	if stamp == "" {
+		return nil
+	}
+	args := json.RawMessage(`{}`)
+	if path != "" {
+		args, _ = json.Marshal(map[string]string{"path": path})
+	}
+	calls, err := pathCalls(f.view(), "path", def, args)
+	if err != nil || !hmac.Equal([]byte(factsStamp(name, calls)), []byte(stamp)) {
+		return errTouched
+	}
+	return nil
 }

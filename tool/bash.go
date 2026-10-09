@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+
+	"github.com/ChristopherDavenport/dax/facts"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/workspace"
@@ -54,11 +57,24 @@ func WithMaxFile(n int64) BashOption { return func(c *bashConfig) { c.maxFile = 
 // workspace gives its processes. It is sequential: a batch that
 // contains a shell command runs one call at a time, so a command never
 // races a concurrent edit of the same file.
+//
+// Its facts claim is what a call would touch, from the same analysis the
+// policy's bash rules read (BashSubjects), and, for a line the analysis
+// allows unasked, the arguments carrying the stamp of that plan: the
+// tool then runs only that plan (command).
 func Bash(f *Files, opts ...BashOption) agenttool.Tool {
 	var cfg bashConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
+	an := &Analyzer{Files: f, MaxFile: cfg.maxFile}
+	return facts.With(exactArgs[BashArgs](bashTool(f, cfg)), func(ctx context.Context, args json.RawMessage) (facts.Facts, error) {
+		calls, rewrite, err := bashFacts(ctx, an, args, true)
+		return facts.Facts{Calls: calls, Rewrite: rewrite}, err
+	})
+}
+
+func bashTool(f *Files, cfg bashConfig) agenttool.Tool {
 	return agenttool.New("bash", "Run a bash command in the working directory and return its combined output and exit code.",
 		func(ctx context.Context, in BashArgs) (string, error) {
 			if strings.TrimSpace(in.Command) == "" {

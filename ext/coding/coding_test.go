@@ -11,6 +11,8 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/facts"
+	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 )
 
 // dax-coding is an extension like any other: its tools in the order the
@@ -61,14 +63,32 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	if e.Kit != nil || len(e.Owns) != 0 {
 		t.Error("dax-coding adds nothing through the kit")
 	}
+	// The policy reads the machine only through the tools: each claims
+	// its facts, and dax-coding brings no subjects and no hook of its own.
+	for _, tl := range e.Tools(env) {
+		if !facts.Claims(tl) {
+			t.Errorf("%s makes no facts claim", tl.Name())
+		}
+	}
+	for name, m := range e.Matchers(env) {
+		if m.Subjects != nil {
+			t.Errorf("the matcher for %s brings subjects; they are the tool's claim", name)
+		}
+	}
+	if e.BeforeToolCall != nil {
+		t.Error("dax-coding ships a hook; the stamp is the bash tool's facts")
+	}
 }
 
-// The stamp touches a bash call alone, and decides nothing that could
-// overrule the policy: an allow folds under the policy's verdict.
-func TestTheStampTouchesOnlyBash(t *testing.T) {
+// The stamp: every call of a tool that claims its facts runs with the
+// stamp of what it was decided on, bash's the stamp of its plan. It
+// decides nothing that could overrule the policy: an allow folds under
+// the policy's verdict. It is the session's generic hook over the tools'
+// facts claims; dax-coding ships no hook of its own.
+func TestTheStampBindsEveryClaimingCall(t *testing.T) {
 	dir := t.TempDir()
 	ws, files := local(t, dir)
-	hook := New(0).BeforeToolCall(extension.ToolEnv{Workspace: ws, Files: files})
+	hook := factspolicy.Hook(New(0).Tools(extension.ToolEnv{Workspace: ws, Files: files}))
 	call := func(name, args string) *agentturn.ToolDecision {
 		t.Helper()
 		c := &openresponses.FunctionCall{Name: name, Arguments: args, CallID: "c1"}
@@ -81,11 +101,18 @@ func TestTheStampTouchesOnlyBash(t *testing.T) {
 	for _, tc := range []struct{ name, args string }{
 		{"read", `{"path":"x","dax_stamp":"deadbeef"}`},
 		{"write", `{"path":"x","content":"y"}`},
-		{"deploy", `{"command":"pwd"}`},
 	} {
-		if d := call(tc.name, tc.args); d != nil {
-			t.Errorf("%s: the stamp decided %+v", tc.name, d)
+		d := call(tc.name, tc.args)
+		var got map[string]any
+		if d != nil {
+			json.Unmarshal(d.Args, &got)
 		}
+		if d == nil || d.Action != agentturn.Allow || got["dax_stamp"] == nil || got["dax_stamp"] == "deadbeef" || got["path"] != "x" {
+			t.Errorf("%s: not stamped with its facts' stamp: %+v", tc.name, d)
+		}
+	}
+	if d := call("deploy", `{"command":"pwd"}`); d != nil {
+		t.Errorf("a tool that makes no claim: the stamp decided %+v", d)
 	}
 	if d := call("bash", `{"command":"pwd"}`); d == nil || d.Action != agentturn.Allow || !strings.Contains(string(d.Args), "dax_stamp") {
 		t.Errorf("a read-only bash line is not stamped: %+v", d)
@@ -93,7 +120,9 @@ func TestTheStampTouchesOnlyBash(t *testing.T) {
 	if d := call("bash", `{"command":"touch x","dax_stamp":"deadbeef"}`); d == nil || strings.Contains(string(d.Args), "dax_stamp") {
 		t.Errorf("a stamp the model made is not taken off: %+v", d)
 	}
-	if d := call("bash", `not json`); d != nil {
-		t.Errorf("arguments that are not JSON: %+v, want left to the tool", d)
+	// A call nothing can be said about never runs on the model's own
+	// arguments, the policy's verdict aside.
+	if d := call("bash", `not json`); d == nil || d.Action != agentturn.Block {
+		t.Errorf("arguments that are not JSON: %+v, want blocked", d)
 	}
 }

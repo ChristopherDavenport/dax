@@ -15,8 +15,6 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
-
-	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // allowRules is the allow list dax-coding ships. go test, build, vet and
@@ -75,23 +73,25 @@ func askRules() string {
 // lifts: the ones that read.
 var lifts = []string{"read", "grep", "glob", "ls"}
 
-// matchers are the per-tool specifier matchers: bash by its command,
-// the file tools by their path, normalised against the workspace dir
-// (a search by the directory it looks in). Rules for a path are written
-// relative to the workspace: write(docs/**), read(.env).
-func matchers(f *tool.Files, maxFile int64) map[string]agentpolicy.ToolMatcher {
-	file := func(def string) agentpolicy.ToolMatcher {
-		return agentpolicy.ToolMatcher{Match: pathMatcher, Subjects: tool.PathSubjects(f, "path", def)}
-	}
+// matchers are how a rule's specifier matches the tools' calls: bash's
+// by its command, the file tools' by their path. They match only; what
+// a call is matched as, its subjects (bash's stages, a path normalised
+// against the workspace and what its links lead to), comes from the
+// tool's own facts claim (tool.BashSubjects, tool.PathSubjects), which
+// the session reads. Rules for a path are written relative to the
+// workspace: write(docs/**), read(.env).
+func matchers() map[string]agentpolicy.ToolMatcher {
+	path := agentpolicy.ToolMatcher{Match: pathMatcher}
 	return map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command"), Subjects: tool.BashSubjects(f, maxFile)},
-		"read":  file(""),
-		"write": file(""),
-		"edit":  file(""),
-		// A search is matched on where it looks, not on its pattern.
-		"glob": file("."),
-		"grep": file("."),
-		"ls":   file("."),
+		"bash":  {Match: agentpolicy.GlobMatcher("command")},
+		"read":  path,
+		"write": path,
+		"edit":  path,
+		// A search is matched on where it looks, not on its pattern: its
+		// facts name the directory, "." when it names none.
+		"glob": path,
+		"grep": path,
+		"ls":   path,
 	}
 }
 

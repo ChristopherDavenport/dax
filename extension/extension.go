@@ -66,9 +66,13 @@ type Extension struct {
 	// Matchers say how a rule's specifier matches a call of one of the
 	// extension's tools: bash(git status:*) is dax-coding's bash matcher
 	// reading the command. A tool without one is matched by name alone.
-	// They are built over the session's ToolEnv, as the tools are, so a
-	// matcher that looks at files looks at the workspace the tools act
-	// in, and no other.
+	// What a call is matched as, its subjects, is the tool's own facts
+	// claim (package facts) when it makes one: the session reads the
+	// claim, so a matcher for a claiming tool supplies Match alone, and
+	// one that brings Subjects too is an error at start. A tool with no
+	// claim is matched on its arguments as given, or on a matcher's own
+	// Subjects. They are built over the session's ToolEnv, as the tools
+	// are.
 	Matchers func(ToolEnv) map[string]agentpolicy.ToolMatcher
 	// Aliases are names a rule may use for several of the extension's
 	// tools: dax-coding's Read stands for read, grep, glob and ls.
@@ -89,9 +93,10 @@ type Extension struct {
 	// agentkit.WithBeforeToolCall does, for the main agent and for every
 	// sub-agent built with Env.ChildPolicy. Decisions fold deny over ask
 	// over allow with the policy's, so it can make a call stricter but
-	// not allow one the policy asks about. dax-coding's stamps a bash
-	// call the policy allowed with the plan it approved. It is built
-	// over the session's ToolEnv, as the tools are.
+	// not allow one the policy asks about. The rewrite a tool's facts
+	// claim asks for (bash's stamped plan) is applied by the session
+	// this way, with no hook of the extension's. It is built over the
+	// session's ToolEnv, as the tools are.
 	BeforeToolCall func(ToolEnv) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
 
 	// Instructions are added to the main agent's system prompt, after

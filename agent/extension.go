@@ -16,6 +16,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"github.com/ChristopherDavenport/dax/internal/prompt"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -37,8 +38,10 @@ const mcpPrefixLower = "mcp__"
 // build builds the extensions' tools over env and checks what each
 // claims: its name, its tools, the names it owns and its aliases are
 // unique across the session without regard to case; a read-only tool,
-// a matcher and an alias name only the extension's own tools. On an
-// error the tools built so far are closed.
+// a matcher and an alias name only the extension's own tools; a call
+// a tool's facts claim names that is not one of them asks
+// (factspolicy.SubjectsOf). On an error the tools built so far are
+// closed.
 func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err error) {
 	a = &assembly{matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}}
 	defer func() {
@@ -123,12 +126,20 @@ func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err 
 		if e.Matchers != nil {
 			ms = e.Matchers(env)
 		}
-		for name, m := range ms {
+		for name := range ms {
 			if !own[name] {
 				return a, fmt.Errorf("extension %s: matcher for %q, which is not one of its tools", e.Name, name)
 			}
-			a.matchers[name] = m
 		}
+		// What a call of a tool that claims is matched as comes from its
+		// facts claim, whichever extension's it is: the policy reads the
+		// machine only through the tools. A claim may name only this
+		// extension's own names, so it cannot borrow another's rules.
+		ms, err = factspolicy.Matchers(tools, ruleNames, ms)
+		if err != nil {
+			return a, fmt.Errorf("extension %s: %w", e.Name, err)
+		}
+		maps.Copy(a.matchers, ms)
 		for _, n := range e.Lifts {
 			if !own[n] {
 				return a, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
@@ -143,6 +154,11 @@ func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err 
 				a.hooks = append(a.hooks, h)
 			}
 		}
+	}
+	// The rewrite a call runs with if allowed comes from its tool's facts
+	// claim, as its subjects do.
+	if h := factspolicy.Hook(a.tools); h != nil {
+		a.hooks = append([]func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error){h}, a.hooks...)
 	}
 	return a, nil
 }

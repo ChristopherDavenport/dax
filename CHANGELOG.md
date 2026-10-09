@@ -9,6 +9,41 @@ versions may break flags and the config file.
 
 - Security: golang.org/x/net is v0.60.0, which fixes GO-2026-6617 and
   GO-2026-6612 in the HTTP/2 code the provider clients use.
+- Added: `facts`, a tool's claim of what a call would touch, said before
+  it runs: the calls it amounts to (`read` of what `cat` reads, `write`
+  of a redirect's target) and the arguments it runs with if allowed
+  (bash's stamped plan). dax-coding's tools make it; the session takes
+  the policy's subjects from claims and applies a claim's rewrite as one
+  hook folded under the policy's verdict, so the policy reads no machine
+  but through the tools. It is dax's draft of an optional per-call claim
+  for agenttool. An extension's matcher for a claiming tool supplies
+  `Match` only; one that brings `Subjects` too is refused at start. A
+  claim that fails blocks the call.
+  dax-coding ships no `BeforeToolCall` and no subjects of its own.
+- Security: a claim may name only its own extension's tools (bash's
+  claims of `read` and `write` are dax-coding's). A call that names
+  another extension's tool, an extension's `upload` claiming to be a
+  `read` of README.md, is decided as a call no rule names, so it asks,
+  and never runs on another extension's allow rule.
+- Security: a file tool's call (read, write, edit, glob, grep, ls) runs
+  only on the facts it was allowed on, whether the policy allowed it or
+  a person approved it, in the main agent or a sub-agent. Its arguments
+  carry a stamp of them in `dax_stamp`, a field each tool's schema marks
+  "Set by dax; leave it out", as bash's does, and a path that became a
+  link elsewhere in the workspace between the decision and the call, a
+  `notes.txt` turned into a link to `.env`, is refused with "ask again".
+  A stamp the model writes is replaced by dax's or taken off before the
+  call runs, and refused by the tool if one ever reaches it.
+- Security: a call whose arguments name a field in another case is
+  refused, by the policy and again by the tool. The policy read the
+  exact key and the tool decodes any case, the last such key winning,
+  so the two could disagree on what the call touched: on main (and in
+  v0.0.4), `read {"path":"notes.txt","Path":".env"}` was allowed unasked
+  as a read of notes.txt and returned `.env`, and an approved
+  `write {"path":"hello.txt","content":"x","Path":"victim.txt"}` wrote
+  victim.txt. dax-coding's tools refuse any of their fields in another
+  case; the claims, the fields they read (`path`, `command`,
+  `dax_stamp`).
 - Changed: the session has one agent and exposes it as `agent.Turn`, its
   human or autonomous plane: `Prompt`, `Answer` (the policy engine's
   release, then the loop's resume), `Permissions`, `Steer`, `FollowUp`,

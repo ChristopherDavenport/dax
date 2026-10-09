@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/dax/facts"
+	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -158,9 +161,9 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				t.Errorf("bash = %q, %v", out, err)
 			}
 
-			// The policy's path subjects: the name in the workspace, and
-			// what a link leads to.
-			subj := PathSubjects(f, "path", "")
+			// The policy's path subjects, from read's facts claim: the
+			// name in the workspace, and what a link leads to.
+			subj := factspolicy.Subjects(Read(f), []string{"read"})
 			for raw, want := range map[string][]string{
 				abs(".env"):  {".env"},
 				"notes.txt":  {"notes.txt", ".env"},
@@ -206,6 +209,15 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				if got := an.Check(ctx, cmd).Auto; got != auto {
 					t.Errorf("%q auto = %v, want %v", cmd, got, auto)
 				}
+				// bash's claim stamps exactly the lines that run unasked.
+				args, _ := json.Marshal(map[string]string{"command": cmd})
+				fx, _, err := facts.Of(ctx, Bash(f), args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stamped := strings.Contains(string(fx.Rewrite), "dax_stamp"); stamped != auto {
+					t.Errorf("%q stamped by its claim = %v, want %v", cmd, stamped, auto)
+				}
 			}
 			// A stamped call runs the plan, in the workspace.
 			if out, err := call(ctx, Bash(f), stampedIn(t, f, "cat README.md")); err != nil || out != "# hi\n[exit 0]" {
@@ -216,15 +228,15 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 }
 
 // stampedIn is the arguments of a bash call in f as the policy hook
-// passes them on.
+// passes them on: the rewrite bash's facts claim asks for.
 func stampedIn(t *testing.T, f *Files, cmd string) string {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]string{"command": cmd})
-	out, changed, err := StampArgs(context.Background(), &Analyzer{Files: f}, raw)
-	if err != nil || !changed {
+	fx, _, err := facts.Of(context.Background(), Bash(f), raw)
+	if err != nil || fx.Rewrite == nil {
 		t.Fatalf("%q was not stamped: %v", cmd, err)
 	}
-	return string(out)
+	return string(fx.Rewrite)
 }
 
 // A workspace that cannot read links cannot say what a path leads to,
@@ -255,10 +267,14 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.Default = agentpolicy.Ask()
-			eng, err := agentpolicy.Build(p, map[string]agentpolicy.ToolMatcher{
-				"read": {Match: agentpolicy.GlobMatcher("path"), Subjects: PathSubjects(f, "path", "")},
-				"bash": {Match: agentpolicy.GlobMatcher("command"), Subjects: BashSubjects(f, 0)},
+			ms, err := factspolicy.Matchers([]agenttool.Tool{Read(f), Bash(f)}, []string{"read", "bash"}, map[string]agentpolicy.ToolMatcher{
+				"read": {Match: agentpolicy.GlobMatcher("path")},
+				"bash": {Match: agentpolicy.GlobMatcher("command")},
 			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			eng, err := agentpolicy.Build(p, ms)
 			if err != nil {
 				t.Fatal(err)
 			}
