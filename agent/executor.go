@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os/exec"
 	"slices"
 	"strings"
-	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -73,18 +71,20 @@ func connectExecutor(ctx context.Context, t mcp.Transport, name, version string)
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{r: r, view: &executorView{d: r.Descriptor()}}, nil
+	return &Executor{r: r, view: &executorView{d: r.Descriptor(), fsys: r.FS()}}, nil
 }
 
 // Server is the name and version the executor gave, its program's.
 func (e *Executor) Server() (name, version string) { return e.r.Server() }
 
 // Workspace is the executor's workspace as this machine sees it: its
-// root and descriptor, the executor's word for where its tools act.
-// It cannot write, remove or run anything, and is not a
-// workspace.Starter; the tools do that in the executor. Its file system
-// is empty for now, so the project's files (AGENTS.md, .dax/skills,
-// .dax/config.json) are not read through it.
+// root and descriptor, the executor's word for where its tools act,
+// and its files, read-only, through the executor, which serves them
+// confined to its workspace as its tools' reads are. The session reads
+// the project's AGENTS.md and .dax/skills through it, and a program
+// reads the project's .dax/config.json through it as dax's command
+// line does. It cannot write, remove or run anything, and is not a
+// workspace.Starter; the tools do that in the executor.
 func (e *Executor) Workspace() workspace.Workspace { return e.view }
 
 // Close ends the calls in flight and the connection, which stops the
@@ -107,14 +107,17 @@ func (e *Executor) String() string {
 var errViewOnly = fmt.Errorf("the tools act in the executor, not through this view: %w", errors.ErrUnsupported)
 
 // executorView is an executor's workspace as the session holds it:
-// the root and descriptor it records and tells the model, and nothing
-// to act with.
-type executorView struct{ d workspace.Descriptor }
+// the root and descriptor it records and tells the model, the files it
+// reads through the executor, and nothing to act with.
+type executorView struct {
+	d    workspace.Descriptor
+	fsys fs.FS
+}
 
 var _ workspace.Workspace = (*executorView)(nil)
 
 func (v *executorView) Root() string                     { return v.d.Root }
-func (v *executorView) FS() fs.FS                        { return emptyFS{} }
+func (v *executorView) FS() fs.FS                        { return v.fsys }
 func (v *executorView) Env() []string                    { return nil }
 func (v *executorView) Descriptor() workspace.Descriptor { return v.d }
 func (v *executorView) Close() error                     { return nil }
@@ -128,42 +131,6 @@ func (v *executorView) Remove(context.Context, string) error { return errViewOnl
 func (v *executorView) Exec(context.Context, workspace.Command) (*workspace.Output, error) {
 	return nil, errViewOnly
 }
-
-// emptyFS is a file system with an empty root directory.
-type emptyFS struct{}
-
-func (emptyFS) Open(name string) (fs.File, error) {
-	switch {
-	case !fs.ValidPath(name):
-		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
-	case name == ".":
-		return emptyDir{}, nil
-	}
-	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
-}
-
-// emptyDir is emptyFS's root.
-type emptyDir struct{}
-
-func (emptyDir) Stat() (fs.FileInfo, error) { return emptyDir{}, nil }
-func (emptyDir) Read([]byte) (int, error) {
-	return 0, &fs.PathError{Op: "read", Path: ".", Err: errors.New("is a directory")}
-}
-func (emptyDir) Close() error { return nil }
-func (emptyDir) ReadDir(n int) ([]fs.DirEntry, error) {
-	if n > 0 {
-		return nil, io.EOF
-	}
-	return nil, nil
-}
-
-// emptyDir is its own fs.FileInfo.
-func (emptyDir) Name() string       { return "." }
-func (emptyDir) Size() int64        { return 0 }
-func (emptyDir) Mode() fs.FileMode  { return fs.ModeDir | 0o555 }
-func (emptyDir) ModTime() time.Time { return time.Time{} }
-func (emptyDir) IsDir() bool        { return true }
-func (emptyDir) Sys() any           { return nil }
 
 // keepOpen is an executor the session runs its tools through and does
 // not close: the caller's Executor.

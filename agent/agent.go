@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -371,6 +372,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, errors.New("MCP servers cannot run with an executor yet: they would run on this machine, not where the tools act; remove them or the executor")
 		}
 		ws = o.Executor.Workspace()
+		// The project's files are read through the executor. One
+		// whose files cannot be read (gone, or too slow) fails the
+		// session here, with that said, rather than as one part of
+		// the prompt or another.
+		if _, err := fs.Stat(ws.FS(), "."); err != nil {
+			return nil, fmt.Errorf("the executor's workspace cannot be read: %w", err)
+		}
 	}
 	if ws == nil {
 		local, err := workspace.NewLocal(o.Dir, tool.DefaultEnv(o.PassEnv, o.KeyEnv))
@@ -428,9 +436,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	s.set = a.set
-	if o.Executor != nil {
-		s.refused = append(s.refused, omission("", ws.Root(), "the project's files (AGENTS.md, .dax/skills, .dax/config.json) are not read with an executor yet"))
-	}
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -441,9 +446,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if o.AgentsMD {
 		// The chain is read through the workspace, screened first so
 		// that a file that is a link out of it is left out and
-		// reported rather than failing the session (trust.go).
-		// With an executor, no directory of this machine is the
-		// workspace's, whatever its descriptor says.
+		// reported rather than failing the session (trust.go). With
+		// an executor it is the executor's workspace, read through it,
+		// and no directory of this machine is the workspace's,
+		// whatever its descriptor says (an executor of kind local may
+		// be on another host), so no file above it is read from here.
 		dir := o.Dir
 		if o.Executor != nil {
 			dir = ""

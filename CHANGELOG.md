@@ -5,6 +5,36 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: with `-executor`, the project's files are the executor's,
+  read through it: the root's `AGENTS.md`, `.dax/skills` and
+  `.dax/config.json`, screened as a local project's are (a link out of
+  the workspace, or out of the skills directory, is left out and
+  reported). Nothing above the executor's root is read, from either
+  machine. `dax execute` serves its workspace's files read-only as MCP
+  resources under `dax-workspace:///{op}{?path}` (`stat`, `lstat`,
+  `readdir`, `readlink`, `read`), every name through the workspace's
+  confinement, a read bounded at 1 MiB and a listing at 10,000
+  entries, and names the template in its capability as `files`. The
+  project's config is read once the executor is connected and can only
+  tighten, as anywhere; one that cannot be read (a link out, over 1
+  MiB, the executor gone or silent for 30 seconds) stops the start, as
+  does an executor whose files cannot be read at all. A single
+  `AGENTS.md` or skills directory that cannot be read is left out and
+  reported.
+- Changed: a session refuses an executor that does not serve its
+  files, which an executor of dax v0.0.6 does not: update `dax` where
+  it runs. The capability's version stays 1; a v0.0.6 session ignores
+  the new field.
+- Changed: `agent.Executor.Workspace` reads the executor's files
+  (`FS` implements `fs.StatFS`, `fs.ReadDirFS`, `fs.ReadFileFS` and
+  `fs.ReadLinkFS`) instead of being empty, so a program built on dax
+  reads the project's config through it as the command line does.
+- Fixed: a project's skills directory that cannot be read for a reason
+  other than a link is reported with that reason, not as a link
+  outside the workspace.
+
 ## v0.0.6 - 2026-10-09
 
 - Added: `dax execute`, the tools served over MCP on standard input

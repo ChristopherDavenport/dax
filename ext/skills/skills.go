@@ -159,13 +159,22 @@ func projectSkills(files *tool.Files) (src agentskill.Source, ok bool, omitted [
 		return src, false, []agentkit.Omission{omission(shown, reason)}
 	}
 	// Lstat is Stat on a file system that cannot read links, and a
-	// .dax that is itself a link out fails it: either is refused.
+	// .dax that is itself a link out fails it: either is refused. A
+	// file system that cannot be read (an executor gone, a request
+	// timed out) is refused with its error.
 	_, err := fs.Lstat(fsys, skillsDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return src, false, nil // absent: nothing to offer, nothing to refuse
 	}
-	if _, serr := fs.Stat(fsys, skillsDir); err != nil || serr != nil {
+	if err == nil {
+		_, err = fs.Stat(fsys, skillsDir)
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, tool.ErrOutside), errors.Is(err, fs.ErrNotExist):
 		return refuse("symbolic link outside the workspace")
+	default:
+		return refuse(err.Error())
 	}
 	// Where the directory really is, in the workspace: .dax/skills ->
 	// ../real offers real, and what is below it must stay in real.

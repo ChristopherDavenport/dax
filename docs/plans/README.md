@@ -64,8 +64,10 @@ After #35 and #36, in dax:
 
 What still touches the machine dax runs on, and belongs in the executor:
 MCP stdio servers in a workspace that cannot start a process (in one
-that can, `workspace.Starter`, they start there), project skills,
-AGENTS.md and the project config.
+that can, `workspace.Starter`, they start there), which a session with
+`-executor` refuses. Project skills, AGENTS.md and the project config
+are read through the workspace, and with `-executor` through the
+executor, which serves its workspace's files read-only.
 
 ## Changes by repository
 
@@ -128,6 +130,14 @@ before the dax step that uses them, as the workspace's rules require.
      the workspace. The MCP servers are **done**: a stdio server starts
      through `Start` when the session's workspace is a
      `workspace.Starter`, and on this machine when it is not.
+     `dax execute` and `-executor` are **done** in dax v0.0.6, and the
+     project's files (AGENTS.md, `.dax/skills`, `.dax/config.json`)
+     read through the executor, which serves its workspace's files as
+     read-only MCP resources (`dax-workspace:///{op}{?path}`), are
+     **done** (branch `executor-files`). Follow-ups: MCP servers with
+     an executor (started in it, or refused as now), facts batched per
+     model response, and an executor over an address rather than a
+     command.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.

@@ -3,6 +3,7 @@ package skills_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -373,6 +374,48 @@ func TestAWorkspaceThatCannotReadLinksRefusesALinkedSkill(t *testing.T) {
 				t.Errorf("offered %v, omitted %v, want refused for %q", offered, ours, tc.refused)
 			}
 		})
+	}
+}
+
+// failing is a workspace whose file system cannot read .dax, as an
+// executor that stopped answering cannot.
+type failing struct{ *workspace.Local }
+
+func (f failing) FS() fs.FS { return failingFS{f.Local.FS()} }
+
+type failingFS struct{ fs.FS }
+
+func (f failingFS) Lstat(name string) (fs.FileInfo, error) {
+	if strings.HasPrefix(name, ".dax") {
+		return nil, &fs.PathError{Op: "lstat", Path: name, Err: errors.New("executor: context deadline exceeded")}
+	}
+	return fs.Lstat(f.FS, name)
+}
+
+func (f failingFS) ReadLink(name string) (string, error) { return fs.ReadLink(f.FS, name) }
+
+// A skills directory that cannot be read is left out and reported with
+// the error that stopped it, not as a link.
+func TestAProjectsSkillsThatCannotBeReadAreLeftOutWithTheError(t *testing.T) {
+	o := session(t, &scripted{}, skills.Options{})
+	write(t, filepath.Join(o.Dir, ".dax", "skills", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
+	local, err := workspace.NewLocal(o.Dir, nil)
+	must(t, err)
+	t.Cleanup(func() { local.Close() })
+	o.Workspace = failing{local}
+	s, err := agent.New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var ours []string
+	for _, om := range s.Omitted() {
+		if om.Source == skills.Name {
+			ours = append(ours, om.Reason)
+		}
+	}
+	if strings.Contains(s.Agent().Config().Instructions, "greet2") || len(ours) != 1 || !strings.Contains(ours[0], "context deadline exceeded") {
+		t.Errorf("omitted %v", ours)
 	}
 }
 

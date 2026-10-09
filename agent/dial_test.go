@@ -102,13 +102,18 @@ type remoteBox struct {
 
 func newRemoteBox(t *testing.T) *remoteBox {
 	t.Helper()
-	dir := t.TempDir()
+	return newRemoteBoxAt(t, t.TempDir(), workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: "/work"})
+}
+
+// newRemoteBoxAt is a box over dir that says it is d.
+func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox {
+	t.Helper()
 	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	srv, closeTools, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "box", Descriptor: workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: "/work"}},
+	srv, closeTools, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "box", Descriptor: d},
 		[]extension.Extension{coding.New(0), acme()}, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +227,7 @@ func remoteOptions(t *testing.T, model openresponses.Streamer, ex *Executor) Opt
 // allows is decided on the executor's facts and runs there with its
 // stamp, the main agent's and the explore sub-agent's alike, the
 // record, the prompt and explore's prompt name the executor's
-// workspace, and this directory's project files are not read.
+// workspace, and this directory's AGENTS.md is not read.
 func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 	ctx := context.Background()
 	box := newRemoteBox(t)
@@ -247,12 +252,8 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "ask", "status", "broken"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
-	omitted := ""
-	for _, om := range s.Omitted() {
-		omitted += om.String() + "\n"
-	}
-	if !strings.Contains(omitted, "/work") || !strings.Contains(omitted, "not read with an executor yet") {
-		t.Errorf("omitted:\n%s", omitted)
+	if om := s.Omitted(); len(om) != 0 {
+		t.Errorf("omitted %v", om)
 	}
 	var asked []string
 	if _, err := promptOn(ctx, s, "read the notes", func(c *openresponses.FunctionCall, _ string) bool {
@@ -606,29 +607,37 @@ func TestDialExecutorKeepsTheKeyHere(t *testing.T) {
 	}
 }
 
-// The view of the executor's workspace acts on nothing.
+// The view of the executor's workspace acts on nothing: it writes,
+// removes and runs nothing, here or in the executor, and is not a
+// Starter. Its files are the executor's, read-only.
 func TestTheExecutorsViewActsOnNothing(t *testing.T) {
 	ctx := context.Background()
-	v := &executorView{d: workspace.Descriptor{Kind: workspace.KindRemote, Root: "/srv"}}
-	if v.Root() != "/srv" {
+	box := newRemoteBox(t)
+	write(t, filepath.Join(box.dir, "AGENTS.md"), "remote\n")
+	ex, _ := box.dial(t)
+	v := ex.Workspace()
+	if v.Root() != "/work" {
 		t.Errorf("root %s", v.Root())
 	}
 	if err := v.WriteFile(ctx, "x", nil, 0o644); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("WriteFile: %v", err)
 	}
-	if err := v.Remove(ctx, "x"); !errors.Is(err, errors.ErrUnsupported) {
+	if err := v.Remove(ctx, "AGENTS.md"); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Remove: %v", err)
 	}
-	if _, err := v.Exec(ctx, workspace.Command{Args: []string{"true"}}); !errors.Is(err, errors.ErrUnsupported) {
+	if _, err := v.Exec(ctx, workspace.Command{Args: []string{"touch", "y"}}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Exec: %v", err)
 	}
-	if _, ok := any(v).(workspace.Starter); ok {
+	if _, ok := v.(workspace.Starter); ok {
 		t.Error("the view is a Starter")
 	}
-	if _, err := v.FS().Open("AGENTS.md"); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("open: %v", err)
+	if data, err := fs.ReadFile(v.FS(), "AGENTS.md"); err != nil || string(data) != "remote\n" {
+		t.Errorf("read: %q %v", data, err)
 	}
-	if entries, err := fs.ReadDir(v.FS(), "."); err != nil || len(entries) != 0 {
+	if entries, err := fs.ReadDir(v.FS(), "."); err != nil || len(entries) != 1 {
 		t.Errorf("readdir: %v %v", entries, err)
+	}
+	if _, ok := v.FS().(fs.ReadLinkFS); !ok {
+		t.Error("the view's files cannot read links")
 	}
 }

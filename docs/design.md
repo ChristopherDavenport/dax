@@ -67,11 +67,11 @@ Where dax does not keep to this yet, and what each needs:
   its glue fakes or drops.
 - The execution plane: `dax execute` serves the tools over stdio MCP
   and `-executor` (`agent.Options.Executor`, `executor.Remote`) runs a
-  session's tools there, but a session with an executor refuses MCP
-  servers, which would run on this machine, and reads none of the
-  project's files (AGENTS.md, `.dax/skills`, `.dax/config.json`) until
-  the executor serves them; facts are read one request per reading,
-  not batched per response. An MCP stdio server starts in the workspace only when
+  session's tools there, reading the project's files (AGENTS.md,
+  `.dax/skills`, `.dax/config.json`) through it, but a session with an
+  executor refuses MCP servers, which would run on this machine; facts
+  are read one request per reading, not batched per response, and the
+  project's files one request per stat, listing or read. An MCP stdio server starts in the workspace only when
   the workspace can start a long-lived process with pipes
   (`workspace.Starter`); in one that cannot, it starts where the turn
   runs.
@@ -330,12 +330,14 @@ is:
   offers `.dax/skills` as an `agentskill.Source` over it, screened by
   walking it there, every link required to lead inside `.dax/skills`
   (`tool.Files.Resolve`), since the skill tool runs unasked; the command line reads `.dax/config.json` through a
-  `workspace.Local` over the project. One exception reads this machine:
+  `workspace.Local` over the project, or with `-executor` through the
+  executor's workspace once it is connected. One exception reads this machine:
   when the workspace's descriptor says it is `Dir` on this machine and
   the session started below its repository's root, the AGENTS.md files
   between the two are outside the workspace and are read from `Dir`'s
   ancestors, a link that leaves `Dir` left out. A workspace elsewhere
-  gives only its own files.
+  gives only its own files, and so does an executor's, whatever its
+  descriptor says: an executor of kind `local` may be on another host.
 - The session records the workspace: the header's `cwd`, the env
   entry's `cwd` and its `workspace` kind and ref come from the
   descriptor, so a resume into another workspace is recorded as a
@@ -426,8 +428,23 @@ method or the capability, of another version, listing a tool the
 capability does not name or the reverse, or saying a tool claims facts
 that is listed without the claim. A client that took such tools would
 decide their calls on the model's arguments, a wider policy than the
-user's. The session's workspace is then a view of the executor's
-(its root and descriptor; nothing to write or run with), each
+user's. The session's workspace is then a view of the executor's:
+its root and descriptor, nothing to write or run with, and its files,
+read-only, which the executor serves as MCP resources under
+`dax-workspace:///{op}{?path}` (stat, lstat, readdir, readlink, read)
+through its workspace's confined file system, a read bounded at 1 MiB
+and a listing at 10,000 entries, each request within 30 seconds. The
+reply carries a refusal's kind, so the view's errors are the ones a
+local workspace gives (`fs.ErrNotExist`, `workspace.ErrOutside`,
+`fs.ErrInvalid`, `fs.ErrPermission`), and the readers of the project's
+files (the AGENTS.md screening and chain, dax-skills' screening and
+source, `config.LoadProject`) run over it unchanged. The capability
+names the template; a client refuses an executor without it rather
+than run with the project's config unread. An executor whose files
+cannot be read when the session starts fails it, and a project config
+that cannot be read fails the command line's start, since it only
+tightens; a single AGENTS.md or skills directory that cannot be read
+is left out and reported. Each
 extension with Tools must be one the executor runs, a matcher may not
 give a served tool's subjects (they would read this machine), and a
 reading of the facts that fails, takes longer than 30 seconds or finds
