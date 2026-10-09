@@ -149,10 +149,10 @@ type Env interface {
 	ToolEnv() ToolEnv
 	// Name is the program's, dax unless it named itself.
 	Name() string
-	// Dir is the directory on this machine the session reads its
-	// instructions from (agent.Options.Dir); the tools act in
-	// ToolEnv().Workspace, which may be elsewhere. UserDir is the
-	// user's ~/.dax.
+	// Dir is the directory on this machine the session started in
+	// (agent.Options.Dir); the tools act in ToolEnv().Workspace, which
+	// may be elsewhere, and the project's files are read through it,
+	// not from Dir. UserDir is the user's ~/.dax.
 	Dir() string
 	UserDir() string
 	// Tools are every extension's tools, the read-only ones included,

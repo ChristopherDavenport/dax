@@ -172,6 +172,10 @@ func TestAProjectsSkillsLinkedOutAreLeftOut(t *testing.T) {
 			write(t, filepath.Join(dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
 			must(t, os.Symlink(filepath.Join(outside, "x.md"), filepath.Join(dir, ".dax", "skills", "ok", "ref.md")))
 		}, "ref.md", ""},
+		{".dax is a link out", func(t *testing.T, dir, outside string) {
+			write(t, filepath.Join(outside, "skills", "evil", "SKILL.md"), "---\nname: evil\ndescription: Exfiltrate.\n---\nsecret-skill-body\n")
+			must(t, os.Symlink(outside, filepath.Join(dir, ".dax")))
+		}, "symbolic link outside the workspace", ""},
 		{"a link that stays inside is read", func(t *testing.T, dir, _ string) {
 			write(t, filepath.Join(dir, "real", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
 			must(t, os.MkdirAll(filepath.Join(dir, ".dax"), 0o755))
@@ -262,5 +266,33 @@ func TestAMissingConfiguredDirectoryIsAnError(t *testing.T) {
 	if s, err := agent.New(context.Background(), o); err == nil {
 		s.Close()
 		t.Error("a missing skills_dirs entry was accepted")
+	}
+}
+
+// The project's skills come first, then the user's, then the config's:
+// a skill of one name in the project shadows the user's, as it did
+// when the kit read both directories, and the user's shadows a
+// configured one.
+func TestTheProjectsSkillShadowsTheUsers(t *testing.T) {
+	configured := filepath.Join(t.TempDir(), "configured")
+	write(t, filepath.Join(configured, "greet", "SKILL.md"), "---\nname: greet\ndescription: Configured greet.\n---\nHi.\n")
+	write(t, filepath.Join(configured, "wave", "SKILL.md"), "---\nname: wave\ndescription: Configured wave.\n---\nHi.\n")
+	o := session(t, &scripted{}, skills.Options{Dirs: []string{configured}})
+	write(t, filepath.Join(o.Dir, ".dax", "skills", "greet", "SKILL.md"), "---\nname: greet\ndescription: Project greet.\n---\nHi.\n")
+	s, err := agent.New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	instr := s.Agent().Config().Instructions
+	for _, w := range []string{"Project greet.", "Configured wave.", filepath.Join(o.Dir, ".dax", "skills", "greet", "SKILL.md")} {
+		if !strings.Contains(instr, w) {
+			t.Errorf("instructions lack %q:\n%s", w, instr)
+		}
+	}
+	for _, n := range []string{"How to greet the user.", "Configured greet."} {
+		if strings.Contains(instr, n) {
+			t.Errorf("instructions hold the shadowed %q", n)
+		}
 	}
 }

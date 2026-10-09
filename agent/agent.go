@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -90,10 +91,13 @@ type Options struct {
 	Think bool
 	// Effort is the reasoning effort Think asks for; empty is low.
 	Effort openresponses.ReasoningEffort
-	// Dir is the directory on this machine the session's instructions
-	// are read from: the AGENTS.md chain and an extension's project
-	// files (.dax/skills). With no Workspace it is also where the tools
-	// act, as a workspace.Local.
+	// Dir is the directory on this machine the session started in.
+	// With no Workspace it is where the tools act, as a
+	// workspace.Local. The project's instructions (AGENTS.md, an
+	// extension's project files such as .dax/skills) are read through
+	// the workspace, not from Dir; only when the workspace is Dir on
+	// this machine and Dir is below its repository's root are the
+	// AGENTS.md files between the two read from here.
 	Dir string
 	// Workspace is where the tools act and what the session records as
 	// its cwd and workspace: a container, a remote runtime, or this
@@ -121,9 +125,18 @@ type Options struct {
 	// instructions_file, added to dax's part of the system prompt.
 	Instructions string
 
-	// AgentsMD reads UserDir/AGENTS.md and the AGENTS.md chain from the
-	// file system root down to Dir into the instructions.
+	// AgentsMD reads UserDir/AGENTS.md, AgentsMDGlobal and the
+	// AGENTS.md chain from the repository's root down to the
+	// workspace's root into the instructions (https://agents.md);
+	// never a file above the repository.
 	AgentsMD bool
+	// AgentsMDGlobal are the user's own instruction files for every
+	// session (the config's agents_md_global), read under AgentsMD
+	// after UserDir/AGENTS.md and before the chain, in order. They are
+	// paths on this machine whatever the workspace, since they are the
+	// user's and not the project's, and are not screened; a missing
+	// one is skipped.
+	AgentsMDGlobal []string
 	// Compact, when positive, is the estimated token budget above which
 	// the transcript is folded before a call.
 	Compact int
@@ -368,18 +381,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	var kopts []agentkit.Option
 	agentsText := ""
 	if o.AgentsMD {
-		// The walk is done here, so that a file that is a link out of
-		// the workspace can be left out; agentsmd is given the screened
-		// files and a name that matches nothing, so it walks to no more.
-		files, refused := agentsFiles(o.Dir)
+		// The chain is read through the workspace, screened first so
+		// that a file that is a link out of it is left out and
+		// reported rather than failing the session (trust.go).
+		mdOpts, refused := agentsMDOptions(ws, o.Dir, o.UserDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
-		mdOpts := agentsmd.Options{
-			Names:  []string{".dax-no-such-file"},
-			Extra:  append([]string{filepath.Join(o.UserDir, "AGENTS.md")}, files...),
-			Budget: 32 << 10,
-		}
-		kopts = append(kopts, agentkit.WithAgentsMD(o.Dir, mdOpts))
-		res, err := agentsmd.Chain(o.Dir, mdOpts)
+		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
+		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
 		if err != nil {
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
@@ -621,9 +629,29 @@ func (s *Session) Path() string {
 	return filepath.Join(cs.Root(), "sessions", s.ID())
 }
 
-// Omitted is what the instruction layers considered and left out.
+// Omitted is what the instruction layers considered and left out. A
+// file of the AGENTS.md chain the kit left out is named by its path in
+// the workspace's root, as the screening names one, where the kit
+// names it within the workspace's file system.
 func (s *Session) Omitted() []agentkit.Omission {
-	return append(append([]agentkit.Omission(nil), s.refused...), s.Kit.Omitted()...)
+	out := append([]agentkit.Omission(nil), s.refused...)
+	for _, om := range s.Kit.Omitted() {
+		if om.Source == agentkit.SourceAgentsMD {
+			om.What, om.By = s.inRoot(om.What), s.inRoot(om.By)
+		}
+		out = append(out, om)
+	}
+	return out
+}
+
+// inRoot is a name in the workspace's file system as a path in its
+// root; an absolute path, such as the user's own file, or nothing, is
+// returned as it is.
+func (s *Session) inRoot(name string) string {
+	if name == "" || path.IsAbs(name) {
+		return name
+	}
+	return path.Join(s.ws.Root(), name)
 }
 
 // Tools lists the tools the kit assembled, each with its source.

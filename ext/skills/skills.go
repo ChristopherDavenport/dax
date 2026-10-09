@@ -8,9 +8,10 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // Name is the extension's name, and so its rules' source:
@@ -48,20 +50,34 @@ func New(o Options) extension.Extension {
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			// Neither default directory is one the user configured, so
 			// either may be absent; the project's comes first and
-			// shadows the user's.
+			// shadows the user's, and the config's come last. Every
+			// one is a source, since the kit discovers directories it
+			// names before sources and the project's is read through
+			// the workspace, which may not be this machine.
+			ws := env.ToolEnv().Workspace
+			project, ok, refused := projectSkills(ws)
+			for _, om := range refused {
+				env.Omit(om)
+			}
+			var sources []agentskill.Source
+			if ok {
+				sources = append(sources, project)
+			}
 			user := filepath.Join(env.UserDir(), "skills")
-			dirs := []string{user}
-			if ok, refused := projectSkillsOK(env.Dir()); ok {
-				dirs = []string{filepath.Join(env.Dir(), ".dax", "skills"), user}
-			} else {
-				for _, om := range refused {
-					env.Omit(om)
+			switch src, err := agentskill.Dir(user); {
+			case err == nil:
+				sources = append(sources, src)
+			case !errors.Is(err, fs.ErrNotExist):
+				return nil, fmt.Errorf("skills %s: %w", user, err)
+			}
+			for _, d := range o.Dirs {
+				src, err := agentskill.Dir(d)
+				if err != nil {
+					return nil, fmt.Errorf("skills %s: %w", d, err)
 				}
+				sources = append(sources, src)
 			}
-			opts := []agentkit.Option{agentkit.WithOptionalSkills(dirs...)}
-			if len(o.Dirs) > 0 {
-				opts = append(opts, agentkit.WithSkills(o.Dirs...))
-			}
+			opts := []agentkit.Option{agentkit.WithSkillSources(sources...)}
 			if o.Trust {
 				roots := append([]string{user}, o.Dirs...)
 				opts = append(opts,
@@ -71,7 +87,12 @@ func New(o Options) extension.Extension {
 						// skills_dirs. A repository's skill is text from
 						// the repository; its allowed-tools are withheld
 						// like any untrusted rule.
-						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: under(roots, sk.Location)}
+						// The project's is refused by its location before
+						// any path on this machine is consulted, since
+						// the workspace's paths need not be this
+						// machine's.
+						trusted := !(ok && inside(project.Location, sk.Location)) && under(roots, sk.Location)
+						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: trusted}
 					}),
 					agentkit.WithSkillGrantScope(),
 					agentkit.WithSkillGrantReport(func(g agentkit.SkillGrant) {
@@ -107,52 +128,58 @@ func inside(dir, p string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// within reports whether p, once its links are resolved, is dir or
-// below it. dir is already resolved.
-func within(dir, p string) bool {
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return false
-	}
-	return inside(dir, real)
-}
+// The skill library follows the links its file system follows, and a
+// skill's catalogue entry goes into the system prompt and its body to
+// the model. A repository can ship .dax/skills -> ~/. So the project's
+// skills are read through the session's workspace, whose file system
+// refuses a name that leaves it, and screened through it first, so a
+// directory that would be refused is left out and reported rather than
+// failing the session or offering part of itself. The screening reads
+// the workspace, never this machine: the project may be in a container.
 
-// The skill library follows symbolic links, and a skill's catalogue
-// entry goes into the system prompt and its body to the model. A
-// repository can ship .dax/skills -> ~/. So a project's skills directory
-// is screened before the library sees it, as the session screens
-// AGENTS.md.
+// skillsDir is the project's skills directory, as a name in the
+// workspace.
+const skillsDir = ".dax/skills"
 
-// projectSkillsOK reports whether the project's skills directory can be
-// offered: it, and every link below it, stays inside the workspace. A
-// directory with one link that leaves is left out whole, since the
-// kit takes directories, and reported.
-func projectSkillsOK(dir string) (ok bool, omitted []agentkit.Omission) {
-	skills := filepath.Join(dir, ".dax", "skills")
-	if _, err := os.Lstat(skills); err != nil {
-		return true, nil // absent: nothing to offer, nothing to refuse
+// projectSkills is the project's skills directory as a source over the
+// workspace's file system, and whether it can be offered: it, and
+// every link below it, leads somewhere inside the workspace. A
+// directory with one link that does not is left out whole, and
+// reported.
+func projectSkills(ws workspace.Workspace) (src agentskill.Source, ok bool, omitted []agentkit.Omission) {
+	fsys := ws.FS()
+	shown := path.Join(ws.Root(), skillsDir)
+	// Lstat is Stat on a file system that cannot read links, and a
+	// .dax that is itself a link out fails it: either is refused.
+	_, err := fs.Lstat(fsys, skillsDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return src, false, nil // absent: nothing to offer, nothing to refuse
 	}
-	real, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		real = dir
-	}
-	if !within(real, skills) {
-		return false, []agentkit.Omission{omission(skills, "symbolic link outside the workspace")}
+	if _, serr := fs.Stat(fsys, skillsDir); err != nil || serr != nil {
+		return src, false, []agentkit.Omission{omission(shown, "symbolic link outside the workspace")}
 	}
 	var bad string
-	filepath.WalkDir(skills, func(p string, d fs.DirEntry, err error) error {
+	fs.WalkDir(fsys, skillsDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || bad != "" {
 			return nil
 		}
-		if d.Type()&fs.ModeSymlink != 0 && !within(real, p) {
-			bad = p
+		// A link is followed through the workspace, which refuses one
+		// that leaves it; a link to nothing is refused as well.
+		if d.Type()&fs.ModeSymlink != 0 {
+			if _, err := fs.Stat(fsys, p); err != nil {
+				bad = path.Join(ws.Root(), p)
+			}
 		}
 		return nil
 	})
 	if bad != "" {
-		return false, []agentkit.Omission{omission(skills, fmt.Sprintf("holds a symbolic link outside the workspace, %s", bad))}
+		return src, false, []agentkit.Omission{omission(shown, fmt.Sprintf("holds a symbolic link outside the workspace, %s", bad))}
 	}
-	return true, nil
+	sub, err := fs.Sub(fsys, skillsDir)
+	if err != nil {
+		return src, false, []agentkit.Omission{omission(shown, err.Error())}
+	}
+	return agentskill.Source{FS: sub, Location: shown}, true, nil
 }
 
 func omission(path, reason string) agentkit.Omission {
