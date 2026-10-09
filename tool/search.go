@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
+
+	"github.com/ChristopherDavenport/dax/facts"
 )
 
 const (
@@ -115,14 +117,24 @@ type GlobArgs struct {
 	Pattern    string `json:"pattern" desc:"Glob pattern, e.g. **/*.go or cmd/*/main.go. ** matches any number of directories; * and ? stay within one path segment; {a,b} alternates"`
 	Path       string `json:"path,omitempty" desc:"Directory to search, relative to the workspace (default the workspace root); the pattern is relative to it"`
 	MaxResults int    `json:"max_results,omitempty" desc:"Maximum paths to return (default 1000)"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // Glob returns a tool that lists files whose path matches a
 // doublestar-style pattern, sorted. It skips .git and common vendored
 // directories.
 func Glob(ws *Files) agenttool.Tool {
+	return facts.With(exactArgs[GlobArgs](globTool(ws)), pathFacts(ws, "glob", "path", "."))
+}
+
+func globTool(ws *Files) agenttool.Tool {
 	return agenttool.New("glob", "Find files by glob pattern, e.g. **/*.go. Paths are relative to the search directory and sorted. Skips .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GlobArgs) (string, error) {
+			if err := ws.checkTouched("glob", ".", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			if in.Pattern == "" {
 				return "", errors.New("pattern is required")
 			}
@@ -269,13 +281,23 @@ type GrepArgs struct {
 	Include    string `json:"include,omitempty" desc:"Only search files whose path matches this glob, e.g. *.go or internal/**/*.go; a pattern with no / matches the file name"`
 	IgnoreCase bool   `json:"ignore_case,omitempty" desc:"Match case-insensitively"`
 	MaxResults int    `json:"max_results,omitempty" desc:"Maximum matching lines to return (default 200)"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // Grep returns a tool that searches files for a regular expression and
 // returns path:line:text for each matching line.
 func Grep(ws *Files) agenttool.Tool {
+	return facts.With(exactArgs[GrepArgs](grepTool(ws)), pathFacts(ws, "grep", "path", "."))
+}
+
+func grepTool(ws *Files) agenttool.Tool {
 	return agenttool.New("grep", "Search file contents for a regular expression. Returns path:line:text, sorted by path. Skips binary files, .git, node_modules, vendor and similar directories.",
 		func(ctx context.Context, in GrepArgs) (string, error) {
+			if err := ws.checkTouched("grep", ".", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			if in.Pattern == "" {
 				return "", errors.New("pattern is required")
 			}
@@ -388,13 +410,23 @@ func (w *Files) grepFile(rel string, re *regexp.Regexp, emit func(line int, text
 // LSArgs are the arguments of the ls tool.
 type LSArgs struct {
 	Path string `json:"path,omitempty" desc:"Directory to list, relative to the workspace (default the workspace root)"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // LS returns a tool that lists one directory: names sorted, directories
 // with a trailing slash, files with their size.
 func LS(ws *Files) agenttool.Tool {
+	return facts.With(exactArgs[LSArgs](lsTool(ws)), pathFacts(ws, "ls", "path", "."))
+}
+
+func lsTool(ws *Files) agenttool.Tool {
 	return agenttool.New("ls", "List the entries of one directory, sorted: directories end in /, files show their size in bytes.",
 		func(_ context.Context, in LSArgs) (string, error) {
+			if err := ws.checkTouched("ls", ".", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			rel, err := ws.relBase(in.Path)
 			if err != nil {
 				return "", err

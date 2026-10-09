@@ -10,12 +10,9 @@
 package coding
 
 import (
-	"context"
 	"strings"
 
-	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
-	"github.com/ChristopherDavenport/agentturn"
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -36,11 +33,13 @@ const instructions = "Use the tools to inspect and change files and run commands
 // file read scans, edit rewrites and the bash analyzer reads of a file a
 // command names; zero is tool.DefaultMaxRead.
 //
-// Everything it builds is built over the session's ToolEnv: the tools
-// over its tool.Files, whose write lock every writing tool of the
-// session shares, and the matchers and the bash stamp over the same
-// Files, so the policy looks at the workspace the tools act in and no
-// other.
+// Its tools are built over the session's ToolEnv, on its tool.Files,
+// whose write lock every writing tool of the session shares. Each makes
+// the facts claim (package facts): what a call would touch, read in the
+// workspace the tools act in, and for bash the stamped plan. The session
+// takes the policy's subjects and the stamp from those claims; dax-coding
+// ships only how its rules match (matchers), so the policy reads no
+// machine but through the tools.
 //
 // read, glob, grep, ls and bash are ReadOnly, which the explore
 // sub-agent gets too. bash is there though a command may write, because
@@ -52,34 +51,12 @@ func New(maxRead int64) extension.Extension {
 		Tools: func(e extension.ToolEnv) []agenttool.Tool {
 			return tool.Builtins(e.Files, maxRead)
 		},
-		ReadOnly: []string{"read", "glob", "grep", "ls", "bash"},
-		Matchers: func(e extension.ToolEnv) map[string]agentpolicy.ToolMatcher {
-			return matchers(e.Files, maxRead)
-		},
-		Aliases: aliases,
-		Policy:  policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},
-		Lifts:   lifts,
-		BeforeToolCall: func(e extension.ToolEnv) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-			return stampBash(&tool.Analyzer{Files: e.Files, MaxFile: maxRead})
-		},
+		ReadOnly:     []string{"read", "glob", "grep", "ls", "bash"},
+		Matchers:     extension.FixedMatchers(matchers()),
+		Aliases:      aliases,
+		Policy:       policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},
+		Lifts:        lifts,
 		Instructions: instructions,
 		Renderers:    toolrender.Renderers,
-	}
-}
-
-// stampBash is the hook that stamps an auto-allowed bash call with the
-// plan the policy approved, and takes a stamp the model made off any
-// other. It decides nothing itself: its Allow folds under the policy's
-// verdict, so it never lets run a call the policy asks about.
-func stampBash(an *tool.Analyzer) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-		if info.Call == nil || info.Call.Name != "bash" {
-			return nil, nil
-		}
-		args, changed, err := tool.StampArgs(ctx, an, info.Args)
-		if err != nil || !changed {
-			return nil, nil // not JSON: the tool will say so
-		}
-		return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args}, nil
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 	"github.com/ChristopherDavenport/dax/workspace"
@@ -54,6 +55,25 @@ func local(t testing.TB, dir string) (workspace.Workspace, *tool.Files) {
 	return ws, tool.NewFiles(ws)
 }
 
+// sessionMatchers are dax-coding's matchers as a session in dir builds
+// them: how its rules match, with each tool's subjects taken from its
+// facts claim.
+func sessionMatchers(t testing.TB, dir string) map[string]agentpolicy.ToolMatcher {
+	t.Helper()
+	ws, files := local(t, dir)
+	x := New(0)
+	tools := x.Tools(extension.ToolEnv{Workspace: ws, Files: files})
+	own := slices.Collect(maps.Keys(x.Aliases))
+	for _, tl := range tools {
+		own = append(own, tl.Name())
+	}
+	ms, err := factspolicy.Matchers(tools, own, matchers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ms
+}
+
 // engine builds the engine a session in dir would decide calls with
 // under s: dax-coding's rules beside s's, its matchers and aliases.
 func engine(t *testing.T, dir string, s Settings) *agentpolicy.Engine {
@@ -63,8 +83,7 @@ func engine(t *testing.T, dir string, s Settings) *agentpolicy.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, files := local(t, dir)
-	eng, err := agentpolicy.Build(p, matchers(files, 0), agentpolicy.WithAliases(aliases))
+	eng, err := agentpolicy.Build(p, sessionMatchers(t, dir), agentpolicy.WithAliases(aliases))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,8 +294,7 @@ func TestBadRulesAreErrorsNotSilence(t *testing.T) {
 	s.Shipped = []policy.Shipped{shipped(t, testDir)}
 	p, err := policy.Build(s)
 	if err == nil {
-		_, files := local(t, testDir)
-		_, err = agentpolicy.Build(p, matchers(files, 0), agentpolicy.WithAliases(aliases))
+		_, err = agentpolicy.Build(p, sessionMatchers(t, testDir), agentpolicy.WithAliases(aliases))
 	}
 	if err == nil {
 		t.Error("a specifier on a tool with no matcher should not build")

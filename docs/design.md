@@ -368,7 +368,9 @@ kit options add, such as `skill`) and its aliases are unique; `mcp__` is
 an MCP server's; an alias may differ from its own tool only in case
 (`Bash` and `bash`); a `ReadOnly` tool, a matcher, an alias target and a
 `Lifts` entry name only the extension's own tools; a read-only tool
-annotated destructive is refused. `BeforeToolCall` hooks fold with the
+annotated destructive is refused. A tool's facts claim, what a call
+would touch, may name only its extension's tools: a call it names of
+another's is decided as one no rule names, so it asks. `BeforeToolCall` hooks fold with the
 policy, deny over ask over allow, for the main agent and, through
 `Env.ChildPolicy`, every sub-agent; with the policy off they are not
 run. `extension.Renderers` merges the extensions' renderers for the

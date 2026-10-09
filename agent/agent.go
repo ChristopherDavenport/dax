@@ -913,8 +913,8 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 // for none), folded deny over ask over allow: a block blocks it, an
 // allow lets it run (with the arguments a hook rewrote, a bash line
 // dax-coding stamped say), and a call either asks about is put to the
-// user. With no one to ask, it is refused. A policy that is off governs
-// nothing, the child included.
+// user, and runs rewritten too if they approve. With no one to ask, it
+// is refused. A policy that is off governs nothing, the child included.
 func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		e := eng.Load()
@@ -941,7 +941,11 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 			if v.Action != agentturn.Defer {
 				why, subject = h.Reason, ""
 			}
-			return s.askChild(ctx, name, info, why, subject), nil
+			var args json.RawMessage
+			if h != nil {
+				args = h.Args
+			}
+			return s.askChild(ctx, name, info, why, subject, args), nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -959,7 +963,11 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 // Question, answered with Reply. Its context is the call's, so an abort
 // gives the question up. With nobody to ask, the call is refused, and
 // the model is told to make it itself, where it can be put to the user.
-func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string) *agentturn.ToolDecision {
+// An approved call runs with args, the hooks' rewrite, when there is
+// one, as an allowed call does and as the main agent's approved call
+// does: a file tool's call carries the stamp of the facts it was asked
+// about, and a stamp the model forged never reaches the tool.
+func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
 	reason := "the " + name + " sub-agent asks: " + why
 	if subject != "" && !strings.Contains(reason, subject) {
 		reason += "; about: " + subject
@@ -978,5 +986,5 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 		}
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
 	}
-	return &agentturn.ToolDecision{Action: agentturn.Allow, By: agentpolicy.ByHuman}
+	return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args, By: agentpolicy.ByHuman}
 }

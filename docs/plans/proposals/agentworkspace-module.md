@@ -75,7 +75,13 @@ New:
   pipes runs the server inside the workspace instead of `CommandTransport`
   on the host. The study's persistent `Shell` (`design.md:150-180`) is a
   `Process` running a shell, with the sentinel protocol on top, and can be
-  built on `Start` rather than being its own method.
+  built on `Start` rather than being its own method. A `Process` lives no
+  longer than its owner: it is started in a process group of its own
+  (as dax's `Local.Exec` starts a command), `Close` and the context's end
+  send `SIGTERM` to the group and `SIGKILL` after a short grace period,
+  and the remote handler closes every process a client started when that
+  client's connection ends. Containing what the processes may use is
+  the sandbox's (cgroups, the container), not the interface's.
 - **Backends.** `Local` (`os.Root`, process groups, `WaitDelay`: dax's
   `local.go`), and `remote`: `remote.Handler(ws Workspace) http.Handler`
   serving any Workspace, and `remote.Dial(url) (Workspace, error)`. A
@@ -107,6 +113,9 @@ table that runs on Local and on a container stand-in) moving with them.
   `ErrOutside`, however it leaves.
 - Block on a FIFO, a device or a slow remote file without honouring the
   context where the operation takes one.
+- Leave a started process running after its owner: a `Process` whose
+  `Close` was not called is killed when its context ends or its remote
+  client disconnects, with everything it started.
 - Pass the host's environment by default: `Env` is what the constructor
   was given, and a nil one is empty, not inherited.
 - Depend on anything but the standard library in the root package; the

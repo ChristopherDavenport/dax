@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
+
+	"github.com/ChristopherDavenport/dax/facts"
 )
 
 const (
@@ -21,6 +23,9 @@ type ReadArgs struct {
 	Path   string `json:"path" desc:"File path, relative to the workspace or absolute inside it"`
 	Offset int    `json:"offset,omitempty" desc:"1-based line to start at (default 1)"`
 	Limit  int    `json:"limit,omitempty" desc:"Maximum lines to return (default 2000)"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // DefaultMaxRead is the most bytes of one file read scans, and the
@@ -57,9 +62,16 @@ func readCap(opts []ReadOption) int64 {
 // costs what a small one does. Past the cap, use grep to find the
 // line.
 func Read(ws *Files, opts ...ReadOption) agenttool.Tool {
+	return facts.With(exactArgs[ReadArgs](readTool(ws, opts...)), pathFacts(ws, "read", "path", ""))
+}
+
+func readTool(ws *Files, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files; only the first "+fmt.Sprint(limitBytes>>10)+" KiB of a file can be read, so use grep to find a line in a larger one.",
 		func(_ context.Context, in ReadArgs) (string, error) {
+			if err := ws.checkTouched("read", "", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			f, _, size, err := ws.openRegular(in.Path)
 			if err != nil {
 				return "", err
@@ -138,12 +150,22 @@ func readLine(br *bufio.Reader) (string, bool) {
 type WriteArgs struct {
 	Path    string `json:"path" desc:"File path"`
 	Content string `json:"content" desc:"Full file content"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // Write returns a tool that creates or replaces a file.
 func Write(ws *Files) agenttool.Tool {
+	return facts.With(exactArgs[WriteArgs](writeTool(ws)), pathFacts(ws, "write", "path", ""))
+}
+
+func writeTool(ws *Files) agenttool.Tool {
 	return agenttool.New("write", "Create or overwrite a file with the given content. Parent directories are created.",
 		func(_ context.Context, in WriteArgs) (string, error) {
+			if err := ws.checkTouched("write", "", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			ws.writes.Lock()
 			defer ws.writes.Unlock()
 			rel, err := ws.writeFile(in.Path, []byte(in.Content), true)
@@ -159,13 +181,23 @@ type EditArgs struct {
 	Path string `json:"path" desc:"File path"`
 	Old  string `json:"old_string" desc:"Exact text to find"`
 	New  string `json:"new_string" desc:"Replacement text"`
+	// Stamp is the stamp of the facts the policy decided this call on
+	// (dax sets it); the tool runs only if they still hold.
+	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
 // Edit returns a tool that replaces one exact occurrence of a string.
 func Edit(ws *Files, opts ...ReadOption) agenttool.Tool {
+	return facts.With(exactArgs[EditArgs](editTool(ws, opts...)), pathFacts(ws, "edit", "path", ""))
+}
+
+func editTool(ws *Files, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
 	return agenttool.New("edit", "Replace old_string with new_string in a file. old_string must appear exactly once; include enough surrounding lines to make it unique.",
 		func(_ context.Context, in EditArgs) (string, error) {
+			if err := ws.checkTouched("edit", "", in.Path, in.Stamp); err != nil {
+				return "", err
+			}
 			if in.Old == "" {
 				return "", errors.New("old_string must not be empty")
 			}

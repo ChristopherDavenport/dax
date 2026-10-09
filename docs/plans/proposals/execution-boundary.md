@@ -106,26 +106,68 @@ type Call struct {
 	Args json.RawMessage
 }
 
-type Facts struct {
-	// Subjects are the call as the policy's rules see it; nil is the
-	// call's own arguments, one subject.
-	Subjects []agentpolicy.Subject
-	// Rewrite, when set, is the arguments the call runs with if the
-	// policy allows it without asking: bash's arguments carrying the
-	// stamp of the plan the analysis approved.
-	Rewrite json.RawMessage
-}
+// Facts is the claim dax's package facts defines (built; see below).
+type Facts = facts.Facts
 ```
 
 The session wraps it for the loop: each `Tool` becomes an
-`agenttool.Tool` whose `Execute` is `Executor.Call`; the policy's
-matcher for a tool takes its subjects from `Facts`; the extension's
-`BeforeToolCall` that dax-coding uses for the stamp becomes "allow with
-`Facts.Rewrite`", folded under the policy's verdict as today
-(`ext/coding/coding.go:74` `stampBash`). The static parts of a matcher
-stay with control: `Match` reads only a specifier and a subject's
-arguments (`ext/coding/policy.go:112` `pathMatcher`), and aliases and
-lifts are configuration (`ext/coding/policy.go`).
+`agenttool.Tool` whose `Execute` is `Executor.Call` and whose facts
+claim is `Executor.Facts`. Nothing else changes, because the in-process
+session already decides on claims (below). The static parts of a
+matcher stay with control: `Match` reads only a specifier and a
+subject's arguments (`ext/coding/policy.go` `pathMatcher`), and aliases
+and lifts are configuration.
+
+### The claim, as built
+
+dax builds the in-process half now, as the draft of agenttool's claim:
+
+```go
+// package facts: agenttool and the standard library only.
+type Call struct {
+	Tool string          // "" is the called tool; "read" for what cat reads; a name no rule names for what cannot be read
+	Args json.RawMessage
+	Text string          // what a question shows
+}
+
+type Facts struct {
+	Calls   []Call          // nil: the call itself; empty: nothing readable, which the policy refuses
+	Rewrite json.RawMessage // the arguments it runs with if the policy allows it (bash's stamped plan)
+}
+
+type Claimer interface {
+	Facts(ctx context.Context, args json.RawMessage) (Facts, error)
+}
+
+func Of(ctx context.Context, t agenttool.Tool, args json.RawMessage) (Facts, bool, error)
+func With(t agenttool.Tool, fn func(context.Context, json.RawMessage) (Facts, error)) agenttool.Tool
+```
+
+- dax-coding's seven tools make the claim from the analysis that was
+  the policy's splitters (`tool.BashSubjects`, `tool.PathSubjects`).
+  Within one claim the stamp is of the facts it reports (bash's, of the
+  plan of the same reading of the command). The policy's verdict and
+  the hook's rewrite are separate calls of the claim, so separate
+  readings, until facts are fetched once per call (Gaps, 1 and 2).
+- A claimed call names the claiming tool or another tool of its own
+  extension (bash's `read` of what `cat` reads); one that names any
+  other tool is decided as a tool no rule names, so it asks, and never
+  borrows another extension's rules (`factspolicy.SubjectsOf`). A claim
+  that fails blocks the call. A claim refuses arguments with a key that
+  is one of the fields it reads in another case, and dax-coding's tools
+  refuse a key that is any of their fields in another case, since a
+  tool's decoder takes any case and a claim reads the exact key.
+- `facts/factspolicy` turns claims into agentpolicy's subjects
+  (`Matchers`: a matcher for a claiming tool supplies `Match` only, and
+  bringing `Subjects` too is an error) and into one generic
+  `BeforeToolCall` that applies `Rewrite` as an allow folded under the
+  verdict. dax-coding ships no hook and no subjects of its own.
+- `agenttool.Wrap` drops a claim agenttool does not know, so `Of` looks
+  through wrappers; `With` forwards every claim agenttool reads, as
+  `Wrap` does. Both are reasons the claim belongs in agenttool, where
+  `Wrap` would forward it.
+- Every policy, exploit and confinement test, and the cross-workspace
+  table, passes through the claims with its expectations unchanged.
 
 ### Checked against dax-coding
 
@@ -138,7 +180,7 @@ where it lands:
 | `tool.PathSubjects` (`tool/shell.go:304`) with `view.rel`/`view.resolve` (`tool/view.go:50`, `:57`) | normalises the path, follows links within the workspace, adds `dax:links-unknown` (`tool/shell.go:291`, `:332`) when links cannot be read | `Facts.Subjects` for read, write, edit, glob, grep, ls |
 | `tool.Analyzer.Check` (`tool/check.go:826`): `stageFirst`, `rels`, `checkCd` (`:699`, `:736`, `:802`), globs through `strictFS` (`tool/view.go:165`) | the workspace's files and links | inside `Facts` |
 | `execConfigKey` (`tool/gitconfig.go:61`) and its scripts | runs `git config` and `sh` in the workspace | inside `Facts` |
-| `tool.StampArgs` (`tool/stamp.go:39`), called by `stampBash` (`ext/coding/coding.go:74`) | runs `Check`, signs the plan with the process's key (`tool/stamp.go:14`) | `Facts.Rewrite`; the key stays in the executor |
+| `tool.StampArgs` (`tool/stamp.go`), called before facts by dax-coding's `stampBash` hook, now bash's claim | runs `Check`, signs the plan with the process's key (`tool/stamp.go:14`) | `Facts.Rewrite`; the key stays in the executor |
 | bash's `command` re-check (`tool/bash.go:150`) | runs `Check` again and compares the stamp | inside `Call`, unchanged |
 | the file tools, search, bash (`tool/fs.go`, `tool/search.go`, `tool/bash.go`) | `Files` over the workspace | inside `Call` |
 | `matchers`' `Match` (`ext/coding/policy.go:112`), `aliases`, `lifts`, `allowRules`, `askRules` | nothing | control, unchanged |
@@ -159,11 +201,22 @@ executor. Gaps the sketch has to close:
 2. **Facts and effects happen at different moments.** Between them the
    sandbox can change. For bash this is already handled: the tool
    re-checks and refuses a plan that no longer analyses to its stamp
-   (`errChanged`, `tool/stamp.go`). For the file tools it is the same gap
-   dax has in process today: a link swapped after the decision is
-   followed only within the workspace (`os.Root`), so the confinement
-   holds while the secret-path ask can be raced. The executor does not
-   widen it, but it is worth stating.
+   (`errChanged`, `tool/stamp.go`). The file tools' facts stamp does
+   the same (`errTouched`): a call runs only if its facts, recomputed
+   at the call, are the stamped ones, whether the policy allowed it or
+   a person approved it, in the main agent or a sub-agent. Two windows
+   are left. One is the moment between that recompute and the tool's
+   own open. The other is between readings: the policy decides on one
+   reading of the claim and the stamp is of another (the hook's), so an
+   outside process that changes a path between the two gets the later
+   one stamped. The main agent re-decides on the rewrite, a third
+   reading, so the path would have to change back and forth between
+   the readings; a sub-agent's check (`childPolicy`) takes the rewrite
+   from a reading after its verdict and does not re-decide, so one
+   change in that moment is enough.
+   Fetching facts once per call (1) closes it. A link swapped is
+   followed only within the workspace (`os.Root`), so confinement holds
+   either way. The executor does not widen either window.
 3. **Replay hints do not cross MCP.** `agenttool.WithReplay` has no MCP
    field and `mcpclient` has no option for it; a remote call reads as
    replay-unknown. dax-coding sets none today, so nothing is lost now.
@@ -193,17 +246,35 @@ import. Facts are the calls this call amounts to (`read {"path": ".env"}`,
 for a stage), which is the shape of `agentpolicy.Subject` already, plus
 an optional rewrite (bash's stamped plan). agentpolicy then takes a
 tool's subjects from its facts. In process, dax-coding's tools implement
-the claim; over the wire, `mcpserver` answers it as one reserved request
-on the same connection (a method of its own, or a reserved tool name
-`mcpclient` keeps out of the model's list) and `mcpclient`'s tools
-implement the claim by asking. Not a new protocol: the calls, progress,
+the claim; over the wire, `mcpserver` answers it as a method of its own
+on the same connection (`execution/facts`, say) and `mcpclient`'s tools
+implement the claim by asking. A method, not a reserved tool name: a
+tool name could reach the model's tool list if a client failed to hide
+it, and a method cannot. Not a new protocol: the calls, progress,
 questions, cancellation and records are what MCP already carries, and an
 executor is then also an ordinary MCP server any other host can use
 without the facts.
 
-The read-only flag, `Sequential` and `Resource` travel in the facts
-call's listing or in the tool's `_meta`, since MCP's annotations are
-hints the policy must not use alone (`agenttool/tool.go:278`).
+The read-only flag, `Sequential`, `Resource` and whether a tool claims
+facts at all travel in the tool's `_meta` in the listing, as facts
+about the tool, not as MCP annotations, which are hints the policy must
+not use alone (`agenttool/tool.go:278`).
+
+Round trips. Each call that reaches the policy costs a facts request
+before its call, so over a slow link the executor's place in the loop
+shows. Two things keep it to what it must be:
+
+- A tool that claims no facts is its own one fact, so control decides
+  it on its arguments with no facts request. The listing says which
+  tools claim; that is a fact about the tool, not an annotation, so
+  skipping the request for one cannot widen what the policy allows.
+- The calls of one model response are decided together, so their facts
+  are fetched in one request (`execution/facts` takes a list), and a
+  response of five calls costs one round trip for facts, not five. The
+  stamp each call's facts carry is checked when that call runs, so a
+  batch fetched early still runs only on the facts that were stamped,
+  which, with facts fetched once per call, are the facts it was decided
+  on.
 
 ## What else in dax touches the machine
 
@@ -279,12 +350,14 @@ run, for the cases that want them apart too.
 
 ## What the siblings need
 
-- **agenttool**: facts as an optional per-call claim in the root
-  contract, in tool-call terms; `mcpserver` and `mcpclient` carry it as a
-  reserved request on the same connection, with read-only, sequential
-  and resource in the listing so a client does not configure them by
-  hand.
-- **agentpolicy**: a context on subjects (`Subjects` with a
+- **agenttool**: the claim as built in dax's `facts` (`Claimer`, `Facts`,
+  `Call`, `FactsOf`), beside `Confined` and `Replayable`, with `Wrap`
+  forwarding it; `mcpserver` and `mcpclient` carry it as a reserved
+  request on the same connection, with read-only, sequential and
+  resource in the listing so a client does not configure them by hand.
+- **agentpolicy**: subjects taken from a tool's claim, what dax's
+  `factspolicy.Matchers` does (agentpolicy already depends on agenttool
+  through agentturn), and a context on subjects (`Subjects` with a
   `context.Context`, or an engine option that supplies one), so a facts
   call can be cancelled and bounded.
 

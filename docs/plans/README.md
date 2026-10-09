@@ -91,22 +91,25 @@ Each step depends only on those above it. Sibling steps are released
 before the dax step that uses them, as the workspace's rules require.
 
 1. **Merge #35, then #36** (merge, not squash).
-2. **dax, no sibling needed**: the `executor` package with dax-coding as
-   its in-process form; project skills and the project config read
-   from the workspace. Facts are fetched once per call and cached until
-   agentpolicy takes a context.
+2. **In parallel, no network needed:**
+   - dax: the `executor` package with dax-coding as its in-process
+     form; project skills and the project config read from the
+     workspace. Facts are fetched once per call and cached until
+     agentpolicy takes a context.
+   - Instruction sources: agentsmd's `FS`, an agentkit release, and dax
+     reading AGENTS.md from the workspace. Independent of everything
+     else, so it need not wait for the sandbox (agentskill already
+     reads through `fs.FS`).
 3. **The sandbox**, the goal's first case:
    - agenttool: the facts claim and its MCP carriage.
    - agentpolicy: subjects from facts, with a context.
    - agentworkspace: the module, `Local`, `Start`.
    - dax: `dax execute` and the remote executor; MCP servers started in
      the workspace.
-4. **Instruction sources**: agentsmd's `FS`, an agentkit release, dax
-   reads AGENTS.md from the workspace.
-5. **Where the orchestration runs** (optional): agentturn's `Control`
+4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.
-6. **Peers** (optional): agentsession's peer link, agentturn's peer
+5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 
 ## Decided
@@ -116,17 +119,89 @@ before the dax step that uses them, as the workspace's rules require.
   control runs, never in the executor, so a sandboxed session cannot
   read or write the user's memory directly.
 
+- **The shape of facts**, settled by building it (`facts`, dax's draft
+  for agenttool). A tool claims `Facts(ctx, args) (Facts, error)`, an
+  optional per-call claim beside `Confined` and `Replayable`. `Facts`
+  is `Calls`, the calls this call amounts to in tool-call terms
+  (`{Tool, Args, Text}`: a `read` of what `cat` reads, a `write` of a
+  redirect's target, a call no rule names for what cannot be read), and
+  `Rewrite`, the arguments the call runs with if the policy allows it.
+  Nil `Calls` is the call itself; empty is nothing readable, which the
+  policy refuses. The policy's subjects are the claim's calls
+  (`facts/factspolicy`), so a matcher supplies only `Match`; the
+  session applies `Rewrite` as one generic hook folded under the
+  policy's verdict, so an ask is still asked and an approved call runs
+  rewritten, in the main agent and in a sub-agent. A claim that fails
+  blocks the call.
+  - **The stamp is in the same claim.** It is a fact about the call
+    only the tool can state: within a claim, the facts it reports and
+    the stamp are of one analysis (bash's, of one reading of the
+    command), and the key never leaves the executor. Beside the claim
+    it would be a second call over the wire and a second analysis that
+    could disagree with the first. The policy's verdict and the hook's
+    rewrite are still separate calls of the claim, so separate
+    readings, until facts are fetched once per call (step 2; see the
+    open decision on the policy engine).
+  - **A claim names only its own extension's tools.** A claimed call
+    names the claiming tool or another of its extension's tools (bash's
+    `read` of what `cat` reads); one that names any other tool is
+    decided as a tool no rule names, so it asks, and an extension's
+    claim never borrows another's allow rule.
+  - **A claim reads its fields by their exact keys, and refuses them
+    in another case.** The tool's decoder takes any case, the last such
+    key winning; a claim that read `path` while the tool read `Path`
+    would put one path to the policy and act on another. The tools
+    refuse such arguments too, on their own.
+  - **Why it belongs in agenttool.** `agenttool.Wrap` forwards only the
+    claims agenttool knows, so a claim defined elsewhere is lost on a
+    wrapped tool; dax's `facts.Of` looks through wrappers until it
+    moves.
+  - Every policy, exploit and confinement test passes through the
+    claims with its expectations unchanged.
+- **Facts cross the wire as an MCP method of their own**
+  (`execution/facts`, taking a model response's calls together), not a
+  reserved tool name, which could reach the model's tool list.
+- **The stamp covers every claiming tool.** A file tool's claim
+  (read, write, edit, glob, grep, ls) rewrites its arguments with a
+  stamp: an HMAC, under bash's per-process key, of the facts it reported
+  (its name and each call's tool and arguments, in order). A call that
+  carries one recomputes its facts when it runs and is refused ("ask
+  again") if they differ, so a path the policy saw as `notes.txt` that
+  became a link to `.env` before the call (which `os.Root` follows,
+  `.env` being inside) does not run, whether the policy allowed it or a
+  person approved it, in the main agent or a sub-agent. A stamp the
+  model supplied is replaced by the rewrite, or refused at the call; a
+  call with no stamp, with the policy off, is not checked. Bash keeps its plan stamp: re-analysing the line
+  at the call already binds an unasked line to its plan and its reads,
+  so a facts stamp would add nothing there; a line a person approved
+  runs as written, unconfined, as before. Two windows are left: between
+  the executor's recompute and its own open of the path, and between
+  the policy's reading of a call's facts and the stamped one (see the
+  open decision on the policy engine).
+
 ## Decisions still open
 
-- **Facts' shape in agenttool.** Tool-call terms (the calls a call
-  amounts to) keep the contract free of policy; whether a rewrite (the
-  stamp) belongs in the same claim or beside it.
-- **The view and live events.** Whether agentconsole reads the record
-  alone, with uncommitted changes carried by RFC 0003's follow, or keeps
-  its live events.
+- **The view and live events.** The plan recommends that agentconsole
+  read the record alone, with uncommitted changes carried by RFC 0003's
+  follow (which marks each change durable or not), so there is one
+  stream to reconcile, not two. Its own rule keeps live events for what
+  is not committed, so the decision is agentconsole's, made when its
+  proposal is taken up.
 - **Where the policy engine runs** when control and execution are apart.
-  The plan keeps rules and decisions with control and facts with
-  execution; the engine's fast allows and denies then cost a round trip
-  for facts on every call that has a matcher.
+  Rules and decisions stay with control and facts with execution, as
+  built; what is open is the cost: the engine reads a call's subjects
+  more than once (its verdict, a sub-agent's check) and the rewrite hook
+  asks again, so a remote executor needs the facts fetched once per call
+  and cached, and agentpolicy's subjects a context. Tools that claim no
+  facts cost no request, and a model response's calls share one
+  (execution-boundary.md, Round trips). The re-reading is also a known
+  window, in process today: the subjects the policy decides on and the
+  stamp come from separate readings of the claim. The main agent
+  re-decides on the rewrite, so a path would have to change back and
+  forth between readings; a sub-agent's check (`childPolicy`) takes the
+  rewrite from a reading after its verdict and does not re-decide, so an
+  outside process that swaps a path in that moment gets the swapped
+  facts stamped, and the call runs on them. The cache per call in step
+  2 closes it.
 - **Who answers a peer's own asks.** The callee's controller by default;
   escalation to the caller only where the callee enables it.
