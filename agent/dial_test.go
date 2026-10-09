@@ -355,11 +355,19 @@ func TestASwapBeforeTheCallIsRefusedByTheExecutor(t *testing.T) {
 // A running command's output arrives as progress, a tool's question
 // reaches whoever holds the Turn and its answer the tool, and the
 // replay claim is the executor's.
+//
+// The command does not end until the update has reached the Turn: it
+// prints, then waits for the file "seen", which the subscriber writes
+// when the update arrives. A command that ended at once could lose the
+// race: the go-sdk client hands a progress notification to a handler
+// goroutine while the call's response wakes the caller directly, so the
+// update can trail the result, and agenttool's batch executor drops an
+// update that comes after its job's result.
 func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 	ctx := context.Background()
 	box := newRemoteBox(t)
 	ex, _ := box.dial(t)
-	model := &scripted{calls: [][2]string{{"bash", `{"command":"echo hi"}`}, {"ask", `{}`}}}
+	model := &scripted{calls: [][2]string{{"bash", `{"command":"echo hi; until [ -e seen ]; do sleep 0.01; done","timeout_seconds":10}`}, {"ask", `{}`}}}
 	o := remoteOptions(t, model, ex)
 	s, err := New(ctx, o)
 	if err != nil {
@@ -372,6 +380,11 @@ func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 		if u, ok := e.(*agentturn.ToolUpdate); ok {
 			mu.Lock()
 			updates = append(updates, u.Partial.Output.String())
+			if strings.Contains(strings.Join(updates, ""), "hi") {
+				if err := os.WriteFile(filepath.Join(box.dir, "seen"), nil, 0o644); err != nil {
+					t.Error(err)
+				}
+			}
 			mu.Unlock()
 		}
 		return nil
