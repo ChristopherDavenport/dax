@@ -141,6 +141,9 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	if caps.Tools == nil || caps.Tools.ListChanged {
 		t.Errorf("tools capability %+v, want listChanged false", caps.Tools)
 	}
+	if caps.Resources == nil || caps.Resources.ListChanged || caps.Resources.Subscribe {
+		t.Errorf("resources capability %+v, want listChanged and subscribe false", caps.Resources)
+	}
 	if _, ok := caps.Experimental[mcpclient.FactsCapability]; !ok {
 		t.Errorf("no %s in %v", mcpclient.FactsCapability, caps.Experimental)
 	}
@@ -165,7 +168,8 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	}
 	d := testDescriptor(s.ws.Root())
 	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}) ||
-		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) {
+		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) ||
+		got.Files == nil || got.Files.URITemplate != FilesURITemplate {
 		t.Errorf("capability %s\nwant tools %+v", raw, want)
 	}
 	// The listing is sorted by name, so the order is the capability's.

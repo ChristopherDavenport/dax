@@ -424,9 +424,24 @@ became a link since the decision is caught where the file is. What MCP has no fi
 crosses beside the tools: agenttool's `_meta` (facts and replay claims,
 sequential, resource), its `execution/facts` method, and the
 experimental capability `io.github.christopherdavenport.dax/executor`
-with the descriptor, the extensions, and each tool in order with its
-extension, read-only, facts and strict. A running command's output
-arrives as progress, and a tool's question reaches the session.
+with the descriptor, the extensions, each tool in order with its
+extension, read-only, facts and strict, and where its files are read. A
+running command's output arrives as progress, and a tool's question
+reaches the session.
+
+It also serves the workspace's files, read-only, so the session reads
+the project where the project is: MCP resources under the template
+`dax-workspace:///{op}{?path}`, where `op` is `stat`, `lstat`,
+`readdir`, `readlink` or `read` and `path` a name relative to the root
+(`.` for the root itself), percent-encoded. Every name goes through the
+workspace's own confinement: one that is absolute, climbs out with `..`
+or leads out through a link is refused, and nothing is written. A read
+gives at most 1 MiB of a regular file (the bound on a project's config
+and a skill's file) and refuses a larger one, a directory or a FIFO; a
+listing gives at most 10,000 entries. The reply is one JSON document,
+with a refusal's kind (`notexist`, `outside`, `invalid`, `permission`
+or `other`) in it, so the session sees the same errors a read of its
+own directory would give.
 
 With `-executor`, the session starts the command with this machine's
 environment less its credentials (the model's key's variable among
@@ -440,15 +455,30 @@ claim fails, a reading takes longer than 30 seconds, the executor is
 gone) the call is blocked, never allowed. The banner and the record name
 the executor's workspace, and the model is told its root.
 
+The project's files are the executor's, read through it and not from
+this directory: the root's `AGENTS.md`, `.dax/skills` and
+`.dax/config.json`. They are screened as a local project's are: an
+`AGENTS.md` that is a link out of the workspace, and a skills directory
+with a link out of it, are left out with an `omitted:` line. Nothing
+above the executor's root is read, from either machine, even when it
+says it is a local directory. The project's config is read once the
+executor is connected (your config and the flags say which executor; a
+project's file cannot) and, as anywhere, can only tighten the policy;
+one that cannot be read (a link out, over 1 MiB, the executor gone or
+answering none of it within 30 seconds) stops the start, since leaving
+it out would drop rules that only tighten. An executor whose files
+cannot be read at all when the session starts stops it too; a single
+`AGENTS.md` or skills directory that cannot be read is left out and
+reported, as on this machine. Your own `~/.dax/AGENTS.md`,
+`agents_md_global` and skills are read here as usual. An executor from
+dax v0.0.6, which does not serve its files, is refused: update `dax`
+where it runs.
+
 What `-executor` does not do yet:
 
 - MCP servers: a session with `-executor` and any MCP server
   (`mcp_servers`, `-mcp`, `/mcp add`) refuses to start, since the
   server would run on this machine rather than where the tools act.
-- The project's files: `AGENTS.md`, `.dax/skills` and `.dax/config.json`
-  are neither read from the executor nor from this directory; the start
-  lines say so with an `omitted:` line. Your own `~/.dax/AGENTS.md`,
-  `agents_md_global` and skills are read as usual.
 - Only a command: an `http:`, `https:` or `unix:` address is refused.
 
 Standard output carries MCP and nothing else. While it serves,
@@ -992,7 +1022,8 @@ What is not there yet:
   a program's to provide until agentworkspace ships one. `dax execute`
   serves the tools from inside a sandbox and `-executor`
   (`agent.Options.Executor`, `agent.DialExecutor`) runs a session's
-  tools there, without MCP servers or the project's files yet.
+  tools there and reads the project's files through it, without MCP
+  servers yet.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs
   handling. `Options.Store` takes today's interface; the lease handling

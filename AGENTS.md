@@ -94,7 +94,9 @@ before changing the shape.
   `Set`, the tools bound as adapters for the kit, which pins each
   decision's facts so one reading decides and stamps a call; and
   `NewServer` (`serve.go`), the in-process tools served over MCP for
-  `execute`, with what MCP cannot carry in a capability; `Remote`
+  `execute`, with what MCP cannot carry in a capability, and its
+  workspace's files served read-only as MCP resources and read back as
+  an `fs.FS` (`files.go`); `Remote`
   (`remote.go`), the client of such a server, which refuses one that
   does not give the claims (`agent/executor.go` wraps it as the public
   `agent.Executor` for `-executor`). Kit tools are control and never

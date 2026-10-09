@@ -215,11 +215,17 @@ func run(ctx context.Context, args []string, p program) error {
 	// the project's skills, and not from this machine's directory. The
 	// session's workspace is opened below, once the settings say what
 	// its processes may inherit; this one only reads, and runs nothing.
+	// With an executor the project is where it runs, and its file is
+	// read through it once it is connected (executorSettings).
+	user, err := loadUser(*cfgPath)
+	if err != nil {
+		return err
+	}
 	proj, err := workspace.NewLocal(dir, nil)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
-	settings, err := loadSettings(proj, *cfgPath, flags)
+	settings, err := loadSettings(proj, user, flags)
 	proj.Close()
 	if err != nil {
 		return err
@@ -253,6 +259,9 @@ func run(ctx context.Context, args []string, p program) error {
 			return fmt.Errorf("-executor: %w", err)
 		}
 		defer ex.Close()
+		if settings, err = executorSettings(ex.Workspace(), user, flags); err != nil {
+			return err
+		}
 		wsRoot = ex.Workspace().Root()
 	} else {
 		local, err := workspace.NewLocal(dir, tool.DefaultEnv(settings.PassEnv, m.KeyEnv))
@@ -362,26 +371,50 @@ func run(ctx context.Context, args []string, p program) error {
 	return f.Run(ctx, sess)
 }
 
-// loadSettings reads the user's file and the project's, through the
-// workspace the project is in, and folds them with the flags.
-func loadSettings(project workspace.Workspace, userPath string, flags config.Flags) (config.Settings, error) {
+// loadUser reads the user's file: the one named, which must exist, or
+// the default, which need not.
+func loadUser(userPath string) (config.Layer, error) {
 	explicit := userPath != ""
 	if !explicit {
 		userPath = config.Path()
 	}
-	user, err := config.Load(userPath, false, explicit)
-	if err != nil {
-		return config.Settings{}, err
-	}
-	// With an executor the project is where it runs, not this
-	// directory, and its .dax/config.json is not read yet.
+	return config.Load(userPath, false, explicit)
+}
+
+// loadSettings folds the user's layer, the project's read through the
+// workspace the project is in, and the flags. With an executor, which
+// only the user's layer and the flags can name, the project is where
+// the executor runs and not this directory, so project is not read:
+// executorSettings reads it through the executor once it is connected.
+func loadSettings(project workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	var proj config.Layer
 	if strings.TrimSpace(config.ExecutorOf(user, flags)) == "" {
+		var err error
 		if proj, err = config.LoadProject(project); err != nil {
 			return config.Settings{}, err
 		}
 	}
 	return config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
+}
+
+// executorSettings are the settings with the project's .dax/config.json
+// read through the executor's workspace, view, folded in. The project's
+// layer is validated as any project's: it can only tighten the policy
+// and cannot name an executor, a provider or anything else that
+// started the executor, so what started it stands. A file
+// that cannot be read (a link out of the workspace, too large, the
+// executor gone or too slow) fails the session's start: leaving it out
+// would drop rules that only tighten.
+func executorSettings(view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
+	proj, err := config.LoadProject(view)
+	if err != nil {
+		return config.Settings{}, fmt.Errorf("-executor: %w", err)
+	}
+	s, err := config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
+	if err != nil {
+		return config.Settings{}, fmt.Errorf("-executor: %w", err)
+	}
+	return s, nil
 }
 
 // executorLine is the banner's line about the executor, "" for none.

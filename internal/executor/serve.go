@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/ChristopherDavenport/agenttool"
@@ -15,14 +16,20 @@ import (
 // served by NewServer says what a session needs of it that MCP has no
 // field for: the workspace's descriptor, the extensions whose tools it
 // runs, and each tool's extension, read-only, facts and strict, in the
-// order the tools run in process. The go-sdk lists tools sorted by
-// name, and dax's per-extension ReadOnly is not the annotation hint, so
-// neither can be read off the listing.
+// order the tools run in process; and the resource template its
+// workspace's files are read under (files.go). The go-sdk lists tools
+// sorted by name, and dax's per-extension ReadOnly is not the
+// annotation hint, so neither can be read off the listing.
 //
 //	{"version": 1,
 //	 "descriptor": {"kind": "container", "ref": "box", "root": "/work"},
 //	 "extensions": ["dax-coding"],
-//	 "tools": [{"name": "read", "extension": "dax-coding", "readOnly": true, "facts": true}, ...]}
+//	 "tools": [{"name": "read", "extension": "dax-coding", "readOnly": true, "facts": true}, ...],
+//	 "files": {"uriTemplate": "dax-workspace:///{op}{?path}"}}
+//
+// files came after version 1 was released, as a field a client of
+// version 1 ignores; a client that reads it refuses an executor
+// without it.
 const CapabilityKey = "io.github.christopherdavenport.dax/executor"
 
 // CapabilityVersion is the version of CapabilityKey's value. A client
@@ -38,6 +45,15 @@ type capability struct {
 	Extensions []string `json:"extensions"`
 	// Tools are the tools in the order they run in process.
 	Tools []capabilityTool `json:"tools"`
+	// Files names how the workspace's files are read; nil from an
+	// executor older than the field.
+	Files *capabilityFiles `json:"files,omitempty"`
+}
+
+// capabilityFiles says the workspace's files are served, read-only, as
+// MCP resources under URITemplate (FilesURITemplate).
+type capabilityFiles struct {
+	URITemplate string `json:"uriTemplate"`
 }
 
 // capabilityDescriptor is a workspace.Descriptor on the wire.
@@ -77,6 +93,10 @@ type ServeOptions struct {
 // never changes, so a client does not wait for a notification after
 // every call.
 //
+// It also serves env's workspace's files, read-only, as resources
+// under FilesURITemplate, so that the session reads the project's
+// AGENTS.md, .dax/skills and .dax/config.json where the project is.
+//
 // closeTools closes the tools; the caller closes env's workspace after it.
 // Two tools of one name are refused: the session refuses them anyway,
 // and a capability that named one twice could not say which ran.
@@ -94,7 +114,14 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 	if d == (workspace.Descriptor{}) {
 		d = x.Descriptor()
 	}
-	c := capability{Version: CapabilityVersion, Descriptor: capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}, Extensions: []string{}, Tools: []capabilityTool{}}
+	if env.Workspace == nil {
+		return nil, nil, errors.New("executor: no workspace")
+	}
+	c := capability{
+		Version: CapabilityVersion, Descriptor: capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root},
+		Extensions: []string{}, Tools: []capabilityTool{},
+		Files: &capabilityFiles{URITemplate: FilesURITemplate},
+	}
 	for _, e := range exts {
 		if e.Tools != nil {
 			c.Extensions = append(c.Extensions, e.Name)
@@ -115,8 +142,10 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 		Capabilities: &sdk.ServerCapabilities{
 			Experimental: map[string]any{CapabilityKey: c},
 			Tools:        &sdk.ToolCapabilities{ListChanged: false},
+			Resources:    &sdk.ResourceCapabilities{ListChanged: false},
 		},
 	})
+	serveFiles(srv, env.Workspace.FS())
 	if err := mcpserver.AddTools(srv, x.inner...); err != nil {
 		return nil, nil, err
 	}

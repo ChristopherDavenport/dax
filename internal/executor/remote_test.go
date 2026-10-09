@@ -125,16 +125,17 @@ func claiming(name string) agenttool.Tool {
 
 // A server that does not say what a session needs of an executor is
 // refused at connect: without the facts method or the capability, of
-// another version, naming no workspace, listing a tool the capability
-// does not name or the reverse, or saying a tool claims facts that is
-// listed without the claim (or the reverse). A session that took such
+// another version, naming no workspace or not serving its files (an
+// executor of dax v0.0.6), listing a tool the capability does not name
+// or the reverse, or saying a tool claims facts that is listed without
+// the claim (or the reverse). A session that took such
 // a server's tools would match the model's raw arguments where it
 // should match what the call touches.
 func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 	desc := capabilityDescriptor{Kind: "container", Ref: "box", Root: "/work"}
 	capOf := func(c capability) map[string]any { return map[string]any{CapabilityKey: c} }
 	good := func(tools ...capabilityTool) capability {
-		return capability{Version: CapabilityVersion, Descriptor: desc, Extensions: []string{"acme"}, Tools: tools}
+		return capability{Version: CapabilityVersion, Descriptor: desc, Extensions: []string{"acme"}, Tools: tools, Files: &capabilityFiles{URITemplate: FilesURITemplate}}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -163,6 +164,16 @@ func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 			c.Descriptor = capabilityDescriptor{}
 			return fake(t, capOf(c), false, plain("read"))
 		}, "names no workspace"},
+		{"an executor that does not serve its files (dax v0.0.6)", func(t *testing.T) *sdk.Server {
+			c := good(capabilityTool{Name: "read", Extension: "acme"})
+			c.Files = nil
+			return fake(t, capOf(c), false, plain("read"))
+		}, "does not serve its workspace's files"},
+		{"its files under another template", func(t *testing.T) *sdk.Server {
+			c := good(capabilityTool{Name: "read", Extension: "acme"})
+			c.Files.URITemplate = "file:///{path}"
+			return fake(t, capOf(c), false, plain("read"))
+		}, `serves its workspace's files under "file:///{path}"`},
 		{"a listed tool the capability does not name", func(t *testing.T) *sdk.Server {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"})), false, plain("read"), plain("rm"))
 		}, `lists "rm"`},

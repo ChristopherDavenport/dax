@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"slices"
 	"sync"
 	"time"
@@ -105,6 +106,12 @@ func remoteOf(c *mcpclient.Remote) (*Remote, error) {
 	}
 	if cp.Version != CapabilityVersion {
 		return nil, refuse("%s version %d; this client reads version %d", CapabilityKey, cp.Version, CapabilityVersion)
+	}
+	if cp.Files == nil {
+		return nil, refuse("it does not serve its workspace's files (no files in %s), which the session reads AGENTS.md, .dax/skills and .dax/config.json through; update dax execute where it runs", CapabilityKey)
+	}
+	if cp.Files.URITemplate != FilesURITemplate {
+		return nil, refuse("it serves its workspace's files under %q; this client reads %q", cp.Files.URITemplate, FilesURITemplate)
 	}
 	if cp.Descriptor.Kind == "" || cp.Descriptor.Root == "" {
 		return nil, refuse("its capability names no workspace (kind %q, root %q)", cp.Descriptor.Kind, cp.Descriptor.Root)
@@ -207,6 +214,13 @@ func (r *Remote) Call(ctx context.Context, c Call) (agenttool.Result, error) {
 	}
 	return t.Execute(ctx, c.Call)
 }
+
+// FS is the executor's workspace's files, read-only, each request
+// within filesTimeout (files.go). It implements fs.StatFS,
+// fs.ReadDirFS, fs.ReadFileFS and fs.ReadLinkFS; a name that leaves the
+// workspace is workspace.ErrOutside, as the executor's own file system
+// has it.
+func (r *Remote) FS() fs.FS { return remoteFS{r.c.Session()} }
 
 // Descriptor is the workspace the executor's capability names.
 func (r *Remote) Descriptor() workspace.Descriptor { return r.desc }

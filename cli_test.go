@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
@@ -36,6 +37,17 @@ func home(t *testing.T) string {
 }
 
 func str(s string) *string { return &s }
+
+// settingsOf is the settings as run reads them before any executor is
+// connected: the user's file at userPath ("" for the default), then the
+// project's through project unless an executor is set.
+func settingsOf(project workspace.Workspace, userPath string, flags config.Flags) (config.Settings, error) {
+	user, err := loadUser(userPath)
+	if err != nil {
+		return config.Settings{}, err
+	}
+	return loadSettings(project, user, flags)
+}
 
 // local is this machine's directory as a workspace, closed with the
 // test.
@@ -99,7 +111,7 @@ func TestTheProjectConfigIsReadThroughTheWorkspace(t *testing.T) {
 			if tc.box {
 				ws = boxed{ws.(*workspace.Local)}
 			}
-			s, err := loadSettings(ws, "", config.Flags{})
+			s, err := settingsOf(ws, "", config.Flags{})
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tc.wantErr)
@@ -128,7 +140,7 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	proj := t.TempDir()
 	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"anthropic","model":"from-user","think":false}`)
 
-	s, err := loadSettings(local(t, proj), "", config.Flags{})
+	s, err := settingsOf(local(t, proj), "", config.Flags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,15 +150,15 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 
 	// A project file tightens the policy and cannot set the model.
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"model":"from-project"}`)
-	if _, err = loadSettings(local(t, proj), "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
+	if _, err = settingsOf(local(t, proj), "", config.Flags{}); err == nil || !strings.Contains(err.Error(), "model: a project file may only tighten") {
 		t.Fatalf("project model: %v", err)
 	}
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(git push:*)"]}}`)
-	if s, err = loadSettings(local(t, proj), "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
+	if s, err = settingsOf(local(t, proj), "", config.Flags{}); err != nil || s.Model != "from-user" || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("project over user: %+v, %v", s, err)
 	}
 
-	s, err = loadSettings(local(t, proj), "", config.Flags{Model: str("from-flag"), Provider: str("openai")})
+	s, err = settingsOf(local(t, proj), "", config.Flags{Model: str("from-flag"), Provider: str("openai")})
 	if err != nil || s.Model != "from-flag" || s.Provider != "openai" {
 		t.Fatalf("flags over files: %+v, %v", s, err)
 	}
@@ -156,11 +168,11 @@ func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 
 	// -config names another user file, which must exist.
 	other := filepath.Join(h, "other.json")
-	if _, err := loadSettings(local(t, proj), other, config.Flags{}); err == nil {
+	if _, err := settingsOf(local(t, proj), other, config.Flags{}); err == nil {
 		t.Error("a missing -config file should be an error")
 	}
 	write(t, other, `{"provider":"gemini"}`)
-	if s, err = loadSettings(local(t, proj), other, config.Flags{}); err != nil || s.Provider != "gemini" {
+	if s, err = settingsOf(local(t, proj), other, config.Flags{}); err != nil || s.Provider != "gemini" {
 		t.Fatalf("-config: %+v, %v", s, err)
 	}
 }
@@ -169,7 +181,7 @@ func TestABrokenConfigFileIsAClearError(t *testing.T) {
 	h := home(t)
 	path := filepath.Join(h, ".config", "dax", "config.json")
 	write(t, path, `{"provider":"ollama","modle":"x"}`)
-	_, err := loadSettings(local(t, t.TempDir()), "", config.Flags{})
+	_, err := settingsOf(local(t, t.TempDir()), "", config.Flags{})
 	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "modle") {
 		t.Fatalf("err = %v, want the file and the field named", err)
 	}
@@ -207,7 +219,7 @@ func TestPricingParsesAndPrices(t *testing.T) {
 func TestSelectedProviderWithoutItsKeyFailsBeforeAnyRequest(t *testing.T) {
 	home(t)
 	t.Setenv("OPENAI_API_KEY", "")
-	s, err := loadSettings(local(t, t.TempDir()), "", config.Flags{Provider: str("openai")})
+	s, err := settingsOf(local(t, t.TempDir()), "", config.Flags{Provider: str("openai")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,16 +322,96 @@ func TestTheProjectConfigIsNotReadHereWithAnExecutor(t *testing.T) {
 	h := home(t)
 	proj := t.TempDir()
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(make:*)"]}}`)
-	s, err := loadSettings(local(t, proj), "", config.Flags{Executor: str("ssh host dax execute")})
+	s, err := settingsOf(local(t, proj), "", config.Flags{Executor: str("ssh host dax execute")})
 	if err != nil || s.Executor != "ssh host dax execute" || len(s.Policy.Project.Deny) != 0 {
 		t.Fatalf("with -executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
 	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"executor":{"command":"docker exec -i box dax execute"}}`)
-	if s, err = loadSettings(local(t, proj), "", config.Flags{}); err != nil || s.Executor == "" || len(s.Policy.Project.Deny) != 0 {
+	if s, err = settingsOf(local(t, proj), "", config.Flags{}); err != nil || s.Executor == "" || len(s.Policy.Project.Deny) != 0 {
 		t.Fatalf("with the config's executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
-	if s, err = loadSettings(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || s.Executor != "" || len(s.Policy.Project.Deny) != 1 {
+	if s, err = settingsOf(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || s.Executor != "" || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("with -executor '': %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
+	}
+}
+
+// With an executor the project's .dax/config.json is the executor's,
+// read through it once it is connected: its deny is in force, this
+// directory's file is not read, and a file that sets what a project may
+// not (the executor among them), that is a link out of the executor's
+// workspace or over the bound fails the start, as does an executor
+// that is gone, since leaving the file out would drop rules that only
+// tighten.
+func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
+	home(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	box, here, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	write(t, filepath.Join(here, ".dax", "config.json"), `{"policy":{"deny":["bash(rm:*)"]}}`)
+	write(t, filepath.Join(outside, "config.json"), `{"policy":{"deny":["bash(curl:*)"]}}`)
+	t.Setenv(executeRoot, box)
+	ex, err := agent.DialExecutor(ctx, os.Args[0], agent.ExecutorOptions{Name: "dax", Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ex.Close()
+	user, err := loadUser("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := config.Flags{Executor: str(os.Args[0])}
+	if s, err := loadSettings(local(t, here), user, flags); err != nil || len(s.Policy.Project.Deny) != 0 {
+		t.Fatalf("before the executor: %v %v", s.Policy.Project.Deny, err)
+	}
+	file := filepath.Join(box, ".dax", "config.json")
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T)
+		deny    string
+		wantErr string
+	}{
+		{"no file", func(*testing.T) {}, "", ""},
+		{"a deny", func(t *testing.T) { write(t, file, `{"policy":{"deny":["bash(make:*)"]}}`) }, "bash(make:*)", ""},
+		{"a link inside", func(t *testing.T) {
+			write(t, filepath.Join(box, "conf.json"), `{"policy":{"deny":["bash(go:*)"]}}`)
+			must(t, os.Symlink("../conf.json", file))
+		}, "bash(go:*)", ""},
+		{"it may not name an executor", func(t *testing.T) {
+			write(t, file, `{"executor":{"command":"ssh elsewhere dax execute"}}`)
+		}, "", box + "/.dax/config.json: executor: a project file may only tighten"},
+		{"it may not allow", func(t *testing.T) { write(t, file, `{"policy":{"allow":["bash"]}}`) }, "", "may not allow anything"},
+		{"a link out of the executor's workspace", func(t *testing.T) {
+			must(t, os.Symlink(filepath.Join(outside, "config.json"), file))
+		}, "", "outside the workspace"},
+		{"over the bound", func(t *testing.T) {
+			write(t, file, `{"policy":{"deny":["bash(make:*)"]}}`+strings.Repeat(" ", config.MaxProjectBytes))
+		}, "", "over the 1048576-byte limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			os.RemoveAll(filepath.Join(box, ".dax"))
+			must(t, os.MkdirAll(filepath.Join(box, ".dax"), 0o755))
+			tc.setup(t)
+			s, err := executorSettings(ex.Workspace(), user, flags)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(s.Policy.Project.Deny, ","); got != tc.deny {
+				t.Errorf("project deny = %q, want %q", got, tc.deny)
+			}
+			if s.Executor != os.Args[0] {
+				t.Errorf("executor %q", s.Executor)
+			}
+		})
+	}
+	ex.Close()
+	if _, err := executorSettings(ex.Workspace(), user, flags); err == nil || !strings.Contains(err.Error(), "executor") {
+		t.Errorf("an executor that is gone: %v", err)
 	}
 }
 
