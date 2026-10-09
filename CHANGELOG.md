@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.6 - 2026-10-09
 
 - Added: `dax execute`, the tools served over MCP on standard input
   and output from inside the place they should act, for a session
