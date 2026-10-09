@@ -38,6 +38,20 @@ versions may break flags and the config file.
   device or over 1 MiB is now an error naming the file, where it was
   read: the file only tightens, so leaving it out would loosen the
   policy.
+- Security: a `.dax/skills` that holds a symbolic link leading outside
+  it is left out whole and reported ("holds a symbolic link outside the
+  skills directory"), even when the link stays in the workspace:
+  `.dax/skills/x/notes.md -> ../../../.env` would otherwise let the
+  skill tool, which runs unasked, read `.env` without the question
+  `read(.env)` gets. Links are followed through the workspace, chains,
+  relative and absolute; a link between two skills is still read. On
+  a workspace whose file system cannot read links, a skills directory
+  with any link is refused. On main a skill with such a link was
+  offered and the skill tool refused the one file.
+- Added: `tool.Files.Resolve`, where a path leads with its links
+  followed through the workspace (`ErrOutside` out of it,
+  `tool.ErrLinksUnknown` where the workspace cannot say), for an
+  extension that offers a project's files through a tool of its own.
 - Changed: a skill in `.dax/skills` is listed at the workspace's root
   joined with `.dax/skills`, and is never trusted under
   `-trust-skills`, whatever this machine's paths say. The project's

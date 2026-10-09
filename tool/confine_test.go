@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // confined builds a workspace beside a directory that holds a secret,
@@ -204,6 +206,7 @@ func TestTheWorkspacesExportedMethodsRefusePathsOutside(t *testing.T) {
 		"WriteFile": func(p string) error { _, err := ws.WriteFile(p, []byte("x")); return err },
 		"Stat":      func(p string) error { _, err := ws.Stat(p); return err },
 		"ReadDir":   func(p string) error { _, err := ws.ReadDir(p); return err },
+		"Resolve":   func(p string) error { _, err := ws.Resolve(p); return err },
 		"Update": func(p string) error {
 			_, err := ws.Update(p, 0, func(b []byte) ([]byte, error) { return append(b, 'x'), nil })
 			return err
@@ -234,6 +237,12 @@ func TestTheWorkspacesExportedMethodsRefusePathsOutside(t *testing.T) {
 	}
 	if fi, err := ws.Stat("alias.txt"); err != nil || fi.Size() != 3 {
 		t.Errorf("Stat through a link that stays in = %v %v", fi, err)
+	}
+	if rel, err := ws.Resolve("alias.txt"); err != nil || rel != "inside.txt" {
+		t.Errorf("Resolve through a link that stays in = %q %v", rel, err)
+	}
+	if _, err := NewFiles(noLinks{ws.ws.(*workspace.Local)}).Resolve("alias.txt"); !errors.Is(err, ErrLinksUnknown) {
+		t.Errorf("Resolve where links cannot be read = %v, want ErrLinksUnknown", err)
 	}
 	if es, err := ws.ReadDir("."); err != nil || len(es) == 0 {
 		t.Errorf("ReadDir of the workspace = %v %v", es, err)

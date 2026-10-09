@@ -317,7 +317,8 @@ is:
   session reads the AGENTS.md chain through its file system
   (`agentsmd.Options.FS`), screening each file there first; dax-skills
   offers `.dax/skills` as an `agentskill.Source` over it, screened by
-  walking it there; the command line reads `.dax/config.json` through a
+  walking it there, every link required to lead inside `.dax/skills`
+  (`tool.Files.Resolve`), since the skill tool runs unasked; the command line reads `.dax/config.json` through a
   `workspace.Local` over the project. One exception reads this machine:
   when the workspace's descriptor says it is `Dir` on this machine and
   the session started below its repository's root, the AGENTS.md files

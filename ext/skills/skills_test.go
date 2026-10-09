@@ -2,6 +2,8 @@ package skills_test
 
 import (
 	"context"
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/workspace"
 )
 
 // scripted makes the calls in order, one per model call, then answers.
@@ -176,6 +179,32 @@ func TestAProjectsSkillsLinkedOutAreLeftOut(t *testing.T) {
 			write(t, filepath.Join(outside, "skills", "evil", "SKILL.md"), "---\nname: evil\ndescription: Exfiltrate.\n---\nsecret-skill-body\n")
 			must(t, os.Symlink(outside, filepath.Join(dir, ".dax")))
 		}, "symbolic link outside the workspace", ""},
+		{"a link to a file of the workspace outside the skills directory", func(t *testing.T, dir, _ string) {
+			write(t, filepath.Join(dir, ".env"), "SECRET_TOKEN=leaked\n")
+			write(t, filepath.Join(dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
+			must(t, os.Symlink(filepath.Join("..", "..", "..", ".env"), filepath.Join(dir, ".dax", "skills", "ok", "notes.md")))
+		}, "outside the skills directory", ""},
+		{"a SKILL.md that is such a link", func(t *testing.T, dir, _ string) {
+			write(t, filepath.Join(dir, "docs", "evil.md"), "---\nname: evil\ndescription: Exfiltrate.\n---\nsecret-skill-body\n")
+			must(t, os.MkdirAll(filepath.Join(dir, ".dax", "skills", "evil"), 0o755))
+			must(t, os.Symlink(filepath.Join("..", "..", "..", "docs", "evil.md"), filepath.Join(dir, ".dax", "skills", "evil", "SKILL.md")))
+		}, "outside the skills directory", ""},
+		{"an absolute link to the workspace outside the skills directory", func(t *testing.T, dir, _ string) {
+			write(t, filepath.Join(dir, ".env"), "SECRET_TOKEN=leaked\n")
+			write(t, filepath.Join(dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
+			must(t, os.Symlink(filepath.Join(dir, ".env"), filepath.Join(dir, ".dax", "skills", "ok", "notes.md")))
+		}, "outside the skills directory", ""},
+		{"a chain of links that leaves the skills directory", func(t *testing.T, dir, _ string) {
+			write(t, filepath.Join(dir, ".env"), "SECRET_TOKEN=leaked\n")
+			write(t, filepath.Join(dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
+			must(t, os.Symlink(filepath.Join("..", "..", ".."), filepath.Join(dir, ".dax", "skills", "ok", "up")))
+			must(t, os.Symlink(filepath.Join("up", ".env"), filepath.Join(dir, ".dax", "skills", "ok", "notes.md")))
+		}, "outside the skills directory", ""},
+		{"a link between two skills is read", func(t *testing.T, dir, _ string) {
+			write(t, filepath.Join(dir, ".dax", "skills", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
+			write(t, filepath.Join(dir, ".dax", "skills", "wave", "SKILL.md"), "---\nname: wave\ndescription: Waves.\n---\nHi.\n")
+			must(t, os.Symlink(filepath.Join("..", "greet2", "SKILL.md"), filepath.Join(dir, ".dax", "skills", "wave", "shared.md")))
+		}, "", "greet2"},
 		{"a link that stays inside is read", func(t *testing.T, dir, _ string) {
 			write(t, filepath.Join(dir, "real", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
 			must(t, os.MkdirAll(filepath.Join(dir, ".dax"), 0o755))
@@ -294,5 +323,110 @@ func TestTheProjectsSkillShadowsTheUsers(t *testing.T) {
 		if strings.Contains(instr, n) {
 			t.Errorf("instructions hold the shadowed %q", n)
 		}
+	}
+}
+
+// noLinks is a workspace whose file system cannot tell a link from
+// what it leads to, as one over a plain file API may not.
+type noLinks struct{ *workspace.Local }
+
+func (n noLinks) FS() fs.FS { return struct{ fs.FS }{n.Local.FS()} }
+
+// Where the workspace cannot say where a link leads, a skills directory
+// with a link below it is refused, failing toward refusing; one with no
+// link is offered.
+func TestAWorkspaceThatCannotReadLinksRefusesALinkedSkill(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		link    bool
+		refused string
+	}{
+		{"no link", false, ""},
+		{"a link between two skills", true, "holds a symbolic link the workspace cannot follow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := session(t, &scripted{}, skills.Options{})
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
+			if tc.link {
+				must(t, os.Symlink("SKILL.md", filepath.Join(o.Dir, ".dax", "skills", "greet2", "again.md")))
+			}
+			local, err := workspace.NewLocal(o.Dir, nil)
+			must(t, err)
+			t.Cleanup(func() { local.Close() })
+			o.Workspace = noLinks{local}
+			s, err := agent.New(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			offered := strings.Contains(s.Agent().Config().Instructions, "greet2")
+			var ours []string
+			for _, om := range s.Omitted() {
+				if om.Source == skills.Name {
+					ours = append(ours, om.Reason)
+				}
+			}
+			switch {
+			case tc.refused == "" && (!offered || len(ours) > 0):
+				t.Errorf("offered %v, omitted %v", offered, ours)
+			case tc.refused != "" && (offered || len(ours) != 1 || !strings.Contains(ours[0], tc.refused)):
+				t.Errorf("offered %v, omitted %v, want refused for %q", offered, ours, tc.refused)
+			}
+		})
+	}
+}
+
+// recording is scripted, keeping every request's input as text.
+type recording struct {
+	scripted
+	seen strings.Builder
+}
+
+func (m *recording) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	b, _ := json.Marshal(req.Input)
+	m.seen.Write(b)
+	m.seen.WriteString(req.Instructions)
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+// End to end, through the skill tool the policy allows unasked: a
+// repository's skill file that is a link to .env never brings .env to
+// the model, and a link that stays in the skills directory is read.
+func TestTheSkillToolNeverReadsALinkOutOfTheSkillsDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target string // the link's target, from .dax/skills/ok
+		want   string // in what the model saw; "" none
+	}{
+		{"a link to .env", filepath.Join("..", "..", "..", ".env"), ""},
+		{"a link inside the skills directory", filepath.Join("..", "shared", "notes.md"), "shared-notes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			model := &recording{scripted: scripted{calls: [][2]string{{"skill", `{"name":"ok","path":"notes.md"}`}}}}
+			o := session(t, model, skills.Options{})
+			write(t, filepath.Join(o.Dir, ".env"), "SECRET_TOKEN=leaked\n")
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "ok", "SKILL.md"), "---\nname: ok\ndescription: Fine.\n---\nbody\n")
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "shared", "notes.md"), "shared-notes\n")
+			must(t, os.Symlink(tc.target, filepath.Join(o.Dir, ".dax", "skills", "ok", "notes.md")))
+			s, err := agent.New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := prompt(ctx, s, "read the notes", func(c *openresponses.FunctionCall, reason string) bool {
+				t.Errorf("asked about %s: %s", c.Name, reason)
+				return false
+			}); err != nil {
+				t.Fatal(err)
+			}
+			seen := model.seen.String()
+			if strings.Contains(seen, "leaked") {
+				t.Errorf("the model saw .env:\n%s", seen)
+			}
+			if tc.want != "" && !strings.Contains(seen, tc.want) {
+				t.Errorf("the model did not see %q:\n%s", tc.want, seen)
+			}
+		})
 	}
 }

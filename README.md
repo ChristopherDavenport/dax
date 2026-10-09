@@ -557,7 +557,9 @@ machine matters.
   Its `AGENTS.md`, `.dax/skills` and `.dax/config.json` are read through
   the workspace, so one that is a symbolic link out of it is refused as
   a tool's read would be: an `AGENTS.md` or `.dax/skills` is left out
-  and reported, and a `.dax/config.json` is an error. Path rules match
+  and reported, and a `.dax/config.json` is an error. A `.dax/skills`
+  holding a link that leads outside it, even into the workspace, is left
+  out too, since the skill tool reads without asking. Path rules match
   the path after normalisation, so `docs/../.git/x` is not under `docs/**`.
 - **Keeps credentials away from what it starts.** Bash commands and MCP
   servers get your environment without `*_API_KEY`, `*_TOKEN`,
