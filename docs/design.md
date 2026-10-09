@@ -415,6 +415,10 @@ from its verdict to the hooks' rewrite, so every reading in between is
 one reading, made under the call's context, and the stamp a call runs
 with is of the facts its verdict was decided on. The rewrite's own
 arguments are another call, read afresh when the engine decides them.
+agentpolicy passes the policy's subjects the context of the decision
+that reads them, so a reading no decision has pinned, a sibling the
+batch hold reads, is made under the held decision's context, and a
+cancelled decision fails its reading, which blocks the call.
 
 Each claim is checked at start, across the session and without regard
 to case: an extension's name, its tools, the names it `Owns` (tools its

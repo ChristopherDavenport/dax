@@ -37,11 +37,13 @@ const sentinel = "$(...) "
 // A command with an unterminated quote is an error, which blocks the
 // call, and so are arguments with a key that is command or dax_stamp
 // in another case (exactKeys), which the tool would read and the
-// analysis would not.
+// analysis would not. The analysis runs under the context the policy
+// passes, the decision's, so the git-config check it runs through the
+// workspace's Exec is cancelled with the decision.
 func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
 	an := &Analyzer{Files: f, MaxFile: maxFile}
-	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
-		calls, _, err := bashFacts(context.Background(), an, args, false)
+	return func(ctx context.Context, args json.RawMessage) ([]agentpolicy.Subject, error) {
+		calls, _, err := bashFacts(ctx, an, args, false)
 		if err != nil {
 			return nil, err
 		}
@@ -348,7 +350,7 @@ const unresolvedTool = "dax:links-unknown"
 // tool would decode that key, and this reads field.
 func PathSubjects(f *Files, field, def string) agentpolicy.Subjects {
 	v := f.view()
-	return func(args json.RawMessage) ([]agentpolicy.Subject, error) {
+	return func(_ context.Context, args json.RawMessage) ([]agentpolicy.Subject, error) {
 		calls, err := pathCalls(v, field, def, args)
 		if err != nil {
 			return nil, err

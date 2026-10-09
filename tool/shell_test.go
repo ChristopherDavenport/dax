@@ -20,7 +20,7 @@ var wd = func() string {
 func subjects(t *testing.T, cmd string) ([]subj, error) {
 	t.Helper()
 	args, _ := json.Marshal(map[string]string{"command": cmd})
-	got, err := BashSubjects(newWS(t, wd), 0)(args)
+	got, err := BashSubjects(newWS(t, wd), 0)(t.Context(), args)
 	var have []subj
 	for _, s := range got {
 		var m map[string]string

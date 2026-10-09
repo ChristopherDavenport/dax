@@ -36,6 +36,33 @@ versions may break flags and the config file.
   a process, a server runs on this machine as before.
   `agent.Options.MCP`'s and `PassEnv`'s comments say so.
 - Dependencies: agentworkspace v0.0.1.
+- Dependencies: agentpolicy v0.0.12, up from v0.0.11, whose `Subjects`
+  takes the decision's context, and whose batch hold now holds a call
+  beside a sibling it could not read and reads that sibling again
+  later in the batch, where it read as blocked (a failing splitter) or
+  kept a failed hook's reading; agentkit v0.0.9, up from v0.0.8, the
+  release that requires it. agenttool and agenttool/mcpclient v0.0.20,
+  up from v0.0.19: dax does not pass mcpclient's `WithClaims()`, so no
+  MCP server is asked for facts and its tools claim none, as before;
+  a server built on agenttool's `mcpserver` v0.0.20 that marks a tool
+  sequential or names its resource in the listing's `_meta` now has
+  that tool run one call at a time, which only orders calls. A server
+  that does not carry agenttool's `_meta` entry is unchanged.
+- Changed: `tool.BashSubjects` and `tool.PathSubjects` return
+  agentpolicy v0.0.12's `Subjects`, which takes a `context.Context`
+  first. Bash's analysis, the git-config check it runs through the
+  workspace's `Exec` included, runs under that context, the
+  decision's, where it ran under `context.Background()`; a path's
+  reading takes no context. A program that calls either splitter
+  directly passes a context.
+- Changed: the policy asks a tool's facts claim under the context of
+  the decision that reads it (`factspolicy.Subjects`), where it asked
+  under `context.Background()`. A claim that a cancelled decision cuts
+  off fails, which blocks the call, as any failed claim does. The
+  session's own tools are read once per decision under the pin's
+  context as before (`internal/executor`'s `Set.Pin`); a call no
+  decision has pinned, a sibling the batch hold reads, is read under
+  the held decision's context.
 
 ## v0.0.5 - 2026-10-09
 

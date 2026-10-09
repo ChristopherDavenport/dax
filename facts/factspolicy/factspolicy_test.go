@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
@@ -21,6 +22,17 @@ func tool(name string, fx func(context.Context, json.RawMessage) (agenttool.Fact
 
 func decide(t *testing.T, ms map[string]agentpolicy.ToolMatcher, rules []agentpolicy.Rule, name, args string) agentpolicy.Verdict {
 	t.Helper()
+	v, err := decideIn(t, context.Background(), ms, rules, name, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// decideIn is what the engine would decide of a call of name with args
+// under ctx, the decision's context.
+func decideIn(t *testing.T, ctx context.Context, ms map[string]agentpolicy.ToolMatcher, rules []agentpolicy.Rule, name, args string) (agentpolicy.Verdict, error) {
+	t.Helper()
 	p, err := agentpolicy.Merge(agentpolicy.RuleSet{Source: agentpolicy.Source{Name: "test", Trusted: true, Rank: 1}, Allow: rules})
 	if err != nil {
 		t.Fatal(err)
@@ -31,11 +43,7 @@ func decide(t *testing.T, ms map[string]agentpolicy.ToolMatcher, rules []agentpo
 		t.Fatal(err)
 	}
 	call := &openresponses.FunctionCall{Name: name, Arguments: args, CallID: "c1"}
-	v, err := eng.Would(context.Background(), agentturn.ToolCallInfo{Call: call, Args: json.RawMessage(args), Batch: []*openresponses.FunctionCall{call}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v
+	return eng.Would(ctx, agentturn.ToolCallInfo{Call: call, Args: json.RawMessage(args), Batch: []*openresponses.FunctionCall{call}})
 }
 
 // The subjects a policy decides on: a tool with no claim is its own
@@ -78,11 +86,76 @@ func TestSubjectsComeFromTheClaim(t *testing.T) {
 	}
 }
 
+// decisionKey marks the context of a decision, so a claim can say
+// which context it was asked under.
+type decisionKey struct{}
+
+// The claim is asked under the context of the decision that reads the
+// subjects: a value the decision carries reaches it, and a context
+// cancelled while the claim is asked, as a remote executor's reading
+// is, blocks the call rather than letting it run.
+func TestTheClaimIsAskedUnderTheDecisionsContext(t *testing.T) {
+	allowA := []agentpolicy.Rule{{Tool: "t", Spec: "a"}}
+	matchers := func(t *testing.T, fx func(context.Context, json.RawMessage) (agenttool.Facts, error)) map[string]agentpolicy.ToolMatcher {
+		t.Helper()
+		ms, err := Matchers([]agenttool.Tool{tool("t", fx)}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": {Match: agentpolicy.GlobMatcher("path")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ms
+	}
+	t.Run("a value on the decision's context reaches the claim", func(t *testing.T) {
+		var seen []any
+		ms := matchers(t, func(ctx context.Context, args json.RawMessage) (agenttool.Facts, error) {
+			seen = append(seen, ctx.Value(decisionKey{}))
+			return agenttool.Facts{}, nil
+		})
+		ctx := context.WithValue(t.Context(), decisionKey{}, "decision-1")
+		v, err := decideIn(t, ctx, ms, allowA, "t", `{"path":"a"}`)
+		if err != nil || v.Action != agentturn.Allow {
+			t.Fatalf("= %v (%s), %v; want allowed", v.Action, v.Reason, err)
+		}
+		if len(seen) == 0 {
+			t.Fatal("the claim was not asked")
+		}
+		for _, s := range seen {
+			if s != "decision-1" {
+				t.Errorf("the claim saw %v, want the decision's context", s)
+			}
+		}
+	})
+	t.Run("a context cancelled during the decision does not allow the call", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		ms := matchers(t, func(ctx context.Context, args json.RawMessage) (agenttool.Facts, error) {
+			// A remote reading the decision is cancelled under: it
+			// answers with the context's error, and would have said
+			// the call touches only what the rule allows.
+			cancel()
+			select {
+			case <-ctx.Done():
+				return agenttool.Facts{}, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return agenttool.Facts{}, nil
+			}
+		})
+		v, err := decideIn(t, ctx, ms, allowA, "t", `{"path":"a"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Action != agentturn.Block || !strings.Contains(v.Reason, context.Canceled.Error()) {
+			t.Errorf("= %v (%s), want blocked by the cancellation", v.Action, v.Reason)
+		}
+	})
+}
+
 func TestAMatcherMayNotBringSubjectsForAClaimingTool(t *testing.T) {
 	tl := tool("t", func(context.Context, json.RawMessage) (agenttool.Facts, error) { return agenttool.Facts{}, nil })
 	_, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": {
-		Match:    agentpolicy.GlobMatcher("path"),
-		Subjects: func(a json.RawMessage) ([]agentpolicy.Subject, error) { return []agentpolicy.Subject{{Args: a}}, nil },
+		Match: agentpolicy.GlobMatcher("path"),
+		Subjects: func(_ context.Context, a json.RawMessage) ([]agentpolicy.Subject, error) {
+			return []agentpolicy.Subject{{Args: a}}, nil
+		},
 	}})
 	if err == nil || !strings.Contains(err.Error(), "facts claim") {
 		t.Errorf("err = %v", err)

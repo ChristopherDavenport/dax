@@ -77,7 +77,7 @@ repository exists to hold; a tension is named where there is one.
 |---|---|---|---|
 | **dax** | the product that assembles the siblings and keeps only what is specific to a coding agent | an `executor` package (in-process form: dax-coding over the session's workspace; remote form: a client); `dax execute`, which serves an executor from inside a sandbox; skills and the project config read from the workspace | Fits. The executor's in-process form is dax-specific; its wire belongs to the siblings below |
 | **agenttool** | the tool contract: what a tool is, how a batch of calls executes, MCP adapters in both directions; the root depends on openresponses and the standard library | **facts as an optional per-call claim** in the root contract, beside `Confined` and `Replayable`: the calls this call amounts to, in tool-call terms (`read {path}`, `bash {command}`), plus an optional rewrite (bash's stamped plan). The MCP adapters carry it, with read-only, sequential and resource, in the listing | Fits: per-call claims are already the contract's pattern, and tool-call terms need no policy import. **Adjust the draft**: it proposes an MCP-only facts call, which would put a contract concept in an adapter |
-| **agentpolicy** | decisions: a rule grammar and an engine that become the loop's `BeforeToolCall`, with every verdict recorded | subjects taken from a tool's facts claim; `Subjects` with a context (or an engine option that supplies one) | Fits: the engine decides; where facts come from is a matcher's concern |
+| **agentpolicy** | decisions: a rule grammar and an engine that become the loop's `BeforeToolCall`, with every verdict recorded | subjects taken from a tool's facts claim; `Subjects` with a context (done in v0.0.12) | Fits: the engine decides; where facts come from is a matcher's concern |
 | **agentworkspace** *(new)* | proposed by the openhands-workspace study: the seam that lets the built-in tools act on a local directory, a container or a remote runtime | create it from the study and dax's `workspace` package; `Start` for long-lived processes with pipes (MCP servers in the workspace); `Local` and a remote handler and client | Fits the study's design; it is what the executor runs over inside the sandbox, and the primitive cut for hosts that offer only files and exec |
 | **agentsmd** | the AGENTS.md convention: `Chain` finds the files that apply at a path; root is standard library only | `Options.FS`: walk the chain through an `fs.FS` | Fits: `io/fs` is the standard library, and the convention does not care where the files are |
 | **agentskill** | the Agent Skills format: `SKILL.md` trees read through `fs.FS`, local or not | nothing | Already fits; dax reads project skills from the workspace with what exists |
@@ -98,8 +98,8 @@ before the dax step that uses them, as the workspace's rules require.
      form; project skills and the project config read from the
      workspace. Facts are read once per decision: each decision pins
      its call's reading, so the policy's verdict and the stamp are of
-     one reading. The pin stays useful once agentpolicy takes a
-     context, since the engine would still read a call more than once.
+     one reading. The pin stays useful now that agentpolicy takes a
+     context (v0.0.12), since the engine still reads a call more than once.
      **Done**: `internal/executor` (`Executor`, `InProcess`, `Set.Pin`);
      every extension's `Tools` run through it, `Kit` tools stay with
      control, and the replay claim crosses the adapter.
@@ -115,8 +115,12 @@ before the dax step that uses them, as the workspace's rules require.
    - agenttool: the facts claim and its MCP carriage. The claim is
      **done** in agenttool v0.0.19 (`Factual`, `FactsOf`, `WithFacts`,
      forwarded by `Wrap`), and dax's tools make it; the MCP carriage is
-     still to come.
-   - agentpolicy: subjects from facts, with a context.
+     **done** in agenttool v0.0.20 (`execution/facts`, opt-in on the
+     client with `WithClaims()`, which dax does not pass yet).
+   - agentpolicy: subjects from facts, with a context. The context is
+     **done** in agentpolicy v0.0.12: `Subjects` takes the decision's
+     context, and dax's splitters and `factspolicy` ask the claim under
+     it (execution-boundary.md, gap 1, closed).
    - agentworkspace: the module, `Local`, `Start`. **Done** in
      agentworkspace v0.0.1, from dax's `workspace` package; dax has
      moved to it (its `workspace` package is gone, the import renamed).
@@ -211,7 +215,7 @@ before the dax step that uses them, as the workspace's rules require.
   more than once (its verdict, a sub-agent's check) and the rewrite hook
   asks again; the session pins each decision's reading
   (`internal/executor`), so a remote executor is asked once per call's
-  arguments, and agentpolicy's subjects still want a context. Tools that
+  arguments, under the decision's context (agentpolicy v0.0.12). Tools that
   claim no facts cost no request, and a model response's calls share one
   (execution-boundary.md, Round trips). The re-reading was also a
   window, closed by the same pin: a sub-agent's check (`childPolicy`)

@@ -19,8 +19,13 @@ import (
 type counting struct {
 	mu    sync.Mutex
 	reads []Call
+	under []any // ctxKey's value on each reading's context
 	fail  error
 }
+
+// ctxKey marks a context, so a test can say which one a reading was
+// made under.
+type ctxKey struct{}
 
 func (c *counting) Tools(context.Context) ([]Tool, error) {
 	return []Tool{
@@ -29,10 +34,11 @@ func (c *counting) Tools(context.Context) ([]Tool, error) {
 	}, nil
 }
 
-func (c *counting) Facts(_ context.Context, call Call) (agenttool.Facts, error) {
+func (c *counting) Facts(ctx context.Context, call Call) (agenttool.Facts, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reads = append(c.reads, call)
+	c.under = append(c.under, ctx.Value(ctxKey{}))
 	if c.fail != nil {
 		return agenttool.Facts{}, c.fail
 	}
@@ -67,14 +73,20 @@ func info(id, name, args string) agentturn.ToolCallInfo {
 }
 
 // read is one reading of the claim through the adapter, as the
-// policy's subjects make it: with no context of the call's.
+// policy's subjects make it, under a context that carries no call.
 func read(t *testing.T, s *Set, name, args string) (string, error) {
+	t.Helper()
+	return readIn(t, context.Background(), s, name, args)
+}
+
+// readIn is read under ctx, the context of the decision that reads.
+func readIn(t *testing.T, ctx context.Context, s *Set, name, args string) (string, error) {
 	t.Helper()
 	b, ok := s.ByName(name)
 	if !ok {
 		t.Fatalf("no %s", name)
 	}
-	f, _, err := agenttool.FactsOf(context.Background(), b.Adapter, json.RawMessage(args))
+	f, _, err := agenttool.FactsOf(ctx, b.Adapter, json.RawMessage(args))
 	if err != nil {
 		return "", err
 	}
@@ -171,4 +183,25 @@ func TestPinnedFactsAreReadOncePerDecision(t *testing.T) {
 			t.Errorf("%d readings for a pin nobody read", n)
 		}
 	})
+}
+
+// A reading of a call no decision has pinned, as the batch hold's of a
+// sibling, is made under the reader's context, which agentpolicy makes
+// the decision's; a pinned call is read under its pin's context, by
+// whichever reader comes first.
+func TestAReadingIsMadeUnderItsDecisionsContext(t *testing.T) {
+	x := &counting{}
+	s := bind(t, x)
+	reader := context.WithValue(t.Context(), ctxKey{}, "reader")
+	if _, err := readIn(t, reader, s, "claim", `{"a":1}`); err != nil {
+		t.Fatal(err)
+	}
+	pin := context.WithValue(t.Context(), ctxKey{}, "pin")
+	defer s.Pin(pin, info("c1", "claim", `{"a":2}`))()
+	if _, err := readIn(t, reader, s, "claim", `{"a":2}`); err != nil {
+		t.Fatal(err)
+	}
+	if want := []any{"reader", "pin"}; len(x.under) != 2 || x.under[0] != want[0] || x.under[1] != want[1] {
+		t.Errorf("read under %v, want %v", x.under, want)
+	}
 }

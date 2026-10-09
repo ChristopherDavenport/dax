@@ -192,19 +192,25 @@ where it lands:
 Nothing on the policy path is left reading the machine outside the
 executor. Gaps the sketch has to close:
 
-1. **Subjects have no context.** `agentpolicy.Subjects` is
-   `func(args json.RawMessage) ([]Subject, error)`
-   (`agentpolicy/matcher.go:104`); dax's bash splitter calls `Check` with
-   `context.Background()` (`tool/shell.go:54`). A remote facts call needs
-   a context and a deadline, and the engine may evaluate a call more than
-   once (`Would`, the decision, a sub-agent's `childPolicy`). **Built**
-   in `internal/executor`: each decision pins its call (`Set.Pin`, keyed
+1. **Subjects have no context.** **Closed** in agentpolicy v0.0.12:
+   `agentpolicy.Subjects` was `func(args json.RawMessage) ([]Subject,
+   error)` and dax's splitters read the claim under
+   `context.Background()`. It is now
+   `func(ctx context.Context, args json.RawMessage) ([]Subject, error)`,
+   and the engine passes the context of the decision that asks
+   (`Decide`'s, `Would`'s, or, when the batch hold reads a sibling, the
+   held decision's); `factspolicy.Subjects` and `tool.BashSubjects` ask
+   under it, so a remote facts call is cancelled with the decision and
+   keeps its deadline, and a cancelled context blocks the call. The
+   engine may still evaluate a call more than once (`Would`, the
+   decision, a sub-agent's `childPolicy`), so the pin stays: in
+   `internal/executor` each decision pins its call (`Set.Pin`, keyed
    by the tool and the arguments' exact bytes), the first reading is
-   made under the call's context and every other reading of that
+   made under the pin's context and every other reading of that
    decision gets it, an error included, which blocks the call. A reading
-   no decision pinned is not kept, and an entry goes with its last pin.
-   The engine still reads the rewrite's arguments afresh; agentpolicy's
-   subjects still want a context for a remote executor's deadline.
+   no decision pinned, a sibling the batch hold reads, is made under
+   the reader's context and not kept, and an entry goes with its last
+   pin. The engine still reads the rewrite's arguments afresh.
 2. **Facts and effects happen at different moments.** Between them the
    sandbox can change. For bash this is already handled: the tool
    re-checks and refuses a plan that no longer analyses to its stamp
@@ -365,12 +371,14 @@ run, for the cases that want them apart too.
   `Factual`, `Facts`, `FactCall`, `FactsOf`); `mcpserver` and
   `mcpclient` carry it as a reserved
   request on the same connection, with read-only, sequential and
-  resource in the listing so a client does not configure them by hand.
+  resource in the listing so a client does not configure them by hand
+  (done in v0.0.20: `execution/facts`, opt-in on the client with
+  `WithClaims()`, which dax does not pass yet).
 - **agentpolicy**: subjects taken from a tool's claim, what dax's
   `factspolicy.Matchers` does (agentpolicy already depends on agenttool
-  through agentturn), and a context on subjects (`Subjects` with a
-  `context.Context`, or an engine option that supplies one), so a facts
-  call can be cancelled and bounded.
+  through agentturn), and a context on subjects, so a facts call can
+  be cancelled and bounded (the context is done in v0.0.12: `Subjects`
+  takes the decision's `context.Context`).
 
 ## Open questions
 

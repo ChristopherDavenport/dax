@@ -112,7 +112,7 @@ func TestAMatchersOwnSubjectsForAClaimingToolAreRefused(t *testing.T) {
 		Tools: func(extension.ToolEnv) []agenttool.Tool { return []agenttool.Tool{d.tool()} },
 		Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": {
 			Match: agentpolicy.GlobMatcher("env"),
-			Subjects: func(args json.RawMessage) ([]agentpolicy.Subject, error) {
+			Subjects: func(_ context.Context, args json.RawMessage) ([]agentpolicy.Subject, error) {
 				return []agentpolicy.Subject{{Args: args}}, nil
 			},
 		}}),
