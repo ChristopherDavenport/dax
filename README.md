@@ -541,10 +541,12 @@ are added to `diff`, `log` and `show`, and `go` runs with
 you would run it, hooks and `GIT_CONFIG_*` included.
 
 *What was decided is what runs*: the policy stamps an auto-allowed call with
-the plan it approved, and the bash tool runs a stamped call only if the line
-still analyses to that plan. If a file or the repository's config changed in
-between, the call fails with "the command changed since it was allowed; ask
-again", and the original line is never run instead. Only dax can stamp a
+the plan it approved and the files it was decided on, and the bash tool runs
+a stamped call only if the line still analyses to that plan on those files.
+If a file, where a path leads (`notes.txt` is now a link to `.env`) or the
+repository's config changed in between, the call fails with "the command
+changed since it was allowed; ask again", and the original line is never
+run instead. Only dax can stamp a
 call; one the model stamps is refused. `ls` with a glob runs with the
 expansion after a `--`, so a file called `-n` is a name.
 
@@ -839,7 +841,7 @@ dax's own extensions are built the same way, from the same fields:
 
 | Extension | Package | What it offers |
 |---|---|---|
-| `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan the policy approved |
+| `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan and the facts the policy approved |
 | `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`) |
 | `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
 | `dax-memory` | `ext/memory` | the memory tools and block |

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/agenttool"
 )
 
 // R3-3 of the third review: the decision said Auto, the config then
@@ -68,6 +70,8 @@ func TestOnlyDaxCanStampACall(t *testing.T) {
 		`{"command":"touch PWN","dax_stamp":"deadbeef"}`,
 		`{"command":"pwd","dax_stamp":"` + stampOf("'pwd'") + `x"}`,
 		`{"command":"touch PWN","dax_stamp":"` + stampOf("'pwd'") + `"}`,
+		// The stamp of the plan alone, as before it bound the facts.
+		`{"command":"pwd","dax_stamp":"` + stampOf("'pwd'") + `"}`,
 	} {
 		if out, err := call(context.Background(), b, args); err == nil {
 			t.Errorf("%s ran: %q", args, out)
@@ -83,8 +87,9 @@ func TestOnlyDaxCanStampACall(t *testing.T) {
 	if err != nil || !changed || strings.Contains(string(out), "dax_stamp") {
 		t.Errorf("forged stamp kept: %s %v %v", out, changed, err)
 	}
-	if got := stamped(t, dir, "pwd"); !strings.Contains(got, stampOf("'pwd'")) {
-		t.Errorf("pwd is not stamped with its plan: %s", got)
+	pwdFacts := []agenttool.FactCall{{Args: json.RawMessage(`{"command":"pwd"}`)}}
+	if got := stamped(t, dir, "pwd"); !strings.Contains(got, planStamp("'pwd'", pwdFacts)) {
+		t.Errorf("pwd is not stamped with its plan and facts: %s", got)
 	}
 	out, changed, _ = StampArgs(context.Background(), &Analyzer{Files: newWS(t, dir)}, json.RawMessage(`{"command":"touch PWN"}`))
 	if changed || strings.Contains(string(out), "dax_stamp") {
@@ -151,6 +156,46 @@ func TestRedactUserinfo(t *testing.T) {
 	} {
 		if got := redactUserinfo(in); got != want {
 			t.Errorf("redactUserinfo(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The claim analyses a line once, trimmed, and stamps that analysis.
+// Spaces and tabs around the line are trimmed by the tool's analysis
+// too, so such a line is stamped and runs; any other space around it (a
+// newline) is outside the safe subset as the tool reads it, so it is
+// not stamped, and a stamp the model put on it is taken off.
+func TestTheStampIsOfTheLineTheToolAnalyses(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("notes\n"), 0o644)
+	f := newWS(t, dir)
+	for _, tc := range []struct {
+		cmd     string
+		stamped bool
+	}{
+		{"cat notes.txt", true},
+		{"  cat notes.txt\t", true},
+		{"cat notes.txt\n", false},
+		{"\ncat notes.txt", false},
+		{"cat notes.txt\r", false},
+		{"cat notes.txt ", false},
+	} {
+		args, _ := json.Marshal(map[string]string{"command": tc.cmd, "dax_stamp": "forged"})
+		fx, _, err := agenttool.FactsOf(ctx, Bash(f), args)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.cmd, err)
+		}
+		var m map[string]string
+		json.Unmarshal(fx.Rewrite, &m)
+		stamp, has := m["dax_stamp"]
+		if has != tc.stamped || stamp == "forged" {
+			t.Errorf("%q: rewrite %s, want stamped = %v", tc.cmd, fx.Rewrite, tc.stamped)
+		}
+		if tc.stamped {
+			if out, err := call(ctx, Bash(f), string(fx.Rewrite)); err != nil || out != "notes\n[exit 0]" {
+				t.Errorf("%q stamped = %q, %v", tc.cmd, out, err)
+			}
 		}
 	}
 }
