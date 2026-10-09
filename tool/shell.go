@@ -53,10 +53,12 @@ func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
 
 // bashFacts is what a bash call would touch: the calls BashSubjects
 // describes, and, with stamp, the arguments the call runs with if the
-// policy allows it unasked (StampArgs). One analysis serves both when
-// the command is given without surrounding space, as the model writes
-// it; otherwise the stamp is of the line exactly as given, which is
-// what the tool checks again before it runs.
+// policy allows it unasked (StampArgs). One analysis serves both, so the
+// stamp binds the facts the policy decides on: a second look could find
+// a path that became a link in between. The tool analyses the line
+// exactly as given, which Check trims of spaces and tabs only; a line
+// with other space at its ends (a newline) is outside the safe subset
+// as given, so it is never stamped, whatever its trimmed form is.
 func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bool) (calls []agenttool.FactCall, rewrite json.RawMessage, err error) {
 	if err := exactKeys(args, "command", "dax_stamp"); err != nil {
 		return nil, nil, err
@@ -76,23 +78,10 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 		return nil, nil, errors.New("command is empty")
 	}
 	c := an.Check(ctx, cmd)
-	// Never nil: a line that analyses to nothing is no calls, which a
-	// policy refuses, and not the call itself, which a rule could allow.
-	calls = []agenttool.FactCall{}
 	if c.Parsed {
-		for _, st := range c.Stages {
-			calls = append(calls, mk("", "command", st.Match, st.Text))
-			// What a stage reads is also a read of that path, so the
-			// rules for secret-looking files and the user's own path
-			// rules apply to cat, head, grep and git show as to read.
-			for _, r := range st.Reads {
-				calls = append(calls, mk("read", "path", r, st.Text+"  [reads "+r+"]"))
-			}
-			if st.Governed && !st.OK {
-				calls = append(calls, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
-			}
-		}
+		calls = parsedCalls(c)
 	} else {
+		calls = []agenttool.FactCall{}
 		parts, targets, _, err := splitShell(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -108,11 +97,40 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 	if !stamp {
 		return calls, nil, nil
 	}
-	if in.Command != cmd {
-		c = an.Check(ctx, in.Command)
+	if strings.Trim(in.Command, " \t") != cmd {
+		c = &Check{}
 	}
 	rewrite, err = stampWith(c, args)
 	return calls, rewrite, err
+}
+
+// parsedCalls is what a line in the safe subset would touch, from its
+// analysis c: each stage as a command, what it reads (a read of the
+// path and of where its links lead) and, for a governed stage whose
+// arguments fail or a git whose configuration names a program, a
+// subject no rule names. It is the claim's calls and what an
+// auto-allowed line's stamp signs (stampOfCheck). Never nil: a line
+// that analyses to nothing is no calls, which a policy refuses, and not
+// the call itself, which a rule could allow.
+func parsedCalls(c *Check) []agenttool.FactCall {
+	mk := func(tool, field, match, text string) agenttool.FactCall {
+		a, _ := json.Marshal(map[string]string{field: match})
+		return agenttool.FactCall{Args: a, Tool: tool, Text: text}
+	}
+	calls := []agenttool.FactCall{}
+	for _, st := range c.Stages {
+		calls = append(calls, mk("", "command", st.Match, st.Text))
+		// What a stage reads is also a read of that path, so the
+		// rules for secret-looking files and the user's own path
+		// rules apply to cat, head, grep and git show as to read.
+		for _, r := range st.Reads {
+			calls = append(calls, mk("read", "path", r, st.Text+"  [reads "+r+"]"))
+		}
+		if st.Governed && !st.OK {
+			calls = append(calls, mk("", "command", sentinel+st.Text, st.Text+"  ["+st.Why+"]"))
+		}
+	}
+	return calls
 }
 
 // subjectsOf is calls as agentpolicy's subjects, nil for nil.
