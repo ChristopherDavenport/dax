@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
@@ -286,6 +287,13 @@ func TestAStampIsCheckedInTheExecutor(t *testing.T) {
 // output arrives as updates, a tool's question reaches the caller's
 // elicitor and its answer the tool, and the replay claim is the tool's
 // (safe for status, unknown for dax's).
+//
+// An update may arrive after the result: the server sends the progress
+// notification before its response, but the client SDK hands
+// notifications to a handler goroutine while the response wakes the
+// caller directly, and mcpclient keeps the call's progress token
+// routable for a grace period after it returns for that reason. So the
+// test waits for the update to be delivered, not for the call to end.
 func TestProgressQuestionsAndReplayCross(t *testing.T) {
 	ctx := context.Background()
 	s := newServer(t)
@@ -293,20 +301,27 @@ func TestProgressQuestionsAndReplayCross(t *testing.T) {
 
 	var mu sync.Mutex
 	var updates []string
+	delivered := make(chan struct{})
 	bash := remoteTool(t, r, "bash")
 	res, err := bash.Execute(ctx, agenttool.Call{ID: "b1", Args: json.RawMessage(`{"command":"echo hi"}`), OnUpdate: func(u agenttool.Result) {
 		mu.Lock()
+		defer mu.Unlock()
+		had := strings.Contains(strings.Join(updates, ""), "hi")
 		updates = append(updates, u.Output.String())
-		mu.Unlock()
+		if !had && strings.Contains(strings.Join(updates, ""), "hi") {
+			close(delivered)
+		}
 	}})
 	if err != nil || !strings.Contains(res.Output.String(), "hi") {
 		t.Fatalf("bash = %+v, %v", res, err)
 	}
-	mu.Lock()
-	if len(updates) == 0 || !strings.Contains(strings.Join(updates, ""), "hi") {
-		t.Errorf("updates %q", updates)
+	select {
+	case <-delivered:
+	case <-time.After(5 * time.Second):
+		mu.Lock()
+		t.Errorf("no update with the command's output; updates %q", updates)
+		mu.Unlock()
 	}
-	mu.Unlock()
 
 	var asked agenttool.Elicitation
 	ectx := agenttool.ContextWithElicitor(ctx, func(_ context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
