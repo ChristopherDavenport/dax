@@ -17,13 +17,16 @@ import (
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
+	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/internal/prompt"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
-// assembly is a session's extensions, built: their tools in order, and
-// what the policy and the sub-agents need of them.
+// assembly is a session's extensions, built: their tools in order, as
+// the executor's adapters, and what the policy and the sub-agents need
+// of them.
 type assembly struct {
+	set             *executor.Set
 	tools, readOnly []agenttool.Tool
 	matchers        map[string]agentpolicy.ToolMatcher
 	aliases         map[string][]string
@@ -35,21 +38,36 @@ type assembly struct {
 // extension may take, so the user's mcp__* rules reach only servers.
 const mcpPrefixLower = "mcp__"
 
-// build builds the extensions' tools over env and checks what each
-// claims: its name, its tools, the names it owns and its aliases are
-// unique across the session without regard to case; a read-only tool,
-// a matcher and an alias name only the extension's own tools; a call
-// a tool's facts claim names that is not one of them asks
-// (factspolicy.SubjectsOf). On an error the tools built so far are
+// build builds the extensions' tools over env, in this process, and
+// checks what each claims (buildFrom). On an error the tools built are
 // closed.
-func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err error) {
-	a = &assembly{matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}}
-	defer func() {
-		if err != nil {
-			agenttool.Set(a.tools).Close()
-			a = nil
-		}
-	}()
+func build(exts []extension.Extension, env extension.ToolEnv) (*assembly, error) {
+	x, err := executor.InProcess(exts, env)
+	if err != nil {
+		return nil, err
+	}
+	a, err := buildFrom(context.Background(), exts, env, x)
+	if err != nil {
+		x.Close()
+		return nil, err
+	}
+	return a, nil
+}
+
+// buildFrom binds x's tools, the extensions' wherever they run, and
+// checks what each extension claims: its name, its tools, the names it
+// owns and its aliases are unique across the session without regard to
+// case; a read-only tool, a matcher and an alias name only the
+// extension's own tools; a call a tool's facts claim names that is not
+// one of them asks (factspolicy.SubjectsOf); a tool names an extension
+// of the session. The extensions' matchers and hooks are built over
+// env. It closes nothing: x is the caller's.
+func buildFrom(ctx context.Context, exts []extension.Extension, env extension.ToolEnv, x executor.Executor) (*assembly, error) {
+	set, err := executor.Bind(ctx, x)
+	if err != nil {
+		return nil, err
+	}
+	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}}
 	extNames := map[string]bool{}
 	claimed := map[string]string{} // lower-case name -> the extension that has it
 	claim := func(ext, name, what string) error {
@@ -70,53 +88,68 @@ func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err 
 	}
 	for _, e := range exts {
 		if e.Name == "" {
-			return a, errors.New("an extension with no name")
+			return nil, errors.New("an extension with no name")
 		}
 		if extNames[e.Name] {
-			return a, fmt.Errorf("two extensions named %s", e.Name)
+			return nil, fmt.Errorf("two extensions named %s", e.Name)
 		}
 		extNames[e.Name] = true
 		own := map[string]bool{}
-		var tools []agenttool.Tool
-		if e.Tools != nil {
-			tools = e.Tools(env)
-		}
-		for _, t := range tools {
-			if t == nil {
-				return a, fmt.Errorf("extension %s: a nil tool", e.Name)
+		var tools []executor.Bound
+		for _, t := range set.Tools() {
+			if t.Extension != e.Name {
+				continue
 			}
-			a.tools = append(a.tools, t)
+			tools = append(tools, t)
+			a.tools = append(a.tools, t.Adapter)
 			if err := claim(e.Name, t.Name(), "tool"); err != nil {
-				return a, err
+				return nil, err
 			}
 			own[t.Name()] = true
 		}
-		for _, n := range e.ReadOnly {
-			i := slices.IndexFunc(tools, func(t agenttool.Tool) bool { return t.Name() == n })
-			if i < 0 {
-				return a, fmt.Errorf("extension %s: read-only %q is not one of its tools", e.Name, n)
-			}
+		listed := map[string]bool{}
+		readOnly := func(t executor.Bound) error {
 			// The annotations are hints, never enough to allow; they
 			// may make a decision stricter, as refusing this one does.
-			if an := agenttool.AnnotationsOf(tools[i]); !an.ReadOnly && an.Destructive {
-				return a, fmt.Errorf("extension %s: %q is read-only but annotated destructive", e.Name, n)
+			if an := t.Annotations; !an.ReadOnly && an.Destructive {
+				return fmt.Errorf("extension %s: %q is read-only but annotated destructive", e.Name, t.Name())
 			}
-			a.readOnly = append(a.readOnly, tools[i])
+			listed[t.Name()] = true
+			a.readOnly = append(a.readOnly, t.Adapter)
+			return nil
+		}
+		for _, n := range e.ReadOnly {
+			i := slices.IndexFunc(tools, func(t executor.Bound) bool { return t.Name() == n })
+			if i < 0 {
+				return nil, fmt.Errorf("extension %s: read-only %q is not one of its tools", e.Name, n)
+			}
+			if err := readOnly(tools[i]); err != nil {
+				return nil, err
+			}
+		}
+		// An executor may say a tool is read-only that the extension's
+		// list does not name; it is checked as one the list names.
+		for _, t := range tools {
+			if t.ReadOnly && !listed[t.Name()] {
+				if err := readOnly(t); err != nil {
+					return nil, err
+				}
+			}
 		}
 		for _, n := range e.Owns {
 			if err := claim(e.Name, n, "tool"); err != nil {
-				return a, err
+				return nil, err
 			}
 			own[n] = true
 		}
 		ruleNames := slices.Collect(maps.Keys(own))
 		for alias, targets := range e.Aliases {
 			if err := claim(e.Name, alias, "alias"); err != nil {
-				return a, err
+				return nil, err
 			}
 			for _, t := range targets {
 				if !own[t] {
-					return a, fmt.Errorf("extension %s: alias %s names %q, which is not one of its tools", e.Name, alias, t)
+					return nil, fmt.Errorf("extension %s: alias %s names %q, which is not one of its tools", e.Name, alias, t)
 				}
 			}
 			a.aliases[alias] = targets
@@ -128,21 +161,25 @@ func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err 
 		}
 		for name := range ms {
 			if !own[name] {
-				return a, fmt.Errorf("extension %s: matcher for %q, which is not one of its tools", e.Name, name)
+				return nil, fmt.Errorf("extension %s: matcher for %q, which is not one of its tools", e.Name, name)
 			}
 		}
 		// What a call of a tool that claims is matched as comes from its
 		// facts claim, whichever extension's it is: the policy reads the
 		// machine only through the tools. A claim may name only this
 		// extension's own names, so it cannot borrow another's rules.
-		ms, err = factspolicy.Matchers(tools, ruleNames, ms)
+		adapters := make([]agenttool.Tool, len(tools))
+		for i, t := range tools {
+			adapters[i] = t.Adapter
+		}
+		ms, err = factspolicy.Matchers(adapters, ruleNames, ms)
 		if err != nil {
-			return a, fmt.Errorf("extension %s: %w", e.Name, err)
+			return nil, fmt.Errorf("extension %s: %w", e.Name, err)
 		}
 		maps.Copy(a.matchers, ms)
 		for _, n := range e.Lifts {
 			if !own[n] {
-				return a, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
+				return nil, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
 			}
 		}
 		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts) > 0 {
@@ -153,6 +190,11 @@ func build(exts []extension.Extension, env extension.ToolEnv) (a *assembly, err 
 			if h := e.BeforeToolCall(env); h != nil {
 				a.hooks = append(a.hooks, h)
 			}
+		}
+	}
+	for _, t := range set.Tools() {
+		if !extNames[t.Extension] {
+			return nil, fmt.Errorf("tool %q names extension %q, which the session does not have", t.Name(), t.Extension)
 		}
 	}
 	// The rewrite a call runs with if allowed comes from its tool's facts
@@ -209,7 +251,7 @@ func (e *sessionEnv) ChildPolicy(name string) func(context.Context, agentturn.To
 	if e.s.opts.Policy == nil {
 		return nil
 	}
-	return e.s.childPolicy(name, e.eng, e.a.hook())
+	return e.s.childPolicy(name, e.eng, e.a.hook(), e.a.set)
 }
 
 // systemPrompt is the main agent's part of the system prompt: dax's

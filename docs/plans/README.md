@@ -94,8 +94,13 @@ before the dax step that uses them, as the workspace's rules require.
 2. **In parallel, no network needed:**
    - dax: the `executor` package with dax-coding as its in-process
      form; project skills and the project config read from the
-     workspace. Facts are fetched once per call and cached until
-     agentpolicy takes a context.
+     workspace. Facts are read once per decision: each decision pins
+     its call's reading, so the policy's verdict and the stamp are of
+     one reading. The pin stays useful once agentpolicy takes a
+     context, since the engine would still read a call more than once.
+     **Done**: `internal/executor` (`Executor`, `InProcess`, `Set.Pin`);
+     every extension's `Tools` run through it, `Kit` tools stay with
+     control, and the replay claim crosses the adapter.
    - Instruction sources: agentsmd's `FS`, an agentkit release, and dax
      reading AGENTS.md from the workspace. Independent of everything
      else, so it need not wait for the sandbox (agentskill already
@@ -147,9 +152,8 @@ before the dax step that uses them, as the workspace's rules require.
     command), and the key never leaves the executor. Beside the claim
     it would be a second call over the wire and a second analysis that
     could disagree with the first. The policy's verdict and the hook's
-    rewrite are still separate calls of the claim, so separate
-    readings, until facts are fetched once per call (step 2; see the
-    open decision on the policy engine).
+    rewrite read the claim once between them: each decision pins the
+    call's reading (step 2, done).
   - **A claim names only its own extension's tools.** A claimed call
     names the claiming tool or another of its extension's tools (bash's
     `read` of what `cat` reads); one that names any other tool is
@@ -182,10 +186,10 @@ before the dax step that uses them, as the workspace's rules require.
   call with no stamp, with the policy off, is not checked. Bash keeps its plan stamp: re-analysing the line
   at the call already binds an unasked line to its plan and its reads,
   so a facts stamp would add nothing there; a line a person approved
-  runs as written, unconfined, as before. Two windows are left: between
-  the executor's recompute and its own open of the path, and between
-  the policy's reading of a call's facts and the stamped one (see the
-  open decision on the policy engine).
+  runs as written, unconfined, as before. One window is left: between
+  the executor's recompute and its own open of the path. The one
+  between the policy's reading of a call's facts and the stamped one
+  is closed by the per-decision pin (step 2).
 
 ## Decisions still open
 
@@ -199,17 +203,15 @@ before the dax step that uses them, as the workspace's rules require.
   Rules and decisions stay with control and facts with execution, as
   built; what is open is the cost: the engine reads a call's subjects
   more than once (its verdict, a sub-agent's check) and the rewrite hook
-  asks again, so a remote executor needs the facts fetched once per call
-  and cached, and agentpolicy's subjects a context. Tools that claim no
-  facts cost no request, and a model response's calls share one
-  (execution-boundary.md, Round trips). The re-reading is also a known
-  window, in process today: the subjects the policy decides on and the
-  stamp come from separate readings of the claim. The main agent
-  re-decides on the rewrite, so a path would have to change back and
-  forth between readings; a sub-agent's check (`childPolicy`) takes the
-  rewrite from a reading after its verdict and does not re-decide, so an
-  outside process that swaps a path in that moment gets the swapped
-  facts stamped, and the call runs on them. The cache per call in step
-  2 closes it.
+  asks again; the session pins each decision's reading
+  (`internal/executor`), so a remote executor is asked once per call's
+  arguments, and agentpolicy's subjects still want a context. Tools that
+  claim no facts cost no request, and a model response's calls share one
+  (execution-boundary.md, Round trips). The re-reading was also a
+  window, closed by the same pin: a sub-agent's check (`childPolicy`)
+  took the rewrite from a reading after its verdict and did not
+  re-decide, so a path swapped in that moment was stamped and run.
+  The rewrite's own arguments are still read afresh when the engine
+  decides them; seeding them from the pinned reading is for step 3.
 - **Who answers a peer's own asks.** The callee's controller by default;
   escalation to the caller only where the callee enables it.

@@ -83,6 +83,12 @@ before changing the shape.
   dax-agents' calls (`toolview.Renderer`s), from the record's arguments
   and output alone. It does not import `tool`; its tests run the real
   tools, so a change to a tool's output format fails them.
+- `internal/executor`: the execution plane: the `Executor` the
+  session runs the extensions' `Tools` through (facts, replay, calls,
+  descriptor, close), `InProcess` (the tools in this process), and
+  `Set`, the tools bound as adapters for the kit, which pins each
+  decision's facts so one reading decides and stamps a call. Kit tools
+  are control and never go through it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/provider`: provider setting to `openresponses.Streamer`, and
   the vendor's `modelinfo.Describer`.

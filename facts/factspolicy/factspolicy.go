@@ -31,10 +31,13 @@ const outside = "dax:outside-its-extension"
 // reads as one subject per call.
 //
 // agentpolicy.Subjects takes no context, so the claim is asked under
-// context.Background(): enough for a tool in this process. A remote
-// executor needs a context and a deadline, and the engine may ask
-// about one call more than once; that is the plan's gap (agentpolicy:
-// subjects with a context; until then, fetch once per call and cache).
+// context.Background(). The session's tools are the executor's
+// stand-ins, which answer every reading made while a decision about the
+// call is in flight from one reading taken under the call's context
+// (internal/executor's Set.Pin), so the engine's several readings of
+// one call are one. A remote executor still wants a context and a
+// deadline here: agentpolicy's subjects with a context, step 3 of the
+// plan.
 func Subjects(t agenttool.Tool, own []string) agentpolicy.Subjects {
 	if !agenttool.IsFactual(t) {
 		return nil

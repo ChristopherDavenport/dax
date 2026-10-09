@@ -151,8 +151,8 @@ func With(t agenttool.Tool, fn func(context.Context, json.RawMessage) (Facts, er
   the policy's splitters (`tool.BashSubjects`, `tool.PathSubjects`).
   Within one claim the stamp is of the facts it reports (bash's, of the
   plan of the same reading of the command). The policy's verdict and
-  the hook's rewrite are separate calls of the claim, so separate
-  readings, until facts are fetched once per call (Gaps, 1 and 2).
+  the hook's rewrite read the claim once between them: each decision
+  pins the call's reading (Gaps, 1 and 2).
 - A claimed call names the claiming tool or another tool of its own
   extension (bash's `read` of what `cat` reads); one that names any
   other tool is decided as a tool no rule names, so it asks, and never
@@ -197,11 +197,14 @@ executor. Gaps the sketch has to close:
    (`agentpolicy/matcher.go:104`); dax's bash splitter calls `Check` with
    `context.Background()` (`tool/shell.go:54`). A remote facts call needs
    a context and a deadline, and the engine may evaluate a call more than
-   once (`Would`, the decision, a sub-agent's `childPolicy`). Until
-   agentpolicy takes a context, the session fetches `Facts` once per call
-   (by call ID and arguments) under the call's context and the matcher
-   reads the cached value; an error or a timeout is a subject no rule
-   names, which asks, as `dax:links-unknown` does today.
+   once (`Would`, the decision, a sub-agent's `childPolicy`). **Built**
+   in `internal/executor`: each decision pins its call (`Set.Pin`, keyed
+   by the tool and the arguments' exact bytes), the first reading is
+   made under the call's context and every other reading of that
+   decision gets it, an error included, which blocks the call. A reading
+   no decision pinned is not kept, and an entry goes with its last pin.
+   The engine still reads the rewrite's arguments afresh; agentpolicy's
+   subjects still want a context for a remote executor's deadline.
 2. **Facts and effects happen at different moments.** Between them the
    sandbox can change. For bash this is already handled: the tool
    re-checks and refuses a plan that no longer analyses to its stamp
@@ -210,20 +213,23 @@ executor. Gaps the sketch has to close:
    at the call, are the stamped ones, whether the policy allowed it or
    a person approved it, in the main agent or a sub-agent. Two windows
    are left. One is the moment between that recompute and the tool's
-   own open. The other is between readings: the policy decides on one
-   reading of the claim and the stamp is of another (the hook's), so an
-   outside process that changes a path between the two gets the later
-   one stamped. The main agent re-decides on the rewrite, a third
-   reading, so the path would have to change back and forth between
-   the readings; a sub-agent's check (`childPolicy`) takes the rewrite
-   from a reading after its verdict and does not re-decide, so one
-   change in that moment is enough.
-   Fetching facts once per call (1) closes it. A link swapped is
+   own open. The other was between readings: the policy decided on one
+   reading of the claim and the stamp was of another (the hook's), and
+   a sub-agent's check (`childPolicy`) took the rewrite from a reading
+   after its verdict and did not re-decide, so one change in that
+   moment was stamped and run. The pin of (1) closes it: the stamp is of
+   the reading the verdict was decided on
+   (`TestACallRunsWithTheFactsItsVerdictWasDecidedOn`). Not closed: a
+   third party's claim with no check when it runs, and two identical
+   calls decided at once (parallel tasks) share one reading, which is
+   still consistent. A link swapped is
    followed only within the workspace (`os.Root`), so confinement holds
    either way. The executor does not widen either window.
 3. **Replay hints do not cross MCP.** `agenttool.WithReplay` has no MCP
    field and `mcpclient` has no option for it; a remote call reads as
    replay-unknown. dax-coding sets none today, so nothing is lost now.
+   The in-process executor carries the claim (`Executor.Replay`), so a
+   third party's replay claim survives the adapter.
 
 ## The wire: MCP, plus a facts call
 
