@@ -344,37 +344,37 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 				prompt()
 				continue
 			}
-			if running {
-				switch {
-				case strings.HasPrefix(line, "/follow "):
-					if err := t.FollowUp(ctx, openresponses.UserText(strings.TrimPrefix(line, "/follow "))); err != nil {
-						fmt.Fprintln(os.Stderr, "error:", err)
-					} else {
-						fmt.Println("[queued as follow-up]")
-					}
-				case line == "/abort":
-					t.Abort()
-				default:
-					if err := t.Steer(ctx, openresponses.UserText(line)); err != nil {
-						fmt.Fprintln(os.Stderr, "error:", err)
-					} else {
-						fmt.Println("[queued as steering]")
-					}
+			if isCommand(line) {
+				r, err := command(ctx, t, ctl, line, running)
+				if r.out != "" {
+					fmt.Println(r.out)
 				}
-				continue
-			}
-			if handled, err := command(ctx, t, ctl, line); handled {
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				}
-				if line == "/quit" || line == "/exit" {
+				if r.quit {
+					if running {
+						t.Abort()
+						<-done
+					}
 					return nil
 				}
-				prompt()
+				if !running {
+					prompt()
+				}
 				continue
 			}
-			sent = line
-			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(line)) })
+			text := userText(line)
+			if running {
+				if err := t.Steer(ctx, openresponses.UserText(text)); err != nil {
+					fmt.Fprintln(os.Stderr, "error:", err)
+				} else {
+					fmt.Println("[queued as steering]")
+				}
+				continue
+			}
+			sent = text
+			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(text)) })
 		}
 	}
 }
@@ -426,53 +426,6 @@ func abortOnInterrupt(t agent.Turn) {
 			t.Abort()
 		}
 	}()
-}
-
-// command handles a slash command while idle; handled is false for a
-// prompt.
-func command(ctx context.Context, t agent.Turn, ctl agent.Controls, line string) (handled bool, err error) {
-	switch {
-	case strings.HasPrefix(line, "/mcp add "):
-		// /mcp add <name> <command line>
-		prefix, cmd, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "/mcp add ")), " ")
-		if !ok {
-			return true, errors.New("usage: /mcp add <name> <command line>")
-		}
-		label, err := ctl.AddMCP(ctx, prefix, strings.TrimSpace(cmd))
-		if err == nil {
-			fmt.Printf("[%s added; its tools are offered from the next prompt]\n", label)
-			showAssembly(ctl.Info())
-		}
-		return true, err
-	case strings.HasPrefix(line, "/mcp remove "):
-		err := ctl.RemoveMCP(strings.TrimSpace(strings.TrimPrefix(line, "/mcp remove ")))
-		if err == nil {
-			showAssembly(ctl.Info())
-		}
-		return true, err
-	case line == "/tools":
-		showAssembly(ctl.Info())
-		return true, nil
-	case line == "/quit", line == "/exit":
-		return true, nil
-	case line == "/session":
-		info := ctl.Info()
-		fmt.Println(info.ID, info.Path)
-		return true, nil
-	case strings.HasPrefix(line, "/model "):
-		return true, ctl.SetModel(strings.TrimSpace(strings.TrimPrefix(line, "/model ")))
-	case line == "/think on":
-		return true, ctl.SetThink(true)
-	case line == "/think off":
-		return true, ctl.SetThink(false)
-	case strings.HasPrefix(line, "/follow "):
-		if err := t.FollowUp(ctx, openresponses.UserText(strings.TrimPrefix(line, "/follow "))); err != nil {
-			return true, err
-		}
-		fmt.Println("[queued as follow-up for the next run]")
-		return true, nil
-	}
-	return false, nil
 }
 
 // ended says what a run's end leaves the user to know: the calls an

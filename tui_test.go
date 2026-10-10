@@ -628,3 +628,32 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	}
 	r.quit()
 }
+
+// TestASlashLineInTheTUIIsDaxsCommand: the terminal client hands each
+// line to dax, which runs a slash line as the REPL does and shows what it
+// says over the input; the model never sees it. /quit leaves without an
+// error.
+func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
+	m := &steps{}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("/tools\r")
+	r.waitOutput("tools: read, write, edit")
+	r.type_("/nope\r")
+	r.waitOutput("submit: unknown command /nope")
+	r.type_("\x15/think on\r") // ctrl+u clears the line given back
+	r.waitOutput("[reasoning on from the next request]")
+	if n := len(r.sess.Turn().State().Transcript); n != 0 {
+		t.Fatalf("a command reached the model: %d transcript items", n)
+	}
+	r.type_("hello\r")
+	r.waitOutput("all done")
+	r.type_("/quit\r")
+	select {
+	case err := <-r.done:
+		if err != nil {
+			t.Fatalf("Run after /quit: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("/quit did not end the client")
+	}
+}

@@ -136,8 +136,8 @@ is sequential, so a command never races a concurrent edit of the same
 file. That is dax's whole concurrency policy.
 
 After each tool batch the loop polls for steering messages and, when the
-model returns with no tool calls, for follow-ups. A line typed in the REPL
-during a run is steering; `/follow text` is a follow-up.
+model returns with no tool calls, for follow-ups. A line typed during a
+run is steering; `/follow text` is a follow-up.
 
 A call the policy asks about ends the run with the call pending. The front
 asks the user, the answer is recorded as a person's, and the run is
@@ -308,7 +308,11 @@ where one is chosen. The REPL renders the agent's events and answers
 permissions and questions on standard input; print (`-p`) is
 `agent.Drive`, a controller whose rules ask on standard input; the
 terminal client, agentconsole, is a view of the record that drives the
-Turn through the glue in `tuiadapter.go`. The session asks nothing of a
+Turn through the glue in `tuiadapter.go`. A front's input is
+dax's: a line that starts with a slash is a command to dax in every
+front (`commands.go`), which the REPL reads itself and the terminal
+client hands over with each submitted line (`console.WithSubmit`), and
+the model never sees it. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Turn.Answer`, and every question asked while a call runs
 goes to whoever holds `Turn.Questions`, refused when nobody does.

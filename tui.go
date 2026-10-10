@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
@@ -197,11 +199,46 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if run == nil {
 		run = console.Run
 	}
-	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers)}, f.console...)
+	// The input is dax's: a slash line is a command, as in the REPL,
+	// and /quit ends the client by ending the context it runs under.
+	cctx, quit := context.WithCancel(ctx)
+	defer quit()
+	var quitting atomic.Bool
+	opts := append([]console.Option{
+		console.WithToolRenderers(f.info.Renderers),
+		console.WithSubmit(submitLine(sess.Turn(), sess, func() { quitting.Store(true); quit() })),
+	}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	return run(ctx, be, opts...)
+	err = run(cctx, be, opts...)
+	if quitting.Load() && ctx.Err() == nil {
+		// The program ends with the context's error when /quit ends it,
+		// which is the user leaving, not a failure.
+		return nil
+	}
+	return err
+}
+
+// submitLine is what the terminal client does with a line the user
+// submits: a slash line is run as a command, its output the reply shown
+// over the input, and anything else is a prompt, or a steer while a run
+// goes.
+func submitLine(t agent.Turn, ctl agent.Controls, quit func()) func(context.Context, console.Line) (console.Submit, error) {
+	return func(ctx context.Context, l console.Line) (console.Submit, error) {
+		if isCommand(l.Text) {
+			r, err := command(ctx, t, ctl, l.Text, l.Running)
+			if r.quit {
+				quit()
+			}
+			return console.Submit{Reply: r.out}, err
+		}
+		item := openresponses.UserText(userText(l.Text))
+		if l.Running {
+			return console.Submit{Steer: []openresponses.Item{item}}, nil
+		}
+		return console.Submit{Prompt: []openresponses.Item{item}}, nil
+	}
 }
 
 // flush prints the warnings held while the client had the screen,
