@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.9 - 2026-10-09
 
 - Added: with `-executor`, MCP servers run in the sandbox. Every server
   in `mcp_servers`, `-mcp` and `/mcp add` starts in `dax execute`, at
