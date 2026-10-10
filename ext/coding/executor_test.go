@@ -38,7 +38,7 @@ func boundMatchers(t testing.TB, dir string) map[string]agentpolicy.ToolMatcher 
 		tools = append(tools, b.Adapter)
 		own = append(own, b.Name())
 	}
-	ms, err := factspolicy.Matchers(tools, own, matchers())
+	ms, err := factspolicy.Matchers(tools, own, nil, matchers())
 	if err != nil {
 		t.Fatal(err)
 	}

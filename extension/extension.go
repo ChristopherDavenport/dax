@@ -69,7 +69,9 @@ type Extension struct {
 	ReadOnly []string
 	// Owns names the tools the extension adds through its kit options
 	// (skill, memory_save), so its rules may name them and no other
-	// extension may take the names.
+	// extension may take the names. A call of one whose tool makes the
+	// facts claim (agenttool.Factual) is decided on that claim, as a
+	// call of one of Tools is, once the session's kit is built.
 	Owns []string
 
 	// Matchers say how a rule's specifier matches a call of one of the
@@ -80,8 +82,9 @@ type Extension struct {
 	// claim, so a matcher for a claiming tool supplies Match alone, and
 	// one that brings Subjects too is an error at start. A tool with no
 	// claim is matched on its arguments as given, or on a matcher's own
-	// Subjects. They are built over the session's ToolEnv, as the tools
-	// are.
+	// Subjects, which, as a claim, may name only the extension's own
+	// tools: a subject that names another's asks. They are built over
+	// the session's ToolEnv, as the tools are.
 	Matchers func(ToolEnv) map[string]agentpolicy.ToolMatcher
 	// Aliases are names a rule may use for several of the extension's
 	// tools: dax-coding's Read stands for read, grep, glob and ls.
@@ -98,6 +101,19 @@ type Extension struct {
 	// with a specifier lifts: allowing read(.env) means reading .env,
 	// though dax-coding asks about secret-looking paths.
 	Lifts []string
+	// HeldTo holds the calls of one of the extension's tools (a key:
+	// one of its Tools or a name in Owns) to the ask and deny rules of
+	// other extensions' tools (the value). A call a tool's facts claim
+	// (agenttool.Factual) names of such a tool is a constraint on the
+	// call (agentpolicy's Subject.Constrain): that tool's ask and deny
+	// rules, whoever's they are, can make the call ask or refuse it,
+	// and its allow rules never allow it, so the call still needs an
+	// allow of its own tool's. A claim that names any other tool asks.
+	// dax-skills holds skill to read: a project's skill file is
+	// claimed as a read of it, so read(.env)'s question and a user's
+	// deny of read(config/**) reach it, and an allow of read(...) does
+	// not open it.
+	HeldTo map[string][]string
 	// BeforeToolCall decides or rewrites a call, as
 	// agentkit.WithBeforeToolCall does, for the main agent and for every
 	// sub-agent built with Env.ChildPolicy. Decisions fold deny over ask

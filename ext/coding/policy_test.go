@@ -67,7 +67,7 @@ func sessionMatchers(t testing.TB, dir string) map[string]agentpolicy.ToolMatche
 	for _, tl := range tools {
 		own = append(own, tl.Name())
 	}
-	ms, err := factspolicy.Matchers(tools, own, matchers())
+	ms, err := factspolicy.Matchers(tools, own, nil, matchers())
 	if err != nil {
 		t.Fatal(err)
 	}

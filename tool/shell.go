@@ -521,6 +521,24 @@ func PathSubjects(f *Files, field, def string) agentpolicy.Subjects {
 	}
 }
 
+// PathCalls is what a read of name, a path as a file tool takes it,
+// would touch, as dax-coding's file tools claim it: name normalised
+// against the workspace's root, and what its links lead to, read
+// through f's workspace. The calls name no tool (Tool is empty, the
+// tool that reads), except the one a workspace that cannot read links
+// adds, which names a tool no rule names, so it asks. It is exported
+// for an extension whose tool reads a workspace file by another name,
+// dax-skills' skill tool reading a file of a project's skill, so its
+// facts claim can name the file as a read would (see
+// extension.Extension.HeldTo).
+func PathCalls(f *Files, name string) ([]agenttool.FactCall, error) {
+	args, err := json.Marshal(map[string]string{"path": name})
+	if err != nil {
+		return nil, err
+	}
+	return pathCalls(f.view(), "path", "", args)
+}
+
 // pathCalls is what a file tool's call would touch: the path in field,
 // normalised, and what its links lead to (see PathSubjects).
 func pathCalls(v view, field, def string, args json.RawMessage) ([]agenttool.FactCall, error) {

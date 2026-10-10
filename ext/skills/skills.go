@@ -8,6 +8,7 @@
 package skills
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentskill"
+	"github.com/ChristopherDavenport/agenttool"
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -39,14 +41,23 @@ type Options struct {
 	Trust bool
 }
 
+// readTool is the tool whose asks and denies the skill tool's reads of
+// a project's skill are held to: dax-coding's read, by name, as a rule
+// names it. Without dax-coding no rule names it, and the hold adds
+// nothing.
+const readTool = "read"
+
 // New is dax-skills. It owns the skill tool and ships one rule:
 // starting a skill runs unasked, since reading one does nothing of
-// itself.
+// itself. A read of a file of a project's skill, its instructions
+// included, is held to read's asks and denies (HeldTo): the file is
+// the repository's, wherever .dax/skills leads in it.
 func New(o Options) extension.Extension {
 	return extension.Extension{
 		Name:   Name,
 		Owns:   []string{agentskill.ToolName},
 		Policy: policy.Rules{Allow: []string{agentskill.ToolName}},
+		HeldTo: map[string][]string{agentskill.ToolName: {readTool}},
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			// Neither default directory is one the user configured, so
 			// either may be absent; the project's comes first and
@@ -77,6 +88,9 @@ func New(o Options) extension.Extension {
 				sources = append(sources, src)
 			}
 			opts := []agentkit.Option{agentkit.WithSkillSources(sources...)}
+			if ok {
+				opts = append(opts, agentkit.WithSkillTool(agentskill.WithFileClaim(projectFileClaim(env.ToolEnv().Files, project.Location))))
+			}
 			if o.Trust {
 				roots := append([]string{user}, o.Dirs...)
 				opts = append(opts,
@@ -219,6 +233,36 @@ func projectSkills(files *tool.Files) (src agentskill.Source, ok bool, omitted [
 		return refuse(err.Error())
 	}
 	return agentskill.Source{FS: sub, Location: shown}, true, nil
+}
+
+// projectFileClaim is the skill tool's claim of the file a call would
+// serve (agentskill.WithFileClaim): for a skill of the project's
+// skills directory, at location in the workspace, a read of that file
+// by its name in the workspace, .dax/skills/<skill>/<file>, normalised
+// and through its links as read's claim is (tool.PathCalls), each
+// named as a call of read, so read's asks and denies hold it (HeldTo).
+// A call where the workspace cannot read links names a tool no rule
+// names, so it asks. A skill the user installed, under ~/.dax/skills or
+// skills_dirs, claims nothing more than the call: its files are the
+// user's, not the repository's. Which skill is the project's is decided
+// by its location before any path on this machine is consulted, as the
+// grant's trust is.
+func projectFileClaim(files *tool.Files, location string) func(context.Context, *agentskill.Skill, string) ([]agenttool.FactCall, error) {
+	return func(_ context.Context, sk *agentskill.Skill, file string) ([]agenttool.FactCall, error) {
+		if !inside(location, sk.Location) {
+			return nil, nil
+		}
+		calls, err := tool.PathCalls(files, path.Join(skillsDir, sk.DirName, file))
+		if err != nil {
+			return nil, err
+		}
+		for i := range calls {
+			if calls[i].Tool == "" {
+				calls[i].Tool = readTool
+			}
+		}
+		return calls, nil
+	}
 }
 
 // linked reports whether name's entry in its directory is a link, read
