@@ -134,10 +134,12 @@ before the dax step that uses them, as the workspace's rules require.
      project's files (AGENTS.md, `.dax/skills`, `.dax/config.json`)
      read through the executor, which serves its workspace's files as
      read-only MCP resources (`dax-workspace:///{op}{?path}`), are
-     **done** (branch `executor-files`). Follow-ups: MCP servers with
-     an executor (started in it, or refused as now), facts batched per
-     model response, and an executor over an address rather than a
-     command.
+     **done** (branch `executor-files`). Facts batched per model
+     response are **done**: a response's calls are read in one request
+     and their rewrites in a second (`Set.PinBatch`), for the main
+     agent and a sub-agent. Follow-ups: MCP servers with an executor
+     (started in it, or refused as now), and an executor over an
+     address rather than a command.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.
@@ -227,16 +229,20 @@ before the dax step that uses them, as the workspace's rules require.
 - **Where the policy engine runs** when control and execution are apart.
   Rules and decisions stay with control and facts with execution, as
   built; what is open is the cost: the engine reads a call's subjects
-  more than once (its verdict, a sub-agent's check) and the rewrite hook
-  asks again; the session pins each decision's reading
-  (`internal/executor`), so a remote executor is asked once per call's
-  arguments, under the decision's context (agentpolicy v0.0.12). Tools that
-  claim no facts cost no request, and a model response's calls share one
+  more than once (its verdict, a sub-agent's check, the batch hold's
+  reading of each sibling) and decides the rewrite hook's arguments
+  again. The session holds each model response's facts for the
+  decisions about it (`internal/executor`'s `Set.PinBatch`), so a
+  remote executor is asked twice per response, its calls then their
+  rewrites, under the first decision's context (agentpolicy v0.0.12):
+  three calls cost the main agent two requests, not twelve, and a
+  sub-agent two, not six. Tools that claim no facts cost no request
   (execution-boundary.md, Round trips). The re-reading was also a
-  window, closed by the same pin: a sub-agent's check (`childPolicy`)
-  took the rewrite from a reading after its verdict and did not
-  re-decide, so a path swapped in that moment was stamped and run.
-  The rewrite's own arguments are still read afresh when the engine
-  decides them; seeding them from the pinned reading is for step 3.
+  window, closed first by a per-decision pin and now by the batch: a
+  sub-agent's check (`childPolicy`) took the rewrite from a reading
+  after its verdict and did not re-decide, so a path swapped in that
+  moment was stamped and run. A rewrite is read as a call of its own,
+  never seeded from the reading that asked for it, since what the
+  rewrite claims is what the engine decides. Decided; nothing open.
 - **Who answers a peer's own asks.** The callee's controller by default;
   escalation to the caller only where the callee enables it.

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -288,5 +289,49 @@ func TestTheClientsStampIsCheckedInTheExecutor(t *testing.T) {
 	}
 	if !strings.Contains(out, "ask again") || strings.Contains(out, "SECRET") {
 		t.Errorf("after the swap: %q", out)
+	}
+}
+
+// BatchFacts reads a response's calls in one request: each call's claim
+// or its own error (a tool the executor does not run among them), and
+// the request's failure, the executor gone, as the error of all.
+func TestBatchFactsReadsTheCallsInOneRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newServer(t)
+	os.WriteFile(filepath.Join(s.dir, "notes.txt"), []byte("notes\n"), 0o644)
+	var requests atomic.Int32
+	s.srv.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+			if method == mcpserver.FactsMethod {
+				requests.Add(1)
+			}
+			return next(ctx, method, req)
+		}
+	})
+	r, ss := s.remote(t)
+	calls := []Call{
+		{Tool: "read", Call: agenttool.Call{Args: json.RawMessage(`{"path":"notes.txt"}`)}},
+		{Tool: "nope", Call: agenttool.Call{Args: json.RawMessage(`{}`)}},
+		{Tool: "read", Call: agenttool.Call{Args: json.RawMessage(`{"path":"other.txt"}`)}},
+	}
+	facts, errs, err := r.BatchFacts(ctx, calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("%d requests, want 1", n)
+	}
+	if errs[0] != nil || !strings.Contains(string(facts[0].Rewrite), "dax_stamp") {
+		t.Errorf("notes.txt: %+v, %v", facts[0], errs[0])
+	}
+	if errs[1] == nil {
+		t.Error("a tool the executor does not run was read")
+	}
+	if errs[2] != nil || len(facts[2].Calls) == 0 {
+		t.Errorf("other.txt: %+v, %v", facts[2], errs[2])
+	}
+	ss.Close()
+	if _, _, err := r.BatchFacts(ctx, calls); err == nil {
+		t.Error("the executor gone, BatchFacts gave no error")
 	}
 }

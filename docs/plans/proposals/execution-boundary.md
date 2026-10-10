@@ -210,7 +210,12 @@ executor. Gaps the sketch has to close:
    decision gets it, an error included, which blocks the call. A reading
    no decision pinned, a sibling the batch hold reads, is made under
    the reader's context and not kept, and an entry goes with its last
-   pin. The engine still reads the rewrite's arguments afresh.
+   pin. The engine still reads the rewrite's arguments afresh. Since
+   then a model response's facts are read together for its decisions
+   (`Set.PinBatch`): its calls in one request, their rewrites in a
+   second, every reading under a decision's context answered from them,
+   so a response costs two requests and the pin is left for a call no
+   batch holds.
 2. **Facts and effects happen at different moments.** Between them the
    sandbox can change. For bash this is handled: its stamp signs the
    plan and the facts together, and the tool re-checks and refuses a
@@ -288,7 +293,9 @@ shows. Two things keep it to what it must be:
   skipping the request for one cannot widen what the policy allows.
 - The calls of one model response are decided together, so their facts
   are fetched in one request (`execution/facts` takes a list), and a
-  response of five calls costs one round trip for facts, not five. The
+  response of five calls costs one round trip for facts, not five (as
+  built, two: the calls, then the rewrites they ask for, which the
+  engine decides as calls of their own). The
   stamp each call's facts carry is checked when that call runs, so a
   batch fetched early still runs only on the facts that were stamped,
   which, with facts fetched once per call, are the facts it was decided

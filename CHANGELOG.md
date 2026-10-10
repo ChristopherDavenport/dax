@@ -5,6 +5,19 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: the facts of a model response's calls are read together for
+  the decisions about them. With `-executor`, a response costs two
+  facts requests, one for its calls and one for the rewrites (stamps)
+  they ask for, however many calls it has and whichever agent makes
+  them: three reads cost the main agent two requests where they cost
+  twelve, and a sub-agent two where they cost six. A call's verdict,
+  the stamp it runs with, the decision about that stamp and the batch
+  hold's reading of its siblings are one reading of the response. A
+  request that fails blocks every call of the response. A sub-agent's
+  question lets the reading go, so the calls after it are read again.
+
 ## v0.0.7 - 2026-10-09
 
 - Added: with `-executor`, the project's files are the executor's,

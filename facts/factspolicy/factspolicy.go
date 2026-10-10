@@ -36,11 +36,11 @@ const outside = "dax:outside-its-extension"
 // remote executor is cancelled with the decision and keeps its
 // deadline; a cancelled context is the claim's error and blocks the
 // call. The session's tools are the executor's stand-ins, which answer
-// every reading made while a decision about the call is in flight from
-// one reading taken under the context of the pin (internal/executor's
-// Set.Pin), so the engine's several readings of one call are one; a
-// call no decision has pinned, a sibling the batch hold reads, is read
-// under the context given here.
+// every reading made under a decision's context from its model
+// response's one reading (internal/executor's Set.PinBatch), so the
+// engine's several readings of one call, and its readings of the
+// call's siblings, are one; a call no batch holds is read under the
+// context given here.
 func Subjects(t agenttool.Tool, own []string) agentpolicy.Subjects {
 	if !agenttool.IsFactual(t) {
 		return nil

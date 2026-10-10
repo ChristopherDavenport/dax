@@ -12,7 +12,7 @@
 //
 // Bind turns an executor's tools into agenttool tools for the kit, each
 // an adapter whose every call goes through the executor, and keeps the
-// facts each decision read (Set.Pin).
+// facts each model response's decisions read (Set.PinBatch).
 package executor
 
 import (
@@ -45,6 +45,19 @@ type Executor interface {
 	Descriptor() workspace.Descriptor
 	// Close releases what the tools hold, once.
 	Close() error
+}
+
+// Batcher is an Executor that reads the facts claims of several calls
+// in one request, as a model response's calls arrive together. A Set
+// reads each response's calls through it when the executor is one
+// (Set.PinBatch), and reads them one by one through Facts when it is
+// not, as InProcess, which has no round trip to save, is not.
+type Batcher interface {
+	// BatchFacts is each call's facts claim, as Facts gives it: facts[i]
+	// and errs[i] are the claim and the claim's error for calls[i]. err
+	// is the request's: when it is set nothing was read, and every call
+	// of the batch is blocked.
+	BatchFacts(ctx context.Context, calls []Call) (facts []agenttool.Facts, errs []error, err error)
 }
 
 // Tool is one tool an executor runs, as the session sees it: what the
