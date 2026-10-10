@@ -395,7 +395,11 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	r.type_("n")
 	r.waitOutput("Reason for refusing")
 	r.type_("\r")
-	r.waitOutput("Question (1/1): read")
+	// The second question replaces the first in one frame when the
+	// first closes and the second opens between two renders, and the
+	// renderer then writes only the cells that changed: "read …" after
+	// the "Question (1/1): " already on the screen. Wait for that part.
+	r.waitOutput(`read {"path":".env"}`)
 	r.type_("n\r")
 	r.waitOutput("all done")
 	r.quit()
