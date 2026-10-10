@@ -68,13 +68,13 @@ Where dax does not keep to this yet, and what each needs:
 - The execution plane: `dax execute` serves the tools over stdio MCP
   and `-executor` (`agent.Options.Executor`, `executor.Remote`) runs a
   session's tools there, reading the project's files (AGENTS.md,
-  `.dax/skills`, `.dax/config.json`) through it, but a session with an
-  executor refuses MCP servers, which would run on this machine; facts
-  are read one request per reading, not batched per response, and the
-  project's files one request per stat, listing or read. An MCP stdio server starts in the workspace only when
-  the workspace can start a long-lived process with pipes
-  (`workspace.Starter`); in one that cannot, it starts where the turn
-  runs.
+  `.dax/skills`, `.dax/config.json`) through it, and starts the MCP
+  servers in it; the project's files are read one request per stat,
+  listing or read. An MCP stdio server starts in the workspace only
+  when the workspace can start a long-lived process with pipes
+  (`workspace.Starter`, which an executor's view is); in a workspace
+  that cannot, it starts where the turn runs, and with an executor
+  that cannot, it does not start.
 - Peers: a call to one is not linked in the caller's record as a
   sub-agent's session is, an abort does not cancel the remote task,
   and `front/a2a` has no authentication.
@@ -383,7 +383,8 @@ What is not equal yet, and why:
   `workspace.Starter`, over the process's pipes (the MCP SDK's
   `IOTransport`), at its root and with its environment; in a workspace
   that cannot start a process, it runs on this machine, with this
-  machine's environment scrubbed.
+  machine's environment scrubbed. An executor's view is a Starter, so
+  with `-executor` this machine never runs one.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
   `Store`: opening takes a lease, an append returns a new result, and a
@@ -497,8 +498,18 @@ session's close waits on a read in flight. `executor.Remote.Start` is
 their client: standard input is ordered write requests, standard
 output read requests, and standard error is read in the background
 into the start's stream. An executor without `start` is refused as
-unsupported, and nothing starts anywhere else. A session does not use
-it yet.
+unsupported, and nothing starts anywhere else. The session's view of
+the executor's workspace is a `workspace.Starter` over it, so with
+`-executor` every MCP server, configured or added with `/mcp add`,
+starts in the executor at its root, and one the executor cannot start
+fails (the session, or the `/mcp add`), saying to update `dax execute`,
+rather than start on this machine. Only control says which servers
+start: the user's config, the flags and `/mcp add`; a project's config
+may not name one, and the executor keeps no list. Their tools are
+the kit's MCP client's, which takes no facts claims, so they are
+decided by name under the user's rules (they ask by default), make no
+facts request of the executor, and are recorded here as on this
+machine.
 
 The facts of a model response's calls are read together
 for the decisions about them (`Set.PinBatch`): on the first reading,

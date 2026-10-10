@@ -111,11 +111,13 @@ type Options struct {
 	// workspace: their calls, facts and stamps are the executor's, and
 	// the session records its workspace. Setting both Executor and
 	// Workspace is an error. Every extension with Tools must be one the
-	// executor runs, no extension's matcher may give a served tool's
-	// subjects (the policy reads the executor only through the tools'
-	// facts), and MCP servers are refused, since they would run on
-	// this machine. The project's files are not read with one yet. It
-	// is the caller's to close, after the session.
+	// executor runs, and no extension's matcher may give a served
+	// tool's subjects (the policy reads the executor only through the
+	// tools' facts). MCP servers start in the executor (its workspace
+	// is a workspace.Starter there), and an executor that cannot start
+	// one fails them, never starting them here. The project's files
+	// are read through it. It is the caller's to close, after the
+	// session.
 	Executor *Executor
 	// Store records the session: a store the caller opened, which it
 	// closes after the session; a remote one (agentsession RFC 0003)
@@ -163,8 +165,9 @@ type Options struct {
 	// MCP are stdio MCP servers started with the session, each offering
 	// its tools as mcp__<Name>__<tool>. Each runs in the workspace when
 	// it can start a process (workspace.Starter), at its root and with
-	// its environment, and otherwise on this machine. Their stderr is
-	// dax's.
+	// its environment, and otherwise on this machine. With an Executor
+	// each runs in the executor, and one that cannot start a process
+	// fails the session. Their stderr is dax's, cleaned.
 	MCP []MCPServer
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
@@ -367,11 +370,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}
 	ws, ownWS := o.Workspace, false
 	if o.Executor != nil {
-		switch {
-		case ws != nil:
+		if ws != nil {
 			return nil, errors.New("both an executor and a workspace: the executor's tools act in its own")
-		case len(o.MCP) > 0:
-			return nil, errors.New("MCP servers cannot run with an executor yet: they would run on this machine, not where the tools act; remove them or the executor")
 		}
 		ws = o.Executor.Workspace()
 		// The project's files are read through the executor. One
@@ -782,9 +782,6 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
-	if s.opts.Executor != nil {
-		return "", errors.New("MCP servers cannot run with an executor yet: they would run on this machine, not where the tools act")
-	}
 	prefix, err := mcpPrefix(name)
 	if err != nil {
 		return "", err
@@ -1010,7 +1007,9 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 // workspace that can start a process (workspace.Starter) the server
 // runs there, at its root, with the workspace's environment, over the
 // process's pipes; in one that cannot, it runs on this machine
-// (mcpTransport), with env as its whole environment.
+// (mcpTransport), with env as its whole environment. An executor's
+// view is a Starter, so with -executor every server runs in the
+// executor or not at all.
 func mcpServer(ws workspace.Workspace, command string, env []string) (mcp.Transport, error) {
 	if _, ok := ws.(workspace.Starter); !ok {
 		return mcpTransport(command, env)

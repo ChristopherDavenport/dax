@@ -294,7 +294,7 @@ names the file and the field.
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
-| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools in `dax execute` started by that command, split on spaces (see below); not with `mcp_servers` |
+| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command, split on spaces (see below) |
 | `policy` | see below |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -458,7 +458,7 @@ started is refused; a write is at most 1 MiB and a read's reply at most
 64 KiB; standard error it holds unread is bounded, and past the bound
 dropped. When the session's connection closes, or a signal stops `dax
 execute`, every process it started for the session ends with it. A
-session does not use them yet.
+session started with `-executor` runs its MCP servers this way.
 
 With `-executor`, the session starts the command with this machine's
 environment less its credentials (the model's key's variable among
@@ -471,6 +471,20 @@ what the executor says it would touch; when the executor cannot say (its
 claim fails, a reading takes longer than 30 seconds, the executor is
 gone) the call is blocked, never allowed. The banner and the record name
 the executor's workspace, and the model is told its root.
+
+The MCP servers run in the sandbox too: every one in your config's
+`mcp_servers`, `-mcp` and `/mcp add` starts in `dax execute`, at its
+root and with the environment its commands get, never on this machine.
+Which servers start is yours alone to say: the executor keeps no list
+and reads no config, and a project's `.dax/config.json` may not name
+one. Their tools are `mcp__<name>__<tool>` as anywhere, decided here by
+name under your rules (they ask by default; an MCP server's tools make
+no claim of what they would touch), and recorded here. Their standard
+error comes back cleaned, and `/mcp remove`, the session's end or the
+executor's end stops them. An executor too old to start a process (dax
+v0.0.8 or earlier) fails a session that has an MCP server, and `/mcp
+add`, with "update dax execute where it runs"; the server is not started
+here in its place.
 
 The project's files are the executor's, read through it and not from
 this directory: the root's `AGENTS.md`, `.dax/skills` and
@@ -493,9 +507,6 @@ where it runs.
 
 What `-executor` does not do yet:
 
-- MCP servers: a session with `-executor` and any MCP server
-  (`mcp_servers`, `-mcp`, `/mcp add`) refuses to start, since the
-  server would run on this machine rather than where the tools act.
 - Only a command: an `http:`, `https:` or `unix:` address is refused.
 
 Standard output carries MCP and nothing else. While it serves,
@@ -1037,10 +1048,10 @@ interface, and the rest of dax cannot tell them apart:
   started in. Only when the workspace is that directory on this machine
   and dax started below its repository's root are the `AGENTS.md` files
   between the two read from this machine, screened the same way.
-- MCP stdio servers run in it when it is a `Starter` (`Local` is), at
-  its root and with its environment, and end with the session; in a
-  workspace that cannot start a process they run on this machine, with
-  its environment scrubbed.
+- MCP stdio servers run in it when it is a `Starter` (`Local` is, and
+  so is an executor's), at its root and with its environment, and end
+  with the session; in a workspace that cannot start a process they run
+  on this machine, with its environment scrubbed.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
@@ -1062,8 +1073,8 @@ What is not there yet:
   a program's to provide until agentworkspace ships one. `dax execute`
   serves the tools from inside a sandbox and `-executor`
   (`agent.Options.Executor`, `agent.DialExecutor`) runs a session's
-  tools there and reads the project's files through it, without MCP
-  servers yet.
+  tools and MCP servers there and reads the project's files through
+  it.
 - RFC 0003's client is not a drop-in `Store`: opening takes a lease,
   an append returns a different result, and a lost lease needs
   handling. `Options.Store` takes today's interface; the lease handling

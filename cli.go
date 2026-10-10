@@ -249,9 +249,6 @@ func run(ctx context.Context, args []string, p program) error {
 		wsRoot = dir
 	)
 	if settings.Executor != "" {
-		if len(settings.MCP) > 0 || *mcp != "" {
-			return errors.New("-executor: MCP servers cannot run with an executor yet, since they would run on this machine; leave out mcp_servers and -mcp, or clear the executor with -executor=''")
-		}
 		// The command that starts it gets this machine's environment
 		// without credentials, the model's key's variable among them.
 		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv})

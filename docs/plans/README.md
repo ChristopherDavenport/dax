@@ -64,10 +64,11 @@ After #35 and #36, in dax:
 
 What still touches the machine dax runs on, and belongs in the executor:
 MCP stdio servers in a workspace that cannot start a process (in one
-that can, `workspace.Starter`, they start there), which a session with
-`-executor` refuses. Project skills, AGENTS.md and the project config
-are read through the workspace, and with `-executor` through the
-executor, which serves its workspace's files read-only.
+that can, `workspace.Starter`, they start there; with `-executor` they
+start in the executor, or fail when it cannot). Project skills,
+AGENTS.md and the project config are read through the workspace, and
+with `-executor` through the executor, which serves its workspace's
+files read-only.
 
 ## Changes by repository
 
@@ -142,10 +143,11 @@ before the dax step that uses them, as the workspace's rules require.
      its session through dax-only JSON-RPC methods (`dax/process.*`,
      not tools), with `executor.Remote.Start` their client, **done**
      (branch `process-tunnel`, agenttool v0.0.21's `WithClientSetup`);
-     the session's executor view becoming a `workspace.Starter` over it,
-     so every configured server and `/mcp add` runs in the sandbox, is
-     next. Follow-up: an executor over an address rather than a
-     command.
+     the session's executor view is a `workspace.Starter` over it, so
+     every configured server and `/mcp add` runs in the sandbox and an
+     executor that cannot start one fails it, **done** (branch
+     `executor-mcp`). Follow-up: an executor over an address rather
+     than a command.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.
