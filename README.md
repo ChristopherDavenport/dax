@@ -576,8 +576,12 @@ a stamped call only if the line still analyses to that plan on those files.
 If a file, where a path leads (`notes.txt` is now a link to `.env`) or the
 repository's config changed in between, the call fails with "the command
 changed since it was allowed; ask again", and the original line is never
-run instead. Only dax can stamp a
-call; one the model stamps is refused. `ls` with a glob runs with the
+run instead. A line outside the subset that writes through a redirect
+(`echo x > notes`) is never auto-allowed, but once you approve it (or a
+rule allows it) it is stamped with the files its redirects write, and it
+runs as typed only while they are still those files: a target that
+became a link to `.env` after your yes is refused the same way. Only dax
+can stamp a call; one the model stamps is refused. `ls` with a glob runs with the
 expansion after a `--`, so a file called `-n` is a name.
 
 *Secret-looking files ask* (any case, and under any name: a link to one is
@@ -602,8 +606,15 @@ auto-allow environment, so the repository's `core.fsmonitor`, `hooksPath`,
 the key.
 
 A command outside the subset is still cut into its parts, so a deny or ask
-rule for `rm` reaches `git status; rm x`, a redirect to a file is shown as
-a write to its target, and the question names the part it is asking about.
+rule for `rm` reaches `git status; rm x`, a redirect to a file is decided
+as a write of the file it opens, and the question names the part it is
+asking about. The target is read as a file tool's path is: normalised from
+the directory the line is in (after a plain `cd DIR`, and from the root as
+well), and through its links, so `"deny": ["write(.env)"]` refuses
+`echo x > notes` when `notes` is a link to `.env`, and
+`cd sub && echo x > ../.env`. A target whose links the workspace cannot
+read, or that leads out of it, adds a subject no rule names; one bash
+expands (`$HOME/x`, `~/x`, a glob) is decided as its text.
 The cut is for the question and for deny and ask rules. Nothing is allowed
 because of it: a command outside the subset is allowed only by a bare
 `bash` allow rule or `"fallback": "allow"`. Inside the subset a command

@@ -5,6 +5,8 @@ import (
 	"crypto/hmac"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -30,9 +32,11 @@ const sentinel = "$(...) "
 //   - Any other command line is cut into the parts a rule can still
 //     name, so a deny or ask rule for rm reaches `git status; rm x`,
 //     and a sentinel subject is added, so no allow rule for a command
-//     ever covers it. The cut is for the question the user is asked and
-//     for deny and ask rules; it is a best-effort reading of bash, not
-//     a parser, and nothing is allowed because of it.
+//     ever covers it. A redirect to a file is a write of the file it
+//     opens, links followed (redirectCalls). The cut is for the question
+//     the user is asked and for deny and ask rules; it is a best-effort
+//     reading of bash, not a parser, and nothing is allowed because of
+//     it.
 //
 // A command with an unterminated quote is an error, which blocks the
 // call, and so are arguments with a key that is command or dax_stamp
@@ -53,12 +57,15 @@ func BashSubjects(f *Files, maxFile int64) agentpolicy.Subjects {
 
 // bashFacts is what a bash call would touch: the calls BashSubjects
 // describes, and, with stamp, the arguments the call runs with if the
-// policy allows it unasked (StampArgs). One analysis serves both, so the
-// stamp binds the facts the policy decides on: a second look could find
-// a path that became a link in between. The tool analyses the line
-// exactly as given, which Check trims of spaces and tabs only; a line
-// with other space at its ends (a newline) is outside the safe subset
-// as given, so it is never stamped, whatever its trimmed form is.
+// policy lets it run (stampWith): an auto-allowed line's plan stamp
+// (StampArgs), or, for a line outside the safe subset that writes
+// through a redirect, the stamp of the line and of where its redirects
+// lead (lineStamp). One analysis serves both, so the stamp binds the
+// facts the policy decides on: a second look could find a path that
+// became a link in between. The tool analyses the line exactly as
+// given, which Check trims of spaces and tabs only; a line with other
+// space at its ends (a newline) is outside the safe subset as given, so
+// it is never plan-stamped, whatever its trimmed form is.
 func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bool) (calls []agenttool.FactCall, rewrite json.RawMessage, err error) {
 	if err := exactKeys(args, "command", "dax_stamp"); err != nil {
 		return nil, nil, err
@@ -69,39 +76,170 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil, nil, err
 	}
-	mk := func(tool, field, match, text string) agenttool.FactCall {
-		a, _ := json.Marshal(map[string]string{field: match})
-		return agenttool.FactCall{Args: a, Tool: tool, Text: text}
+	calls, c, writes, err := bashCalls(ctx, an, in.Command)
+	if err != nil || !stamp {
+		return calls, nil, err
 	}
-	cmd := strings.TrimSpace(in.Command)
-	if cmd == "" {
-		return nil, nil, errors.New("command is empty")
-	}
-	c := an.Check(ctx, cmd)
-	if c.Parsed {
-		calls = parsedCalls(c)
-	} else {
-		calls = []agenttool.FactCall{}
-		parts, targets, _, err := splitShell(cmd)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, p := range parts {
-			calls = append(calls, mk("", "command", p, p))
-		}
-		for _, t := range targets {
-			calls = append(calls, mk("write", "path", t, t))
-		}
-		calls = append(calls, mk("", "command", sentinel+cmd, cmd))
-	}
-	if !stamp {
-		return calls, nil, nil
-	}
-	if strings.Trim(in.Command, " \t") != cmd {
+	if strings.Trim(in.Command, " \t") != strings.TrimSpace(in.Command) {
 		c = &Check{}
 	}
-	rewrite, err = stampWith(c, args)
+	line := ""
+	if writes {
+		line = lineStamp(in.Command, calls)
+	}
+	rewrite, err = stampWith(c, line, args)
 	return calls, rewrite, err
+}
+
+// bashCalls is the claim's calls for the bash line command, trimmed, and
+// the analysis they come from. A line in the safe subset is its stages
+// (parsedCalls). Any other line is the parts splitShell cuts it into,
+// what its redirects write (redirectCalls) and a subject no rule names;
+// writes says it has a redirect to a file, which makes its calls depend
+// on where the links on the way lead.
+func bashCalls(ctx context.Context, an *Analyzer, command string) (calls []agenttool.FactCall, c *Check, writes bool, err error) {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return nil, nil, false, errors.New("command is empty")
+	}
+	c = an.Check(ctx, cmd)
+	if c.Parsed {
+		return parsedCalls(c), c, false, nil
+	}
+	parts, targets, _, err := splitShell(cmd)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	calls = []agenttool.FactCall{}
+	for _, p := range parts {
+		calls = append(calls, mkCall("", "command", p, p))
+	}
+	calls = append(calls, redirectCalls(an.Files.view(), parts, targets)...)
+	calls = append(calls, mkCall("", "command", sentinel+cmd, cmd))
+	return calls, c, len(targets) > 0, nil
+}
+
+func mkCall(tool, field, match, text string) agenttool.FactCall {
+	a, _ := json.Marshal(map[string]string{field: match})
+	return agenttool.FactCall{Args: a, Tool: tool, Text: text}
+}
+
+// redirectCalls is what the redirects of a line outside the safe subset
+// write, each decided as the write tool's call on the file it opens, as
+// a file tool's path is (pathCalls): the name, normalised against the
+// workspace's root from the directory the line is in when it opens it,
+// and what the links on its way lead to, read through the workspace, so
+// `echo x > notes` is a write of .env when notes is a link to it.
+//
+// splitShell is a reader and not a shell, so where the line is is not
+// known for certain: a target is read from the root and from each
+// directory a plain `cd DIR` before it leads to, and is a write of
+// every name that gives. A cd in a pipe or a subshell may not hold, and
+// one with anything to expand is not followed; reading the root too
+// keeps the name the target had before any cd. A target bash expands
+// ($, a glob, ~) or one outside the workspace is its text, as it was. A
+// target whose links lead out of the workspace adds a write no rule
+// names; one whose links the workspace cannot read adds a subject no
+// rule names (unresolvedTool), so the call asks.
+func redirectCalls(v view, parts []string, targets []target) []agenttool.FactCall {
+	var calls []agenttool.FactCall
+	seen := map[string]bool{}
+	add := func(tool, p, text string) {
+		c := mkCall(tool, "path", p, text)
+		if k := tool + "\x00" + string(c.Args); !seen[k] {
+			seen[k] = true
+			calls = append(calls, c)
+		}
+	}
+	for _, t := range targets {
+		if strings.HasPrefix(t.text, "~") || strings.ContainsAny(t.text, "$`*?\\") {
+			add("write", t.text, t.text)
+			continue
+		}
+		for _, cwd := range cdDirs(v.dir, parts[:t.part]) {
+			text := t.text
+			if crel, ok := v.rel(cwd); ok && crel != "." && !filepath.IsAbs(t.text) {
+				text += " (from " + crel + ")"
+			}
+			name := t.text
+			if !filepath.IsAbs(name) {
+				name = filepath.Join(cwd, name)
+			}
+			rel, ok := v.rel(name)
+			if ok {
+				add("write", rel, text)
+			} else {
+				add("write", t.text, text)
+			}
+			switch to, r := v.reach(cwd, t.text); {
+			case r == inside && (!ok || to != rel):
+				add("write", to, text+" -> "+to)
+			case r == outside && ok:
+				add("write", sentinel+t.text, text+"  [a link on its way leads out of the workspace]")
+			case r == unknown:
+				if !ok {
+					rel = t.text
+				}
+				add(unresolvedTool, rel, text+"  [where its links lead cannot be read]")
+			}
+		}
+	}
+	return calls
+}
+
+// reach is where a redirect to p in the directory cwd, absolute in the
+// workspace's namespace, opens its file: from where cwd really is, its
+// links followed, then p's names one at a time, a ".." from where the
+// name before it leads, as the kernel takes them.
+func (v view) reach(cwd, p string) (string, reach) {
+	if filepath.IsAbs(p) {
+		for _, base := range []string{v.dir, v.real} {
+			if base == "" {
+				continue
+			}
+			if p == base || strings.HasPrefix(p, strings.TrimSuffix(base, string(filepath.Separator))+string(filepath.Separator)) {
+				return v.resolve(strings.TrimPrefix(p, base))
+			}
+		}
+		return "", outside
+	}
+	crel, ok := v.rel(cwd)
+	if !ok {
+		return "", outside
+	}
+	dir, r := v.resolve(crel)
+	if r != inside {
+		return "", r
+	}
+	return v.resolve(filepath.ToSlash(dir) + "/" + filepath.ToSlash(p))
+}
+
+// cdDirs are the directories, absolute in the workspace's namespace, a
+// line may be in after parts: root, and each one a part that is a plain
+// `cd DIR` leads to from the one before, as bash's cd takes DIR, with
+// its ".." taken off the names before it. A cd whose directory has
+// anything bash expands or quotes is not followed.
+func cdDirs(root string, parts []string) []string {
+	dirs := []string{root}
+	cur := root
+	for _, p := range parts {
+		f := strings.Fields(strings.TrimLeft(p, "({ \t"))
+		for len(f) > 0 && (f[0] == "then" || f[0] == "do" || f[0] == "else") {
+			f = f[1:]
+		}
+		if len(f) != 2 || f[0] != "cd" || strings.HasPrefix(f[1], "-") || strings.ContainsAny(f[1], "$`'\"\\~*?[]{}()") {
+			continue
+		}
+		if filepath.IsAbs(f[1]) {
+			cur = filepath.Clean(f[1])
+		} else {
+			cur = filepath.Join(cur, f[1])
+		}
+		if !slices.Contains(dirs, cur) {
+			dirs = append(dirs, cur)
+		}
+	}
+	return dirs
 }
 
 // parsedCalls is what a line in the safe subset would touch, from its
@@ -113,10 +251,7 @@ func bashFacts(ctx context.Context, an *Analyzer, args json.RawMessage, stamp bo
 // that analyses to nothing is no calls, which a policy refuses, and not
 // the call itself, which a rule could allow.
 func parsedCalls(c *Check) []agenttool.FactCall {
-	mk := func(tool, field, match, text string) agenttool.FactCall {
-		a, _ := json.Marshal(map[string]string{field: match})
-		return agenttool.FactCall{Args: a, Tool: tool, Text: text}
-	}
+	mk := mkCall
 	calls := []agenttool.FactCall{}
 	for _, st := range c.Stages {
 		calls = append(calls, mk("", "command", st.Match, st.Text))
@@ -149,7 +284,7 @@ func subjectsOf(calls []agenttool.FactCall) []agentpolicy.Subject {
 // subjects of a command that is asked about. It follows quotes,
 // $'...' strings, comments and the redirect forms, and reports
 // whether anything it cannot follow (substitution) was there.
-func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
+func splitShell(s string) (parts []string, redirects []target, opaque bool, err error) {
 	var cur strings.Builder
 	flush := func() {
 		if t := strings.TrimSpace(cur.String()); t != "" {
@@ -247,7 +382,7 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 				if i+1 < len(s) && s[i+1] == '>' {
 					i++
 				}
-				i, redirects = readTarget(s, i+1, redirects, &opaque)
+				i, redirects = readTarget(s, i+1, len(parts), redirects, &opaque)
 				break
 			}
 			flush()
@@ -284,7 +419,7 @@ func splitShell(s string) (parts, redirects []string, opaque bool, err error) {
 				i++
 			}
 			dropFD(&cur)
-			i, redirects = readTarget(s, i+1, redirects, &opaque)
+			i, redirects = readTarget(s, i+1, len(parts), redirects, &opaque)
 		default:
 			cur.WriteByte(c)
 		}
@@ -306,9 +441,18 @@ func dropFD(cur *strings.Builder) {
 	}
 }
 
+// target is a redirect's target as splitShell read it: its text, the
+// quotes at its ends taken off, and the number of parts before the one
+// it belongs to, which says which cds came before it.
+type target struct {
+	text string
+	part int
+}
+
 // readTarget reads the word after a redirect operator at s[i:], records
 // it unless it is /dev/null, and returns the index of its last byte.
-func readTarget(s string, i int, redirects []string, opaque *bool) (int, []string) {
+// part is the number of parts cut before it.
+func readTarget(s string, i, part int, redirects []target, opaque *bool) (int, []target) {
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
 		i++
 	}
@@ -333,16 +477,16 @@ func readTarget(s string, i int, redirects []string, opaque *bool) (int, []strin
 		}
 		i++
 	}
-	target := strings.Trim(s[start:i], `'"`)
+	text := strings.Trim(s[start:i], `'"`)
 	switch {
-	case target == "":
+	case text == "":
 		*opaque = true
-	case target == "/dev/null":
-	case strings.ContainsAny(target, "$`*?"):
+	case text == "/dev/null":
+	case strings.ContainsAny(text, "$`*?"):
 		*opaque = true
-		redirects = append(redirects, target)
+		redirects = append(redirects, target{text, part})
 	default:
-		redirects = append(redirects, target)
+		redirects = append(redirects, target{text, part})
 	}
 	return i - 1, redirects
 }
