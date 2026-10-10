@@ -379,6 +379,9 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 		{"it may not name an executor", func(t *testing.T) {
 			write(t, file, `{"executor":{"command":"ssh elsewhere dax execute"}}`)
 		}, "", box + "/.dax/config.json: executor: a project file may only tighten"},
+		{"it may not name an MCP server", func(t *testing.T) {
+			write(t, file, `{"mcp_servers":{"x":{"command":"touch started"}}}`)
+		}, "", "mcp_servers: a project file may only tighten"},
 		{"it may not allow", func(t *testing.T) { write(t, file, `{"policy":{"allow":["bash"]}}`) }, "", "may not allow anything"},
 		{"a link out of the executor's workspace", func(t *testing.T) {
 			must(t, os.Symlink(filepath.Join(outside, "config.json"), file))
@@ -416,7 +419,9 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 }
 
 // -executor refuses what it cannot do yet before it starts anything: an
-// address in place of a command, and an MCP server beside it.
+// address in place of a command. An MCP server beside it is no longer
+// refused: it starts in the executor, so the start gets as far as
+// dialing the executor.
 func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
 	home(t)
 	t.Chdir(t.TempDir())
@@ -427,7 +432,7 @@ func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
 	}{
 		{[]string{"-executor", "https://box.example:7000"}, "an executor over https is not supported yet"},
 		{[]string{"-executor", "unix:/run/dax.sock"}, "an executor over unix is not supported yet"},
-		{[]string{"-executor", "/nonexistent/dax execute", "-mcp", "/nonexistent/server"}, "MCP servers cannot run with an executor yet"},
+		{[]string{"-executor", "/nonexistent/dax execute", "-mcp", "/nonexistent/server"}, "-executor: executor:"},
 	} {
 		err := run(context.Background(), append(tc.args, "-sessions", "", "-p", "hi"), p)
 		if err == nil || !strings.Contains(err.Error(), tc.wants) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -557,9 +558,10 @@ func TestAnExecutorThatCannotAnswerBlocks(t *testing.T) {
 }
 
 // What a session with an executor refuses: a workspace beside it, an
-// MCP server (at start or added), an extension with tools the executor
-// does not run, and a matcher that would give a served tool's subjects
-// from this machine.
+// extension with tools the executor does not run, and a matcher that
+// would give a served tool's subjects from this machine. An MCP server,
+// configured or added, is not refused: it starts in the executor
+// (TestMCPServersRunInTheExecutor).
 func TestASessionWithAnExecutorRefuses(t *testing.T) {
 	ctx := context.Background()
 	box := newRemoteBox(t)
@@ -576,9 +578,6 @@ func TestASessionWithAnExecutorRefuses(t *testing.T) {
 			t.Cleanup(func() { ws.Close() })
 			o.Workspace = ws
 		}, "both an executor and a workspace"},
-		{"an MCP server", func(o *Options) {
-			o.MCP = []MCPServer{{Name: "fs", Command: os.Args[0]}}
-		}, "MCP servers cannot run with an executor"},
 		{"an extension the executor does not run", func(o *Options) {
 			o.Extensions = append(o.Extensions, extension.Extension{Name: "other", Tools: func(extension.ToolEnv) []agenttool.Tool { return nil }})
 		}, "the executor (dax box) does not run other"},
@@ -614,9 +613,6 @@ func TestASessionWithAnExecutorRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.AddMCP(ctx, "fs", os.Args[0]); err == nil || !strings.Contains(err.Error(), "MCP servers cannot run with an executor") {
-		t.Errorf("AddMCP: %v", err)
-	}
 	// The session leaves the caller's executor open.
 	s.Close()
 	if _, err := ex.r.Tools(ctx); err != nil {
@@ -674,10 +670,11 @@ func TestDialExecutorKeepsTheKeyHere(t *testing.T) {
 	}
 }
 
-// The view of the executor's workspace acts on nothing: it writes,
-// removes and runs nothing, here or in the executor, and is not a
-// Starter. Its files are the executor's, read-only.
-func TestTheExecutorsViewActsOnNothing(t *testing.T) {
+// The view of the executor's workspace writes, removes and runs no
+// command, here or in the executor; it is a Starter whose processes
+// start in the executor, at its root. Its files are the executor's,
+// read-only.
+func TestTheExecutorsViewOnlyReadsAndStarts(t *testing.T) {
 	ctx := context.Background()
 	box := newRemoteBox(t)
 	write(t, filepath.Join(box.dir, "AGENTS.md"), "remote\n")
@@ -695,8 +692,17 @@ func TestTheExecutorsViewActsOnNothing(t *testing.T) {
 	if _, err := v.Exec(ctx, workspace.Command{Args: []string{"touch", "y"}}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Errorf("Exec: %v", err)
 	}
-	if _, ok := v.(workspace.Starter); ok {
-		t.Error("the view is a Starter")
+	if _, err := os.Stat(filepath.Join(box.dir, "y")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Exec ran in the executor: %v", err)
+	}
+	p, err := workspace.Start(ctx, v, workspace.Command{Args: []string{"pwd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(p.Stdout())
+	p.Close()
+	if real, _ := filepath.EvalSymlinks(box.dir); err != nil || (strings.TrimSpace(string(out)) != box.dir && strings.TrimSpace(string(out)) != real) {
+		t.Errorf("started at %q (%v), want the executor's root %s", out, err, box.dir)
 	}
 	if data, err := fs.ReadFile(v.FS(), "AGENTS.md"); err != nil || string(data) != "remote\n" {
 		t.Errorf("read: %q %v", data, err)

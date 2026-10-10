@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,8 +17,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestMain lets the test binary be the MCP server the tests start: one
-// tool, leak, that says what its environment holds; or, with
+// TestMain lets the test binary be the MCP server the tests start: two
+// tools, leak, that says what its environment holds, and where, its
+// directory and process id; or, with
 // executorRoot set, `dax execute` over that directory.
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(executorRoot); dir != "" {
@@ -34,6 +36,12 @@ func TestMain(m *testing.M) {
 		mcp.AddTool(srv, &mcp.Tool{Name: "leak", Description: "report the environment"},
 			func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
 				text := "key=[" + os.Getenv("OPENAI_API_KEY") + "] token=[" + os.Getenv("MY_TOKEN") + "] plain=[" + os.Getenv("PLAIN") + "]"
+				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, struct{}{}, nil
+			})
+		mcp.AddTool(srv, &mcp.Tool{Name: "where", Description: "report where the server runs"},
+			func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+				wd, _ := os.Getwd()
+				text := "dir=[" + wd + "] pid=[" + strconv.Itoa(os.Getpid()) + "]"
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, struct{}{}, nil
 			})
 		if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {

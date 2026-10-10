@@ -7,6 +7,22 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: with `-executor`, MCP servers run in the sandbox. Every server
+  in `mcp_servers`, `-mcp` and `/mcp add` starts in `dax execute`, at
+  its root and with the environment its commands get, over the process
+  methods; it used to be refused, since it would have run on this
+  machine. Only your config, the flags and `/mcp add` say which servers
+  start: a project's config still may not name one, and the executor
+  keeps no list. Their tools are `mcp__<name>__<tool>` as anywhere,
+  asked about by default under your rules, recorded here, and make no
+  facts request of the executor; their standard error comes back
+  cleaned, and `/mcp remove` or the session's end stops them. An
+  executor too old to start a process (dax v0.0.8 or earlier) fails a
+  session with an MCP server, and `/mcp add`, with "update dax execute
+  where it runs", and the server is not started here instead.
+- Changed: `agent.Executor.Workspace` is a `workspace.Starter` whose
+  `Start` starts the process in the executor, and `agent.Options` no
+  longer refuses `MCP` beside `Executor`, nor `Session.AddMCP` with one.
 - Added: `dax execute` starts a process for the session that asks, one
   that lives longer than a call with pipes to it, through custom
   JSON-RPC methods (`dax/process.start`, `.write`, `.read`,
@@ -17,8 +33,8 @@ versions may break flags and the config file.
   command. A session's processes are its own (another session's id is
   refused), at most 32 at once, with writes of at most 1 MiB, reads of
   at most 64 KiB and standard error bounded, and they end with the
-  session's connection and at a signal to `dax execute`. Nothing uses
-  them yet; MCP servers with `-executor` are the next step.
+  session's connection and at a signal to `dax execute`. A session
+  with `-executor` runs its MCP servers this way.
 - Changed: agenttool, mcpclient and mcpserver v0.0.21, for
   `mcpclient.WithClientSetup`, with which the executor's client
   registers the process methods.

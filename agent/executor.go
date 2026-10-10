@@ -71,7 +71,7 @@ func connectExecutor(ctx context.Context, t mcp.Transport, name, version string)
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{r: r, view: &executorView{d: r.Descriptor(), fsys: r.FS()}}, nil
+	return &Executor{r: r, view: &executorView{d: r.Descriptor(), fsys: r.FS(), r: r}}, nil
 }
 
 // Server is the name and version the executor gave, its program's.
@@ -83,8 +83,12 @@ func (e *Executor) Server() (name, version string) { return e.r.Server() }
 // confined to its workspace as its tools' reads are. The session reads
 // the project's AGENTS.md and .dax/skills through it, and a program
 // reads the project's .dax/config.json through it as dax's command
-// line does. It cannot write, remove or run anything, and is not a
-// workspace.Starter; the tools do that in the executor.
+// line does. It cannot write, remove or run a command; the tools do
+// that in the executor. It is a workspace.Starter whose Start starts
+// the process in the executor (`dax execute`'s process methods), so
+// the session's MCP servers run there, where the tools act; an
+// executor that cannot start one (an older dax execute) refuses, and
+// nothing starts on this machine in its place.
 func (e *Executor) Workspace() workspace.Workspace { return e.view }
 
 // Close ends the calls in flight and the connection, which stops the
@@ -108,13 +112,15 @@ var errViewOnly = fmt.Errorf("the tools act in the executor, not through this vi
 
 // executorView is an executor's workspace as the session holds it:
 // the root and descriptor it records and tells the model, the files it
-// reads through the executor, and nothing to act with.
+// reads through the executor, and processes it starts there; nothing
+// else to act with.
 type executorView struct {
 	d    workspace.Descriptor
 	fsys fs.FS
+	r    *executor.Remote
 }
 
-var _ workspace.Workspace = (*executorView)(nil)
+var _ workspace.Starter = (*executorView)(nil)
 
 func (v *executorView) Root() string                     { return v.d.Root }
 func (v *executorView) FS() fs.FS                        { return v.fsys }
@@ -130,6 +136,14 @@ func (v *executorView) Remove(context.Context, string) error { return errViewOnl
 
 func (v *executorView) Exec(context.Context, workspace.Command) (*workspace.Output, error) {
 	return nil, errViewOnly
+}
+
+// Start starts cmd in the executor, at its root, with its environment
+// and cmd's: an MCP server the user configured or added. An executor
+// without the process methods refuses it, as unsupported, with what to
+// do; it is never started here instead.
+func (v *executorView) Start(ctx context.Context, cmd workspace.Command) (workspace.Process, error) {
+	return v.r.Start(ctx, cmd)
 }
 
 // keepOpen is an executor the session runs its tools through and does
