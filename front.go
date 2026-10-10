@@ -1,18 +1,19 @@
 package dax
 
 // This file is the seam where the front is chosen. A front is the human
-// plane of a session: it drives the session's agent.Turn (prompt,
-// steer, answer, abort, the run's events and the questions asked while
-// a call runs), uses dax's own agent.Controls for its slash commands
-// and start lines, and may follow the session's record. Everything
-// below a front, the policy, the tools, the recording, is the agent
-// package's and does not know which front holds it; a front over a
-// wire to a remote session would hold the same Turn.
+// plane of a session: it drives the session as agentturn's control
+// contract (prompt, queue, resume with answers, abort, the run's events
+// and the questions asked while a call runs, answered with Reply), uses
+// dax's own agent.Controls for its slash commands and start lines, and
+// may follow the session's record. Everything below a front, the
+// policy, the tools, the recording, is the agent package's and does not
+// know which front holds it; a front over a wire to a remote session
+// would hold the same contract.
 //
 // There are three: the terminal client (tui.go, agentconsole's console,
-// a view of the record, over glue that presents the Turn as
-// agentconsole's client.Backend), the default when standard input and
-// output are a terminal; the REPL, which has the slash commands; and
+// a view of the record and the session's events that sends what the
+// user asks to the session as intents), the default when standard input
+// and output are a terminal; the REPL, which has the slash commands; and
 // print, which is -p and an autonomous controller (agent.Drive) whose
 // rules ask on standard input. A new front implements front and gets a
 // case in selectFront. The renderer of the agent's events,
@@ -25,12 +26,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 	"golang.org/x/term"
@@ -73,11 +77,11 @@ type frontInfo struct {
 type front interface {
 	// Prepare says where the session's notes go: a front that takes the
 	// screen holds them back until it gives it up. It is not how
-	// questions reach the user; those come through the Backend.
+	// questions reach the user; those are the session's events.
 	Prepare(o *agent.Options)
 	// Run drives the session until the user is done: the REPL and print
-	// through its Turn and Controls alone, the terminal client through
-	// the glue that shows it in agentconsole.
+	// through its control contract and Controls alone, the terminal
+	// client as agentconsole's source of events and its controller.
 	Run(ctx context.Context, sess *agent.Session) error
 }
 
@@ -142,10 +146,10 @@ type printFront struct {
 }
 
 func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
-	return f.run(ctx, sess.Turn(), sess)
+	return f.run(ctx, sess, sess)
 }
 
-func (f *printFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) error {
+func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
 	abortOnInterrupt(t)
 	showAssembly(ctl.Info())
@@ -157,11 +161,15 @@ func (f *printFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) 
 				fmt.Println()
 				return false, ""
 			}
-			return yes(f.in.Text()), ""
+			return answerLine(f.in.Text())
 		},
-		Reply: func(q agent.Question) agent.Reply {
+		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
-			return agent.Reply{Accept: f.in.Scan() && yes(f.in.Text())}
+			if !f.in.Scan() {
+				fmt.Println()
+				return agenttool.Answer{Action: agenttool.ActionDecline}
+			}
+			return replyOf(f.in.Text())
 		},
 		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
 	}
@@ -196,10 +204,12 @@ type result struct {
 }
 
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
-	return f.run(ctx, sess.Turn(), sess)
+	// The REPL answers the questions asked while a call runs.
+	defer sess.Answering()()
+	return f.run(ctx, sess, sess)
 }
 
-func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) error {
+func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
 	abortOnInterrupt(t)
 	info := ctl.Info()
@@ -215,14 +225,23 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 	}
 	showAssembly(info)
 	showPending(t, "resumed")
-	questions := make(chan agent.Question)
-	defer t.Questions(func(q agent.Question) {
-		go func() {
+	// The questions asked and closed while a call runs, in order, off
+	// the loop's goroutine.
+	var qmu sync.Mutex
+	var qevents []agentturn.Event
+	questions := make(chan struct{}, 1)
+	defer t.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		switch ev.(type) {
+		case *agentturn.Question, *agentturn.QuestionClosed:
+			qmu.Lock()
+			qevents = append(qevents, ev)
+			qmu.Unlock()
 			select {
-			case questions <- q:
-			case <-q.Done:
+			case questions <- struct{}{}:
+			default:
 			}
-		}()
+		}
+		return nil
 	})()
 	lines := make(chan string)
 	go func() {
@@ -261,14 +280,37 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 		answers = nil
 		next()
 	}
+	// takeQuestions puts the questions asked since it last ran on the
+	// lines waited for, and drops those closed meanwhile.
+	takeQuestions := func() {
+		qmu.Lock()
+		evs := qevents
+		qevents = nil
+		qmu.Unlock()
+		for _, ev := range evs {
+			switch e := ev.(type) {
+			case *agentturn.Question:
+				asks = append(asks, waiting{q: questionText(*e), question: e.ID})
+				if len(asks) == 1 {
+					next()
+				}
+			case *agentturn.QuestionClosed:
+				// Answered, or given up by the call that asked it (an
+				// abort): it no longer waits on a line.
+				if i := slices.IndexFunc(asks, func(w waiting) bool { return w.question == e.ID }); i >= 0 {
+					asks = slices.Delete(asks, i, i+1)
+					if i == 0 && len(asks) > 0 {
+						next()
+					}
+				}
+			}
+		}
+	}
 	prompt()
 	for {
 		select {
-		case q := <-questions:
-			asks = append(asks, waiting{q: questionText(q), question: q.ID})
-			if len(asks) == 1 {
-				next()
-			}
+		case <-questions:
+			takeQuestions()
 		case r := <-done:
 			running = false
 			switch {
@@ -290,7 +332,7 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 					fmt.Fprintln(os.Stderr, h)
 				}
 			case r.end.Reason == agentturn.ReasonInputRequired:
-				if perms := t.Permissions(r.end); len(perms) > 0 {
+				if perms := agent.PermissionsOf(t, r.end); len(perms) > 0 {
 					ask(perms)
 					continue
 				}
@@ -309,17 +351,25 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 				return nil
 			}
 			line = strings.TrimSpace(line)
+			// A question asked before the line was read is what the
+			// line answers, not a run to steer.
+			takeQuestions()
 			if len(asks) > 0 {
 				a := asks[0]
 				asks = asks[1:]
+				allow, note := answerLine(line)
 				switch {
 				case a.question != "":
-					t.Reply(a.question, agent.Reply{Accept: yes(line)})
-				case yes(line):
-					answers = append(answers, agentturn.Approve(a.call.CallID).WithBy(agentpolicy.ByHuman))
+					t.Reply(a.question, replyOf(line))
+				case allow:
+					ans := agentturn.Approve(a.call.CallID).WithBy(agentpolicy.ByHuman)
+					if note != "" {
+						ans = ans.WithNote(note)
+					}
+					answers = append(answers, ans)
 				default:
 					fmt.Printf("  ✗ %s denied\n", render.Clean(a.call.Name))
-					answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(a.call.CallID, deniedOutput)).WithBy(agentpolicy.ByHuman))
+					answers = append(answers, agent.Refusal(a.call.CallID, note))
 				}
 				if len(asks) > 0 {
 					next()
@@ -330,11 +380,11 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 					answers, steerText = nil, ""
 					start(func() (*agentturn.RunEnd, error) {
 						if text != "" {
-							if err := t.Steer(ctx, openresponses.UserText(text)); err != nil {
+							if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 								return nil, err
 							}
 						}
-						return t.Answer(ctx, give...)
+						return t.Resume(ctx, give...)
 					})
 				}
 				prompt()
@@ -366,7 +416,7 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 			}
 			text := userText(line)
 			if running {
-				if err := t.Steer(ctx, openresponses.UserText(text)); err != nil {
+				if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				} else {
 					fmt.Println("[queued as steering]")
@@ -379,9 +429,6 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 	}
 }
 
-// deniedOutput is what the model is told of a call the user refused.
-const deniedOutput = "Error: the user denied this call."
-
 // question is what the user is asked about a call the policy asked
 // about.
 func question(c *openresponses.FunctionCall, reason string) string {
@@ -393,16 +440,38 @@ func question(c *openresponses.FunctionCall, reason string) string {
 
 // questionText is what the user is asked of a question a running call
 // asked: a sub-agent's call the policy asks about, or a tool's own.
-func questionText(q agent.Question) string {
-	if q.Call != nil {
-		return question(q.Call, q.Text)
+func questionText(q agentturn.Question) string {
+	if c := q.Call; c != nil {
+		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, q.Elicitation.Message)
 	}
-	return "? " + render.Clean(q.Text) + " [y/N] "
+	return "? " + render.Clean(q.Elicitation.Message) + " [y/N] "
 }
 
-func yes(s string) bool {
-	a := strings.ToLower(strings.TrimSpace(s))
-	return a == "y" || a == "yes"
+// answerLine reads the user's answer to a question: y or yes allows,
+// anything else refuses, and what follows the first word (or the whole
+// line, for a refusal that does not start with n or no) is what the user
+// said with it, which the model is told.
+func answerLine(line string) (allow bool, note string) {
+	line = strings.TrimSpace(line)
+	word, rest, _ := strings.Cut(line, " ")
+	word = strings.TrimRight(strings.ToLower(word), ",:;.")
+	rest = strings.TrimSpace(rest)
+	switch word {
+	case "y", "yes":
+		return true, rest
+	case "n", "no", "":
+		return false, rest
+	}
+	return false, line
+}
+
+// replyOf is a line's answer to a question asked while a call runs.
+func replyOf(line string) agenttool.Answer {
+	allow, note := answerLine(line)
+	if allow {
+		return agenttool.Answer{Action: agenttool.ActionAccept, Note: note}
+	}
+	return agenttool.Answer{Action: agenttool.ActionDecline, Note: note}
 }
 
 func openSession(ctx context.Context, opts agent.Options, resume string) (*agent.Session, error) {
@@ -414,7 +483,7 @@ func openSession(ctx context.Context, opts agent.Options, resume string) (*agent
 
 // abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
 // or one while idle, exits.
-func abortOnInterrupt(t agent.Turn) {
+func abortOnInterrupt(t agentturn.Control) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -430,7 +499,7 @@ func abortOnInterrupt(t agent.Turn) {
 
 // ended says what a run's end leaves the user to know: the calls an
 // abort cut off, which the next prompt answers, and why a run stopped.
-func ended(t agent.Turn, end *agentturn.RunEnd) {
+func ended(t agentturn.Control, end *agentturn.RunEnd) {
 	switch end.Reason {
 	case agentturn.ReasonAborted:
 		showPending(t, "aborted")
@@ -473,7 +542,7 @@ func showAssembly(info agent.Info) {
 
 // showPending tells the user which calls are unanswered and why, since
 // the next prompt answers them in those terms.
-func showPending(t agent.Turn, why string) {
+func showPending(t agentturn.Control, why string) {
 	pending := t.State().Pending
 	if len(pending) == 0 {
 		return

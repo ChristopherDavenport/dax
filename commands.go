@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -58,7 +59,7 @@ type commandResult struct {
 // either way. The output and the error are cleaned, since a tool's or a
 // server's name, or a server's complaint, may carry what a terminal
 // would act on.
-func command(ctx context.Context, t agent.Turn, ctl agent.Controls, line string, running bool) (commandResult, error) {
+func command(ctx context.Context, t agentturn.Control, ctl agent.Controls, line string, running bool) (commandResult, error) {
 	r, err := runCommand(ctx, t, ctl, line, running)
 	r.out = render.Clean(r.out)
 	if err != nil {
@@ -67,7 +68,7 @@ func command(ctx context.Context, t agent.Turn, ctl agent.Controls, line string,
 	return r, err
 }
 
-func runCommand(ctx context.Context, t agent.Turn, ctl agent.Controls, line string, running bool) (commandResult, error) {
+func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, line string, running bool) (commandResult, error) {
 	name, arg, _ := strings.Cut(line, " ")
 	arg = strings.TrimSpace(arg)
 	idle := func() error {
@@ -91,7 +92,7 @@ func runCommand(ctx context.Context, t agent.Turn, ctl agent.Controls, line stri
 		if arg == "" {
 			return commandResult{}, errors.New("usage: /follow <text>")
 		}
-		if err := t.FollowUp(ctx, openresponses.UserText(arg)); err != nil {
+		if err := t.Queue(ctx, agentturn.QueueFollowUp, openresponses.UserText(arg)); err != nil {
 			return commandResult{}, err
 		}
 		if running {

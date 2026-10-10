@@ -9,18 +9,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
-// The human plane is an interface: a controller that holds nothing but
-// the session's Turn, in a goroutine of its own and with no front
+// The human plane is agentturn's control contract: a controller that
+// holds nothing but it, in a goroutine of its own and with no front
 // attached, drives a session end to end. It answers by rule the
 // permission a run stops on and the question a sub-agent's call asks
 // while it runs, and the work both were about is done.
-func TestAControllerHoldingOnlyTheTurnDrivesASession(t *testing.T) {
+func TestAControllerHoldingOnlyTheControlDrivesASession(t *testing.T) {
 	ctx := context.Background()
 	model := &twoModels{
 		parent: scripted{calls: [][2]string{
@@ -37,7 +38,7 @@ func TestAControllerHoldingOnlyTheTurnDrivesASession(t *testing.T) {
 	}
 	defer s.Close()
 
-	var turn Turn = s.Turn()
+	var turn agentturn.Control = s
 	var mu sync.Mutex
 	var permitted, replied []string
 	type result struct {
@@ -47,25 +48,31 @@ func TestAControllerHoldingOnlyTheTurnDrivesASession(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		// Every question asked while a call runs is allowed.
-		defer turn.Questions(func(q Question) {
+		defer s.Answering()()
+		defer turn.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+			q, ok := ev.(*agentturn.Question)
+			if !ok {
+				return nil
+			}
 			go func() {
 				mu.Lock()
-				replied = append(replied, q.Call.Name+" "+q.Call.Arguments)
+				replied = append(replied, q.Call.Name+" "+string(q.Call.Args))
 				mu.Unlock()
-				turn.Reply(q.ID, Reply{Accept: true})
+				turn.Reply(q.ID, agenttool.Answer{Action: agenttool.ActionAccept})
 			}()
+			return nil
 		})()
 		// Every call the policy asks about is allowed.
 		end, err := turn.Prompt(ctx, openresponses.UserText("go"))
 		for err == nil && end.Reason == agentturn.ReasonInputRequired {
 			var answers []agentturn.Answer
-			for _, p := range turn.Permissions(end) {
+			for _, p := range PermissionsOf(turn, end) {
 				mu.Lock()
 				permitted = append(permitted, p.Call.Name+" "+p.Call.Arguments)
 				mu.Unlock()
 				answers = append(answers, agentturn.Approve(p.Call.CallID))
 			}
-			end, err = turn.Answer(ctx, answers...)
+			end, err = turn.Resume(ctx, answers...)
 		}
 		done <- result{end, err}
 	}()

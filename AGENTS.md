@@ -41,11 +41,12 @@ before changing the shape.
   settings choose, then one front. `execute.go`: `execute`, the
   extensions' tools served over stdio MCP (`executor.NewServer`), with
   flags of its own and no config read. `front.go`: the `front` interface,
-  `selectFront`, the REPL and print fronts, which drive the session's
-  `agent.Turn`. `tui.go`: the terminal client, agentconsole's
-  `console.Run`, the default front on a terminal; `tuiadapter.go`: the
-  glue that presents the Turn as agentconsole's `client.Backend` over
-  the session's one agent, with what it fakes listed at its top.
+  `selectFront`, the REPL and print fronts, which drive the session as
+  agentturn's control contract. `tui.go`: the terminal client,
+  agentconsole's `console.Run`, the default front on a terminal: the
+  session's record (`client.RecordOf`) and the session as its source of
+  events in, and the session as its controller (`client.Direct`) for
+  the intents it sends out.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it) and `Renderers`.
@@ -53,10 +54,13 @@ before changing the shape.
   extensions and their checks (`agent/extension.go`), the policy built
   from them, the sub-agents' policy hook, and the session-store
   helpers. It names no tool. `agent/plane.go`: the human plane, the
-  session's one agent as `Turn` (the contract dax proposes for
-  agentturn), its questions hub, `Controls`, and `Drive`, the controller
-  that answers by rule. Nothing asks a front through a hook: a new
-  question goes through the Turn.
+  session as `agentturn.Control` over agentkit's `Kit.Control` with
+  dax's controller rules on top (`ErrHeld`, the calls an abort left
+  answered on the next prompt, the questions no front here can answer
+  not asked, `Answering`), `Permissions`, `Controls`, and `Drive`, the
+  controller that answers by rule. Nothing asks a front through a hook:
+  a new question is an `agentturn.Question` event, answered with
+  `Reply`.
 - `policy`: generic. Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern

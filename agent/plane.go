@@ -1,20 +1,19 @@
 package agent
 
-// This file is the session's human or autonomous plane: the Turn a
-// front, a controller or (later) a wire drives, dax's own controls
-// beside it, and Drive, a controller that answers by rule.
+// This file is the session's human or autonomous plane: the session as
+// agentturn's control contract, which a front, a controller or a wire
+// drives, dax's own controls beside it, and Drive, a controller that
+// answers by rule.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/ChristopherDavenport/agentkit"
-	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
@@ -27,67 +26,33 @@ import (
 
 // ErrHeld is what Prompt returns while calls a stopped session held for
 // approval wait for an answer: nobody has said whether they may run, so
-// they are answered first, with Answer, and the prompt goes in as a
+// they are answered first, with Resume, and the prompt goes in as a
 // steer of that run (Drive does both).
 var ErrHeld = errors.New("calls held for approval when the session stopped wait for an answer")
 
-// Turn is a session's agent as its human or autonomous plane drives it,
-// in agentturn's own terms: prompt, steer, answer, abort, and the
-// events of each run. A person at a front and a controller that answers
-// by rule (Drive) hold the same Turn; a wire to a remote front would
-// carry it. It is the shape dax proposes for agentturn, beside its A2A
-// and Responses fronts, and the Session is its in-process
-// implementation: the case with the wire left out.
+// The Session is its agent as agentturn's control contract, the human
+// or autonomous plane a front, a controller that answers by rule
+// (Drive) or a wire holds: the kit's control of the agent
+// (agentkit.Control: the run context, the engine's release of held
+// calls, the queued entries, the questions as events, the head move)
+// with dax's own rules as a controller on top:
 //
-// It differs from agentturn.Agent where a human plane needs more than
-// the loop: Answer puts the answers through the policy engine, which
-// releases the calls it only held beside the ones it asked about;
-// Prompt and Answer answer for the calls an abort or a restart left
-// unanswered; and questions asked while a call runs (a sub-agent's call
-// the policy asks about, a tool's own question) come to the Turn's
-// holder, not to a hook the session was built with.
-type Turn interface {
-	// Prompt appends items and runs until the agent is idle. The calls
-	// an abort or a restart left unanswered are answered ahead of the
-	// items with what is known of them (cut off and may have run; never
-	// reached its tool), in the same model call. While calls a stopped
-	// session held for approval wait, it returns ErrHeld.
-	Prompt(ctx context.Context, items ...openresponses.Item) (*agentturn.RunEnd, error)
-	// Answer answers the calls a run left pending and runs on: the
-	// reply to a permission. It is agentturn.Agent's Resume with the
-	// policy engine between: a call the engine only held is released
-	// with the batch, and a call that waits on no one is answered with
-	// what is known of it. It is named for what the human plane does,
-	// answering, where Resume names what the loop does.
-	Answer(ctx context.Context, answers ...agentturn.Answer) (*agentturn.RunEnd, error)
-	// Permissions are the calls a run that ended for input left for a
-	// person, each with the policy's question: not the calls the engine
-	// holds beside them, which Answer releases.
-	Permissions(end *agentturn.RunEnd) []Permission
-	// Steer queues items into the run in flight, after its tool batch,
-	// or into the next run; FollowUp queues them for when a run would
-	// otherwise end. Both are written to the session as queued entries
-	// before they return.
-	Steer(ctx context.Context, items ...openresponses.Item) error
-	FollowUp(ctx context.Context, items ...openresponses.Item) error
-	// Abort cancels the run in flight.
-	Abort()
-	// State is a snapshot: the transcript, the pending calls, whether a
-	// run goes.
-	State() agentturn.State
-	// Subscribe delivers the agent's events, in order, on the loop's
-	// goroutine, as agentturn.Agent.Subscribe does.
-	Subscribe(fn func(context.Context, agentturn.Event) error) (unsubscribe func())
-	// Questions delivers each question asked while a call runs, and the
-	// ones already waiting when it is called. fn must return at once;
-	// Reply answers. With no one subscribed a question is not asked: a
-	// sub-agent's call is refused with a note to make it from the main
-	// agent, and a tool's question is cancelled.
-	Questions(fn func(Question)) (unsubscribe func())
-	// Reply answers a question. A question no longer waiting is an
-	// error.
-	Reply(id string, r Reply) error
-}
+//   - Prompt answers the calls an abort or a restart left unanswered
+//     ahead of its items, with what is known of them (cut off and may
+//     have run; never reached its tool), in the same model call, and
+//     refuses with ErrHeld while calls a stopped session held for
+//     approval wait;
+//   - Resume answers a pending call no one waits on (one an abort cut
+//     off) the same way, beside the answers it is given;
+//   - a question no front here can answer is not asked: a form or a
+//     page to visit is cancelled, and noted, and with no front
+//     answering questions (Answering) a tool's question is cancelled and
+//     a sub-agent's call the policy asks about is refused with a note
+//     to make it from the main agent.
+//
+// Questions asked while a call runs are agentturn.Question events,
+// answered with Reply; what the user says with an answer is its Note.
+var _ agentturn.Control = (*Session)(nil)
 
 // Permission is a call a run left for a person to answer.
 type Permission struct {
@@ -98,34 +63,9 @@ type Permission struct {
 	Reason string
 }
 
-// Question is asked while a call runs, and the call waits for the
-// reply.
-type Question struct {
-	ID string
-	// Call is the call it is about, a sub-agent's; nil for a tool's own
-	// question.
-	Call *openresponses.FunctionCall
-	Text string
-	// Done is closed when the question no longer waits: answered, or
-	// given up by the call that asked it (an abort).
-	Done <-chan struct{}
-}
-
-// Reply answers a Question: Accept allows the call or says yes; Note is
-// what the person typed with it, a refusal's reason.
-type Reply struct {
-	Accept bool
-	Note   string
-}
-
-var _ Turn = (*Session)(nil)
-
-// Turn is the session's Turn.
-func (s *Session) Turn() Turn { return s }
-
-// Agent is the session's one agent, for a view that needs it: the
-// terminal client's backend (agentconsole's native) takes the agent to
-// follow. Drive the session through its Turn.
+// Agent is the session's one agent, for what the control contract does
+// not carry: its configuration. Drive the session through the Session
+// itself, whose rules a run on the agent would go around.
 func (s *Session) Agent() *agentturn.Agent { return s.ag }
 
 // Record is the store the session is written to, as a view follows it
@@ -137,31 +77,20 @@ func (s *Session) Record() agentsession.Follower {
 	return f
 }
 
+// Recorder is the recorder writing the session, for a view that follows
+// it (agentconsole's client.RecordOf).
+func (s *Session) Recorder() *session.Recorder { return s.Kit.Recorder() }
+
 // RunContext puts on ctx what the kit expects of a run it records: its
-// recorder, the session's ID for the model calls, and the session for
-// memory a run writes. Prompt and Answer use it; a view that starts a
-// run of its own (the terminal client's head move) does too.
-func (s *Session) RunContext(ctx context.Context) context.Context {
-	rec := s.Kit.Recorder()
-	if rec == nil {
-		return ctx
-	}
-	ctx = agentkit.ContextWithRecorder(ctx, rec)
-	ctx = session.ContextWithSessionID(ctx, rec.SessionID())
-	return agentmemory.WithSession(ctx, rec.SessionID())
-}
+// recorder, the session's ID for the model calls, the session for
+// memory a run writes and the reasoning attribution of the branch the
+// head was last moved to (agentkit.Control.RunContext). Prompt and
+// Resume use it.
+func (s *Session) RunContext(ctx context.Context) context.Context { return s.ctl.RunContext(ctx) }
 
-// ended keeps how the last run ended, which Answer gives the engine.
-func (s *Session) ended(end *agentturn.RunEnd) {
-	if end == nil {
-		return
-	}
-	s.mu.Lock()
-	s.lastEnd = end
-	s.mu.Unlock()
-}
-
-// Prompt implements Turn.
+// Prompt implements agentturn.Control, answering the calls an abort or
+// a restart left unanswered first and refusing with ErrHeld while held
+// calls wait.
 func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*agentturn.RunEnd, error) {
 	pending := s.ag.State().Pending
 	if slices.ContainsFunc(pending, held) {
@@ -171,14 +100,14 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	for _, p := range pending {
 		outs = append(outs, openresponses.NewFunctionCallOutput(p.Call.CallID, output(p)))
 	}
-	end, err := s.ag.Prompt(s.RunContext(ctx), append(outs, items...)...)
-	s.ended(end)
-	return end, err
+	return s.ctl.Prompt(ctx, append(outs, items...)...)
 }
 
-// Answer implements Turn.
-func (s *Session) Answer(ctx context.Context, answers ...agentturn.Answer) (*agentturn.RunEnd, error) {
-	ctx = s.RunContext(ctx)
+// Resume implements agentturn.Control: the answers go through the
+// kit's engine, which releases the calls it only held beside the ones
+// asked about, and a pending call no one waits on is answered with
+// what is known of it.
+func (s *Session) Resume(ctx context.Context, answers ...agentturn.Answer) (*agentturn.RunEnd, error) {
 	given := map[string]bool{}
 	for _, a := range answers {
 		given[a.CallID] = true
@@ -188,187 +117,89 @@ func (s *Session) Answer(ctx context.Context, answers ...agentturn.Answer) (*age
 			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))))
 		}
 	}
-	if eng := s.Kit.Engine(); eng != nil {
-		s.mu.Lock()
-		end := s.lastEnd
-		s.mu.Unlock()
-		// An end none of the answers is about is another run's.
-		if end != nil && !slices.ContainsFunc(answers, func(a agentturn.Answer) bool {
-			return slices.ContainsFunc(end.Pending, func(p agentturn.PendingCall) bool { return p.Call != nil && p.Call.CallID == a.CallID })
-		}) {
-			end = nil
-		}
-		var err error
-		if answers, err = eng.Release(ctx, end, answers...); err != nil {
-			return nil, err
-		}
-	}
-	end, err := s.ag.Resume(ctx, answers...)
-	s.ended(end)
-	return end, err
+	return s.ctl.Resume(ctx, answers...)
 }
 
-// Permissions implements Turn: the pending calls the policy asked about,
-// with its question, and not the ones its engine only held.
+// Permissions are the calls a run that ended for input left for a
+// person, each with the policy's question and the part of the call it
+// is about: not the calls the engine holds beside them, which Resume
+// releases.
 func (s *Session) Permissions(end *agentturn.RunEnd) []Permission {
-	if end == nil || end.Reason != agentturn.ReasonInputRequired {
-		return nil
-	}
-	eng := s.Kit.Engine()
 	var out []Permission
-	for _, p := range end.Pending {
-		reason := ""
-		if eng != nil {
-			v, ok := eng.Deferred(end.RunID, p.Call.CallID)
-			if ok && v.Held {
-				continue
-			}
-			reason = v.Reason
-			if v.Subject != "" && !strings.Contains(reason, v.Subject) {
-				// A compound command's question names the part it is
-				// about, which is also where the policy says why.
-				reason += "; about: " + v.Subject
-			}
-		}
-		out = append(out, Permission{Call: p.Call, Reason: reason})
+	for _, p := range s.ctl.Permissions(end) {
+		out = append(out, Permission{Call: p.Call, Reason: about(p.Reason, p.Subject)})
 	}
 	return out
 }
 
-// Steer implements Turn.
-func (s *Session) Steer(ctx context.Context, items ...openresponses.Item) error {
-	return s.queue(ctx, agentturn.QueueSteer, items)
-}
-
-// FollowUp implements Turn.
-func (s *Session) FollowUp(ctx context.Context, items ...openresponses.Item) error {
-	return s.queue(ctx, agentturn.QueueFollowUp, items)
-}
-
-// queue writes each item as a queued entry before the agent takes it,
-// so a steer is on the record before a quiet tool's next event would
-// write it.
-func (s *Session) queue(ctx context.Context, mode agentturn.QueueMode, items []openresponses.Item) error {
-	if rec := s.Kit.Recorder(); rec != nil {
-		return rec.Queue(ctx, s.ag, mode, items...)
+// about adds to a question the part of the call it is about, unless it
+// names it already.
+func about(reason, subject string) string {
+	if subject == "" || strings.Contains(reason, subject) {
+		return reason
 	}
-	return s.ag.Queue(ctx, mode, items...)
+	if reason == "" {
+		return "about: " + subject
+	}
+	return reason + "; about: " + subject
 }
 
-// Abort implements Turn.
-func (s *Session) Abort() { s.ag.Abort() }
+// Queue implements agentturn.Control: each item is on the record, as a
+// queued entry, before it returns.
+func (s *Session) Queue(ctx context.Context, mode agentturn.QueueMode, items ...openresponses.Item) error {
+	return s.ctl.Queue(ctx, mode, items...)
+}
 
-// State implements Turn.
-func (s *Session) State() agentturn.State { return s.ag.State() }
+// Abort implements agentturn.Control.
+func (s *Session) Abort() { s.ctl.Abort() }
 
-// Subscribe implements Turn.
+// State implements agentturn.Control.
+func (s *Session) State() agentturn.State { return s.ctl.State() }
+
+// Subscribe implements agentturn.Control. The recorder subscribed
+// first, so an entry is in the store before a subscriber sees the event
+// that wrote it.
 func (s *Session) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
-	return s.ag.Subscribe(fn)
+	return s.ctl.Subscribe(fn)
 }
 
-// Questions implements Turn.
-func (s *Session) Questions(fn func(Question)) func() { return s.asks.subscribe(fn) }
+// Reply implements agentturn.Control: it answers a question asked
+// while a call runs. A question no longer waiting is an error.
+func (s *Session) Reply(id string, answer agenttool.Answer) error { return s.ctl.Reply(id, answer) }
 
-// Reply implements Turn.
-func (s *Session) Reply(id string, r Reply) error {
-	if !s.asks.close(id, &r) {
-		return fmt.Errorf("no question %q is waiting", id)
+// ContinueFrom moves the session's head to the entry: the next prompt
+// continues the conversation from there, on a branch of the session,
+// with the skill grants of that branch (agentkit.Control.ContinueFrom).
+func (s *Session) ContinueFrom(ctx context.Context, entryID string) error {
+	return s.ctl.ContinueFrom(ctx, entryID)
+}
+
+// Answering says a front answers the questions asked while a call
+// runs, until the returned func is called. With none answering, a
+// question is not asked: a tool's is cancelled, and a sub-agent's call
+// the policy asks about is refused with a note to make it from the main
+// agent, where a run that ends for input can put it to the user.
+func (s *Session) Answering() (done func()) {
+	s.answering.Add(1)
+	var once sync.Once
+	return func() { once.Do(func() { s.answering.Add(-1) }) }
+}
+
+// ask puts a question to the fronts answering, as an agentturn.Question
+// event; errNoOne when none is.
+func (s *Session) ask(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
+	if s.answering.Load() == 0 {
+		return agenttool.Answer{}, errNoOne
 	}
-	return nil
+	return s.ag.QuestionElicitor()(ctx, q)
 }
 
-// errNoOne is a question asked with nobody holding the Turn's questions.
+// errNoOne is a question asked with no front answering questions.
 var errNoOne = errors.New("nobody is answering questions")
 
-// asks are the questions waiting and the subscribers to tell of them.
-type asks struct {
-	mu      sync.Mutex
-	seq     int
-	waiting []*ask
-	subs    map[int]func(Question)
-	nsub    int
-}
-
-type ask struct {
-	q     Question
-	done  chan struct{}
-	reply chan Reply
-}
-
-// put asks a question and waits for the reply; with nobody subscribed
-// it returns errNoOne at once, and when ctx ends first (an abort) it
-// gives the question up and returns ctx's error.
-func (h *asks) put(ctx context.Context, call *openresponses.FunctionCall, text string) (Reply, error) {
-	h.mu.Lock()
-	if len(h.subs) == 0 {
-		h.mu.Unlock()
-		return Reply{}, errNoOne
-	}
-	h.seq++
-	a := &ask{done: make(chan struct{}), reply: make(chan Reply, 1)}
-	a.q = Question{ID: fmt.Sprintf("q%d", h.seq), Call: call, Text: text, Done: a.done}
-	h.waiting = append(h.waiting, a)
-	subs := make([]func(Question), 0, len(h.subs))
-	for _, fn := range h.subs {
-		subs = append(subs, fn)
-	}
-	h.mu.Unlock()
-	for _, fn := range subs {
-		fn(a.q)
-	}
-	select {
-	case r := <-a.reply:
-		return r, nil
-	case <-ctx.Done():
-		h.close(a.q.ID, nil)
-		return Reply{}, ctx.Err()
-	}
-}
-
-// close ends the question id with r, nil when it was given up, and
-// reports whether it was waiting.
-func (h *asks) close(id string, r *Reply) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	i := slices.IndexFunc(h.waiting, func(a *ask) bool { return a.q.ID == id })
-	if i < 0 {
-		return false
-	}
-	a := h.waiting[i]
-	h.waiting = slices.Delete(h.waiting, i, i+1)
-	if r != nil {
-		a.reply <- *r
-	}
-	close(a.done)
-	return true
-}
-
-func (h *asks) subscribe(fn func(Question)) func() {
-	h.mu.Lock()
-	if h.subs == nil {
-		h.subs = map[int]func(Question){}
-	}
-	h.nsub++
-	id := h.nsub
-	h.subs[id] = fn
-	waiting := make([]Question, 0, len(h.waiting))
-	for _, a := range h.waiting {
-		waiting = append(waiting, a.q)
-	}
-	h.mu.Unlock()
-	for _, q := range waiting {
-		fn(q)
-	}
-	return func() {
-		h.mu.Lock()
-		delete(h.subs, id)
-		h.mu.Unlock()
-	}
-}
-
-// elicit puts a tool's yes-or-no question to whoever holds the Turn's
-// questions. A form or a page to visit has no place in a Question, so
-// it is cancelled, and noted.
+// elicit is the session's ToolElicitor: a tool's question goes to the
+// fronts answering as a question event. A form or a page to visit is
+// one no front here can show, so it is cancelled, and noted.
 func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
 	switch {
 	case q.URL != "":
@@ -378,14 +209,16 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 		s.opts.log("[a tool asks for a form dax cannot show: %s]", render.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
-	r, err := s.asks.put(ctx, nil, "a tool asks: "+q.Message)
+	q.Message = "a tool asks: " + q.Message
+	ans, err := s.ask(ctx, q)
 	switch {
 	case err != nil:
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
-	case r.Accept:
-		return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{}`)}, nil
+	case ans.Action == agenttool.ActionAccept && ans.Content == nil:
+		// A yes asks for no field, and MCP wants the content anyway.
+		ans.Content = json.RawMessage(`{}`)
 	}
-	return agenttool.Answer{Action: agenttool.ActionDecline}, nil
+	return ans, nil
 }
 
 // hasFields reports whether a form's schema asks for any property.
@@ -396,12 +229,13 @@ func hasFields(schema json.RawMessage) bool {
 	return len(schema) > 0 && json.Unmarshal(schema, &s) == nil && len(s.Properties) > 0
 }
 
-// Controls are dax's own controls of a session, beside its Turn: what a
-// front's slash commands do and what its start lines show. They are a
-// product's, not every agent's, so they are not part of the Turn: the
-// model and the reasoning setting, the MCP servers, and the session's
-// assembly. A wire to a remote front carries them beside the Turn; the
-// Session is their in-process implementation.
+// Controls are dax's own controls of a session, beside agentturn's
+// control contract: what a front's slash commands do and what its start
+// lines show. They are a product's, not every agent's, so they are not
+// part of the contract: the model and the reasoning setting, the MCP
+// servers, and the session's assembly. A wire to a remote front carries
+// them beside it (front/control's commands); the Session is their
+// in-process implementation.
 type Controls interface {
 	// SetModel changes the model for later runs, sub-agents included.
 	SetModel(name string) error
@@ -440,32 +274,41 @@ func (s *Session) Info() Info {
 // Rules are an autonomous controller's answers: what Drive says to each
 // question a run asks, in place of a person.
 type Rules struct {
-	// Permit decides a call the policy asked about: allow, or refuse
-	// with a note the model is told. reason is the policy's question.
-	// Nil refuses every call.
+	// Permit decides a call the policy asked about: allow, or refuse,
+	// with a note the model is told either way. reason is the policy's
+	// question. Nil refuses every call.
 	Permit func(call *openresponses.FunctionCall, reason string) (allow bool, note string)
 	// Reply answers a question asked while a call runs: a sub-agent's
-	// call the policy asks about, a tool's own question. Nil leaves the
-	// questions unasked: a sub-agent's call is refused with a note to
-	// make it from the main agent, and a tool's question is cancelled.
-	Reply func(q Question) Reply
+	// call the policy asks about (q.Call), a tool's own question. What
+	// it says with the answer is its Note, which the model is told of an
+	// answer about a call. Nil leaves the questions unasked: a
+	// sub-agent's call is refused with a note to make it from the main
+	// agent, and a tool's question is cancelled.
+	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
 }
 
 // Drive is the human or autonomous plane as a controller that answers
-// by rule: it prompts t with items and runs until the agent is idle,
+// by rule: it prompts c with items and runs until the agent is idle,
 // answering every permission with r.Permit and every question with
-// r.Reply, and returns how the last run ended. It holds nothing but the
-// Turn, so it drives a session in this process or one behind a wire
-// alike. Calls a stopped session held for approval are put to r.Permit
-// first, and items go in as a steer of the run that answers them.
-func Drive(ctx context.Context, t Turn, r Rules, items ...openresponses.Item) (*agentturn.RunEnd, error) {
+// r.Reply, and returns how the last run ended. It holds nothing but
+// agentturn's control contract, so it drives a session in this process
+// or one behind a wire alike. Calls a stopped session held for
+// approval are put to r.Permit first, and items go in as a steer of the
+// run that answers them.
+func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openresponses.Item) (*agentturn.RunEnd, error) {
 	if r.Reply != nil {
-		unsub := t.Questions(func(q Question) {
-			go t.Reply(q.ID, r.Reply(q))
-		})
-		defer unsub()
+		if a, ok := c.(interface{ Answering() func() }); ok {
+			defer a.Answering()()
+		}
+		defer c.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+			if q, ok := ev.(*agentturn.Question); ok {
+				q := *q
+				go c.Reply(q.ID, r.Reply(q))
+			}
+			return nil
+		})()
 	}
 	permit := func(call *openresponses.FunctionCall, reason string) agentturn.Answer {
 		allow, note := false, ""
@@ -473,20 +316,20 @@ func Drive(ctx context.Context, t Turn, r Rules, items ...openresponses.Item) (*
 			allow, note = r.Permit(call, reason)
 		}
 		if allow {
-			return agentturn.Approve(call.CallID).WithBy(agentpolicy.ByHuman)
+			a := agentturn.Approve(call.CallID).WithBy(agentpolicy.ByHuman)
+			if note != "" {
+				a = a.WithNote(note)
+			}
+			return a
 		}
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		out := deniedOutput
-		if note != "" {
-			out += " Reason: " + note
-		}
-		return agentturn.Output(openresponses.NewFunctionCallOutput(call.CallID, out)).WithBy(agentpolicy.ByHuman)
+		return Refusal(call.CallID, note)
 	}
 	var end *agentturn.RunEnd
 	var err error
-	if pending := t.State().Pending; slices.ContainsFunc(pending, held) {
+	if pending := c.State().Pending; slices.ContainsFunc(pending, held) {
 		var answers []agentturn.Answer
 		for _, p := range pending {
 			if held(p) {
@@ -494,20 +337,61 @@ func Drive(ctx context.Context, t Turn, r Rules, items ...openresponses.Item) (*
 			}
 		}
 		if len(items) > 0 {
-			if err := t.Steer(ctx, items...); err != nil {
+			if err := c.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
 				return nil, err
 			}
 		}
-		end, err = t.Answer(ctx, answers...)
+		end, err = c.Resume(ctx, answers...)
 	} else {
-		end, err = t.Prompt(ctx, items...)
+		end, err = c.Prompt(ctx, items...)
 	}
 	for err == nil && end.Reason == agentturn.ReasonInputRequired {
 		var answers []agentturn.Answer
-		for _, p := range t.Permissions(end) {
+		for _, p := range PermissionsOf(c, end) {
 			answers = append(answers, permit(p.Call, p.Reason))
 		}
-		end, err = t.Answer(ctx, answers...)
+		end, err = c.Resume(ctx, answers...)
 	}
 	return end, err
+}
+
+// Refusal is a person's refusal of a call, the model told so and, when
+// note is not empty, why.
+func Refusal(callID, note string) agentturn.Answer {
+	out := deniedOutput
+	if note != "" {
+		out += " Reason: " + note
+	}
+	return agentturn.Output(openresponses.NewFunctionCallOutput(callID, out)).WithBy(agentpolicy.ByHuman)
+}
+
+// PermissionsOf are the calls a run that ended for input left for a
+// person: the Session's own Permissions when c is one, and otherwise
+// (a control behind a wire) the pending calls whose decision was not
+// only held beside another's question, with the decision's question and
+// the part of the call it is about.
+func PermissionsOf(c agentturn.Control, end *agentturn.RunEnd) []Permission {
+	if p, ok := c.(interface {
+		Permissions(*agentturn.RunEnd) []Permission
+	}); ok {
+		return p.Permissions(end)
+	}
+	if end == nil || end.Reason != agentturn.ReasonInputRequired {
+		return nil
+	}
+	var out []Permission
+	for _, p := range end.Pending {
+		if p.Call == nil {
+			continue
+		}
+		perm := Permission{Call: p.Call}
+		if d := p.Decision; d != nil {
+			if d.Held {
+				continue
+			}
+			perm.Reason = about(d.Reason, d.Subject)
+		}
+		out = append(out, perm)
+	}
+	return out
 }

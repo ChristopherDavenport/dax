@@ -3,6 +3,7 @@ package dax
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"maps"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/charmbracelet/x/ansi"
 
@@ -72,6 +74,13 @@ func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink 
 		case *openresponses.Message:
 			if v.Role == openresponses.RoleUser {
 				step = 0
+			}
+			if isChild && v.Role == openresponses.RoleDeveloper {
+				// A note the user gave with an approval comes beside the
+				// call's output.
+				m.mu.Lock()
+				m.childSaw["developer: "+v.Text()] = v.Text()
+				m.mu.Unlock()
 			}
 		case *openresponses.FunctionCallOutput:
 			step++
@@ -129,6 +138,7 @@ type tuiRig struct {
 	pre  *syncBuf // the start lines
 	done chan error
 	sess *agent.Session
+	o    agent.Options
 }
 
 func startTUI(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options)) *tuiRig {
@@ -177,14 +187,14 @@ func startRig(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Opti
 		tweakFront(f)
 	}
 	// Nothing reads standard input once the client has the terminal:
-	// every question reaches the client's screen through the session's
-	// Turn, which the client's glue holds.
+	// every question reaches the client's screen as one of the session's
+	// events.
 	f.Prepare(&o)
 	sess, err := agent.New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.sess = sess
+	r.sess, r.o = sess, o
 	t.Cleanup(func() { sess.Close() })
 	if run {
 		go func() { r.done <- f.Run(ctx, sess) }()
@@ -430,7 +440,7 @@ func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
 			r := startFront(t, &steps{}, func(f *tuiFront) {
 				f.out = out
 				f.info.Verbose = verbose
-				f.run = func(context.Context, client.Backend, ...console.Option) error {
+				f.run = func(context.Context, client.Record, client.Source, client.Controller, ...console.Option) error {
 					f.log = append(f.log, "[compaction failed after 2 call(s): boom]")
 					if panics {
 						panic("the client fell over")
@@ -505,7 +515,7 @@ exec "$0"`
 	var shown string
 	r := startFront(t, &steps{}, func(f *tuiFront) {
 		f.out = out
-		f.run = func(context.Context, client.Backend, ...console.Option) error {
+		f.run = func(context.Context, client.Record, client.Source, client.Controller, ...console.Option) error {
 			if err := os.WriteFile(fifo, []byte("connection lost\n"), 0o600); err != nil {
 				return err
 			}
@@ -629,6 +639,60 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	r.quit()
 }
 
+// Allowing a sub-agent's ask with a note (a) runs the call, and the note
+// reaches the sub-agent beside the result.
+func TestAllowingASubagentsAskWithANoteTellsIt(t *testing.T) {
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"NOTED","content":"x"}`}},
+	}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitOutput("Question (1/1): write")
+	r.type_("a")
+	r.waitOutput("A note with the answer")
+	r.type_("keep it short\r")
+	r.waitFile("NOTED", true)
+	r.waitOutput("all done")
+	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
+		t.Errorf("the sub-agent saw %q, want the user's note", saw)
+	}
+	r.quit()
+}
+
+// A session that stopped with a call held for approval is resumed in
+// the terminal client with the call on the permission panel, from the
+// record: the session refuses a prompt until it is answered (ErrHeld,
+// the controller's refusal), and approving it runs it.
+func TestAResumedHeldCallIsAskedOnTheScreen(t *testing.T) {
+	ctx := context.Background()
+	m := &steps{parent: [][2]string{{"bash", `{"command":"touch HELD"}`}}}
+	r := startFront(t, m, nil)
+	end, err := r.sess.Prompt(ctx, openresponses.UserText("go"))
+	if err != nil || end.Reason != agentturn.ReasonInputRequired {
+		t.Fatalf("first run: %v, %v; want it to stop for input", end, err)
+	}
+	id := r.sess.Info().ID
+	r.sess.Close()
+	sess, err := agent.Resume(ctx, r.o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	if err := client.Direct(sess)(ctx, client.Prompt{Items: []openresponses.Item{openresponses.UserText("again")}}); !errors.Is(err, agent.ErrHeld) {
+		t.Fatalf("a prompt while the call is held: %v, want ErrHeld", err)
+	}
+	r.sess = sess
+	go func() { r.done <- r.f.Run(ctx, sess) }()
+	r.waitPanel()
+	r.waitOutput("bash")
+	r.waitFile("HELD", false)
+	r.type_("y")
+	r.waitFile("HELD", true)
+	r.waitOutput("all done")
+	r.quit()
+}
+
 // TestASlashLineInTheTUIIsDaxsCommand: the terminal client hands each
 // line to dax, which runs a slash line as the REPL does and shows what it
 // says over the input; the model never sees it. /quit leaves without an
@@ -642,7 +706,7 @@ func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
 	r.waitOutput("submit: unknown command /nope")
 	r.type_("\x15/think on\r") // ctrl+u clears the line given back
 	r.waitOutput("[reasoning on from the next request]")
-	if n := len(r.sess.Turn().State().Transcript); n != 0 {
+	if n := len(r.sess.State().Transcript); n != 0 {
 		t.Fatalf("a command reached the model: %d transcript items", n)
 	}
 	r.type_("hello\r")

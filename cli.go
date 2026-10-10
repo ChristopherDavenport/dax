@@ -377,8 +377,9 @@ func run(ctx context.Context, args []string, p program) error {
 		return err
 	}
 	defer sess.Close()
-	// The front is the session's human plane: it drives the session's
-	// Turn and dax's controls, as a front over a wire would.
+	// The front is the session's human plane: it drives the session as
+	// agentturn's control contract, with dax's controls, as a front over
+	// a wire would.
 	return f.Run(ctx, sess)
 }
 

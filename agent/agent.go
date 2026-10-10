@@ -32,6 +32,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
@@ -238,12 +239,11 @@ type Session struct {
 	// memory because nothing was to be kept.
 	recorded bool
 
-	ag     *agentturn.Agent // the one agent, which the Turn drives
+	ag     *agentturn.Agent  // the one agent
+	ctl    *agentkit.Control // the kit's control of it, which the session's own delegates to
 	detach func()
-	asks   asks // the questions asked while a call runs
-
-	mu      sync.Mutex
-	lastEnd *agentturn.RunEnd // how the last run ended, for the engine
+	// answering counts the fronts answering questions (Answering).
+	answering atomic.Int32
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -270,8 +270,8 @@ func Describe(p agentturn.PendingCall) string {
 	return s
 }
 
-// withSubjects is the session's adjustment to the agent's configuration
-// (kitbackend.WithConfig). The facts of the model response's calls are
+// withSubjects is the session's adjustment to the agent's
+// configuration. The facts of the model response's calls are
 // held for their decisions (executor.Set.PinBatch), so the policy's
 // subjects, the rewrite a call runs with, the decision about that
 // rewrite and the batch hold's reading of each sibling come from one
@@ -500,7 +500,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
 	}
-	// A tool's question mid-call goes to whoever holds the Backend.
+	// A tool's question mid-call is a question event to the fronts
+	// answering, past the session's rules (elicit).
 	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
@@ -581,10 +582,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
-	if rec := kit.Recorder(); rec != nil {
-		// The inputs a stopped session accepted and no run took are
-		// handed to the agent, which takes them after the next prompt.
-		rec.Requeue(ctx, s.ag)
+	// The kit's control hands the agent the inputs a stopped session
+	// accepted and no run took, which it takes after the next prompt.
+	// The session's elicitor is the kit's own, so the control leaves
+	// the agent's config as it is.
+	if s.ctl, err = kit.Control(s.ag); err != nil {
+		return nil, err
 	}
 	ok = true
 	return s, nil
@@ -1150,26 +1153,38 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 }
 
 // askChild puts a sub-agent's call the policy or a hook asks about to
-// whoever holds the session's Turn, from inside the sub-agent's run: a
-// Question, answered with Reply. Its context is the call's, so an abort
-// gives the question up. With nobody to ask, the call is refused, and
-// the model is told to make it itself, where it can be put to the user.
-// An approved call runs with args, the hooks' rewrite, when there is
-// one, as an allowed call does and as the main agent's approved call
-// does: a file tool's call carries the stamp of the facts it was asked
-// about, and a stamp the model forged never reaches the tool.
+// the fronts answering the session's questions, from inside the
+// sub-agent's run: an agentturn.Question about the call, answered with
+// Reply. Its context is the call's, so an abort gives the question up.
+// With nobody to ask, the call is refused, and the model is told to make
+// it itself, where it can be put to the user. An approved call runs with
+// args, the hooks' rewrite, when there is one, as an allowed call does
+// and as the main agent's approved call does: a file tool's call carries
+// the stamp of the facts it was asked about, and a stamp the model
+// forged never reaches the tool. What the person said with the answer
+// reaches the model: a refusal's reason in its output, an approval's
+// note beside the result.
 func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
 	reason := "the " + name + " sub-agent asks: " + why
 	if subject != "" && !strings.Contains(reason, subject) {
 		reason += "; about: " + subject
 	}
-	r, err := s.asks.put(ctx, info.Call, reason)
+	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
+	call := agentturn.AskedCall{CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
+		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, By: agentpolicy.ByPolicy}}
+	r, err := s.ask(agentturn.ContextWithAskedCall(ctx, call), agenttool.Elicitation{Message: reason})
 	switch {
 	case errors.Is(err, errNoOne):
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
+		return cannot
 	case err != nil:
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
-	case !r.Accept:
+	case r.Action == agenttool.ActionAccept:
+		d := &agentturn.ToolDecision{Action: agentturn.Allow, Args: args, By: agentpolicy.ByHuman}
+		if r.Note != "" {
+			d.Note = "The user said: " + r.Note
+		}
+		return d
+	case r.Action == agenttool.ActionDecline:
 		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
 		out := deniedOutput
 		if r.Note != "" {
@@ -1177,5 +1192,6 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 		}
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
 	}
-	return &agentturn.ToolDecision{Action: agentturn.Allow, Args: args, By: agentpolicy.ByHuman}
+	// Cancelled: the front could not answer it.
+	return cannot
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/agentmemory/filestore"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -362,9 +363,10 @@ func TestTaskArgumentsAreChecked(t *testing.T) {
 	}
 }
 
-// A sub-agent's held call is a question to whoever holds the Turn's
-// questions, not a permission; a refusal's note reaches the sub-agent,
-// and with nobody holding the questions the call is refused with a
+// A sub-agent's held call is a question to the fronts answering the
+// session's questions, not a permission; what the person says with an
+// answer reaches the sub-agent, a refusal's reason and an approval's
+// note alike, and with nobody answering the call is refused with a
 // reason the model can act on.
 func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 	type outcome struct {
@@ -377,9 +379,10 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 		wrote    bool
 		childSaw string
 	}{
-		"allowed":       {outcome{allow: true}, true, ""},
-		"refused":       {outcome{note: "not now"}, false, "Reason: not now"},
-		"nobody to ask": {outcome{err: errors.New("no client")}, false, "cannot ask you"},
+		"allowed":             {outcome{allow: true}, true, ""},
+		"refused":             {outcome{note: "not now"}, false, "Reason: not now"},
+		"allowed with a note": {outcome{allow: true, note: "keep it short"}, true, "The user said: keep it short"},
+		"nobody to ask":       {outcome{err: errors.New("no client")}, false, "cannot ask you"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			model := &taskModels{
@@ -394,9 +397,13 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 				return true, ""
 			}}
 			if tc.ask.err == nil {
-				rules.Reply = func(q agent.Question) agent.Reply {
-					asked = append(asked, q.Call.Name+": "+q.Text)
-					return agent.Reply{Accept: tc.ask.allow, Note: tc.ask.note}
+				rules.Reply = func(q agentturn.Question) agenttool.Answer {
+					asked = append(asked, q.Call.Name+": "+q.Elicitation.Message)
+					a := agenttool.Answer{Action: agenttool.ActionDecline, Note: tc.ask.note}
+					if tc.ask.allow {
+						a.Action = agenttool.ActionAccept
+					}
+					return a
 				}
 			}
 			s, err := agent.New(context.Background(), o)
@@ -404,7 +411,7 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			if _, err := agent.Drive(context.Background(), s.Turn(), rules, openresponses.UserText("go")); err != nil {
+			if _, err := agent.Drive(context.Background(), s, rules, openresponses.UserText("go")); err != nil {
 				t.Fatal(err)
 			}
 			switch {
@@ -423,8 +430,11 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 				model.mu.Lock()
 				last := model.childReqs[len(model.childReqs)-1]
 				model.mu.Unlock()
-				if !strings.Contains(itemsOutputs(last.Input), tc.childSaw) {
-					t.Errorf("the sub-agent saw %q, want %q", itemsOutputs(last.Input), tc.childSaw)
+				// A refusal's reason is in the call's output; an approval's
+				// note is beside it, a developer message after the batch.
+				saw, _ := json.Marshal(last.Input)
+				if !strings.Contains(string(saw), tc.childSaw) {
+					t.Errorf("the sub-agent saw %s, want %q", saw, tc.childSaw)
 				}
 			}
 		})
