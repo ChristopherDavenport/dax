@@ -393,6 +393,10 @@ ssh build-host dax execute -root /home/me/src/app
 kubectl exec -i pod/agent -- dax execute -root /work -kind container -ref pod/agent
 ```
 
+[docs/sandbox.md](docs/sandbox.md) has recipes for daily use: an image
+with dax in it, each launcher, the config, what to check and what does
+not work yet.
+
 The pipe is the credential: whoever started the process is its one
 client. There is no listener, no port and no token. Since no policy
 runs in it, anyone who can start it can run whatever its tools run,

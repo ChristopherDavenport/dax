@@ -5,6 +5,13 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `docs/sandbox.md`, recipes for running the tools in a sandbox
+  with `-executor` (Docker, ssh, kubectl), the config, what to check
+  when it fails, and its limits today; linked from the README's
+  `dax execute` section.
+
 ## v0.0.9 - 2026-10-09
 
 - Added: with `-executor`, MCP servers run in the sandbox. Every server
