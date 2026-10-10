@@ -5,6 +5,24 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `dax execute` starts a process for the session that asks, one
+  that lives longer than a call with pipes to it, through custom
+  JSON-RPC methods (`dax/process.start`, `.write`, `.read`,
+  `.closeStdin`, `.signal`, `.wait`, `.close`) named in its
+  capability's new `start` field; `executor.Remote.Start` is their
+  client, a `workspace.Starter`'s `Start` over the connection. They are
+  not tools, so no client of `dax execute` is offered one that runs a
+  command. A session's processes are its own (another session's id is
+  refused), at most 32 at once, with writes of at most 1 MiB, reads of
+  at most 64 KiB and standard error bounded, and they end with the
+  session's connection and at a signal to `dax execute`. Nothing uses
+  them yet; MCP servers with `-executor` are the next step.
+- Changed: agenttool, mcpclient and mcpserver v0.0.21, for
+  `mcpclient.WithClientSetup`, with which the executor's client
+  registers the process methods.
+
 ## v0.0.8 - 2026-10-09
 
 - Security: a read of a file of a project's skill through the skill

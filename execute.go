@@ -106,17 +106,20 @@ func runExecute(ctx context.Context, args []string, p program) error {
 		return fmt.Errorf("workspace: %w", err)
 	}
 	defer ws.Close()
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// The processes started for the session end at a signal before
+	// the session's close waits for the requests reading them.
 	srv, closeTools, err := executor.NewServer(executor.ServeOptions{
 		Name: p.name, Version: p.version,
 		Descriptor: workspace.Descriptor{Kind: *kind, Ref: descRef, Root: ws.Root()},
+		Done:       ctx.Done(),
 	}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws), MaxReadBytes: *maxRead})
 	if err != nil {
 		return err
 	}
 	defer closeTools()
 
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	mcpOut := os.Stdout
 	os.Stdout = os.Stderr
 	defer func() { os.Stdout = mcpOut }()

@@ -127,7 +127,8 @@ func claiming(name string) agenttool.Tool {
 // A server that does not say what a session needs of an executor is
 // refused at connect: without the facts method or the capability, of
 // another version, naming no workspace or not serving its files (an
-// executor of dax v0.0.6), listing a tool the capability does not name
+// executor of dax v0.0.6), with a start capability whose bounds are not
+// positive, listing a tool the capability does not name
 // or the reverse, or saying a tool claims facts that is listed without
 // the claim (or the reverse). A session that took such
 // a server's tools would match the model's raw arguments where it
@@ -175,6 +176,11 @@ func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 			c.Files.URITemplate = "file:///{path}"
 			return fake(t, capOf(c), false, plain("read"))
 		}, `serves its workspace's files under "file:///{path}"`},
+		{"a start bound that is not positive", func(t *testing.T) *sdk.Server {
+			c := good(capabilityTool{Name: "read", Extension: "acme"})
+			c.Start = &capabilityStart{MaxProcesses: 32, MaxWriteBytes: 0, MaxReadBytes: 1}
+			return fake(t, capOf(c), false, plain("read"))
+		}, "not positive"},
 		{"a listed tool the capability does not name", func(t *testing.T) *sdk.Server {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"})), false, plain("read"), plain("rm"))
 		}, `lists "rm"`},

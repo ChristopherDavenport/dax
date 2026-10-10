@@ -97,7 +97,8 @@ before changing the shape.
   `NewServer` (`serve.go`), the in-process tools served over MCP for
   `execute`, with what MCP cannot carry in a capability, and its
   workspace's files served read-only as MCP resources and read back as
-  an `fs.FS` (`files.go`); `Remote`
+  an `fs.FS` (`files.go`), and processes started for the session
+  through custom methods, not tools (`process.go`); `Remote`
   (`remote.go`), the client of such a server, which refuses one that
   does not give the claims (`agent/executor.go` wraps it as the public
   `agent.Executor` for `-executor`). Kit tools are control and never

@@ -477,7 +477,30 @@ the executor gone blocks the call. What the kit, the policy and `Env.Tools` hold
 tool's definition, scheduling and annotations, whose calls, facts
 claims and replay claims go to the executor; a request carries the
 same bytes either way. The executor owns the tools and the session
-closes it. The facts of a model response's calls are read together
+closes it.
+
+`dax execute` can also start a process for its session, one that
+outlives a call, with pipes to it, as a `workspace.Starter` does
+(`internal/executor/process.go`): custom JSON-RPC methods
+(`dax/process.start`, `.write`, `.read`, `.closeStdin`, `.signal`,
+`.wait`, `.close`), not tools, so no client of the executor is offered
+a tool that runs a command and none of its tools starts one; it starts
+only what its one client asks for, and holds no list and reads no
+config. The capability's `start` field names them, with their bounds.
+Each session's processes are a table of its own, and an id another
+session started is refused; at most 32 are open at once, a write is at
+most 1 MiB, a read's reply at most 64 KiB, a read waits for output (a
+long poll), and standard error held unread is bounded and past the
+bound dropped. A session's processes end with its connection, and all
+of them at a signal to `dax execute` (`ServeOptions.Done`), before the
+session's close waits on a read in flight. `executor.Remote.Start` is
+their client: standard input is ordered write requests, standard
+output read requests, and standard error is read in the background
+into the start's stream. An executor without `start` is refused as
+unsupported, and nothing starts anywhere else. A session does not use
+it yet.
+
+The facts of a model response's calls are read together
 for the decisions about them (`Set.PinBatch`): on the first reading,
 every claiming call of the response in one request, then every
 rewrite those claims ask for (bash's and the file tools' stamps) in a

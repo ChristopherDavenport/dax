@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -212,5 +213,65 @@ func TestExecuteRefusesBadFlags(t *testing.T) {
 		if err := run(context.Background(), args, program{name: "dax"}); err == nil {
 			t.Errorf("%v: no error", args)
 		}
+	}
+}
+
+// A signal to `dax execute` ends the processes it started for the
+// session, a read waiting on one included, and then the executor: the
+// session's close does not wait on the read.
+func TestExecuteEndsItsProcessesAtASignal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	dir := t.TempDir()
+	cmd := exec.CommandContext(ctx, os.Args[0])
+	cmd.Env = append(os.Environ(), executeRoot+"="+dir)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr lockedBuffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := executor.Connect(ctx, &sdk.IOTransport{Reader: stdout, Writer: stdin}, executor.ConnectOptions{Name: "dax", Version: "test"})
+	if err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		t.Fatalf("connect: %v\nstderr: %s", err, stderr.String())
+	}
+	defer r.Close()
+	p, err := r.Start(ctx, workspace.Command{Args: []string{"sh", "-c", "echo $$; exec sleep 1000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := bufio.NewReader(p.Stdout())
+	line, err := out.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := strings.TrimSpace(line)
+	go io.Copy(io.Discard, out) // a read waiting for output
+	time.Sleep(50 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Errorf("execute exited: %v\nstderr: %s", err, stderr.String())
+		}
+	case <-time.After(20 * time.Second):
+		cmd.Process.Kill()
+		t.Fatalf("execute did not exit at the signal\nstderr: %s", stderr.String())
+	}
+	if exec.Command("kill", "-0", pid).Run() == nil {
+		t.Errorf("process %s outlived the executor", pid)
 	}
 }

@@ -137,9 +137,15 @@ before the dax step that uses them, as the workspace's rules require.
      **done** (branch `executor-files`). Facts batched per model
      response are **done**: a response's calls are read in one request
      and their rewrites in a second (`Set.PinBatch`), for the main
-     agent and a sub-agent. Follow-ups: MCP servers with an executor
-     (started in it, or refused as now), and an executor over an
-     address rather than a command.
+     agent and a sub-agent. MCP servers with an executor start in it
+     (decided over refusing them): `dax execute` starts a process for
+     its session through dax-only JSON-RPC methods (`dax/process.*`,
+     not tools), with `executor.Remote.Start` their client, **done**
+     (branch `process-tunnel`, agenttool v0.0.21's `WithClientSetup`);
+     the session's executor view becoming a `workspace.Starter` over it,
+     so every configured server and `/mcp add` runs in the sandbox, is
+     next. Follow-up: an executor over an address rather than a
+     command.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.
