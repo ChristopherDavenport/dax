@@ -863,19 +863,32 @@ A call stamped as auto-allowed that changed before it ran fails with "the
 command changed since it was allowed ... ask again", which shows in the
 transcript.
 
+## Commands
+
+A line that starts with a slash is a command to dax, in the terminal
+client and the REPL alike; the model never sees it. Start a line with
+`//` to send the model a line that begins with a slash (`//etc/hosts`
+sends `/etc/hosts`). In the terminal client a command's output shows over
+the input until the next line, and an error gives the line back to edit.
+
+- `/model name`, `/think on|off`: the model and reasoning from the next
+  request.
+- `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has
+  letters, digits, `-` and `_`, and no `__`), `/mcp remove <label>`.
+- `/tools`, `/session`, `/help`.
+- `/follow text` queues a follow-up that runs once the model would have
+  stopped; `/abort` aborts the run; `/quit` leaves.
+
+Any other line typed while a run is in flight steers it and lands before
+the next model call. `/model`, `/think` and `/mcp` wait for the run to
+end; the rest work during one. An unknown command is an error, not a
+prompt. `/compact` does not exist (use `-compact N`).
+
 ## In the REPL
 
-`dax -front repl` (the default when not on a terminal) is a line REPL with
-slash commands the terminal client does not have yet, since the client
-takes the input line itself. A line typed while a run is in flight steers
-it and lands before the next model call; `/follow text` queues a follow-up
-that runs once the model would have stopped; `/abort` aborts. Between runs:
-`/model name`, `/think on|off`, `/tools`, `/session`, `/mcp add <name>
-<command>` (tools are `mcp__<name>__<tool>`; a name has letters, digits,
-`-` and `_`, and no `__`), `/mcp remove <label>`, `/quit`. In the terminal
-client use the flags and the config for the model, thinking and MCP servers
-(`-model`, `-think`, `mcp_servers`), and Ctrl-C to quit; `/compact` does not
-exist in either (use `-compact N`).
+`dax -front repl` (the default when not on a terminal) is a line REPL
+with the same commands; a permission or a question is answered with `y`
+or `n` on the next line.
 
 ## Sessions
 

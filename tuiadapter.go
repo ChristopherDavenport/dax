@@ -16,7 +16,9 @@ package dax
 //   - A prompt while calls a stopped session held wait is refused with
 //     agent.ErrHeld, which the client shows as an error; it shows the
 //     held calls from the record and their answers go to Answer.
-//   - The client has no follow-up, only Steer.
+//   - The client has no follow-up of its own, only Steer: a follow-up
+//     is dax's /follow, which the client hands over with every line it
+//     is given (console.WithSubmit, tui.go) and dax queues on the Turn.
 //   - Questions asked while a call runs are the Turn's; the glue asks
 //     each through the native backend's own question list (Ask) and
 //     carries the reply back, so a question lives in two lists.

@@ -5,6 +5,21 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: the terminal client takes the REPL's commands. A line that
+  starts with a slash is a command to dax in both fronts and never
+  reaches the model: `/model`, `/think`, `/tools`, `/session`, `/mcp add`,
+  `/mcp remove`, `/follow`, `/abort`, `/quit` and the new `/help`. In the
+  terminal client a command's output shows over the input, an error
+  gives the line back, and `/quit` leaves as ctrl+c does when idle.
+- Changed: an unknown slash command is an error in the REPL, where it
+  used to be sent to the model as a prompt; start a line with `//` to
+  send one that begins with a slash. During a run, `/model`, `/think`
+  and `/mcp` are refused until it ends, where they used to be steered
+  into the run, and `/tools`, `/session` and `/quit` work.
+- Changed: agentconsole v0.0.10 (`console.WithSubmit`).
+
 ## v0.0.10 - 2026-10-09
 
 - Added: `docs/sandbox.md`, recipes for running the tools in a sandbox
