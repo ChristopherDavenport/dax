@@ -227,6 +227,24 @@ cannot cancel their rules. `"builtin": false` drops the extensions'
 allow rules and keeps their asks and denies, so a repository that sets
 it loosens nothing.
 
+One tool's calls can be held to another's asks and denies without
+borrowing its allows. An extension names the tools in `HeldTo`, and a
+call of such a tool that its tool's facts claim names is a constraint
+(agentpolicy's `Subject.Constrain`, v0.0.13): the other tool's deny and
+ask rules, whoever's they are and with their carve-outs, can refuse
+the call or make it ask, and its allow rules and the default never
+apply, so the call is still decided by its own tool's rules. dax-skills
+holds `skill` to `read`: a read of a file of a project's skill, the
+skill file included when the instructions are loaded, is claimed as a
+read of `.dax/skills/<skill>/<file>` (`tool.PathCalls`), normalised and
+through its links as `read`'s own claim is, so a `.dax/skills` that is
+a link elsewhere in the workspace (`-> ..`, `-> ../config`) meets the
+secret-path asks and the user's denies of what it leads to, and an
+allow of `read(...)` does not open it (#39). The skills the user
+installed, `~/.dax/skills` and `skills_dirs`, are the user's and are
+not held. What is not covered yet: the moment between the decision and
+the skill tool's read, in which a link can change.
+
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
 the write tool on the file it opens (normalised from the directory a
@@ -263,7 +281,8 @@ sandbox:
    workspace, whose file system refuses a link out, and screened there
    first, so a file that would be refused is left out and reported
    rather than failing the session; a config that would be refused is
-   an error, since it only tightens.
+   an error, since it only tightens. A read of a project skill's file
+   through the skill tool is held to `read`'s asks and denies.
 5. Children get a scrubbed environment; resource use is bounded; the
    store is private; terminal output is cleaned.
 
@@ -333,7 +352,9 @@ is:
   (`agentsmd.Options.FS`), screening each file there first; dax-skills
   offers `.dax/skills` as an `agentskill.Source` over it, screened by
   walking it there, every link required to lead inside `.dax/skills`
-  (`tool.Files.Resolve`), since the skill tool runs unasked; the command line reads `.dax/config.json` through a
+  (`tool.Files.Resolve`), since the skill tool runs unasked, and the
+  skill tool's claim of a project skill's file is a read of it there
+  (see Policy); the command line reads `.dax/config.json` through a
   `workspace.Local` over the project, or with `-executor` through the
   executor's workspace once it is connected. One exception reads this machine:
   when the workspace's descriptor says it is `Dir` on this machine and
@@ -488,7 +509,17 @@ an MCP server's; an alias may differ from its own tool only in case
 `Lifts` entry name only the extension's own tools; a read-only tool
 annotated destructive is refused. A tool's facts claim
 (`agenttool.Factual`), what a call would touch, may name only its
-extension's tools: a call it names of another's is decided as one no rule names, so it asks. `BeforeToolCall` hooks fold with the
+extension's tools: a call it names of another's is decided as one no
+rule names, so it asks, unless the extension holds the claiming tool
+to that tool (`HeldTo`, a map from one of its own tools to others'),
+when it is a constraint (see Policy). A matcher's own subjects, for a
+tool that makes no claim, are held to the same: one that names
+another extension's tool asks, and `HeldTo` does not apply to them. A
+tool an extension `Owns` is its kit's, built after the policy's
+matchers; when it makes the claim (dax-skills' `skill`, under
+agentskill's `WithFileClaim`), its calls are decided on it as a tool
+of `Tools` is, through the kit's `LookupTool` at each decision, and
+the facts hook applies its rewrite. `BeforeToolCall` hooks fold with the
 policy, deny over ask over allow, for the main agent and, through
 `Env.ChildPolicy`, every sub-agent; with the policy off they are not
 run. `extension.Renderers` merges the extensions' renderers for the

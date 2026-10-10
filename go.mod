@@ -8,9 +8,9 @@ require (
 	github.com/ChristopherDavenport/agenteval v0.0.10
 	github.com/ChristopherDavenport/agentkit v0.0.9
 	github.com/ChristopherDavenport/agentmemory v0.0.10
-	github.com/ChristopherDavenport/agentpolicy v0.0.12
+	github.com/ChristopherDavenport/agentpolicy v0.0.13
 	github.com/ChristopherDavenport/agentsession v0.0.21
-	github.com/ChristopherDavenport/agentskill v0.0.11
+	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
 	github.com/ChristopherDavenport/agenttool v0.0.20
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.20

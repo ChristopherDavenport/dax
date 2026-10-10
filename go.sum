@@ -22,12 +22,12 @@ github.com/ChristopherDavenport/agentkit v0.0.9 h1:I1Eod67eKSYPkSl6kuSpx0RA1wnD3
 github.com/ChristopherDavenport/agentkit v0.0.9/go.mod h1:xslZewGdE5dMTOlsf4ti0rEy0x9VpebcJu2+BIuIjNc=
 github.com/ChristopherDavenport/agentmemory v0.0.10 h1:LH/PN+ujmawwhUesRVPugpZLz9iav2ARYNJ68pWQo5E=
 github.com/ChristopherDavenport/agentmemory v0.0.10/go.mod h1:Eh0ed0u/Xg/olppz+8yiz2LEiFFn0eVP8pc/VmGWp7w=
-github.com/ChristopherDavenport/agentpolicy v0.0.12 h1:K37BuaItMiSPPJ+KijczjCehB/ZsRAQUkoOhtT6rBT4=
-github.com/ChristopherDavenport/agentpolicy v0.0.12/go.mod h1:1dKpcoz3wVjn5WwC+vDw6rL1vKvHuyTk4m2003rD4tQ=
+github.com/ChristopherDavenport/agentpolicy v0.0.13 h1:gZjglpPm1UMgpHTtTTpw/9wpbGL1O5ezYSPmSefThvk=
+github.com/ChristopherDavenport/agentpolicy v0.0.13/go.mod h1:1dKpcoz3wVjn5WwC+vDw6rL1vKvHuyTk4m2003rD4tQ=
 github.com/ChristopherDavenport/agentsession v0.0.21 h1:T3FVxhlNpu9s0QHIz9dtg6LlscX5u5rcXXm8UNOkir4=
 github.com/ChristopherDavenport/agentsession v0.0.21/go.mod h1:lZf8gypPbx95D867i491HRT0OXyX6B8S5wM8zS4YzOA=
-github.com/ChristopherDavenport/agentskill v0.0.11 h1:bUwoE2in3wo7j5x6czne3coO0hsucjkRnSPE+gHVp/Y=
-github.com/ChristopherDavenport/agentskill v0.0.11/go.mod h1:O8GghyLsZFay2fbCsd97G/y8Dx5tcepa2LtK5IJDFlY=
+github.com/ChristopherDavenport/agentskill v0.0.12 h1:8rAmdk+CC5TNnbGjKjfEObAZM9ZzsXd0iyz5kp3wAsE=
+github.com/ChristopherDavenport/agentskill v0.0.12/go.mod h1:T69z4M/C/M1lqSVnI94h4DWVDed64OtS7zrsk4Y9w7g=
 github.com/ChristopherDavenport/agentsmd v0.0.3 h1:l3moYkzUJdkFUVdjHF/oSSrIUE2Iwnw4dPgJXQf9fBg=
 github.com/ChristopherDavenport/agentsmd v0.0.3/go.mod h1:8rJe3f3gD51Fy6EQsf0gFXo8wf0qsSdDZnjo0r8W9Yk=
 github.com/ChristopherDavenport/agenttool v0.0.20 h1:kfTY2DFpofBd8lEjMiztk5hCWeJscwv2L11/KkRBInA=

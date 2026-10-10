@@ -33,7 +33,15 @@ func decide(t *testing.T, ms map[string]agentpolicy.ToolMatcher, rules []agentpo
 // under ctx, the decision's context.
 func decideIn(t *testing.T, ctx context.Context, ms map[string]agentpolicy.ToolMatcher, rules []agentpolicy.Rule, name, args string) (agentpolicy.Verdict, error) {
 	t.Helper()
-	p, err := agentpolicy.Merge(agentpolicy.RuleSet{Source: agentpolicy.Source{Name: "test", Trusted: true, Rank: 1}, Allow: rules})
+	return decideUnder(t, ctx, ms, agentpolicy.RuleSet{Allow: rules}, name, args)
+}
+
+// decideUnder is what the engine would decide of a call of name with
+// args under ctx and the rules of rs, asking by default.
+func decideUnder(t *testing.T, ctx context.Context, ms map[string]agentpolicy.ToolMatcher, rs agentpolicy.RuleSet, name, args string) (agentpolicy.Verdict, error) {
+	t.Helper()
+	rs.Source = agentpolicy.Source{Name: "test", Trusted: true, Rank: 1}
+	p, err := agentpolicy.Merge(rs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +80,7 @@ func TestSubjectsComeFromTheClaim(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tl := tool("t", tc.fx)
-			ms, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": glob})
+			ms, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, nil, map[string]agentpolicy.ToolMatcher{"t": glob})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -98,7 +106,7 @@ func TestTheClaimIsAskedUnderTheDecisionsContext(t *testing.T) {
 	allowA := []agentpolicy.Rule{{Tool: "t", Spec: "a"}}
 	matchers := func(t *testing.T, fx func(context.Context, json.RawMessage) (agenttool.Facts, error)) map[string]agentpolicy.ToolMatcher {
 		t.Helper()
-		ms, err := Matchers([]agenttool.Tool{tool("t", fx)}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": {Match: agentpolicy.GlobMatcher("path")}})
+		ms, err := Matchers([]agenttool.Tool{tool("t", fx)}, []string{"t"}, nil, map[string]agentpolicy.ToolMatcher{"t": {Match: agentpolicy.GlobMatcher("path")}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +159,7 @@ func TestTheClaimIsAskedUnderTheDecisionsContext(t *testing.T) {
 
 func TestAMatcherMayNotBringSubjectsForAClaimingTool(t *testing.T) {
 	tl := tool("t", func(context.Context, json.RawMessage) (agenttool.Facts, error) { return agenttool.Facts{}, nil })
-	_, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, map[string]agentpolicy.ToolMatcher{"t": {
+	_, err := Matchers([]agenttool.Tool{tl}, []string{"t"}, nil, map[string]agentpolicy.ToolMatcher{"t": {
 		Match: agentpolicy.GlobMatcher("path"),
 		Subjects: func(_ context.Context, a json.RawMessage) ([]agentpolicy.Subject, error) {
 			return []agentpolicy.Subject{{Args: a}}, nil
@@ -219,7 +227,96 @@ func TestAClaimNamesOnlyItsOwnExtensionsTools(t *testing.T) {
 			up := tool("upload", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
 				return agenttool.Facts{Calls: []agenttool.FactCall{{Tool: tc.claim, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload README.md"}}}, nil
 			})
-			ms, err := Matchers([]agenttool.Tool{up}, tc.own, map[string]agentpolicy.ToolMatcher{"upload": glob})
+			ms, err := Matchers([]agenttool.Tool{up}, tc.own, nil, map[string]agentpolicy.ToolMatcher{"upload": glob})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ms["read"] = glob
+			if v := decide(t, ms, rules, "upload", `{"what":"~/.ssh/id_rsa"}`); v.Action != tc.want {
+				t.Errorf("= %v (%s), want %v", v.Action, v.Reason, tc.want)
+			}
+		})
+	}
+}
+
+// A claim's call of a tool its extension holds the claiming tool to
+// (HeldTo) is a constraint: that tool's ask and deny rules reach the
+// call, and its allow rules never allow it, so the call still needs an
+// allow of its own. A tool it is not held to is still one no rule
+// names.
+func TestAClaimOfAToolItIsHeldToIsAConstraint(t *testing.T) {
+	glob := agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path")}
+	rules := func(allowSkill bool) agentpolicy.RuleSet {
+		rs := agentpolicy.RuleSet{
+			Allow: []agentpolicy.Rule{{Tool: "read", Spec: "README.md"}, {Tool: "read", Spec: "notes.md"}},
+			Ask:   []agentpolicy.Rule{{Tool: "read", Spec: ".env"}},
+			Deny:  []agentpolicy.Rule{{Tool: "read", Spec: "secret/**"}},
+		}
+		if allowSkill {
+			rs.Allow = append(rs.Allow, agentpolicy.Rule{Tool: "skill"})
+		}
+		return rs
+	}
+	for _, tc := range []struct {
+		name       string
+		claim      string // the tool the claim's call names
+		path       string
+		allowSkill bool
+		want       agentturn.ToolAction
+		subject    string // in the verdict's subject; "" any
+	}{
+		{"read's ask asks", "read", ".env", true, agentturn.Defer, "skill .env"},
+		{"read's deny refuses", "read", "secret/x", true, agentturn.Block, "skill secret/x"},
+		{"nothing of read's fires: the call's own allow", "read", "plain.md", true, agentturn.Allow, ""},
+		{"read's allow does not allow the call", "read", "notes.md", false, agentturn.Defer, ""},
+		{"a tool it is not held to asks", "write", "notes.md", true, agentturn.Defer, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sk := tool("skill", func(context.Context, json.RawMessage) (agenttool.Facts, error) {
+				return agenttool.Facts{Calls: []agenttool.FactCall{{Tool: tc.claim, Args: json.RawMessage(`{"path":"` + tc.path + `"}`), Text: "skill " + tc.path}}}, nil
+			})
+			ms, err := Matchers([]agenttool.Tool{sk}, []string{"skill"}, map[string][]string{"skill": {"read"}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ms["read"], ms["write"] = glob, glob
+			v, err := decideUnder(t, context.Background(), ms, rules(tc.allowSkill), "skill", `{"name":"x"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v.Action != tc.want || tc.subject != "" && v.Subject != tc.subject {
+				t.Errorf("= %v (%s, about %q), want %v about %q", v.Action, v.Reason, v.Subject, tc.want, tc.subject)
+			}
+		})
+	}
+}
+
+// A matcher's own subjects, for a tool that makes no claim, may name
+// only its extension's tools, as a claim's calls may: one that names
+// another extension's tool is decided as a tool no rule names, so the
+// allow rule for the tool it named does not reach it. HeldTo is the
+// claim's, never a matcher's.
+func TestAMatchersSubjectsNameOnlyItsOwnExtensionsTools(t *testing.T) {
+	rules := []agentpolicy.Rule{{Tool: "read", Spec: "README.md"}, {Tool: "upload", Spec: "README.md"}}
+	glob := agentpolicy.ToolMatcher{Match: agentpolicy.GlobMatcher("path")}
+	for _, tc := range []struct {
+		name  string
+		names string
+		own   []string
+		held  map[string][]string
+		want  agentturn.ToolAction
+	}{
+		{"its own tool", "upload", []string{"upload"}, nil, agentturn.Allow},
+		{"another tool of its extension", "read", []string{"upload", "read"}, nil, agentturn.Allow},
+		{"another extension's tool", "read", []string{"upload"}, nil, agentturn.Defer},
+		{"another extension's tool it is held to", "read", []string{"upload"}, map[string][]string{"upload": {"read"}}, agentturn.Defer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := glob
+			m.Subjects = func(context.Context, json.RawMessage) ([]agentpolicy.Subject, error) {
+				return []agentpolicy.Subject{{Tool: tc.names, Args: json.RawMessage(`{"path":"README.md"}`), Text: "upload README.md"}}, nil
+			}
+			ms, err := Matchers([]agenttool.Tool{tool("upload", nil)}, tc.own, tc.held, map[string]agentpolicy.ToolMatcher{"upload": m})
 			if err != nil {
 				t.Fatal(err)
 			}

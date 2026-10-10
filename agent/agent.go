@@ -561,6 +561,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	s.Kit = kit
+	if err := a.bind(kit); err != nil {
+		kit.Close()
+		return nil, err
+	}
 	if e := kit.Engine(); e != nil {
 		if o.Policy == nil {
 			// The session's policy would have replaced it; with none,

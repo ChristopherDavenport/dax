@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -32,6 +33,21 @@ type assembly struct {
 	aliases         map[string][]string
 	shipped         []policy.Shipped
 	hooks           []func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+	// kit is the session's kit once agentkit.New has built it, which
+	// is after the policy's matchers are: a tool an extension Owns is
+	// the kit's (skill), and whether its calls are decided on a facts
+	// claim is known only through it (ownedSubjects).
+	kit atomic.Pointer[agentkit.Kit]
+	// owned are the names the extensions own: whose each is, and
+	// whether its matcher gives subjects of its own (bind).
+	owned map[string]ownedName
+}
+
+// ownedName is a name an extension owns: whose it is, and whether its
+// matcher gives subjects of its own.
+type ownedName struct {
+	ext      string
+	subjects bool
 }
 
 // mcpPrefixLower is the prefix of every MCP server's tools, which no
@@ -59,9 +75,12 @@ func build(exts []extension.Extension, env extension.ToolEnv) (*assembly, error)
 // owns and its aliases are unique across the session without regard to
 // case; a read-only tool, a matcher and an alias name only the
 // extension's own tools; a call a tool's facts claim names that is not
-// one of them asks (factspolicy.SubjectsOf); a tool names an extension
-// of the session. The extensions' matchers and hooks are built over
-// env. With remote, x runs the tools elsewhere and env is this
+// one of them asks (factspolicy.SubjectsOf), unless the extension holds
+// the claiming tool to it (HeldTo), and so does a subject a matcher
+// gives; a tool names an extension of the session. A name an extension
+// owns is a tool of the kit, decided on its facts claim once the kit is
+// built and given to the assembly (bind). The extensions' matchers and
+// hooks are built over env. With remote, x runs the tools elsewhere and env is this
 // machine's view of it, so a matcher that gives a tool's subjects,
 // which would read env, is refused: what a served call touches is the
 // executor's to say, through the tool's facts claim. It closes nothing:
@@ -71,7 +90,7 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 	if err != nil {
 		return nil, err
 	}
-	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}}
+	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}}
 	extNames := map[string]bool{}
 	claimed := map[string]string{} // lower-case name -> the extension that has it
 	claim := func(ext, name, what string) error {
@@ -171,17 +190,39 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 				return nil, fmt.Errorf("extension %s: the matcher for %q gives its subjects, which would read this machine; with an executor a served tool's subjects come from its facts claim", e.Name, name)
 			}
 		}
+		for name, targets := range e.HeldTo {
+			if !own[name] {
+				return nil, fmt.Errorf("extension %s: holds %q to another tool's rules, which is not one of its tools", e.Name, name)
+			}
+			for _, t := range targets {
+				if t == "" || own[t] {
+					return nil, fmt.Errorf("extension %s: holds %q to %q, which is not another extension's tool", e.Name, name, t)
+				}
+			}
+		}
 		// What a call of a tool that claims is matched as comes from its
 		// facts claim, whichever extension's it is: the policy reads the
-		// machine only through the tools. A claim may name only this
-		// extension's own names, so it cannot borrow another's rules.
+		// machine only through the tools. A claim, and a matcher's own
+		// subjects, may name only this extension's own names, so they
+		// cannot borrow another's rules; a claim may name the tools
+		// HeldTo holds the claiming tool to, whose asks and denies alone
+		// then apply.
 		adapters := make([]agenttool.Tool, len(tools))
 		for i, t := range tools {
 			adapters[i] = t.Adapter
 		}
-		ms, err = factspolicy.Matchers(adapters, ruleNames, ms)
+		ms, err = factspolicy.Matchers(adapters, ruleNames, e.HeldTo, ms)
 		if err != nil {
 			return nil, fmt.Errorf("extension %s: %w", e.Name, err)
+		}
+		// A name the extension owns is a tool its kit options add, which
+		// exists once the kit is built, after the policy's matchers: its
+		// subjects are looked up at each decision.
+		for _, n := range e.Owns {
+			m := ms[n]
+			a.owned[n] = ownedName{ext: e.Name, subjects: m.Subjects != nil}
+			m.Subjects = a.ownedSubjects(n, ruleNames, e.HeldTo[n], m.Subjects)
+			ms[n] = m
 		}
 		maps.Copy(a.matchers, ms)
 		for _, n := range e.Lifts {
@@ -205,11 +246,71 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 		}
 	}
 	// The rewrite a call runs with if allowed comes from its tool's facts
-	// claim, as its subjects do.
-	if h := factspolicy.Hook(a.tools); h != nil {
+	// claim, as its subjects do, a tool an extension owns included.
+	if factspolicy.Hook(a.tools) != nil || len(a.owned) > 0 {
+		h := factspolicy.HookFor(a.lookup)
 		a.hooks = append([]func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error){h}, a.hooks...)
 	}
 	return a, nil
+}
+
+// kitTool is the tool of an owned name in the session's kit, once the
+// kit is built.
+func (a *assembly) kitTool(name string) (agenttool.Tool, bool) {
+	if _, ok := a.owned[name]; !ok {
+		return nil, false
+	}
+	k := a.kit.Load()
+	if k == nil {
+		return nil, false
+	}
+	return k.LookupTool(name)
+}
+
+// ownedSubjects is the subjects splitter of name, a tool an extension
+// owns: the tool's facts claim when the kit's tool makes one (own the
+// extension's names, held the tools HeldTo holds it to); otherwise its
+// matcher's own subjects, inner, or the call itself.
+func (a *assembly) ownedSubjects(name string, own, held []string, inner agentpolicy.Subjects) agentpolicy.Subjects {
+	return func(ctx context.Context, args json.RawMessage) ([]agentpolicy.Subject, error) {
+		if t, ok := a.kitTool(name); ok {
+			if s := factspolicy.Subjects(t, own, held); s != nil {
+				return s(ctx, args)
+			}
+		}
+		if inner != nil {
+			return inner(ctx, args)
+		}
+		return []agentpolicy.Subject{{Args: args}}, nil
+	}
+}
+
+// lookup finds a tool whose claim's rewrite the facts hook applies:
+// one of the extensions' Tools, or a name they own, in the kit.
+func (a *assembly) lookup(name string) (agenttool.Tool, bool) {
+	for _, t := range a.tools {
+		if t.Name() == name {
+			return t, true
+		}
+	}
+	return a.kitTool(name)
+}
+
+// bind gives the assembly the session's kit, and checks what the
+// extensions own against it: a matcher that gives subjects of its own
+// for a tool the kit's claims, as one for a tool of Tools does, is an
+// error.
+func (a *assembly) bind(k *agentkit.Kit) error {
+	a.kit.Store(k)
+	for name, o := range a.owned {
+		if !o.subjects {
+			continue
+		}
+		if t, ok := a.kitTool(name); ok && agenttool.IsFactual(t) {
+			return fmt.Errorf("extension %s: matcher for %q: the tool's facts claim gives its subjects", o.ext, name)
+		}
+	}
+	return nil
 }
 
 // hook is the extensions' BeforeToolCall hooks as one, nil for none.

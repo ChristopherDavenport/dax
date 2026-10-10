@@ -162,7 +162,9 @@ an `Unreleased` changelog line:
   no rule names, and the policy asks. A rewrite a tool needs when
   allowed (bash's stamp) is in its claim, never in a hook of the
   extension's. A claim names only its own extension's tools (one that
-  names another's asks). A claim that reads a field of the arguments
+  names another's asks, unless the extension's `HeldTo` holds the
+  claiming tool to it: then that tool's asks and denies apply, never
+  its allows), and so does a matcher's own subjects. A claim that reads a field of the arguments
   refuses a key that is that field in another case, which the tool's
   decoder would take (package tool's `exactKeys`), and the tool refuses
   it again when it runs. The cross-workspace table in

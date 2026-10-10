@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,7 +163,7 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 
 			// The policy's path subjects, from read's facts claim: the
 			// name in the workspace, and what a link leads to.
-			subj := factspolicy.Subjects(Read(f), []string{"read"})
+			subj := factspolicy.Subjects(Read(f), []string{"read"}, nil)
 			for raw, want := range map[string][]string{
 				abs(".env"):  {".env"},
 				"notes.txt":  {"notes.txt", ".env"},
@@ -188,6 +189,25 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				}
 				if strings.Join(paths, " ") != strings.Join(want, " ") {
 					t.Errorf("subjects of %s = %q, want %q", raw, paths, want)
+				}
+			}
+
+			// PathCalls, a read of a name as another extension's claim
+			// makes it (dax-skills'), is read's: the name in the
+			// workspace and what a link leads to, naming no tool.
+			for raw, want := range map[string]string{abs("notes.txt"): "notes.txt .env", "src/../README.md": "README.md"} {
+				calls, err := PathCalls(f, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got []string
+				for _, c := range calls {
+					var m map[string]string
+					json.Unmarshal(c.Args, &m)
+					got = append(got, c.Tool+m["path"])
+				}
+				if strings.Join(got, " ") != want {
+					t.Errorf("PathCalls(%s) = %q, want %q", raw, got, want)
 				}
 			}
 
@@ -294,7 +314,7 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.Default = agentpolicy.Ask()
-			ms, err := factspolicy.Matchers([]agenttool.Tool{Read(f), Bash(f)}, []string{"read", "bash"}, map[string]agentpolicy.ToolMatcher{
+			ms, err := factspolicy.Matchers([]agenttool.Tool{Read(f), Bash(f)}, []string{"read", "bash"}, nil, map[string]agentpolicy.ToolMatcher{
 				"read": {Match: agentpolicy.GlobMatcher("path")},
 				"bash": {Match: agentpolicy.GlobMatcher("command")},
 			})
@@ -317,6 +337,15 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 			}
 			if got := (&Analyzer{Files: f}).Check(context.Background(), "cat README.md").Auto; got != (tc.want == agentturn.Allow) {
 				t.Errorf("cat README.md auto = %v", got)
+			}
+			// PathCalls says so as read's claim does: a call of a tool
+			// no rule names beside the name.
+			calls, err := PathCalls(f, "README.md")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unknown := slices.ContainsFunc(calls, func(c agenttool.FactCall) bool { return c.Tool == unresolvedTool }); unknown != (tc.want != agentturn.Allow) {
+				t.Errorf("PathCalls(README.md) = %+v", calls)
 			}
 			// The file tools still work: they read through the
 			// workspace, which confines them itself.

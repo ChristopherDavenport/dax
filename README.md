@@ -686,7 +686,14 @@ machine matters.
   a tool's read would be: an `AGENTS.md` or `.dax/skills` is left out
   and reported, and a `.dax/config.json` is an error. A `.dax/skills`
   holding a link that leads outside it, even into the workspace, is left
-  out too, since the skill tool reads without asking. Path rules match
+  out too, since the skill tool reads without asking. A read of a file
+  of the repository's skills, the instructions included, is held to
+  `read`'s asks and denies on the file's name in the workspace and where
+  its links lead, so a `.dax/skills` that is itself a link elsewhere in
+  the workspace (`-> ..`, `-> ../config`) does not read a `.env` without
+  `read(.env)`'s question, and your `deny read(config/**)` refuses it.
+  An allow of `read(...)` never allows such a read; the skill tool's own
+  rule does. The skills you installed are read unasked. Path rules match
   the path after normalisation, so `docs/../.git/x` is not under `docs/**`.
 - **Keeps credentials away from what it starts.** Bash commands and MCP
   servers get your environment without `*_API_KEY`, `*_TOKEN`,
@@ -902,6 +909,7 @@ whatever the settings say (any other name is an error), and
 | `Aliases` | names a rule may use for several of its tools: `Read` for read, grep, glob and ls |
 | `Policy` | the allow, ask and deny rules it ships for its tools |
 | `Lifts` | its tools whose asks a user's allow rule with a specifier lifts: `read(.env)` |
+| `HeldTo` | its tools whose calls are held to another extension's tools' ask and deny rules (never their allows), by what the tool's facts claim names: dax-skills holds `skill` to `read` |
 | `BeforeToolCall` | a hook, built over the session's `ToolEnv`, that decides or rewrites a call, folded with the policy, for the main agent and the sub-agents; `extension.FixedHook` wraps one that needs nothing of the session |
 | `Instructions` | text in the main agent's system prompt, in extension order, before your `instructions_file` |
 | `Kit` | agentkit options for anything else (skills, memory, child agents, guards), given every extension's tools |
@@ -928,7 +936,11 @@ allows asks first. Each extension's rules are a source of their own,
 session's record, and the start line counts them. A rule may name only
 the extension's own tools and aliases, not a pattern and not a
 carve-out, so one extension cannot loosen another's tools or cancel its
-rules. Deny beats ask beats allow whatever the source: an extension's
+rules. Nor can it borrow them: a call of another extension's tool that
+its tool's facts claim (`agenttool.Factual`) or its matcher's own
+subjects name is decided as a tool no rule names, so it asks, unless
+`HeldTo` holds the claiming tool to that tool, whose asks and denies
+then apply to the call and whose allows never do. Deny beats ask beats allow whatever the source: an extension's
 ask or deny holds against a plain allow in your config, and a carve-out
 in your config (`"ask": ["deploy(!staging)"]`) or, for a tool in
 `Lifts`, an allow with a specifier lifts it. A project's config can add

@@ -110,7 +110,8 @@ func TestTheExtension(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := skills.New(tc.o)
 			if e.Name != "dax-skills" || !slices.Equal(e.Owns, []string{"skill"}) || !slices.Equal(e.Policy.Allow, []string{"skill"}) ||
-				len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil {
+				len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil ||
+				len(e.HeldTo) != 1 || !slices.Equal(e.HeldTo["skill"], []string{"read"}) {
 				t.Errorf("extension %+v", e)
 			}
 		})
@@ -469,6 +470,51 @@ func TestTheSkillToolNeverReadsALinkOutOfTheSkillsDirectory(t *testing.T) {
 			}
 			if tc.want != "" && !strings.Contains(seen, tc.want) {
 				t.Errorf("the model did not see %q:\n%s", tc.want, seen)
+			}
+		})
+	}
+}
+
+// Where the workspace cannot say where a link leads, a read of a
+// project's skill cannot be held to read's rules on where it leads, so
+// it asks, the instructions included, as read itself would; a skill
+// the user installed is not held, and is read unasked.
+func TestAWorkspaceThatCannotReadLinksAsksAboutAProjectsSkill(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  string
+		asked bool
+	}{
+		{"the project's skill", `{"name":"greet2"}`, true},
+		{"a file of the project's skill", `{"name":"greet2","path":"ref.md"}`, true},
+		{"the user's skill", `{"name":"greet"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := session(t, &scripted{calls: [][2]string{{"skill", tc.args}}}, skills.Options{}, func(string) extension.Extension { return coding.New(0) })
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "greet2", "SKILL.md"), "---\nname: greet2\ndescription: Another.\n---\nHi.\n")
+			write(t, filepath.Join(o.Dir, ".dax", "skills", "greet2", "ref.md"), "ref\n")
+			local, err := workspace.NewLocal(o.Dir, nil)
+			must(t, err)
+			t.Cleanup(func() { local.Close() })
+			o.Workspace = noLinks{local}
+			s, err := agent.New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if !strings.Contains(s.Agent().Config().Instructions, "greet2") {
+				t.Fatalf("the project's skill is not offered:\n%s", s.Agent().Config().Instructions)
+			}
+			asked := false
+			if _, err := prompt(ctx, s, "greet", func(c *openresponses.FunctionCall, reason string) bool {
+				asked = asked || c.Name == "skill"
+				return false
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if asked != tc.asked {
+				t.Errorf("asked = %v, want %v", asked, tc.asked)
 			}
 		})
 	}

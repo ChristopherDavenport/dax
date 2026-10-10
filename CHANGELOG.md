@@ -7,6 +7,50 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Security: a read of a file of a project's skill through the skill
+  tool, the skill file included when the instructions are loaded, is
+  held to `read`'s asks and denies: it is decided as a read of
+  `.dax/skills/<skill>/<file>` in the workspace and of what its links
+  lead to, as `read`'s own call is, beside the skill tool's own rules.
+  A `.dax/skills` that is a link elsewhere in the workspace
+  (`-> ..`, `-> ../config`) offered that directory to the skill tool,
+  which runs unasked, so a `.env` there was read without the question
+  `read(.env)` gets, and a user's `deny read(config/**)` did not reach
+  it. Now the secret-path asks and the user's and the project's asks
+  and denies of `read` reach it; an allow of `read(...)` never allows
+  it (the skill tool's own rule does), and the skills the user
+  installed (`~/.dax/skills`, `skills_dirs`) are not held. A workspace
+  that cannot read links asks about every project skill read.
+  `-> ../.claude/skills` loads unasked as before. With `-executor` the
+  claim reads the executor's files. What is left is the moment between
+  the decision and the read. Closes #39.
+- Security: an extension's matcher's own subjects may name only the
+  extension's tools, as a facts claim's calls may. A subject that names
+  another extension's tool is decided as a tool no rule names, so it
+  asks; it was decided under that tool's rules, so a matcher could
+  borrow, say, dax-coding's allow of `read` for a tool of its own.
+- Added: `extension.Extension.HeldTo`, the other extensions' tools whose
+  ask and deny rules hold one of the extension's tools, by what its
+  facts claim names: such a call is a constraint (agentpolicy's
+  `Subject.Constrain`), which can make the call ask or refuse it and
+  never allows it. dax-skills holds `skill` to `read`.
+- Added: `tool.PathCalls`, what a read of a path would touch as the
+  file tools claim it, for an extension's claim of a read by another
+  name.
+- Changed: a tool an extension `Owns`, which its kit options add, is
+  decided on its facts claim when it makes one, looked up in the kit at
+  each decision, and the facts hook applies its rewrite; a matcher that
+  gives subjects of its own for such a tool is an error at start, as
+  for a tool of `Tools`.
+- Changed: `factspolicy.Subjects`, `SubjectsOf` and `Matchers` take
+  the tools a claiming tool is held to (`held`, by tool for
+  `Matchers`); nil holds none, as before. `factspolicy.Matchers` holds
+  a matcher's own subjects to the extension's names
+  (`factspolicy.Confine`), and `factspolicy.HookFor` is the facts hook
+  over tools looked up at each call.
+- Dependencies: agentpolicy v0.0.13, up from v0.0.12, for
+  `Subject.Constrain`; agentskill v0.0.12, up from v0.0.11, for the
+  skill tool's facts claim (`WithFileClaim`).
 - Changed: the facts of a model response's calls are read together for
   the decisions about them. With `-executor`, a response costs two
   facts requests, one for its calls and one for the rewrites (stamps)
