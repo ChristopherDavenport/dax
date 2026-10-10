@@ -25,12 +25,13 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/ChristopherDavenport/dax/policy"
 	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+
+	"github.com/ChristopherDavenport/dax/internal/cmdline"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // Providers are the model providers dax can talk to.
@@ -118,15 +119,69 @@ type Config struct {
 
 // Executor is how to start the executor.
 type Executor struct {
-	// Command is the command line, split on spaces, that starts `dax
-	// execute` and speaks MCP on its standard input and output:
-	// "docker exec -i box dax execute -root /work".
-	Command string `json:"command"`
+	// Command starts `dax execute` and speaks MCP on its standard input
+	// and output: a command line, "docker exec -i box dax execute -root
+	// /work", or the program and its arguments as an array, used
+	// exactly.
+	Command Command `json:"command"`
+	// PassEnv names variables of this machine's environment, credentials
+	// included, that the command which starts the executor is given and
+	// nothing else is: ssh's SSH_AUTH_SOCK, the token a kubectl
+	// credential plugin reads. The tools and MCP servers never see
+	// them, here or in the executor. The model's key may not be one.
+	PassEnv []string `json:"pass_env,omitempty"`
+}
+
+// Command is a command as a config file gives it: a string, a command
+// line split as a shell splits words with nothing expanded
+// (cmdline.Split), or an array of the program and its arguments, used
+// exactly. No shell runs either.
+type Command struct {
+	line  string
+	argv  []string
+	array bool
+	given bool
+}
+
+// UnmarshalJSON takes a string or an array of strings.
+func (c *Command) UnmarshalJSON(b []byte) error {
+	*c = Command{given: true}
+	var err error
+	if t := bytes.TrimSpace(b); len(t) > 0 && t[0] == '[' {
+		c.array = true
+		err = json.Unmarshal(t, &c.argv)
+	} else {
+		err = json.Unmarshal(b, &c.line)
+	}
+	if err != nil {
+		return errors.New(`command: want a command line ("docker exec -i box dax execute") or the program and its arguments (["docker", "exec", ...])`)
+	}
+	return nil
+}
+
+// Given reports whether the file set the command.
+func (c Command) Given() bool { return c.given }
+
+// Argv is the program and its arguments.
+func (c Command) Argv() ([]string, error) {
+	if c.array {
+		return c.argv, nil
+	}
+	return cmdline.Split(c.line)
+}
+
+// Line is the command as the file wrote it, for an error to quote.
+func (c Command) Line() string {
+	if c.array {
+		return strings.Join(c.argv, " ")
+	}
+	return c.line
 }
 
 // MCPServer is how to start one MCP server.
 type MCPServer struct {
-	// Command is the command line, split on spaces and honouring quotes.
+	// Command is the command line, split as a shell splits words, with
+	// nothing expanded (cmdline.Split).
 	Command string `json:"command"`
 }
 
@@ -302,11 +357,20 @@ func (l *Layer) validate() error {
 			}
 		}
 	}
-	if c.Executor != nil {
-		if strings.TrimSpace(c.Executor.Command) == "" {
+	if x := c.Executor; x != nil {
+		if !x.Command.Given() && len(x.PassEnv) == 0 {
 			return errors.New("executor.command is required")
 		}
-		if err := checkExecutor("executor.command", c.Executor.Command); err != nil {
+		if x.Command.Given() {
+			argv, err := x.Command.Argv()
+			if err != nil {
+				return fmt.Errorf("executor.command: %w", err)
+			}
+			if err := checkExecutor("executor.command", x.Command.Line(), argv); err != nil {
+				return err
+			}
+		}
+		if err := checkExecutorEnv("executor.pass_env", x.PassEnv, c.APIKeyEnv); err != nil {
 			return err
 		}
 	}
@@ -316,6 +380,9 @@ func (l *Layer) validate() error {
 		}
 		if strings.TrimSpace(s.Command) == "" {
 			return fmt.Errorf("mcp_servers.%s: command is required", name)
+		}
+		if _, err := cmdline.Split(s.Command); err != nil {
+			return fmt.Errorf("mcp_servers.%s: command: %w", name, err)
 		}
 	}
 	if p := c.Policy; p != nil {
@@ -352,30 +419,49 @@ func (l *Layer) validate() error {
 // standard input and output are the connection.
 var executorSchemes = []string{"http:", "https:", "unix:"}
 
-// checkExecutor refuses an executor given as an address rather than a
-// command.
-func checkExecutor(field, command string) error {
-	c := strings.ToLower(strings.TrimSpace(command))
+// checkExecutor refuses an executor command, written as line and split
+// into argv, that names no program, or that is an address rather than
+// a command.
+func checkExecutor(field, line string, argv []string) error {
+	if len(argv) == 0 {
+		return fmt.Errorf("%s is required: the command that starts dax execute", field)
+	}
+	if strings.TrimSpace(argv[0]) == "" {
+		return fmt.Errorf("%s %q: an empty program", field, line)
+	}
+	c := strings.ToLower(argv[0])
 	for _, p := range executorSchemes {
 		if strings.HasPrefix(c, p) {
-			return fmt.Errorf("%s %q: an executor over %s is not supported yet; give the command that starts dax execute (docker exec -i box dax execute, ssh host dax execute)", field, command, strings.TrimSuffix(p, ":"))
+			return fmt.Errorf("%s %q: an executor over %s is not supported yet; give the command that starts dax execute (docker exec -i box dax execute, ssh host dax execute)", field, line, strings.TrimSuffix(p, ":"))
 		}
 	}
 	return nil
 }
 
-// ExecutorOf is the executor command the user's layer and the flags
-// set, "" for none: what decides, before the project's layer is read,
-// whether the project is this machine's directory at all. A project's
-// layer cannot set it.
-func ExecutorOf(user Layer, f Flags) string {
+// checkExecutorEnv refuses a launcher's pass list that names something
+// other than a variable, or names keyEnv, the variable of the model's
+// key, which never leaves this process.
+func checkExecutorEnv(field string, names []string, keyEnv string) error {
+	for _, v := range names {
+		if !envName.MatchString(v) {
+			return fmt.Errorf("%s: %q is not a variable name", field, v)
+		}
+		if keyEnv != "" && v == keyEnv {
+			return fmt.Errorf("%s: %s holds the model's key (api_key_env), which never reaches the executor", field, v)
+		}
+	}
+	return nil
+}
+
+// HasExecutor reports whether the user's layer and the flags set an
+// executor: what decides, before the project's layer is read, whether
+// the project is this machine's directory at all. A project's layer
+// cannot set one.
+func HasExecutor(user Layer, f Flags) bool {
 	if f.Executor != nil {
-		return *f.Executor
+		return strings.TrimSpace(*f.Executor) != ""
 	}
-	if user.Executor != nil {
-		return user.Executor.Command
-	}
-	return ""
+	return user.Executor != nil && user.Executor.Command.Given()
 }
 
 // checkKeyCommand refuses a key command with no program or an empty
@@ -507,9 +593,13 @@ type Flags struct {
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
 	SessionHeader, ClientHeader      *string
-	// Executor replaces the config's executor command; "" clears it.
-	Executor      *string
-	Think, Agents *bool
+	// Executor replaces the config's executor command, a command line
+	// split as a shell splits words; "" clears it.
+	Executor *string
+	// ExecutorPassEnv replaces executor.pass_env; nil was not given and
+	// empty clears it.
+	ExecutorPassEnv []string
+	Think, Agents   *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -538,7 +628,8 @@ type Settings struct {
 	AgentsMDGlobal   []string // the user's own instruction files, absolute
 	MemoryDir        string   // empty: off; Resolve fills the default in
 	PricingFile      string   // empty: no terminal-client cost
-	Executor         string   // empty: the tools run in this process
+	Executor         []string // the executor's program and arguments; empty: the tools run in this process
+	ExecutorPassEnv  []string // what only the executor's command is given
 	MCP              []MCP
 	PassEnv          []string
 	MaxReadBytes     int64
@@ -629,8 +720,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if l.PricingFile != "" {
 			s.PricingFile = l.PricingFile
 		}
-		if l.Executor != nil {
-			s.Executor = l.Executor.Command
+		if x := l.Executor; x != nil {
+			if x.Command.Given() {
+				// Validated when the file was read.
+				s.Executor, _ = x.Command.Argv()
+			}
+			if x.PassEnv != nil {
+				s.ExecutorPassEnv = x.PassEnv
+			}
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
@@ -743,10 +840,23 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		s.PricingFile = *f.PricingFile
 	}
 	if f.Executor != nil {
-		if err := checkExecutor("-executor", *f.Executor); err != nil {
+		s.Executor = nil
+		if strings.TrimSpace(*f.Executor) != "" {
+			argv, err := cmdline.Split(*f.Executor)
+			if err != nil {
+				return s, fmt.Errorf("-executor: %w", err)
+			}
+			if err := checkExecutor("-executor", *f.Executor, argv); err != nil {
+				return s, err
+			}
+			s.Executor = argv
+		}
+	}
+	if f.ExecutorPassEnv != nil {
+		if err := checkExecutorEnv("-executor-pass-env", f.ExecutorPassEnv, ""); err != nil {
 			return s, err
 		}
-		s.Executor = strings.TrimSpace(*f.Executor)
+		s.ExecutorPassEnv = f.ExecutorPassEnv
 	}
 	if f.AgentsMDGlobal != nil {
 		if err := checkPaths("-agents-md-global", f.AgentsMDGlobal); err != nil {
@@ -783,6 +893,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if s.Provider == "openresponses" && s.BaseURL == "" {
 		return s, errors.New("provider openresponses needs a base_url")
+	}
+	if err := checkExecutorEnv("executor.pass_env", s.ExecutorPassEnv, s.APIKeyEnv); err != nil {
+		return s, err
 	}
 	if s.APIKeyEnv != "" {
 		if !envName.MatchString(s.APIKeyEnv) {

@@ -571,7 +571,7 @@ every source, the confined workspace, the name checks, the record's
 header) are its to keep, and the layer below is agentkit itself. A
 function that returns the options the session would pass the kit, for a
 program to build on and own, could come later. `config`, `provider`,
-`modelinfo`, `prompt`, `render`, `private` and `executor` stay internal
+`modelinfo`, `prompt`, `render`, `private`, `cmdline` and `executor` stay internal
 (the workspace is agentworkspace's, public there, as an extension's
 tools need it): they are
 the command line's and the session's, and `modelinfo` is a trial meant to

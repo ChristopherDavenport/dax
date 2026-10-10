@@ -55,10 +55,54 @@ type tuiFront struct {
 	// run is console.Run; tests replace it.
 	run func(context.Context, client.Backend, ...console.Option) error
 
-	mu       sync.Mutex
-	warnings bytes.Buffer
-	log      []string
-	restore  func()
+	// warnings are what dax warns about (agent.CaptureWarnings), the
+	// executor's launcher's standard error among them, held back from
+	// Prepare until the client has given the screen up: those from
+	// before it takes the screen are shown before, the rest after.
+	warnings heldOutput
+
+	mu      sync.Mutex
+	log     []string
+	restore func()
+}
+
+// heldOutput is output held back while the client has the screen,
+// written to from any goroutine: the executor's launcher writes from
+// its own. It keeps the last maxHeld bytes.
+type heldOutput struct {
+	mu      sync.Mutex
+	b       []byte
+	dropped bool
+}
+
+// maxHeld bounds what heldOutput keeps of a noisy launcher.
+const maxHeld = 64 << 10
+
+func (h *heldOutput) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.b = append(h.b, p...)
+	if over := len(h.b) - maxHeld; over > 0 {
+		h.b = h.b[over:]
+		// Start at a line, not in the middle of one.
+		if i := bytes.IndexByte(h.b, '\n'); i >= 0 {
+			h.b = h.b[i+1:]
+		}
+		h.dropped = true
+	}
+	return len(p), nil
+}
+
+// take returns what is held, cleaned, and empties it.
+func (h *heldOutput) take() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s := render.Clean(string(h.b))
+	if h.dropped {
+		s = "[earlier output dropped]\n" + s
+	}
+	h.b, h.dropped = nil, false
+	return s
 }
 
 // Prepare collects what the session would have printed, and holds back
@@ -72,6 +116,10 @@ func (f *tuiFront) Prepare(o *agent.Options) {
 	f.restore = agent.CaptureWarnings(&f.warnings)
 }
 
+// executorBanner is the start line that says where the tools act when
+// it is not here, in the terminal client and the REPL.
+func executorBanner(executor string) string { return "executor: " + executor }
+
 // banner is the lines dax shows at start in every front.
 func banner(info frontInfo, si agent.Info) []string {
 	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, info.Dir)}
@@ -79,7 +127,7 @@ func banner(info frontInfo, si agent.Info) []string {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
 	if info.Executor != "" {
-		lines = append(lines, "executor: "+info.Executor)
+		lines = append(lines, executorBanner(info.Executor))
 	}
 	if si.Recorded {
 		lines = append(lines, "session "+si.ID)
@@ -92,26 +140,28 @@ func banner(info frontInfo, si agent.Info) []string {
 
 func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	si := sess.Info()
-	if f.restore != nil {
-		f.restore()
-	}
 	out := f.out
 	if out == nil {
 		out = os.Stdout
 	}
 	// The start lines stay on the terminal under the client's alternate
-	// screen, so they are printed only with -v. A warning is printed
-	// either way, and waited on, since it may say the store was exposed.
+	// screen, so they are printed only with -v, but for where the tools
+	// act when that is not here: the executor's line is printed either
+	// way. A warning is printed either way, and waited on, since it may
+	// say the store was exposed.
 	if f.info.Verbose {
 		for _, l := range banner(f.info, si) {
 			fmt.Fprintln(out, render.Clean(l))
 		}
+	} else if f.info.Executor != "" {
+		fmt.Fprintln(out, render.Clean(executorBanner(f.info.Executor)))
 	}
-	f.mu.Lock()
-	warn := f.warnings.String()
-	f.mu.Unlock()
+	// The warnings stay captured while the client has the screen, so
+	// nothing draws over it: what comes meanwhile (the executor's
+	// launcher's complaints) is printed when it exits.
+	warn := f.warnings.take()
 	if warn != "" {
-		fmt.Fprint(out, render.Clean(warn))
+		fmt.Fprint(out, warn)
 	}
 	omitted := f.info.Verbose && len(si.Omitted) > 0
 	if f.pause && (warn != "" || omitted) {
@@ -129,6 +179,10 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	// in it included.
 	defer func() {
 		r := recover()
+		if f.restore != nil {
+			f.restore()
+			f.restore = nil
+		}
 		f.flush(out, si)
 		if r != nil {
 			panic(r)
@@ -150,9 +204,11 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	return run(ctx, be, opts...)
 }
 
-// flush prints, with -v, the notes dax buffered, and then the command
-// that resumes the session.
+// flush prints the warnings held while the client had the screen,
+// with -v the notes dax buffered, and then the command that resumes
+// the session.
 func (f *tuiFront) flush(out io.Writer, si agent.Info) {
+	fmt.Fprint(out, f.warnings.take())
 	f.mu.Lock()
 	notes := f.log
 	f.log = nil
@@ -179,14 +235,15 @@ func resumeLine(name, id string) string {
 func (f *tuiFront) Abandon() {
 	if f.restore != nil {
 		f.restore()
+		f.restore = nil
 	}
 	w := f.errOut
 	if w == nil {
 		w = os.Stderr
 	}
+	fmt.Fprint(w, f.warnings.take())
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	fmt.Fprint(w, render.Clean(f.warnings.String()))
 	for _, l := range f.log {
 		fmt.Fprintln(w, render.Clean(l))
 	}

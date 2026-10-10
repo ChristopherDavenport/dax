@@ -16,7 +16,8 @@ machine: the model and its key, the policy and every decision, the
 questions you answer, memory, your own `~/.dax/AGENTS.md`,
 `agents_md_global` and skills, and the session record. The key never
 enters the sandbox: the command that starts the executor gets your
-environment less its credentials, the key's variable among them. The
+environment less its credentials, but those you name for it, and never
+the key's variable. The
 connection is that command's standard input and output (a `docker
 exec -i`, an `ssh`, a `kubectl exec -i`); there is no port, listener or
 token.
@@ -61,8 +62,13 @@ docker build -t dax-sandbox .
 cd ~/src/app
 docker run -d --init --name app-box --user "$(id -u):$(id -g)" \
   -v "$PWD:$PWD" -w "$PWD" dax-sandbox sleep infinity
-dax -executor "docker exec -i app-box dax execute -root $PWD -kind container -ref app-box"
+dax -executor "docker exec -i app-box dax execute -root '$PWD' -kind container -ref app-box"
 ```
+
+Your shell fills in `$PWD` inside the double quotes; the single quotes
+reach dax, which splits the line as a shell splits words, so a
+checkout whose path has a space stays one argument (one whose path has
+a single quote needs the array form, under Config).
 
 `-i` and not `-t`: the pipe carries MCP. `-root` must exist in the
 container; it is where every tool acts and nothing above it is read.
@@ -81,37 +87,38 @@ environment reaches them.
 Install dax on the host with the same `go install`, then:
 
 ```sh
-dax -executor "ssh -T -o BatchMode=yes build-host bash -lc 'exec dax execute -root /home/me/src/app -kind remote -ref build-host'"
+dax -executor-pass-env SSH_AUTH_SOCK \
+  -executor "ssh -T -o BatchMode=yes build-host \"bash -lc 'exec dax execute -root ~/src/app -kind remote -ref build-host'\""
 ```
 
-ssh joins its arguments with spaces and the remote user's shell parses
-the result, so quotes and `~` in the command work on that side. Here
-they run `dax execute` under a login shell (`bash -l`): a
-non-interactive ssh session often lacks the `PATH` with `~/go/bin` and
-the Go toolchain, and the tools' commands inherit `dax execute`'s
-environment. The tools run as the user
-you log in as, with that user's files and rights on the host.
+dax splits the line as a shell would split it, so the remote command,
+in double quotes, is one argument to ssh. ssh sends it to the host,
+whose shell parses it again, so the single quotes, `~` and `$HOME`
+inside it work on that side. Here they run `dax execute` under a login
+shell (`bash -l`): a non-interactive ssh session often lacks the
+`PATH` with `~/go/bin` and the Go toolchain, and the tools' commands
+inherit `dax execute`'s environment. The tools run as the user you log
+in as, with that user's files and rights on the host. In your config
+the array form needs one layer of quoting less:
+
+```json
+{
+  "executor": {
+    "command": ["ssh", "-T", "-o", "BatchMode=yes", "build-host", "bash -lc 'exec dax execute -root ~/src/app -kind remote -ref build-host'"],
+    "pass_env": ["SSH_AUTH_SOCK"]
+  }
+}
+```
 
 `-T` asks for no terminal, and `BatchMode=yes` makes ssh fail rather
 than ask for a password, a passphrase or a new host key, since dax
 holds the terminal. Connect by hand once first. dax removes
 `SSH_AUTH_SOCK` from the command's environment along with the other
-credentials, so ssh cannot reach your agent. Either use a key file
-without a passphrase for that host, or let dax's ssh ride a connection
-you opened yourself:
-
-```
-# ~/.ssh/config
-Host build-host
-  ControlMaster auto
-  ControlPath ~/.ssh/cm-%C
-  ControlPersist 8h
-  ServerAliveInterval 30
-```
-
-then `ssh build-host true` in your terminal before starting dax. (Adding
-`SSH_AUTH_SOCK` to `pass_env` also works, but `pass_env` hands it to
-bash and MCP servers too whenever you run dax without an executor.)
+credentials unless you name it for the launcher, as above
+(`-executor-pass-env`, or `pass_env` under `executor`). Only the
+command that starts the executor gets it: bash and the MCP servers do
+not, in the sandbox or, when you run dax without an executor, on your
+machine. (The top-level `pass_env` would hand it to them too.)
 
 ## kubectl
 
@@ -127,7 +134,7 @@ dax -executor "kubectl exec -i app-box -c app-box -- dax execute -root /home/dax
 `kubectl run` names the container after the pod; name yours with `-c`.
 `KUBECONFIG` reaches kubectl, but an exec credential plugin that reads
 a token from your environment (`AWS_SESSION_TOKEN`, say) does not get
-it unless `pass_env` names it.
+it unless `executor.pass_env` (or `-executor-pass-env`) names it.
 
 ## Config
 
@@ -136,18 +143,34 @@ Put the executor in your own config (`~/.config/dax/config.json`):
 ```json
 {
   "executor": {
-    "command": "docker exec -i app-box dax execute -root /home/me/src/app -kind container -ref app-box"
+    "command": "docker exec -i app-box dax execute -root /home/me/src/app -kind container -ref app-box",
+    "pass_env": ["SSH_AUTH_SOCK"]
   }
 }
 ```
 
-The command is split on spaces and run directly, with no shell: no
-`$PWD`, no `~` and no quotes on this side, so a path with a space cannot
-be passed to `docker exec` or `kubectl exec`. Since the root is fixed,
-a shell function suits several projects better:
+`command` is a command line, split as a shell splits words (`'...'`,
+`"..."` and `\` quote; `-root "/home/me/my app"` is one argument) and
+run directly, with no shell: nothing is expanded, so `$PWD`, `$HOME`,
+`~` and `*` reach the program as those characters. `-executor`, `-mcp`,
+`mcp_servers` and `-api-key-command` split the same way. Or give the
+program and its arguments as an array, used exactly:
+
+```json
+{
+  "executor": {
+    "command": ["docker", "exec", "-i", "app-box", "dax", "execute", "-root", "/home/me/my app"]
+  }
+}
+```
+
+`pass_env` names the variables only that command gets (see ssh); it
+may stand alone, without `command`, when you give `-executor` each
+time. Since the root is fixed, a shell function suits several projects
+better:
 
 ```sh
-daxbox() { dax -executor "docker exec -i $(basename "$PWD")-box dax execute -root $PWD -kind container -ref $(basename "$PWD")-box" "$@"; }
+daxbox() { dax -executor "docker exec -i $(basename "$PWD")-box dax execute -root '$PWD' -kind container -ref $(basename "$PWD")-box" "$@"; }
 ```
 
 - `-executor ""` runs one session on this machine despite the config.
@@ -160,20 +183,28 @@ daxbox() { dax -executor "docker exec -i $(basename "$PWD")-box dax execute -roo
   `/mcp add <name> <command>` (in `-front repl`) starts one there
   mid-session. The sandbox keeps no list of its own and a project's
   config cannot name one.
-- Your `pass_env` applies only to the command that starts the executor;
-  what the sandbox's commands get is `dax execute`'s `-pass-env`.
+- Your `pass_env` and `executor.pass_env` apply only to the command
+  that starts the executor (and `pass_env` to the tools when you run
+  dax without one); what the sandbox's commands get is `dax execute`'s
+  `-pass-env`.
+- A project's `.dax/config.json` may not set `executor.pass_env`
+  either; it is part of `executor`.
 - `-config ~/.config/dax/sandbox.json` keeps a second config for
   sandboxed sessions, with the executor and rules of their own. It
   replaces your config rather than adding to it.
 
 ## Checking it
 
-`dax -v` (or `-front repl`) prints the banner, with a line for the
-executor: its name and version, kind and ref, and root,
+With an executor, the terminal client and the REPL print a line for
+it at the start: its name and version, kind and ref, and root,
 
 ```
 executor: dax v0.0.9 · container app-box · /home/me/src/app
 ```
+
+The terminal client prints it before it takes the screen, and it is on
+the terminal again when the client exits; `dax -v` prints the rest of
+the banner with it.
 
 Ask the model to run `hostname`; the answer should be the sandbox's (a
 container's ID, under docker).
@@ -191,9 +222,13 @@ When it fails:
 | a call blocked mid-session | the executor did not answer within 30 seconds or is gone; quit, bring it back, `dax -resume <id>` |
 
 Anything the launcher or `dax execute` writes to standard error comes
-to your terminal, cleaned of control characters; keep the launcher
-quiet (ssh's `-o LogLevel=ERROR`) so nothing draws over the terminal
-client.
+to your terminal, cleaned of control characters. Under the terminal
+client nothing draws over the screen: what comes before it takes the
+screen is printed above it (dax waits for Enter on what came while the
+session opened), and what comes while it runs is held and printed when
+it exits, above the resume command. In the
+REPL and with `-p` it is printed as it comes. Keep the launcher quiet
+(ssh's `-o LogLevel=ERROR`) so a start does not stop for a warning.
 
 Speed: each model response costs two facts requests (its calls, then
 their stamps) however many calls it makes, and each call is one more.
@@ -226,3 +261,6 @@ checkout.
   from its directory finds no such file in the sandbox unless you put
   it there.
 - Memory stays on your machine; the sandbox cannot read or write it.
+- The terminal client's own screen does not name the executor: its
+  line is printed above the client, and the client (agentconsole) has
+  no header for it yet.

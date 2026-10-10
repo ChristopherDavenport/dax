@@ -208,7 +208,7 @@ func (f *replFront) run(ctx context.Context, t agent.Turn, ctl agent.Controls) e
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
 	if f.info.Executor != "" {
-		fmt.Printf("executor: %s\n", render.Clean(f.info.Executor))
+		fmt.Println(render.Clean(executorBanner(f.info.Executor)))
 	}
 	if info.Recorded {
 		fmt.Printf("session %s\n", info.ID)
