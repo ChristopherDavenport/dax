@@ -133,8 +133,9 @@ func (v *executorView) Exec(context.Context, workspace.Command) (*workspace.Outp
 }
 
 // keepOpen is an executor the session runs its tools through and does
-// not close: the caller's Executor.
-type keepOpen struct{ executor.Executor }
+// not close: the caller's Executor, which reads a model response's
+// facts in one request (executor.Batcher).
+type keepOpen struct{ *executor.Remote }
 
 func (keepOpen) Close() error { return nil }
 

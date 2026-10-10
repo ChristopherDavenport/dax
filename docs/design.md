@@ -89,7 +89,7 @@ Where dax does not keep to this yet, and what each needs:
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
-| Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each decision's facts pinned, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
+| Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each model response's facts read together for its decisions, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
 | The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
 | AGENTS.md | `agentsmd` | the session: the chain's extent, reading it through the workspace, screening and budget |
@@ -456,16 +456,29 @@ the executor gone blocks the call. What the kit, the policy and `Env.Tools` hold
 tool's definition, scheduling and annotations, whose calls, facts
 claims and replay claims go to the executor; a request carries the
 same bytes either way. The executor owns the tools and the session
-closes it. Each decision about a call pins the call's facts (`Set.Pin`):
-the main agent's for the length of its `BeforeToolCall`, a sub-agent's
-from its verdict to the hooks' rewrite, so every reading in between is
-one reading, made under the call's context, and the stamp a call runs
-with is of the facts its verdict was decided on. The rewrite's own
-arguments are another call, read afresh when the engine decides them.
-agentpolicy passes the policy's subjects the context of the decision
-that reads them, so a reading no decision has pinned, a sibling the
-batch hold reads, is made under the held decision's context, and a
-cancelled decision fails its reading, which blocks the call.
+closes it. The facts of a model response's calls are read together
+for the decisions about them (`Set.PinBatch`): on the first reading,
+every claiming call of the response in one request, then every
+rewrite those claims ask for (bash's and the file tools' stamps) in a
+second, each rewrite read as the call it is, never taken to claim what
+its call claimed. agentpolicy passes the policy's subjects, its hooks
+and its batch hold the context of the decision that reads them
+(v0.0.12), and the session marks that context with the batch, so the
+verdict about a call, the stamp it runs with, the decision about that
+stamp and every sibling's reading are one reading of the response,
+and the stamp a call runs with is of the facts its verdict was
+decided on. Only a reading under the marked context is the batch's:
+an identical call decided outside it is read afresh. A batch is let go
+when the decision about its last call returns, when the run's next
+batch starts, when its run ends and when the session closes; a
+sub-agent's decision lets it go before it asks, so a person's slow
+answer holds no reading open and the calls after it are read in a
+batch of their own. A request that fails, takes longer than 30 seconds
+or finds the executor gone fails the whole batch, so every call of it
+is blocked, and nothing it read is kept. With `-executor`, a response
+of any number of claiming calls costs two facts requests, where
+reading each call per decision cost the main agent twelve for three
+calls. An executor in this process reads them one by one.
 
 Each claim is checked at start, across the session and without regard
 to case: an extension's name, its tools, the names it `Owns` (tools its

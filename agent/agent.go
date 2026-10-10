@@ -266,9 +266,11 @@ func Describe(p agentturn.PendingCall) string {
 }
 
 // withSubjects is the session's adjustment to the agent's configuration
-// (kitbackend.WithConfig). The call's facts are pinned for the length
-// of its decision (executor.Set.Pin), so the policy's subjects and the
-// rewrite it runs with come from one reading of its claim. A call the
+// (kitbackend.WithConfig). The facts of the model response's calls are
+// held for their decisions (executor.Set.PinBatch), so the policy's
+// subjects, the rewrite a call runs with, the decision about that
+// rewrite and the batch hold's reading of each sibling come from one
+// reading of the response, two requests to an executor elsewhere. A call the
 // policy defers has what the policy was asking about added to its
 // reason, since the reason is the question every front shows: the rule,
 // the secret path, the git config key, the part of a command line, from
@@ -281,8 +283,8 @@ func (s *Session) withSubjects(cfg agentturn.Config) agentturn.Config {
 	eng := s.Kit.Engine()
 	set := s.set
 	cfg.BeforeToolCall = func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-		unpin := set.Pin(ctx, info)
-		defer unpin()
+		ctx, done := set.PinBatch(ctx, info)
+		defer done()
 		d, err := inner(ctx, info)
 		if eng == nil || err != nil || d == nil || d.Action != agentturn.Defer || info.Call == nil {
 			return d, err
@@ -816,6 +818,9 @@ func (s *Session) Close() error {
 		s.detach()
 	}
 	err := s.Kit.Close()
+	if s.set != nil {
+		s.set.ReleaseAll()
+	}
 	s.closeTools()
 	if s.ownWS {
 		s.ws.Close()
@@ -1071,27 +1076,29 @@ func mcpTransport(command string, env []string) (mcp.Transport, error) {
 // user, and runs rewritten too if they approve. With no one to ask, it
 // is refused. A policy that is off governs nothing, the child included.
 //
-// The call's facts are pinned in set from the verdict to the hooks'
-// rewrite (executor.Set.Pin), so the arguments it runs with come from
-// the reading the verdict was decided on; the pin is let go before the
-// question, so a person's slow answer holds nothing open.
+// The facts of the sub-agent's model response are held in set for the
+// decisions about its calls (executor.Set.PinBatch), so a call's
+// verdict, the hooks' rewrite and the decision about that rewrite come
+// from one reading of the response. The batch is let go before a
+// question, so a person's slow answer holds no reading open; the next
+// call of the response is read in a batch of its own.
 func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engine], hook func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error), set *executor.Set) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		e := eng.Load()
 		if e == nil {
 			return nil, nil
 		}
-		unpin := set.Pin(ctx, info)
-		defer unpin() // a no-op after the unpin below, which comes before the question
-		v, err := e.Would(ctx, info)
+		bctx, done := set.PinBatch(ctx, info)
+		defer done() // a no-op after the done below, which comes before the question
+		v, err := e.Would(bctx, info)
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
 		}
 		var h *agentturn.ToolDecision
 		if hook != nil {
-			h, err = hook(ctx, info)
+			h, err = hook(bctx, info)
 		}
-		unpin()
+		done()
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "a hook could not decide this call: " + err.Error()}, nil
 		}
@@ -1109,6 +1116,7 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 			if h != nil {
 				args = h.Args
 			}
+			set.Release(bctx)
 			return s.askChild(ctx, name, info, why, subject, args), nil
 		}
 		// The verdict is returned rather than left implicit, so the

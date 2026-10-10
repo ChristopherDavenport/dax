@@ -192,6 +192,35 @@ func (r *Remote) Facts(ctx context.Context, c Call) (agenttool.Facts, error) {
 	return f, nil
 }
 
+var _ Batcher = (*Remote)(nil)
+
+// BatchFacts reads the calls' claims in the executor in one request
+// (mcpclient's Remote.Facts), within factsTimeout. A call's own error,
+// a tool the executor does not have included, is in errs; the
+// request's, the connection's or the timeout's, is err, and blocks
+// every call of the batch.
+func (r *Remote) BatchFacts(ctx context.Context, calls []Call) ([]agenttool.Facts, []error, error) {
+	ask := make([]mcpclient.FactsCall, len(calls))
+	for i, c := range calls {
+		ask[i] = mcpclient.FactsCall{Name: c.Tool, Args: c.Args}
+	}
+	ctx, cancel := context.WithTimeout(ctx, factsTimeout)
+	defer cancel()
+	got, err := r.c.Facts(ctx, ask...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("executor: %w", err)
+	}
+	facts, errs := make([]agenttool.Facts, len(calls)), make([]error, len(calls))
+	for i, a := range got {
+		if a.Err != nil {
+			errs[i] = fmt.Errorf("executor: %w", a.Err)
+			continue
+		}
+		facts[i] = a.Facts
+	}
+	return facts, errs, nil
+}
+
 // Replay is the executor's replay claim, within factsTimeout; one that
 // cannot be read is agenttool.ReplayUnknown.
 func (r *Remote) Replay(ctx context.Context, c Call) agenttool.Replay {

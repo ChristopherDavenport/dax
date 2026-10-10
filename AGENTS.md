@@ -91,8 +91,9 @@ before changing the shape.
 - `internal/executor`: the execution plane: the `Executor` the
   session runs the extensions' `Tools` through (facts, replay, calls,
   descriptor, close), `InProcess` (the tools in this process), and
-  `Set`, the tools bound as adapters for the kit, which pins each
-  decision's facts so one reading decides and stamps a call; and
+  `Set`, the tools bound as adapters for the kit, which holds each
+  model response's facts for its decisions (two requests: the calls,
+  then their rewrites) so one reading decides and stamps a call; and
   `NewServer` (`serve.go`), the in-process tools served over MCP for
   `execute`, with what MCP cannot carry in a capability, and its
   workspace's files served read-only as MCP resources and read back as

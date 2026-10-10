@@ -90,9 +90,10 @@ type remoteBox struct {
 	dir string
 	srv *mcp.Server
 
-	mu    sync.Mutex
-	facts []string // the arguments of each facts request's calls
-	calls []string // the arguments of each tools/call
+	mu       sync.Mutex
+	requests int      // the facts requests
+	facts    []string // the arguments of each facts request's calls
+	calls    []string // the arguments of each tools/call
 	// beforeCall, when set, runs as a call reaches the executor, after
 	// every decision about it.
 	beforeCall func()
@@ -133,6 +134,7 @@ func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox
 				}
 				json.Unmarshal(raw, &p)
 				b.mu.Lock()
+				b.requests++
 				for _, c := range p.Calls {
 					b.facts = append(b.facts, c.Name+" "+string(c.Arguments))
 				}
@@ -184,6 +186,13 @@ func (b *remoteBox) sent() (facts, calls []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return slices.Clone(b.facts), slices.Clone(b.calls)
+}
+
+// factsRequests is how many facts requests the box was sent.
+func (b *remoteBox) factsRequests() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.requests
 }
 
 // instructed records each request's instructions.
@@ -280,9 +289,9 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 			t.Errorf("the executor ran %s, want read with its stamp", c)
 		}
 	}
-	// One reading of the model's arguments per decision. The engine
-	// decides the stamped rewrite again unpinned, which is one more
-	// reading each: the known cost until facts are batched.
+	// One reading of the model's arguments per decision, and one of
+	// the stamped rewrite, which the engine decides as a call of its
+	// own: each response's batch reads its calls, then their rewrites.
 	own, stamped := 0, 0
 	for _, f := range facts {
 		switch {
@@ -298,7 +307,10 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 		t.Errorf("%d readings of the model's arguments, want one per decision (2): %v", own, facts)
 	}
 	if stamped != 2 {
-		t.Errorf("%d readings of the stamped rewrite, want the known one per decision (2): %v", stamped, facts)
+		t.Errorf("%d readings of the stamped rewrite, want one per decision (2): %v", stamped, facts)
+	}
+	if n := box.factsRequests(); n != 4 {
+		t.Errorf("%d facts requests, want two for each response's one read (4)", n)
 	}
 	for _, w := range []string{`"kind":"container"`, `"ref":"box"`, `"cwd":"/work"`} {
 		if !strings.Contains(string(data), w) {
@@ -323,6 +335,61 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 	}
 	if !main || !explore {
 		t.Errorf("the executor's root in the main prompt %v, in explore's %v", main, explore)
+	}
+}
+
+// A model response's calls are read in two requests, whoever decides
+// them: one for every call's facts and one for every rewrite they ask
+// for, however many readings the decisions make (the engine's subjects,
+// the rewrite hook, the engine's decision about the rewrite, the batch
+// hold's reading of each sibling). Read one by one, three reads cost
+// the main agent twelve requests and a sub-agent six. A sub-agent's
+// question lets its batch go, so the calls after it are read in one
+// batch more.
+func TestAResponsesFactsAreReadInTwoRequests(t *testing.T) {
+	reads := [][2]string{{"read", `{"path":"a.txt"}`}, {"read", `{"path":"b.txt"}`}, {"read", `{"path":"c.txt"}`}}
+	asking := append([][2]string{{"read", `{"path":".env"}`}}, reads[1:]...)
+	explore := [][2]string{{"explore", `{"input":"read them"}`}}
+	for _, tc := range []struct {
+		name          string
+		parent, child [][2]string
+		asked         int
+		ran           int
+		requests      int
+	}{
+		{"main agent", reads, nil, 0, 3, 2},
+		{"main agent, its first call asking", asking, nil, 1, 2, 2},
+		{"explore sub-agent", explore, reads, 0, 3, 2},
+		{"explore sub-agent, its first call asking", explore, asking, 1, 2, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			box := newRemoteBox(t)
+			for _, f := range []string{"a.txt", "b.txt", "c.txt", ".env"} {
+				write(t, filepath.Join(box.dir, f), f+"\n")
+			}
+			ex, _ := box.dial(t)
+			s, err := New(ctx, remoteOptions(t, &inOne{parent: tc.parent, child: tc.child}, ex))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			asked := 0
+			if _, err := promptOn(ctx, s, "read them", func(*openresponses.FunctionCall, string) bool {
+				asked++
+				return false
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_, calls := box.sent()
+			if asked != tc.asked || len(calls) != tc.ran {
+				t.Errorf("asked %d times and ran %v, want %d and %d calls", asked, calls, tc.asked, tc.ran)
+			}
+			if n := box.factsRequests(); n != tc.requests {
+				facts, _ := box.sent()
+				t.Errorf("%d facts requests, want %d: %v", n, tc.requests, facts)
+			}
+		})
 	}
 }
 
