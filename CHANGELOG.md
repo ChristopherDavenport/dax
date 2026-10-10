@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.11 - 2026-10-10
 
 - Added: the terminal client takes the REPL's commands. A line that
   starts with a slash is a command to dax in both fronts and never
