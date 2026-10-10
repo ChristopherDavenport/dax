@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
@@ -74,6 +75,19 @@ func planStamp(rendered string, calls []agenttool.FactCall) string {
 // plan and the calls its claim gives (parsedCalls), from c alone.
 func stampOfCheck(c *Check) string { return planStamp(c.Render(), parsedCalls(c)) }
 
+// lineStamp signs a line outside the safe subset that writes through a
+// redirect, for when the policy lets it run, by a rule or by a person's
+// yes: the line as given and the calls its claim gave (bashCalls), what
+// each redirect writes with the links on its way followed. The line then
+// runs as typed only while its redirects lead where they led, so a
+// target that became a link to .env after the yes is refused as a file
+// tool's path is. The "line" prefix keeps it from equalling a plan's or
+// a file tool's stamp, and the line's length before it keeps the line
+// and the calls read back one way, whatever bytes the line holds.
+func lineStamp(command string, calls []agenttool.FactCall) string {
+	return stampOf("line\x00" + strconv.Itoa(len(command)) + "\x00" + command + "\x00" + factsText("bash", calls))
+}
+
 // withStamp is args with the dax_stamp field set to stamp, replacing
 // any the model supplied.
 func withStamp(args json.RawMessage, stamp string) (json.RawMessage, error) {
@@ -112,7 +126,7 @@ func StampArgs(ctx context.Context, an *Analyzer, args json.RawMessage) (out jso
 			return nil, false, err
 		}
 	}
-	out, err = stampWith(an.Check(ctx, cmd), args)
+	out, err = stampWith(an.Check(ctx, cmd), "", args)
 	if err != nil || out == nil {
 		return args, false, err
 	}
@@ -121,19 +135,24 @@ func StampArgs(ctx context.Context, an *Analyzer, args json.RawMessage) (out jso
 
 // stampWith is StampArgs given the analysis of the call's command: the
 // arguments with the stamp of c's plan and facts when c is Auto
-// (stampOfCheck), or with a stamp the model supplied taken off; nil
-// when they would not change.
-func stampWith(c *Check, args json.RawMessage) (json.RawMessage, error) {
+// (stampOfCheck), else with line when it is not empty (a lineStamp),
+// else with a stamp the model supplied taken off; nil when they would
+// not change.
+func stampWith(c *Check, line string, args json.RawMessage) (json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(args, &m); err != nil {
 		return nil, err
 	}
 	_, had := m["dax_stamp"]
 	delete(m, "dax_stamp")
-	if c.Auto {
+	switch {
+	case c.Auto:
 		s, _ := json.Marshal(stampOfCheck(c))
 		m["dax_stamp"] = s
-	} else if !had {
+	case line != "":
+		s, _ := json.Marshal(line)
+		m["dax_stamp"] = s
+	case !had:
 		return nil, nil
 	}
 	return json.Marshal(m)

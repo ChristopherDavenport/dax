@@ -3,9 +3,12 @@ package tool
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // wd is a real directory: deciding a git command reads its config.
@@ -196,6 +199,96 @@ func TestReadOnlyArgs(t *testing.T) {
 		}
 		if readOnlyArgs(w, newWS(t, wd)) {
 			t.Errorf("readOnlyArgs(%q) = true, want false", cmd)
+		}
+	}
+}
+
+// #47: a redirect's subjects are the files it writes, as a file tool's
+// are: the name normalised from where the line is (after a plain cd,
+// and from the root as well), and what the links on its way lead to,
+// read through the workspace. A link out adds a write no rule names, a
+// workspace that cannot read links a subject no rule names; what bash
+// expands, /dev/null and a target outside the workspace are as before.
+func TestARedirectsSubjectsAreTheFilesItWrites(t *testing.T) {
+	const s = sentinel
+	dir, outside := t.TempDir(), t.TempDir()
+	for name, content := range map[string]string{".env": "SECRET=1\n", "README.md": "# hi\n", "sub/a.txt": "a\n"} {
+		p := filepath.Join(dir, name)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+	}
+	for link, target := range map[string]string{"notes": ".env", "docs": "sub", "out": outside, "sub/up": ".."} {
+		if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local, err := workspace.NewLocal(dir, DefaultEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { local.Close() })
+	tests := []struct {
+		cmd     string
+		writes  []string // tool:path of every subject that is not a command
+		noLinks []string // the same in a workspace that cannot read links
+	}{
+		{"echo x > README.md", []string{"write:README.md"}, []string{"write:README.md", unresolvedTool + ":README.md"}},
+		{"echo x > notes", []string{"write:notes", "write:.env"}, []string{"write:notes", unresolvedTool + ":notes"}},
+		{"echo x >> ./sub/../notes", []string{"write:notes", "write:.env"}, nil},
+		{"echo x > " + filepath.Join(dir, "notes"), []string{"write:notes", "write:.env"}, nil},
+		{"echo x > docs/new.txt", []string{"write:docs/new.txt", "write:sub/new.txt"}, nil},
+		{"echo x > out/x", []string{"write:out/x", "write:" + s + "out/x"}, nil},
+		// After a cd: from the root, as before, and from where the cd leads.
+		{"cd sub && echo x > ../notes", []string{"write:../notes", "write:notes", "write:.env"}, nil},
+		{"cd docs && echo x > a.txt", []string{"write:a.txt", "write:docs/a.txt", "write:sub/a.txt"}, nil},
+		{"cd docs && echo x > up/notes", []string{"write:up/notes", "write:docs/up/notes", "write:.env"}, nil},
+		{"(cd sub; echo x > ../notes)", []string{"write:../notes", "write:notes", "write:.env"}, nil},
+		{"cd $D && echo x > ../notes", []string{"write:../notes"}, nil},
+		// A .. is where the names before it really are: sub/up is the root.
+		{"echo x > sub/up/notes", []string{"write:sub/up/notes", "write:.env"}, nil},
+		// Unchanged: /dev/null, a descriptor, what bash expands, outside.
+		{"echo x > /dev/null; true", nil, nil},
+		{"echo x >&2; true", nil, nil},
+		{"echo x > $HOME/x", []string{"write:$HOME/x"}, nil},
+		{"echo x > ~/.bashrc", []string{"write:~/.bashrc"}, nil},
+		{"echo x > /etc/passwd", []string{"write:/etc/passwd"}, nil},
+		{"echo x > ../x", []string{"write:../x"}, nil},
+	}
+	for _, ws := range []struct {
+		name string
+		ws   workspace.Workspace
+	}{{"local", local}, {"no links", noLinks{local}}} {
+		f := NewFiles(ws.ws)
+		for _, tc := range tests {
+			want := tc.writes
+			if ws.name == "no links" {
+				if tc.noLinks == nil {
+					continue
+				}
+				want = tc.noLinks
+			}
+			t.Run(ws.name+"/"+tc.cmd, func(t *testing.T) {
+				args, _ := json.Marshal(map[string]string{"command": tc.cmd})
+				got, err := BashSubjects(f, 0)(t.Context(), args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var writes []string
+				for _, sj := range got {
+					if sj.Tool == "" {
+						continue
+					}
+					var m map[string]string
+					json.Unmarshal(sj.Args, &m)
+					writes = append(writes, sj.Tool+":"+m["path"])
+				}
+				if !reflect.DeepEqual(writes, want) {
+					t.Fatalf("got  %q\nwant %q", writes, want)
+				}
+				if last := got[len(got)-1]; !strings.HasPrefix(string(last.Args), `{"command":"`+s) {
+					t.Errorf("no sentinel last: %s", last.Args)
+				}
+			})
 		}
 	}
 }

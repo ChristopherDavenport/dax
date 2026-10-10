@@ -366,7 +366,7 @@ func TestAnApprovedCommandKeepsTheUsersGitEnvironment(t *testing.T) {
 		if err := json.Unmarshal([]byte(stamped(t, dir, cmd)), &in); err != nil {
 			t.Fatal(err)
 		}
-		c, err := command(ctx, &Analyzer{Files: newWS(t, dir)}, in)
+		c, _, err := command(ctx, &Analyzer{Files: newWS(t, dir)}, in)
 		if err != nil {
 			t.Fatal(err)
 		}

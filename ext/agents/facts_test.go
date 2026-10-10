@@ -2,6 +2,7 @@ package agents_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,13 @@ func callIn(t *testing.T, child bool, call [2]string, user policy.Rules, approve
 // batchIn is callIn with calls made in one response, as one batch.
 func batchIn(t *testing.T, child bool, calls [][2]string, user policy.Rules, approve func(dir string, c *openresponses.FunctionCall) bool) (string, string) {
 	t.Helper()
+	return batchInWith(t, child, nil, calls, user, approve)
+}
+
+// batchInWith is batchIn with setup run on the project's directory
+// before the session starts.
+func batchInWith(t *testing.T, child bool, setup func(dir string), calls [][2]string, user policy.Rules, approve func(dir string, c *openresponses.FunctionCall) bool) (string, string) {
+	t.Helper()
 	model := &taskModels{parent: scripted{calls: calls, batch: true}}
 	if child {
 		model = &taskModels{
@@ -37,6 +45,9 @@ func batchIn(t *testing.T, child bool, calls [][2]string, user policy.Rules, app
 	o := options(t, model, &agents.Options{Model: "flash"})
 	write(t, filepath.Join(o.Dir, "notes.txt"), "notes\n")
 	write(t, filepath.Join(o.Dir, ".env"), "SECRET=1\n")
+	if setup != nil {
+		setup(o.Dir)
+	}
 	o.Policy = &policy.Settings{Builtin: true, Fallback: "ask", User: user}
 	s, err := agent.New(context.Background(), o)
 	if err != nil {
@@ -183,4 +194,73 @@ func TestAKeyInAnotherCaseRunsNothing(t *testing.T) {
 			})
 		}
 	}
+}
+
+// #47: a bash redirect is decided as the file it writes, in a sub-agent
+// as in the main agent: `echo pwn > notes` with notes a link to .env is
+// a write of .env, which the user's deny refuses. Before, it was a
+// write of "notes", which asked, and a yes wrote .env.
+func TestARedirectThroughALinkMeetsTheDenyOfItsTarget(t *testing.T) {
+	link := func(dir string) {
+		if err := os.Symlink(".env", filepath.Join(dir, "notes")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, w := range where {
+		for _, cmd := range []string{"echo pwn > notes", "echo pwn >> notes", "cd sub && echo pwn > ../notes"} {
+			t.Run(w.name+"/"+cmd, func(t *testing.T) {
+				mkSub := func(dir string) {
+					link(dir)
+					os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+				}
+				asked := false
+				dir, _ := batchInWith(t, w.child, mkSub, [][2]string{{"bash", bash(cmd)}}, policy.Rules{Deny: []string{"write(.env)"}},
+					func(string, *openresponses.FunctionCall) bool { asked = true; return true })
+				if asked {
+					t.Error("the line was asked about; the deny should have refused it")
+				}
+				if b, _ := os.ReadFile(filepath.Join(dir, ".env")); string(b) != "SECRET=1\n" {
+					t.Errorf(".env = %q", b)
+				}
+			})
+		}
+	}
+}
+
+// #47: a bash line that writes through a redirect runs on the facts a
+// person approved, in a sub-agent as in the main agent: notes.txt that
+// became a link to .env while the question was open is refused with
+// "ask again", and .env is not written. Unchanged, the approved line
+// runs as typed.
+func TestAnApprovedRedirectRunsOnTheFactsItWasAskedAbout(t *testing.T) {
+	for _, w := range where {
+		t.Run(w.name+"/swapped", func(t *testing.T) {
+			dir, seen := callIn(t, w.child, [2]string{"bash", bash("echo pwn > notes.txt")}, policy.Rules{},
+				func(dir string, c *openresponses.FunctionCall) bool {
+					os.Remove(filepath.Join(dir, "notes.txt"))
+					if err := os.Symlink(".env", filepath.Join(dir, "notes.txt")); err != nil {
+						t.Fatal(err)
+					}
+					return true
+				})
+			if b, _ := os.ReadFile(filepath.Join(dir, ".env")); string(b) != "SECRET=1\n" {
+				t.Errorf(".env = %q: the approved line wrote through the new link", b)
+			}
+			if !strings.Contains(seen, "ask again") {
+				t.Errorf("a model saw:\n%s\nwant the line refused with ask again", seen)
+			}
+		})
+		t.Run(w.name+"/unchanged", func(t *testing.T) {
+			dir, seen := callIn(t, w.child, [2]string{"bash", bash("echo pwn > notes.txt")}, policy.Rules{},
+				func(string, *openresponses.FunctionCall) bool { return true })
+			if b, _ := os.ReadFile(filepath.Join(dir, "notes.txt")); string(b) != "pwn\n" {
+				t.Errorf("notes.txt = %q; a model saw:\n%s", b, seen)
+			}
+		})
+	}
+}
+
+func bash(cmd string) string {
+	b, _ := json.Marshal(map[string]string{"command": cmd})
+	return string(b)
 }

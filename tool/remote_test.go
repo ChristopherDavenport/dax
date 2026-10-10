@@ -191,6 +191,33 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				}
 			}
 
+			// What a redirect writes, from bash's claim: the name in the
+			// workspace, from where a cd leads, and what a link leads to.
+			for cmd, want := range map[string]string{
+				"echo x > notes.txt":                  "write:notes.txt write:.env",
+				"echo x > " + abs("notes.txt"):        "write:notes.txt write:.env",
+				"cd src && echo x >> ../notes.txt":    "write:../notes.txt write:notes.txt write:.env",
+				"echo x > out/secret":                 "write:out/secret write:" + sentinel + "out/secret",
+				"echo x > " + filepath.Join(dir, "x"): map[bool]string{true: "write:x", false: "write:" + filepath.Join(dir, "x")}[root == dir],
+			} {
+				args, _ := json.Marshal(map[string]string{"command": cmd})
+				got, err := BashSubjects(f, 0)(t.Context(), args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var writes []string
+				for _, s := range got {
+					if s.Tool != "" {
+						var m map[string]string
+						json.Unmarshal(s.Args, &m)
+						writes = append(writes, s.Tool+":"+m["path"])
+					}
+				}
+				if strings.Join(writes, " ") != want {
+					t.Errorf("writes of %q = %q, want %q", cmd, writes, want)
+				}
+			}
+
 			// The bash check: what runs unasked, judged by the
 			// workspace's files and its git, the same on both.
 			an := &Analyzer{Files: f}
@@ -208,7 +235,8 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 				if got := an.Check(ctx, cmd).Auto; got != auto {
 					t.Errorf("%q auto = %v, want %v", cmd, got, auto)
 				}
-				// bash's claim stamps exactly the lines that run unasked.
+				// bash's claim stamps exactly the lines that run unasked (of
+				// these, which write through no redirect).
 				args, _ := json.Marshal(map[string]string{"command": cmd})
 				fx, _, err := agenttool.FactsOf(ctx, Bash(f), args)
 				if err != nil {

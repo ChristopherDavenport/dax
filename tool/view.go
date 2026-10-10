@@ -54,6 +54,9 @@ func (v view) rel(p string) (string, bool) { return normalizePath(v.dir, v.real,
 // name that does not exist yet is judged by where its directory really
 // is. It reads links only through the workspace: one that leads out is
 // outside, and with an FS that cannot read links the answer is unknown.
+// A ".." in rel is taken as the kernel takes it, from where the names
+// before it really are (a redirect's ../notes after a cd); one that
+// climbs above the root is outside.
 func (v view) resolve(rel string) (string, reach) {
 	if v.links == nil {
 		return "", unknown
@@ -61,6 +64,13 @@ func (v view) resolve(rel string) (string, reach) {
 	parts := components(rel)
 	cur := "."
 	for hops := 0; len(parts) > 0; {
+		if parts[0] == ".." {
+			if cur == "." {
+				return "", outside
+			}
+			cur, parts = path.Dir(cur), parts[1:]
+			continue
+		}
 		next := path.Join(cur, parts[0])
 		fi, err := v.links.Lstat(next)
 		switch {
@@ -69,7 +79,11 @@ func (v view) resolve(rel string) (string, reach) {
 		case err != nil:
 			// Not there (or not a directory on the way): the rest is
 			// judged by where cur is, as a file not written yet is.
-			return filepath.FromSlash(path.Join(append([]string{cur}, parts...)...)), inside
+			rest := path.Join(append([]string{cur}, parts...)...)
+			if rest == ".." || strings.HasPrefix(rest, "../") {
+				return "", outside
+			}
+			return filepath.FromSlash(rest), inside
 		case fi.Mode()&fs.ModeSymlink == 0:
 			cur, parts = next, parts[1:]
 			continue
