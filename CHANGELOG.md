@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.10 - 2026-10-09
 
 - Added: `docs/sandbox.md`, recipes for running the tools in a sandbox
   with `-executor` (Docker, ssh, kubectl), the config, what to check
