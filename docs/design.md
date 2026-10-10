@@ -229,8 +229,12 @@ it loosens nothing.
 
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
-the write tool on the target, and command or process substitution adds a
-subject no rule matches. Every subject must be allowed for the call to
+the write tool on the file it opens (normalised from the directory a
+plain `cd` before it leads to, and from the root, and through the links
+on its way, as a file tool's path is), and command or process
+substitution adds a subject no rule matches. A line with such a redirect
+that the policy lets run is stamped with those subjects and runs as typed
+only while they are the same. Every subject must be allowed for the call to
 be. This is a splitter, not a shell parser, and it errs toward asking.
 
 ## Security model

@@ -59,7 +59,10 @@ func WithMaxFile(n int64) BashOption { return func(c *bashConfig) { c.maxFile = 
 // policy's bash rules read (BashSubjects), and, for a line the analysis
 // allows unasked, the arguments carrying the stamp of that plan and of
 // those facts: the tool then runs only that plan, and only while the
-// line still touches what it was allowed on (command).
+// line still touches what it was allowed on (command). A line outside
+// the analysis that writes through a redirect carries the stamp of the
+// files its redirects write, and runs as typed only while they are the
+// same.
 func Bash(f *Files, opts ...BashOption) agenttool.Tool {
 	var cfg bashConfig
 	for _, o := range opts {
@@ -82,17 +85,14 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 			if in.Timeout > 0 {
 				timeout = time.Duration(in.Timeout) * time.Second
 			}
-			cmd, err := command(ctx, &Analyzer{Files: f, MaxFile: cfg.maxFile}, in)
+			cmd, plan, err := command(ctx, &Analyzer{Files: f, MaxFile: cfg.maxFile}, in)
 			if err != nil {
 				return "", err
 			}
-			out := &capWriter{max: maxBashBytes}
+			out := &capWriter{max: maxBashBytes, redact: plan}
 			cmd.Stream = io.MultiWriter(out, &progressWriter{ctx: ctx})
 			cmd.Timeout = timeout
 			res, runErr := f.Workspace().Exec(ctx, cmd)
-			if in.Stamp != "" {
-				out.redact = true
-			}
 
 			var b strings.Builder
 			b.WriteString(out.String())
@@ -161,20 +161,35 @@ func (w *progressWriter) Write(p []byte) (int, error) {
 // somewhere else (notes.txt is a link to .env now) or the repository's
 // git config now names a program, the call fails with errChanged, and
 // the original line is never run instead. What is left is the moment
-// between this analysis and bash's own opens. A call without a stamp,
-// a line outside the analysis that a person approved or one run with
-// no policy, is bash -c exactly as given, in the workspace's
-// environment, the user's minus credentials: their hooks, their
-// sshCommand and their GIT_CONFIG_* are theirs.
-func command(ctx context.Context, an *Analyzer, in BashArgs) (workspace.Command, error) {
-	if in.Stamp != "" {
-		c := an.Check(ctx, in.Command)
-		if !c.Auto || !hmac.Equal([]byte(stampOfCheck(c)), []byte(in.Stamp)) {
-			return workspace.Command{}, errChanged
-		}
-		return workspace.Command{Args: []string{"bash", "-c", c.Render()}, Env: autoEnv()}, nil
+// between this analysis and bash's own opens. plan says the call runs
+// a plan, whose output has URL credentials taken out.
+//
+// A line outside the analysis that writes through a redirect carries,
+// once the policy lets it run, the stamp of the line and of the files
+// its redirects write (lineStamp): it runs as typed only if they are
+// still those files, so a target that has become a link to .env since
+// the yes fails with errChanged. A call without a stamp, any other line
+// a person approved or a rule allowed, or one run with no policy, is
+// bash -c exactly as given, in the workspace's environment, the user's
+// minus credentials: their hooks, their sshCommand and their
+// GIT_CONFIG_* are theirs.
+func command(ctx context.Context, an *Analyzer, in BashArgs) (cmd workspace.Command, plan bool, err error) {
+	asTyped := workspace.Command{Args: []string{"bash", "-c", in.Command}}
+	if in.Stamp == "" {
+		return asTyped, false, nil
 	}
-	return workspace.Command{Args: []string{"bash", "-c", in.Command}}, nil
+	c := an.Check(ctx, in.Command)
+	if c.Auto && hmac.Equal([]byte(stampOfCheck(c)), []byte(in.Stamp)) {
+		return workspace.Command{Args: []string{"bash", "-c", c.Render()}, Env: autoEnv()}, true, nil
+	}
+	if c.Parsed {
+		return workspace.Command{}, false, errChanged
+	}
+	calls, _, writes, err := bashCalls(ctx, an, in.Command)
+	if err != nil || !writes || !hmac.Equal([]byte(lineStamp(in.Command, calls)), []byte(in.Stamp)) {
+		return workspace.Command{}, false, errChanged
+	}
+	return asTyped, false, nil
 }
 
 // capWriter keeps the first max bytes written to it and counts the

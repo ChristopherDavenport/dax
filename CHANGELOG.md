@@ -17,6 +17,20 @@ versions may break flags and the config file.
   hold's reading of its siblings are one reading of the response. A
   request that fails blocks every call of the response. A sub-agent's
   question lets the reading go, so the calls after it are read again.
+- Security: a bash redirect is decided as a write of the file it opens,
+  as a file tool's path is: normalised from the directory the line is in
+  (after a plain `cd`, and from the root as well) and through the links
+  on its way, read through the workspace. Its target was its raw text,
+  so a deny of `write(.env)` did not reach `echo x > notes` with `notes`
+  a link to `.env`, nor `cd sub && echo x > ../.env`: the line asked
+  (or ran, with `"fallback": "allow"`), and a yes wrote `.env`. A target
+  whose links the workspace cannot read adds a subject no rule names, so
+  the line asks; one whose links lead out of the workspace adds a write
+  no rule names. Such a line is still never auto-allowed; once a person
+  approves it or a rule allows it, it is stamped with what its redirects
+  write and runs as typed only while they lead there, so a target that
+  becomes a link to `.env` after the yes fails with "ask again" instead
+  of writing it. Closes #47.
 
 ## v0.0.7 - 2026-10-09
 
