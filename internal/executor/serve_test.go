@@ -127,7 +127,8 @@ func remoteTool(t *testing.T, r *mcpclient.Remote, name string) agenttool.Tool {
 // The capability says what MCP cannot: the descriptor, the extensions
 // with Tools, and each tool in the order it runs in process with its
 // extension, its extension's ReadOnly, whether it claims facts and
-// whether it is strict. The listing's _meta carries sequential and
+// whether it is strict; where the files are read; and that it starts
+// processes, with the bounds of the process methods. The listing's _meta carries sequential and
 // resource; the server says the tools never change and that it answers
 // the facts method.
 func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
@@ -169,7 +170,8 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	d := testDescriptor(s.ws.Root())
 	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}) ||
 		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) ||
-		got.Files == nil || got.Files.URITemplate != FilesURITemplate {
+		got.Files == nil || got.Files.URITemplate != FilesURITemplate ||
+		got.Start == nil || *got.Start != (capabilityStart{MaxProcesses: MaxProcesses, MaxWriteBytes: MaxWriteBytes, MaxReadBytes: MaxReadBytes}) {
 		t.Errorf("capability %s\nwant tools %+v", raw, want)
 	}
 	// The listing is sorted by name, so the order is the capability's.

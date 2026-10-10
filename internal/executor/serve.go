@@ -29,7 +29,13 @@ import (
 //
 // files came after version 1 was released, as a field a client of
 // version 1 ignores; a client that reads it refuses an executor
-// without it.
+// without it. start came after files, the same way: it says the
+// executor answers the process methods (process.go), with their
+// bounds, and is absent when its workspace cannot start a process; a
+// client refuses to start a process in an executor without it, and
+// starts none anywhere else.
+//
+//	"start": {"maxProcesses": 32, "maxWriteBytes": 1048576, "maxReadBytes": 65536}
 const CapabilityKey = "io.github.christopherdavenport.dax/executor"
 
 // CapabilityVersion is the version of CapabilityKey's value. A client
@@ -48,6 +54,10 @@ type capability struct {
 	// Files names how the workspace's files are read; nil from an
 	// executor older than the field.
 	Files *capabilityFiles `json:"files,omitempty"`
+	// Start says the executor starts processes for the session (the
+	// process methods); nil from an executor older than the field or
+	// whose workspace cannot.
+	Start *capabilityStart `json:"start,omitempty"`
 }
 
 // capabilityFiles says the workspace's files are served, read-only, as
@@ -80,6 +90,12 @@ type ServeOptions struct {
 	// Descriptor is the workspace the tools act in as the session
 	// records it. The zero value is the workspace's own.
 	Descriptor workspace.Descriptor
+	// Done, once closed, ends every process the server started for
+	// its sessions and every request waiting on one, and refuses
+	// another start: close it before a session's graceful close
+	// (sdk.Server.Run's, when its context ends), which waits for the
+	// requests in flight. nil is never.
+	Done <-chan struct{}
 }
 
 // NewServer serves exts' tools, built once over env as InProcess builds
@@ -95,7 +111,12 @@ type ServeOptions struct {
 //
 // It also serves env's workspace's files, read-only, as resources
 // under FilesURITemplate, so that the session reads the project's
-// AGENTS.md, .dax/skills and .dax/config.json where the project is.
+// AGENTS.md, .dax/skills and .dax/config.json where the project is;
+// and, when the workspace can start a process (workspace.Starter),
+// the process methods (process.go), so that the MCP servers the
+// session's user configured run here too. Those are custom methods,
+// not tools: no tool of the server starts a process the session did
+// not ask for, and no other client sees one in the listing.
 //
 // closeTools closes the tools; the caller closes env's workspace after it.
 // Two tools of one name are refused: the session refuses them anyway,
@@ -138,6 +159,9 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 			Facts: t.Factual, Strict: agenttool.IsStrict(x.inner[i]),
 		})
 	}
+	if _, ok := env.Workspace.(workspace.Starter); ok {
+		c.Start = &capabilityStart{MaxProcesses: MaxProcesses, MaxWriteBytes: MaxWriteBytes, MaxReadBytes: MaxReadBytes}
+	}
 	srv = sdk.NewServer(&sdk.Implementation{Name: o.Name, Version: o.Version}, &sdk.ServerOptions{
 		Capabilities: &sdk.ServerCapabilities{
 			Experimental: map[string]any{CapabilityKey: c},
@@ -146,6 +170,11 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 		},
 	})
 	serveFiles(srv, env.Workspace.FS())
+	if c.Start != nil {
+		if err := serveProcesses(srv, env.Workspace, o.Done); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := mcpserver.AddTools(srv, x.inner...); err != nil {
 		return nil, nil, err
 	}

@@ -443,6 +443,23 @@ with a refusal's kind (`notexist`, `outside`, `invalid`, `permission`
 or `other`) in it, so the session sees the same errors a read of its
 own directory would give.
 
+It can start a process for the session, a process that lives longer
+than one call with pipes to it, as the session's own machine starts an
+MCP server: dax-specific JSON-RPC methods, `dax/process.start`,
+`.write`, `.read`, `.closeStdin`, `.signal`, `.wait` and `.close`,
+named in the capability's `start` field. They are not tools, so another
+harness connected to `dax execute` is offered no tool that runs a
+command, and nothing in the sandbox (its files, a project's config, a
+tool) makes it start one: it starts only what its one client asks for
+and keeps no list of its own. A process starts at the root (or a
+directory under it) with the environment commands get; each session has
+its own processes, at most 32 open at once, and an id another session
+started is refused; a write is at most 1 MiB and a read's reply at most
+64 KiB; standard error it holds unread is bounded, and past the bound
+dropped. When the session's connection closes, or a signal stops `dax
+execute`, every process it started for the session ends with it. A
+session does not use them yet.
+
 With `-executor`, the session starts the command with this machine's
 environment less its credentials (the model's key's variable among
 them, unless `pass_env` names it), so the key stays here. It refuses a

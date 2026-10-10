@@ -38,6 +38,12 @@ type Remote struct {
 	extensions []string
 	tools      []Tool
 	byName     map[string]agenttool.Tool
+	start      *capabilityStart // nil when the executor starts no process
+	// procs is the context of every request about a process that
+	// waits on it (a read, a wait), ended before the connection
+	// closes, which would otherwise wait for them.
+	procs    context.Context
+	endProcs context.CancelFunc
 
 	once     sync.Once
 	closeErr error
@@ -61,6 +67,9 @@ func Connect(ctx context.Context, t sdk.Transport, o ConnectOptions) (*Remote, e
 		// The executor says its tool list never changes; a call does
 		// not wait for a notification after it.
 		mcpclient.WithNotificationGrace(0),
+		// The process methods (process.go), which only the session
+		// sends.
+		mcpclient.WithClientSetup(registerProcessMethods),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("executor: %w", err)
@@ -113,6 +122,9 @@ func remoteOf(c *mcpclient.Remote) (*Remote, error) {
 	if cp.Files.URITemplate != FilesURITemplate {
 		return nil, refuse("it serves its workspace's files under %q; this client reads %q", cp.Files.URITemplate, FilesURITemplate)
 	}
+	if st := cp.Start; st != nil && (st.MaxProcesses <= 0 || st.MaxWriteBytes <= 0 || st.MaxReadBytes <= 0) {
+		return nil, refuse("its start capability has a bound that is not positive: %+v", *st)
+	}
 	if cp.Descriptor.Kind == "" || cp.Descriptor.Root == "" {
 		return nil, refuse("its capability names no workspace (kind %q, root %q)", cp.Descriptor.Kind, cp.Descriptor.Root)
 	}
@@ -125,7 +137,9 @@ func remoteOf(c *mcpclient.Remote) (*Remote, error) {
 		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Root: cp.Descriptor.Root},
 		extensions: slices.Clone(cp.Extensions),
 		byName:     map[string]agenttool.Tool{},
+		start:      cp.Start,
 	}
+	r.procs, r.endProcs = context.WithCancel(context.Background())
 	for _, ct := range cp.Tools {
 		t, ok := listed[ct.Name]
 		switch {
@@ -254,8 +268,12 @@ func (r *Remote) FS() fs.FS { return remoteFS{r.c.Session()} }
 // Descriptor is the workspace the executor's capability names.
 func (r *Remote) Descriptor() workspace.Descriptor { return r.desc }
 
-// Close ends the calls in flight and the connection, once.
+// Close ends the calls in flight and the connection, once; the
+// executor ends the processes it started for the session.
 func (r *Remote) Close() error {
-	r.once.Do(func() { r.closeErr = r.c.Close() })
+	r.once.Do(func() {
+		r.endProcs()
+		r.closeErr = r.c.Close()
+	})
 	return r.closeErr
 }
