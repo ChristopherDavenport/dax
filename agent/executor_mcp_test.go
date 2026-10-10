@@ -65,8 +65,7 @@ func processGone(t *testing.T, pid int) {
 // stop them.
 func TestMCPServersRunInTheExecutor(t *testing.T) {
 	var got syncBuffer
-	stderr = &got
-	defer func() { stderr = os.Stderr }()
+	defer CaptureWarnings(&got)()
 	// The box's commands get this environment, scrubbed, as `dax
 	// execute`'s get its own.
 	t.Setenv("DAX_TEST_MCP_SERVER", "1")

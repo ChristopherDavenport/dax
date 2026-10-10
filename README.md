@@ -291,10 +291,11 @@ names the file and the field.
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
-| `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>` |
+| `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`; `command` is split as `executor`'s string is |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
-| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command, split on spaces (see below) |
+| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below). `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
+| `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `policy` | see below |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -314,20 +315,21 @@ keys somewhere; a repository does not get to make them.)
 | flag | |
 |---|---|
 | `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think`, `-effort` | override the config |
-| `-api-key-command 'program arg ...'` | overrides `api_key_command`, split on spaces; `""` turns it off, and `api_key_login` with it |
+| `-api-key-command 'program arg ...'` | overrides `api_key_command`, split as a shell splits words with nothing expanded; `""` turns it off, and `api_key_login` with it |
 | `-api-key-login hint` | overrides `api_key_login` |
 | `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
-| `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split on spaces; `""` clears it |
+| `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded; `""` clears it |
+| `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
-| `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only warnings before and the resume command after |
+| `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
-| `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>` |
+| `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
 | `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
 
@@ -465,8 +467,11 @@ execute`, every process it started for the session ends with it. A
 session started with `-executor` runs its MCP servers this way.
 
 With `-executor`, the session starts the command with this machine's
-environment less its credentials (the model's key's variable among
-them, unless `pass_env` names it), so the key stays here. It refuses a
+environment less its credentials, but those `pass_env` and
+`executor.pass_env` name, and never the model's key's variable, so the
+key stays here. What the command and `dax execute` write to standard
+error is cleaned; while the terminal client has the screen it is held
+with dax's other warnings and printed when the client exits. It refuses a
 program that is not a dax executor (no facts method, no capability, a
 capability of another version, or tools the capability does not name),
 and checks the tools against what it would have built: every extension
@@ -797,7 +802,12 @@ To resume this session: dax -resume 01a112e5-b4df-7081-bd11-baac746b29cc
 
 Any warning, such as a store whose permissions were fixed, is printed
 before the client takes the screen, and dax waits for Enter, since the
-client uses the alternate screen. With `-v` dax also prints its start lines
+client uses the alternate screen. A warning that comes while the client
+has the screen, such as what the executor's launcher writes to standard
+error, is held and printed when it exits, above the resume command.
+With `-executor`, the executor's line (its name and version, kind and
+ref, and root) is printed before the client either way, and stays on
+the terminal when it exits. With `-v` dax also prints its start lines
 (provider and model, the session, the policy in force, the tools, any
 `omitted:` line) and waits for Enter on an omission too, and when the
 client exits it prints what it noted during the run (skill grants,

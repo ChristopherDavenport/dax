@@ -25,6 +25,7 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/dax/internal/provider"
@@ -71,7 +72,7 @@ func run(ctx context.Context, args []string, p program) error {
 	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
 	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
-	keyCmd := fs.String("api-key-command", "", "command line whose output is the provider's key, run again as the key ages or is refused; split on spaces")
+	keyCmd := fs.String("api-key-command", "", "command line whose output is the provider's key, run again as the key ages or is refused; split as a shell splits words, nothing expanded")
 	keyLogin := fs.String("api-key-login", "", "how to sign in again when the key command fails or its key is refused, a URL or a command; shown with the error")
 	sessionHeader := fs.String("session-header", "", "header that carries each model call's session ID, for a server that groups calls by session")
 	clientHeader := fs.String("client-header", "", "header that carries dax's name and version, for a server that records which client called")
@@ -92,8 +93,9 @@ func run(ctx context.Context, args []string, p program) error {
 	gc := fs.String("gc", "", "pack the store's loose objects (pack) or repack and drop what no session needs (sweep), and exit")
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
-	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>")
-	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split on spaces; the tools run there; \"\" clears the config's")
+	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>; split as a shell splits words, nothing expanded")
+	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded; the tools run there; \"\" clears the config's")
+	executorEnv := fs.String("executor-pass-env", "", "variables, separated by commas, that the -executor command alone is given, credentials included (SSH_AUTH_SOCK); overrides executor.pass_env, \"\" clears it")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
 	agentsMD := fs.Bool("agents-md", true, "put ~/.dax/AGENTS.md, the agents_md_global files and the AGENTS.md files from the repository's root down to this directory in the instructions")
@@ -180,7 +182,9 @@ func run(ctx context.Context, args []string, p program) error {
 	flags.SessionHeader = str("session-header", sessionHeader)
 	flags.ClientHeader = str("client-header", clientHeader)
 	if given["api-key-command"] {
-		flags.APIKeyCommand = strings.Fields(*keyCmd)
+		if flags.APIKeyCommand, err = cmdline.Split(*keyCmd); err != nil {
+			return fmt.Errorf("-api-key-command: %w", err)
+		}
 		if flags.APIKeyCommand == nil {
 			flags.APIKeyCommand = []string{}
 		}
@@ -194,6 +198,14 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.Executor = str("executor", executorCmd)
+	if given["executor-pass-env"] {
+		flags.ExecutorPassEnv = []string{}
+		if strings.TrimSpace(*executorEnv) != "" {
+			for _, v := range strings.Split(*executorEnv, ",") {
+				flags.ExecutorPassEnv = append(flags.ExecutorPassEnv, strings.TrimSpace(v))
+			}
+		}
+	}
 	flags.PricingFile = str("pricing-file", pricingFile)
 	flags.Effort = str("effort", effort)
 	if given["agents"] {
@@ -248,10 +260,12 @@ func run(ctx context.Context, args []string, p program) error {
 		ex     *agent.Executor
 		wsRoot = dir
 	)
-	if settings.Executor != "" {
+	if len(settings.Executor) > 0 {
 		// The command that starts it gets this machine's environment
-		// without credentials, the model's key's variable among them.
-		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv})
+		// without credentials, the model's key's variable among them,
+		// less those pass_env and executor.pass_env name; the latter are
+		// that command's alone.
+		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, LauncherEnv: settings.ExecutorPassEnv})
 		if err != nil {
 			return fmt.Errorf("-executor: %w", err)
 		}
@@ -261,7 +275,7 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		wsRoot = ex.Workspace().Root()
 	} else {
-		local, err := workspace.NewLocal(dir, tool.DefaultEnv(settings.PassEnv, m.KeyEnv))
+		local, err := workspace.NewLocal(dir, toolsEnv(settings, m.KeyEnv))
 		if err != nil {
 			return fmt.Errorf("workspace: %w", err)
 		}
@@ -385,7 +399,7 @@ func loadUser(userPath string) (config.Layer, error) {
 // executorSettings reads it through the executor once it is connected.
 func loadSettings(project workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	var proj config.Layer
-	if strings.TrimSpace(config.ExecutorOf(user, flags)) == "" {
+	if !config.HasExecutor(user, flags) {
 		var err error
 		if proj, err = config.LoadProject(project); err != nil {
 			return config.Settings{}, err
@@ -412,6 +426,14 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 		return config.Settings{}, fmt.Errorf("-executor: %w", err)
 	}
 	return s, nil
+}
+
+// toolsEnv is the environment the tools and MCP servers of a session
+// on this machine get: this machine's, less its credentials but those
+// pass_env names, and less the model's key's variable, keyEnv.
+// executor.pass_env is the executor's launcher's alone and is not here.
+func toolsEnv(s config.Settings, keyEnv string) []string {
+	return tool.DefaultEnv(s.PassEnv, keyEnv)
 }
 
 // executorLine is the banner's line about the executor, "" for none.

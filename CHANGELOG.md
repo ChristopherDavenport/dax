@@ -11,6 +11,39 @@ versions may break flags and the config file.
   with `-executor` (Docker, ssh, kubectl), the config, what to check
   when it fails, and its limits today; linked from the README's
   `dax execute` section.
+- Added: `executor.pass_env` and `-executor-pass-env NAME,...`: variables,
+  credentials included, that only the command starting the executor is
+  given, such as `SSH_AUTH_SOCK` for ssh's agent or the token a kubectl
+  credential plugin reads. bash and MCP servers never get them, in the
+  sandbox or on this machine; naming the model's key's variable is
+  refused. It may be set without `executor.command`, for an `-executor`
+  given each time, and a project's config may not set it.
+- Added: `executor.command` may be an array of the program and its
+  arguments, used exactly: `["docker", "exec", "-i", "box", "dax",
+  "execute", "-root", "/my work"]`.
+- Changed: a command line, the string form of `executor.command`,
+  `-executor`, `mcp_servers`' commands, `-mcp`, `/mcp add` and
+  `-api-key-command`, is split as a shell splits words (`'...'`, `"..."`
+  and `\` quote, so `-root "/my work"` is one argument), with nothing
+  expanded (`$VAR`, `~` and globs are those characters) and no shell
+  run. It was split on spaces, a quote an ordinary character, so a
+  line that relied on that, such as an ssh remote command in single
+  quotes, now needs the quoting a terminal would: `ssh host "bash -lc
+  '...'"`. An unclosed quote is an error.
+- Changed: `agent.DialExecutor` takes the command as argv (`[]string`),
+  used exactly, not a line split on spaces, and `agent.ExecutorOptions`
+  has `LauncherEnv`, the launcher's own variables.
+- Changed: the terminal client prints the executor's line before it
+  takes the screen without `-v` too, so where the tools act is on the
+  terminal when it exits.
+- Fixed: what the executor's launcher and `dax execute` write to
+  standard error no longer draws over the terminal client: it is held,
+  cleaned, with dax's other warnings while the client has the screen
+  and printed when it exits, above the resume command (the last 64 KiB
+  of it). dax's own warnings during the run are held the same way. In
+  the REPL and with `-p` it is printed as it comes.
+- Fixed: the model's key's variable never reaches the executor's
+  launcher, even when `pass_env` names it, as the docs said.
 
 ## v0.0.9 - 2026-10-09
 

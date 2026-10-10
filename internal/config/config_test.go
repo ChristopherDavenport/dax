@@ -246,6 +246,16 @@ func TestValidation(t *testing.T) {
 		{"executor without command", `{"executor":{}}`, false, "executor.command is required"},
 		{"executor over http", `{"executor":{"command":"https://box.example:7000"}}`, false, "executor.command \"https://box.example:7000\": an executor over https is not supported yet"},
 		{"executor over a unix socket", `{"executor":{"command":"unix:/run/dax.sock"}}`, false, "an executor over unix is not supported yet"},
+		{"executor over http as an array", `{"executor":{"command":["https://box.example:7000"]}}`, false, "an executor over https is not supported yet"},
+		{"executor with an open quote", `{"executor":{"command":"docker exec -i box dax execute -root '/my work"}}`, false, "executor.command: a single quote is not closed"},
+		{"executor as an empty array", `{"executor":{"command":[]}}`, false, "executor.command is required"},
+		{"executor with an empty program", `{"executor":{"command":["", "exec"]}}`, false, "executor.command \" exec\": an empty program"},
+		{"executor as a number", `{"executor":{"command":5}}`, false, "command: want a command line"},
+		{"executor as an array of numbers", `{"executor":{"command":[1]}}`, false, "command: want a command line"},
+		{"project executor pass_env", `{"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`, true, "executor: a project file may only tighten"},
+		{"executor pass_env not a name", `{"executor":{"command":"ssh host dax execute","pass_env":["SSH-AUTH"]}}`, false, `executor.pass_env: "SSH-AUTH" is not a variable name`},
+		{"executor pass_env names the key", `{"provider":"openresponses","base_url":"https://x","api_key_env":"MY_KEY","executor":{"command":"ssh host dax execute","pass_env":["MY_KEY"]}}`, false, "executor.pass_env: MY_KEY holds the model's key"},
+		{"mcp with an open quote", `{"mcp_servers":{"a":{"command":"server \"x"}}}`, false, "mcp_servers.a: command: a double quote is not closed"},
 		{"project allow", `{"policy":{"allow":["bash(curl:*)"]}}`, true, "policy.allow: a project file may not allow anything"},
 		{"project carve-out in deny", `{"policy":{"deny":["bash(!git push:*)"]}}`, true, "may not carve an exception"},
 		{"project carve-out in ask", `{"policy":{"ask":["bash(!go test -race:*)"]}}`, true, "may not carve an exception"},
@@ -515,32 +525,71 @@ func TestAgentsMDGlobalPrecedence(t *testing.T) {
 }
 
 func TestExecutorPrecedence(t *testing.T) {
+	join := func(argv []string) string { return strings.Join(argv, "|") }
 	s, err := Resolve(nil, Flags{}, "")
-	if err != nil || s.Executor != "" {
-		t.Fatalf("default: %q, %v", s.Executor, err)
+	if err != nil || s.Executor != nil || s.ExecutorPassEnv != nil {
+		t.Fatalf("default: %q %q, %v", s.Executor, s.ExecutorPassEnv, err)
 	}
-	user := parse(t, `{"executor":{"command":"docker exec -i box dax execute -root /work"}}`, false)
-	if s, err = Resolve([]Layer{user}, Flags{}, ""); err != nil || s.Executor != "docker exec -i box dax execute -root /work" {
-		t.Fatalf("file: %q, %v", s.Executor, err)
+	user := parse(t, `{"executor":{"command":"docker exec -i box dax execute -root /work","pass_env":["SSH_AUTH_SOCK"]}}`, false)
+	if s, err = Resolve([]Layer{user}, Flags{}, ""); err != nil || join(s.Executor) != "docker|exec|-i|box|dax|execute|-root|/work" || join(s.ExecutorPassEnv) != "SSH_AUTH_SOCK" {
+		t.Fatalf("file: %q %q, %v", s.Executor, s.ExecutorPassEnv, err)
 	}
-	if got := ExecutorOf(user, Flags{}); got != s.Executor {
-		t.Errorf("ExecutorOf the file: %q", got)
+	if !HasExecutor(user, Flags{}) {
+		t.Error("HasExecutor of the file: false")
 	}
-	flag := Flags{Executor: ptr("ssh host dax execute")}
-	if s, err = Resolve([]Layer{user}, flag, ""); err != nil || s.Executor != "ssh host dax execute" {
-		t.Fatalf("flag: %q, %v", s.Executor, err)
+	// The string form is split as a shell splits words, with nothing
+	// expanded; the array form is used exactly.
+	quoted := parse(t, `{"executor":{"command":"docker exec -i box dax execute -root '/my work' -ref $HOME"}}`, false)
+	if s, err = Resolve([]Layer{quoted}, Flags{}, ""); err != nil || join(s.Executor) != "docker|exec|-i|box|dax|execute|-root|/my work|-ref|$HOME" {
+		t.Fatalf("a quoted string: %q, %v", s.Executor, err)
 	}
-	if got := ExecutorOf(user, flag); got != "ssh host dax execute" {
-		t.Errorf("ExecutorOf the flag: %q", got)
+	array := parse(t, `{"executor":{"command":["docker","exec","-i","box","dax","execute","-root","/my work","'x'"]}}`, false)
+	if s, err = Resolve([]Layer{array}, Flags{}, ""); err != nil || join(s.Executor) != "docker|exec|-i|box|dax|execute|-root|/my work|'x'" {
+		t.Fatalf("an array: %q, %v", s.Executor, err)
 	}
-	clear := Flags{Executor: ptr("")}
-	if s, err = Resolve([]Layer{user}, clear, ""); err != nil || s.Executor != "" {
-		t.Fatalf("an empty flag clears it: %q, %v", s.Executor, err)
+	// A file may name what the launcher gets without naming the
+	// executor, which a flag then gives.
+	envOnly := parse(t, `{"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`, false)
+	if HasExecutor(envOnly, Flags{}) {
+		t.Error("HasExecutor of pass_env alone: true")
 	}
-	if got := ExecutorOf(user, clear); got != "" {
-		t.Errorf("ExecutorOf the empty flag: %q", got)
+	if s, err = Resolve([]Layer{envOnly}, Flags{Executor: ptr("ssh host dax execute")}, ""); err != nil || join(s.Executor) != "ssh|host|dax|execute" || join(s.ExecutorPassEnv) != "SSH_AUTH_SOCK" {
+		t.Fatalf("pass_env alone and the flag: %q %q, %v", s.Executor, s.ExecutorPassEnv, err)
 	}
-	if _, err = Resolve([]Layer{user}, Flags{Executor: ptr("http://box:7000")}, ""); err == nil || !strings.Contains(err.Error(), "-executor") || !strings.Contains(err.Error(), "not supported yet") {
-		t.Fatalf("a URL flag: %v", err)
+	flag := Flags{Executor: ptr(`ssh host "dax execute -root '/my work'"`), ExecutorPassEnv: []string{"AWS_SESSION_TOKEN"}}
+	if s, err = Resolve([]Layer{user}, flag, ""); err != nil || join(s.Executor) != "ssh|host|dax execute -root '/my work'" || join(s.ExecutorPassEnv) != "AWS_SESSION_TOKEN" {
+		t.Fatalf("flag: %q %q, %v", s.Executor, s.ExecutorPassEnv, err)
+	}
+	if !HasExecutor(user, flag) {
+		t.Error("HasExecutor of the flag: false")
+	}
+	clear := Flags{Executor: ptr(""), ExecutorPassEnv: []string{}}
+	if s, err = Resolve([]Layer{user}, clear, ""); err != nil || s.Executor != nil || len(s.ExecutorPassEnv) != 0 {
+		t.Fatalf("empty flags clear them: %q %q, %v", s.Executor, s.ExecutorPassEnv, err)
+	}
+	if HasExecutor(user, clear) {
+		t.Error("HasExecutor of the empty flag: true")
+	}
+	for _, tc := range []struct {
+		name  string
+		flags Flags
+		want  string
+	}{
+		{"a URL", Flags{Executor: ptr("http://box:7000")}, "-executor \"http://box:7000\": an executor over http is not supported yet"},
+		{"an open quote", Flags{Executor: ptr(`ssh host "dax execute`)}, "-executor: a double quote is not closed"},
+		{"an empty program", Flags{Executor: ptr(`'' dax`)}, "-executor \"'' dax\": an empty program"},
+		{"a pass_env that is not a name", Flags{ExecutorPassEnv: []string{"A", "$(id)"}}, `-executor-pass-env: "$(id)" is not a variable name`},
+		{"a pass_env that is empty", Flags{ExecutorPassEnv: []string{""}}, `-executor-pass-env: "" is not a variable name`},
+		// The model's key never reaches the launcher, from whichever
+		// layer names it.
+		{"the key's variable", Flags{Provider: ptr("openresponses"), BaseURL: ptr("https://x"), APIKeyEnv: ptr("MY_KEY"), ExecutorPassEnv: []string{"MY_KEY"}}, "executor.pass_env: MY_KEY holds the model's key"},
+	} {
+		if _, err := Resolve([]Layer{user}, tc.flags, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	keyed := parse(t, `{"provider":"openresponses","base_url":"https://x","api_key_env":"MY_KEY"}`, false)
+	if _, err := Resolve([]Layer{keyed, envOnly}, Flags{ExecutorPassEnv: []string{"MY_KEY"}}, ""); err == nil || !strings.Contains(err.Error(), "MY_KEY holds the model's key") {
+		t.Errorf("the key's variable named by the flag, api_key_env by the file: %v", err)
 	}
 }

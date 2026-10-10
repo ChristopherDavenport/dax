@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -38,31 +39,63 @@ type ExecutorOptions struct {
 	Name, Version string
 	// PassEnv and KeyEnv are Options' own: the command that starts the
 	// executor (a docker exec, an ssh) gets this machine's environment
-	// with credentials removed, KeyEnv's variable among them unless
-	// PassEnv names it, so the model's key never reaches the sandbox.
+	// with credentials removed, except those PassEnv names, and never
+	// KeyEnv's variable, whatever names it, so the model's key never
+	// reaches the sandbox.
 	PassEnv []string
 	KeyEnv  string
+	// LauncherEnv names more variables the command that starts the
+	// executor is given, credentials included: ssh's SSH_AUTH_SOCK, the
+	// token a kubectl credential plugin reads. They are that command's
+	// alone; the session's tools and MCP servers run in the executor,
+	// with its environment, and never see them. Naming KeyEnv is an
+	// error.
+	LauncherEnv []string
 }
 
-// DialExecutor starts command, a command line split on spaces that
-// runs `dax execute` where the tools are to act (`docker exec -i box
-// dax execute -root /work`), and connects to it over its standard input
-// and output. The pipe is the credential: there is no listener and no
-// token. Its standard error is dax's, cleaned. A program that is not a
-// dax executor (one whose MCP server lacks the facts method or dax's
+// DialExecutor starts the program argv[0] with the arguments argv[1:],
+// used exactly and with no shell, which runs `dax execute` where the
+// tools are to act ({"docker", "exec", "-i", "box", "dax", "execute",
+// "-root", "/work"}), and connects to it over its standard input and
+// output. The pipe is the credential: there is no listener and no
+// token. What it writes to standard error is cleaned and goes where
+// dax warns at the time (CaptureWarnings). A program that is not a dax
+// executor (one whose MCP server lacks the facts method or dax's
 // capability, or lists tools the capability does not name) is refused
 // and stopped.
-func DialExecutor(ctx context.Context, command string, o ExecutorOptions) (*Executor, error) {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
+func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Executor, error) {
+	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, errors.New("executor: empty command")
 	}
-	cmd := exec.Command(fields[0], fields[1:]...)
-	cmd.Env = tool.DefaultEnv(o.PassEnv, o.KeyEnv)
+	env, err := launcherEnv(os.Environ(), o)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = env
 	// Its diagnostics are text from a program in the sandbox; they get
-	// the same cleaning as a tool's output.
-	cmd.Stderr = render.CleanWriter(stderr)
+	// the same cleaning as a tool's output, and are held with dax's
+	// warnings while a front has the screen.
+	cmd.Stderr = render.CleanWriter(warnings{})
 	return connectExecutor(ctx, &mcp.CommandTransport{Command: cmd}, o.Name, o.Version)
+}
+
+// launcherEnv is base, this machine's environment, as the command that
+// starts the executor gets it: without credentials but those PassEnv
+// and LauncherEnv name, and without KeyEnv's variable even if PassEnv
+// names it.
+func launcherEnv(base []string, o ExecutorOptions) ([]string, error) {
+	if o.KeyEnv != "" && slices.Contains(o.LauncherEnv, o.KeyEnv) {
+		return nil, fmt.Errorf("executor: %s holds the model's key, which never reaches the executor; take it out of executor.pass_env", o.KeyEnv)
+	}
+	env := tool.ChildEnv(base, slices.Concat(o.PassEnv, o.LauncherEnv), o.KeyEnv)
+	if o.KeyEnv != "" {
+		env = slices.DeleteFunc(env, func(kv string) bool {
+			name, _, _ := strings.Cut(kv, "=")
+			return name == o.KeyEnv
+		})
+	}
+	return env, nil
 }
 
 // connectExecutor connects to an executor over t.

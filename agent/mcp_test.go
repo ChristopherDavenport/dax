@@ -154,8 +154,7 @@ func TestMCPNamesAreChecked(t *testing.T) {
 // terminal raw.
 func TestAnMCPServersStderrIsCleaned(t *testing.T) {
 	var got syncBuffer
-	stderr = &got
-	defer func() { stderr = os.Stderr }()
+	defer CaptureWarnings(&got)()
 	t.Setenv("DAX_TEST_MCP_SERVER", "1")
 	t.Setenv("DAX_TEST_MCP_NOISE", "1")
 	o := options(t, &echo.Adapter{})
@@ -292,4 +291,31 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// An MCP server's command line is split as the executor's and the key
+// command's are: quotes keep a space in a word, nothing is expanded.
+func TestAnMCPServersCommandIsSplitAsAShellSplitsWords(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want []string
+		err  string
+	}{
+		{"server --root /work", []string{"server", "--root", "/work"}, ""},
+		{`server --root "/my work" '$HOME' ~`, []string{"server", "--root", "/my work", "$HOME", "~"}, ""},
+		{`server "--root`, nil, "a double quote is not closed"},
+		{"   ", nil, "empty command"},
+		{`'' server`, nil, "empty command"},
+	} {
+		got, err := splitCommand(tc.in)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%q: %q, %v; want %q", tc.in, got, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%q: %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
 }

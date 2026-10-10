@@ -41,6 +41,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/internal/render"
@@ -199,7 +200,8 @@ type Options struct {
 type MCPServer struct {
 	// Name is the prefix of the server's tools.
 	Name string
-	// Command is the command line.
+	// Command is the command line, split as a shell splits words with
+	// nothing expanded; no shell runs it.
 	Command string
 }
 
@@ -680,15 +682,15 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	}
 	sess := s.Kit.Session()
 	if t := sess.Truncated(); t != nil {
-		fmt.Fprintf(stderr, "dax: session %s: %v (dropped)\n", id, t)
+		fmt.Fprintf(warnings{}, "dax: session %s: %v (dropped)\n", id, t)
 	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
 		// which no reader older than agentsession v0.0.18 opens it.
-		fmt.Fprintf(stderr, "dax: session %s was written as %s; this dax writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
+		fmt.Fprintf(warnings{}, "dax: session %s was written as %s; this dax writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
 	}
 	if cwd, now := sess.Header().CWD, s.ws.Root(); cwd != "" && cwd != now {
-		fmt.Fprintf(stderr, "dax: session was recorded in %s, continuing in %s\n", cwd, now)
+		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, now)
 	}
 	return s, nil
 }
@@ -1003,7 +1005,8 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 }
 
 // mcpServer is the transport of an MCP server started from a command
-// line, split on spaces, with its diagnostics on dax's stderr. In a
+// line, split as a shell splits words with nothing expanded
+// (cmdline.Split), with its diagnostics on dax's stderr. In a
 // workspace that can start a process (workspace.Starter) the server
 // runs there, at its root, with the workspace's environment, over the
 // process's pipes; in one that cannot, it runs on this machine
@@ -1014,13 +1017,13 @@ func mcpServer(ws workspace.Workspace, command string, env []string) (mcp.Transp
 	if _, ok := ws.(workspace.Starter); !ok {
 		return mcpTransport(command, env)
 	}
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return nil, errors.New("empty command")
+	fields, err := splitCommand(command)
+	if err != nil {
+		return nil, err
 	}
 	// A server's diagnostics are text from a program the model may have
 	// chosen; they get the same cleaning as its output.
-	return &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(stderr)}}, nil
+	return &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})}}, nil
 }
 
 // startTransport starts an MCP server in a workspace when the client
@@ -1055,20 +1058,33 @@ func (r processPipes) Write(b []byte) (int, error) { return r.p.Stdin().Write(b)
 func (r processPipes) Close() error                { return r.p.Close() }
 
 // mcpTransport starts an MCP server on this machine from a command
-// line, split on spaces, with env as its whole environment and its
-// diagnostics on dax's stderr. The kit's own command transport would
-// hand the server dax's environment, keys included.
+// line, split as mcpServer splits it, with env as its whole environment
+// and its diagnostics on dax's stderr. The kit's own command transport
+// would hand the server dax's environment, keys included.
 func mcpTransport(command string, env []string) (mcp.Transport, error) {
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return nil, errors.New("empty command")
+	fields, err := splitCommand(command)
+	if err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(fields[0], fields[1:]...)
 	cmd.Env = env
 	// A server's diagnostics are text from a program the model may have
 	// chosen; they get the same cleaning as its output.
-	cmd.Stderr = render.CleanWriter(stderr)
+	cmd.Stderr = render.CleanWriter(warnings{})
 	return &mcp.CommandTransport{Command: cmd}, nil
+}
+
+// splitCommand is an MCP server's command line as its program and
+// arguments.
+func splitCommand(command string) ([]string, error) {
+	fields, err := cmdline.Split(command)
+	if err != nil {
+		return nil, fmt.Errorf("command %q: %w", command, err)
+	}
+	if len(fields) == 0 || strings.TrimSpace(fields[0]) == "" {
+		return nil, errors.New("empty command")
+	}
+	return fields, nil
 }
 
 // childPolicy decides a call of a sub-agent called name under the

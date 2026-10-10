@@ -104,6 +104,10 @@ before changing the shape.
   `agent.Executor` for `-executor`). Kit tools are control and never
   go through it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
+- `internal/cmdline`: `Split`, a command line as a program and its
+  arguments, as a shell splits words with nothing expanded; every
+  command dax runs from a line (`-executor`, MCP servers, the key
+  command) goes through it.
 - `internal/provider`: provider setting to `openresponses.Streamer`, and
   the vendor's `modelinfo.Describer`.
 - `internal/modelinfo`: asks the vendor what a model takes and fits each

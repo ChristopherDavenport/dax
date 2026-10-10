@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -454,6 +455,106 @@ func TestTheBufferedNotesAreFlushedEvenOnAPanic(t *testing.T) {
 				t.Errorf("verbose=%v panics=%v: no resume command at the end:\n%s", verbose, panics, got)
 			}
 		}
+	}
+}
+
+// Where the tools act is on the terminal without -v: the executor's line
+// is printed before the client takes the screen, and only it.
+func TestTheTUIShowsTheExecutorWithoutVerbose(t *testing.T) {
+	r := startRig(t, &steps{}, policy.Rules{}, nil, func(f *tuiFront) { f.info.Executor = "dax v1 · container box · /work" }, true)
+	r.quit()
+	want := "executor: dax v1 · container box · /work\nTo resume this session: dax -resume " + r.sess.ID() + "\n"
+	if pre := r.pre.String(); pre != want {
+		t.Errorf("the output is %q, want %q", pre, want)
+	}
+}
+
+// The executor's launcher is started before the terminal client takes
+// the screen, and writes to standard error whenever it likes (ssh's
+// warnings, a kubectl exec that lost its pod). While the client has the
+// screen that is held, cleaned, with dax's other warnings, and printed
+// when it exits, above the resume command; it never draws over the
+// client.
+func TestTheTUIHoldsTheLaunchersStderrWhileItHasTheScreen(t *testing.T) {
+	home(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(executeRoot, t.TempDir())
+	t.Setenv("DAX_TEST_LAUNCHER_FIFO", fifo)
+	script := `(read line < "$DAX_TEST_LAUNCHER_FIFO"; printf 'launcher: \033[31m%s\n' "$line" >&2) &
+exec "$0"`
+	ex, err := agent.DialExecutor(ctx, []string{"sh", "-c", script, os.Args[0]}, agent.ExecutorOptions{Name: "dax", Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ex.Close()
+	defer func() {
+		// However the test went, let the launcher's reader go: Close
+		// waits for the standard error it holds open.
+		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+			f.WriteString("done\n")
+			f.Close()
+		}
+	}()
+	out := &syncBuf{}
+	var shown string
+	r := startFront(t, &steps{}, func(f *tuiFront) {
+		f.out = out
+		f.run = func(context.Context, client.Backend, ...console.Option) error {
+			if err := os.WriteFile(fifo, []byte("connection lost\n"), 0o600); err != nil {
+				return err
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for !strings.Contains(f.warnings.peek(), "connection lost") && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			shown = out.String()
+			return nil
+		}
+	})
+	if err := r.f.Run(context.Background(), r.sess); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(shown, "connection lost") {
+		t.Errorf("printed while the client had the screen: %q", shown)
+	}
+	want := "launcher: [31mconnection lost\nTo resume this session: dax -resume " + r.sess.ID() + "\n"
+	if got := out.String(); got != want {
+		t.Errorf("after the client: %q, want %q", got, want)
+	}
+	// The capture is undone with the client.
+	if r.f.warnings.peek() != "" {
+		t.Errorf("still held: %q", r.f.warnings.peek())
+	}
+}
+
+// peek is what is held, as written.
+func (h *heldOutput) peek() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return string(h.b)
+}
+
+// A launcher that writes without end keeps the last of it, from the
+// start of a line, and says the rest was dropped.
+func TestHeldOutputIsBounded(t *testing.T) {
+	var h heldOutput
+	line := strings.Repeat("x", 99) + "\n"
+	for range 2 * maxHeld / len(line) {
+		h.Write([]byte(line))
+	}
+	h.Write([]byte("last \x1b[2Kline\n"))
+	got := h.take()
+	if !strings.HasPrefix(got, "[earlier output dropped]\n"+line) || !strings.HasSuffix(got, "last [2Kline\n") || len(got) > maxHeld+100 {
+		t.Errorf("held %d bytes: %q...%q", len(got), got[:min(len(got), 140)], got[max(len(got)-40, 0):])
+	}
+	if h.take() != "" {
+		t.Error("take did not empty it")
 	}
 }
 

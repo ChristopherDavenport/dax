@@ -323,14 +323,14 @@ func TestTheProjectConfigIsNotReadHereWithAnExecutor(t *testing.T) {
 	proj := t.TempDir()
 	write(t, filepath.Join(proj, ".dax", "config.json"), `{"policy":{"deny":["bash(make:*)"]}}`)
 	s, err := settingsOf(local(t, proj), "", config.Flags{Executor: str("ssh host dax execute")})
-	if err != nil || s.Executor != "ssh host dax execute" || len(s.Policy.Project.Deny) != 0 {
+	if err != nil || strings.Join(s.Executor, " ") != "ssh host dax execute" || len(s.Policy.Project.Deny) != 0 {
 		t.Fatalf("with -executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
 	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"executor":{"command":"docker exec -i box dax execute"}}`)
-	if s, err = settingsOf(local(t, proj), "", config.Flags{}); err != nil || s.Executor == "" || len(s.Policy.Project.Deny) != 0 {
+	if s, err = settingsOf(local(t, proj), "", config.Flags{}); err != nil || len(s.Executor) == 0 || len(s.Policy.Project.Deny) != 0 {
 		t.Fatalf("with the config's executor: %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
-	if s, err = settingsOf(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || s.Executor != "" || len(s.Policy.Project.Deny) != 1 {
+	if s, err = settingsOf(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || len(s.Executor) != 0 || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("with -executor '': %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
 }
@@ -350,7 +350,7 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 	write(t, filepath.Join(here, ".dax", "config.json"), `{"policy":{"deny":["bash(rm:*)"]}}`)
 	write(t, filepath.Join(outside, "config.json"), `{"policy":{"deny":["bash(curl:*)"]}}`)
 	t.Setenv(executeRoot, box)
-	ex, err := agent.DialExecutor(ctx, os.Args[0], agent.ExecutorOptions{Name: "dax", Version: "test"})
+	ex, err := agent.DialExecutor(ctx, []string{os.Args[0]}, agent.ExecutorOptions{Name: "dax", Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 			if got := strings.Join(s.Policy.Project.Deny, ","); got != tc.deny {
 				t.Errorf("project deny = %q, want %q", got, tc.deny)
 			}
-			if s.Executor != os.Args[0] {
+			if !slices.Equal(s.Executor, []string{os.Args[0]}) {
 				t.Errorf("executor %q", s.Executor)
 			}
 		})
@@ -433,6 +433,10 @@ func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
 		{[]string{"-executor", "https://box.example:7000"}, "an executor over https is not supported yet"},
 		{[]string{"-executor", "unix:/run/dax.sock"}, "an executor over unix is not supported yet"},
 		{[]string{"-executor", "/nonexistent/dax execute", "-mcp", "/nonexistent/server"}, "-executor: executor:"},
+		{[]string{"-executor", "docker exec -i box dax execute -root '/my work"}, "-executor: a single quote is not closed"},
+		{[]string{"-executor", "/nonexistent/dax execute", "-executor-pass-env", "SSH_AUTH_SOCK,$(id)"}, `-executor-pass-env: "$(id)" is not a variable name`},
+		{[]string{"-executor", "/nonexistent/dax execute", "-executor-pass-env", "SSH_AUTH_SOCK,,X"}, `-executor-pass-env: "" is not a variable name`},
+		{[]string{"-provider", "openai", "-api-key-command", `helper "--profile`}, "-api-key-command: a double quote is not closed"},
 	} {
 		err := run(context.Background(), append(tc.args, "-sessions", "", "-p", "hi"), p)
 		if err == nil || !strings.Contains(err.Error(), tc.wants) {
@@ -449,5 +453,37 @@ func TestTheBannerNamesTheExecutor(t *testing.T) {
 	}
 	if executorLine(nil) != "" {
 		t.Error("a line for no executor")
+	}
+}
+
+// executor.pass_env is the launcher's alone: a session on this machine,
+// with no executor, gives its tools none of it, while pass_env reaches
+// them.
+func TestTheLaunchersVariablesDoNotReachTheToolsHere(t *testing.T) {
+	h := home(t)
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	t.Setenv("MY_TOKEN", "tok")
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"pass_env":["MY_TOKEN"],"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`)
+	proj := t.TempDir()
+	for _, flags := range []config.Flags{{}, {ExecutorPassEnv: []string{"SSH_AUTH_SOCK"}}} {
+		s, err := settingsOf(local(t, proj), "", flags)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.Executor) != 0 || !slices.Equal(s.ExecutorPassEnv, []string{"SSH_AUTH_SOCK"}) {
+			t.Fatalf("settings: %q %q", s.Executor, s.ExecutorPassEnv)
+		}
+		ws, err := workspace.NewLocal(proj, toolsEnv(s, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := ws.Exec(context.Background(), workspace.Command{Args: []string{"sh", "-c", "echo sock=[$SSH_AUTH_SOCK] token=[$MY_TOKEN]"}})
+		ws.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(string(out.Stdout)); got != "sock=[] token=[tok]" {
+			t.Errorf("flags %+v: the tools saw %q", flags, got)
+		}
 	}
 }

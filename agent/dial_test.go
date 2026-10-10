@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -626,8 +627,8 @@ func TestASessionWithAnExecutorRefuses(t *testing.T) {
 // DialExecutor starts the executor with this machine's environment
 // less its credentials: the model's key, by the variable it came from
 // though its name does not look like a credential's, never reaches the
-// executor or what it runs. A program that is not an executor is
-// refused.
+// executor or what it runs, even when pass_env names it. A program that
+// is not an executor is refused.
 func TestDialExecutorKeepsTheKeyHere(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -635,7 +636,7 @@ func TestDialExecutorKeepsTheKeyHere(t *testing.T) {
 	t.Setenv("DAXMODELVAR", "sk-model")
 	t.Setenv("MY_TOKEN", "tok-leak")
 	t.Setenv("PLAINVAR", "visible")
-	ex, err := DialExecutor(ctx, os.Args[0], ExecutorOptions{Name: "dax", Version: "test", KeyEnv: "DAXMODELVAR"})
+	ex, err := DialExecutor(ctx, []string{os.Args[0]}, ExecutorOptions{Name: "dax", Version: "test", KeyEnv: "DAXMODELVAR", PassEnv: []string{"DAXMODELVAR"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,17 +657,136 @@ func TestDialExecutorKeepsTheKeyHere(t *testing.T) {
 
 	t.Setenv(executorRoot, "")
 	t.Setenv("DAX_TEST_MCP_SERVER", "1")
-	if ex, err := DialExecutor(ctx, os.Args[0], ExecutorOptions{}); err == nil || !strings.Contains(err.Error(), "not a dax executor") {
+	if ex, err := DialExecutor(ctx, []string{os.Args[0]}, ExecutorOptions{}); err == nil || !strings.Contains(err.Error(), "not a dax executor") {
 		if ex != nil {
 			ex.Close()
 		}
 		t.Errorf("a plain MCP server: %v", err)
 	}
-	if _, err := DialExecutor(ctx, filepath.Join(t.TempDir(), "nothing"), ExecutorOptions{}); err == nil {
+	if _, err := DialExecutor(ctx, []string{filepath.Join(t.TempDir(), "nothing")}, ExecutorOptions{}); err == nil {
 		t.Error("a command that does not exist connected")
 	}
-	if _, err := DialExecutor(ctx, "  ", ExecutorOptions{}); err == nil {
-		t.Error("an empty command connected")
+	for _, argv := range [][]string{nil, {}, {"  "}, {"", "dax"}} {
+		if _, err := DialExecutor(ctx, argv, ExecutorOptions{}); err == nil || !strings.Contains(err.Error(), "empty command") {
+			t.Errorf("%q: %v", argv, err)
+		}
+	}
+}
+
+// The command that starts the executor gets the variables LauncherEnv
+// names, credentials included, and PassEnv's; the key's variable never,
+// and naming it in LauncherEnv is refused before anything starts.
+func TestTheLaunchersEnvironment(t *testing.T) {
+	base := []string{"PATH=/bin", "SSH_AUTH_SOCK=/tmp/agent.sock", "AWS_SESSION_TOKEN=aws", "GITHUB_TOKEN=gh", "MODELKEY=sk", "OPENAI_API_KEY=sk-openai", "PLAIN=p"}
+	for _, tc := range []struct {
+		name string
+		o    ExecutorOptions
+		want string
+		err  string
+	}{
+		{"credentials removed", ExecutorOptions{KeyEnv: "MODELKEY"}, "PATH=/bin PLAIN=p", ""},
+		{"the launcher's own", ExecutorOptions{KeyEnv: "MODELKEY", LauncherEnv: []string{"SSH_AUTH_SOCK", "AWS_SESSION_TOKEN"}}, "PATH=/bin SSH_AUTH_SOCK=/tmp/agent.sock AWS_SESSION_TOKEN=aws PLAIN=p", ""},
+		{"pass_env's too", ExecutorOptions{KeyEnv: "MODELKEY", PassEnv: []string{"GITHUB_TOKEN"}, LauncherEnv: []string{"SSH_AUTH_SOCK"}}, "PATH=/bin SSH_AUTH_SOCK=/tmp/agent.sock GITHUB_TOKEN=gh PLAIN=p", ""},
+		{"never the key, though pass_env names it", ExecutorOptions{KeyEnv: "MODELKEY", PassEnv: []string{"MODELKEY"}}, "PATH=/bin PLAIN=p", ""},
+		{"the key named for the launcher", ExecutorOptions{KeyEnv: "MODELKEY", LauncherEnv: []string{"SSH_AUTH_SOCK", "MODELKEY"}}, "", "MODELKEY holds the model's key"},
+		{"no key variable (a key command)", ExecutorOptions{LauncherEnv: []string{"OPENAI_API_KEY"}}, "PATH=/bin MODELKEY=sk OPENAI_API_KEY=sk-openai PLAIN=p", ""},
+	} {
+		env, err := launcherEnv(base, tc.o)
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) {
+				t.Errorf("%s: err = %v, want %q", tc.name, err, tc.err)
+			}
+			continue
+		}
+		if err != nil || strings.Join(env, " ") != tc.want {
+			t.Errorf("%s: %q, %v; want %q", tc.name, env, err, tc.want)
+		}
+	}
+
+	// The refusal comes before anything starts.
+	ran := filepath.Join(t.TempDir(), "ran")
+	if _, err := DialExecutor(context.Background(), []string{"touch", ran}, ExecutorOptions{KeyEnv: "MODELKEY", LauncherEnv: []string{"MODELKEY"}}); err == nil || !strings.Contains(err.Error(), "never reaches the executor") {
+		t.Errorf("the key named for the launcher: %v", err)
+	}
+	if _, err := os.Stat(ran); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the launcher ran: %v", err)
+	}
+}
+
+// A real launcher: a shell that writes down what it was given, then
+// becomes the executor, taking its argv exactly (a path with a space
+// included). The variables named for it reach it; the tools in the
+// executor do not get them, nor the key. What it writes to standard
+// error goes, cleaned, where dax warns at the time of the write, so
+// what it writes once a front has captured the warnings is held with
+// them.
+func TestTheLauncherGetsItsVariablesAndItsStderrIsAWarning(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	dir := t.TempDir()
+	root := filepath.Join(dir, "my work")
+	must(t, os.Mkdir(root, 0o755))
+	fifo := filepath.Join(dir, "fifo")
+	must(t, syscall.Mkfifo(fifo, 0o600))
+	out := filepath.Join(dir, "launcher.env")
+	t.Setenv("DAX_TEST_LAUNCHER_OUT", out)
+	t.Setenv("DAX_TEST_LAUNCHER_FIFO", fifo)
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	t.Setenv("MY_TOKEN", "tok-leak")
+	t.Setenv("DAXMODELVAR", "sk-model")
+	script := `printf 'sock=[%s] token=[%s] key=[%s] root=[%s]' "$SSH_AUTH_SOCK" "$MY_TOKEN" "$DAXMODELVAR" "$1" > "$DAX_TEST_LAUNCHER_OUT"
+(read line < "$DAX_TEST_LAUNCHER_FIFO"; printf 'launcher: \033[2K%s\n' "$line" >&2) &
+export DAX_TEST_EXECUTOR_ROOT="$1"
+exec "$0"`
+	var before syncBuffer
+	undo := CaptureWarnings(&before)
+	ex, err := DialExecutor(ctx, []string{"sh", "-c", script, os.Args[0], root}, ExecutorOptions{Name: "dax", Version: "test", KeyEnv: "DAXMODELVAR", LauncherEnv: []string{"SSH_AUTH_SOCK", "MY_TOKEN"}})
+	undo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ex.Close()
+	defer func() {
+		// However the test went, let the launcher's reader go: Close
+		// waits for the standard error it holds open.
+		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+			f.WriteString("done\n")
+			f.Close()
+		}
+	}()
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "sock=[/tmp/agent.sock] token=[tok-leak] key=[] root=["+root+"]" {
+		t.Errorf("the launcher got %s", got)
+	}
+	if r := ex.Workspace().Root(); r != root {
+		t.Errorf("the executor's root %q, want %q", r, root)
+	}
+	res, err := ex.r.Call(ctx, executor.Call{Tool: "bash", Call: agenttool.Call{ID: "b", Args: json.RawMessage(`{"command":"echo sock=[$SSH_AUTH_SOCK] token=[$MY_TOKEN] key=[$DAXMODELVAR]"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Output.String(); !strings.Contains(got, "sock=[] token=[] key=[]") {
+		t.Errorf("the executor's command saw %q", got)
+	}
+
+	// Captured after the dial, the launcher's later output is held.
+	var held syncBuffer
+	defer CaptureWarnings(&held)()
+	if err := os.WriteFile(fifo, []byte("held line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(held.String(), "held line") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if h := held.String(); h != "launcher: [2Kheld line\n" {
+		t.Errorf("held %q", h)
+	}
+	if b := before.String(); strings.Contains(b, "held line") {
+		t.Errorf("the earlier capture got %q", b)
 	}
 }
 
