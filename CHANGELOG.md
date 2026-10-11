@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.12 - 2026-10-10
 
 - Added: `dax serve` and `dax attach` (#64). `dax serve [flags]` runs a
   session with no front of its own and serves its control (agentturn's
