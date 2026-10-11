@@ -200,8 +200,22 @@ before the dax step that uses them, as the workspace's rules require.
      `dax attach` verifies the certificate against the system's roots or
      `-tls-ca`, and refuses `http://` to a host that is not loopback,
      **done**. Over the wire still: no front/a2a beside it yet (step 5).
+   - Step 4 is done (dax v0.0.14). What it left, each filed:
+     - The rest of RFC 0003 in agentsession's `remote` (agentsession#213):
+       writing, leases, objects and negotiation, exchange and push, log
+       and shallow reads, ref following, `durable=true`, a client method
+       for `path`, a bound on a follow's snapshot. `dax serve` needs
+       none of it; a session written through a server (a container,
+       another machine) does.
+     - A sub-agent's question is not on the record (dax#74): the record
+       holds its verdict and the call's decision, not the question, the
+       answer or the note, as a tool's own question's record does.
+     - The view and live events, under "Decisions still open".
+     - `client.Direct`'s narrow edge, under "Known" above.
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
-   changes, an `ext/a2a` extension in dax.
+   changes, an `ext/a2a` extension in dax, and `front/a2a` beside
+   `front/control` in `dax serve`. The proposal is
+   [agentturn-peers.md](proposals/agentturn-peers.md).
 
 ## Decided
 
