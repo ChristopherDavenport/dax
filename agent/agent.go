@@ -270,34 +270,25 @@ func Describe(p agentturn.PendingCall) string {
 	return s
 }
 
-// withSubjects is the session's adjustment to the agent's
-// configuration. The facts of the model response's calls are
-// held for their decisions (executor.Set.PinBatch), so the policy's
-// subjects, the rewrite a call runs with, the decision about that
-// rewrite and the batch hold's reading of each sibling come from one
-// reading of the response, two requests to an executor elsewhere. A call the
-// policy defers has what the policy was asking about added to its
-// reason, since the reason is the question every front shows: the rule,
-// the secret path, the git config key, the part of a command line, from
-// the verdict's subject.
-func (s *Session) withSubjects(cfg agentturn.Config) agentturn.Config {
+// withPinnedFacts is the session's adjustment to the agent's
+// configuration. The facts of the model response's calls are held for
+// their decisions (executor.Set.PinBatch), so the policy's subjects, the
+// rewrite a call runs with, the decision about that rewrite and the
+// batch hold's reading of each sibling come from one reading of the
+// response, two requests to an executor elsewhere. What a deferred
+// call's question is about travels on the decision (its Subject, from
+// the verdict) and is recorded with the verdict, so the reason stays
+// the policy's own.
+func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 	inner := cfg.BeforeToolCall
 	if inner == nil {
 		return cfg
 	}
-	eng := s.Kit.Engine()
 	set := s.set
 	cfg.BeforeToolCall = func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		ctx, done := set.PinBatch(ctx, info)
 		defer done()
-		d, err := inner(ctx, info)
-		if eng == nil || err != nil || d == nil || d.Action != agentturn.Defer || info.Call == nil {
-			return d, err
-		}
-		if v, ok := eng.Deferred(info.RunID, info.Call.CallID); ok && v.Subject != "" && !strings.Contains(d.Reason, v.Subject) {
-			d.Reason += "; about: " + v.Subject
-		}
-		return d, nil
+		return inner(ctx, info)
 	}
 	return cfg
 }
@@ -578,7 +569,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		engine.Store(e)
 	}
-	s.ag = agentturn.New(s.withSubjects(kit.Config()), kit.AgentOptions()...)
+	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), kit.AgentOptions()...)
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
