@@ -69,9 +69,9 @@ was lent come back to the caller to run.
 
 Where dax does not keep to this yet, and what each needs:
 
-- The human plane over a wire: `dax serve` listens on loopback only,
-  with no TLS (from elsewhere, tunnel), and a view cannot move the head
-  from the tree over it. agentconsole's `client.Direct` takes the first
+- The human plane over a wire: `dax serve` listens on loopback only
+  unless it serves HTTPS with a certificate (`-tls-cert`, `-tls-key`),
+  and a view cannot move the head from the tree over it. agentconsole's `client.Direct` takes the first
   run start it sees after a prompt as that prompt's, so a prompt refused
   in the instant another view's run starts is reported as taken.
 - The execution plane: `dax execute` serves the tools over stdio MCP

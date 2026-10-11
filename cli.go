@@ -115,7 +115,9 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
-	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the loopback address to serve the session on; port 0 picks one")
+	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
+	tlsCert := fs.String("tls-cert", "", "dax serve: serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
+	tlsKey := fs.String("tls-key", "", "dax serve: the private key (PEM) of -tls-cert")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -126,8 +128,10 @@ func run(ctx context.Context, args []string, p program) error {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
-	if given["listen"] && !serving {
-		return errors.New("-listen is dax serve's")
+	for _, name := range []string{"listen", "tls-cert", "tls-key"} {
+		if given[name] && !serving {
+			return fmt.Errorf("-%s is dax serve's", name)
+		}
 	}
 	if serving && (*once != "" || *frontName != "") {
 		return errors.New("dax serve has no front of its own: drop -p and -front, and attach with dax attach")
@@ -136,8 +140,9 @@ func run(ctx context.Context, args []string, p program) error {
 		return errors.New("dax serve needs a session store: an attached view follows the record; drop -sessions \"\"")
 	}
 	if serving {
-		// The address is checked before anything starts.
-		if _, err := checkLoopback(*listen); err != nil {
+		// The address and the TLS files are checked before anything
+		// starts.
+		if err := checkServeAddr(*listen, *tlsCert, *tlsKey); err != nil {
 			return err
 		}
 	}
@@ -389,7 +394,7 @@ func run(ctx context.Context, args []string, p program) error {
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
-		f = &serveFront{info: fi, addr: *listen, signals: true}
+		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true}
 	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
 		return err
 	}

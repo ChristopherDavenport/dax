@@ -2,9 +2,18 @@ package dax
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,6 +47,10 @@ type served struct {
 	done  chan error
 	stop  context.CancelFunc
 	dir   string // where the token file is written
+	// attachURL is where attach dials, when not url; hc is the client it
+	// dials with (attachHTTPClient), when not the default.
+	attachURL string
+	hc        *http.Client
 }
 
 func startServe(t *testing.T, m *steps, rules policy.Rules) *served {
@@ -46,6 +59,13 @@ func startServe(t *testing.T, m *steps, rules policy.Rules) *served {
 }
 
 func startServeWith(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options)) *served {
+	t.Helper()
+	return startServeFront(t, m, rules, tweak, nil)
+}
+
+// startServeFront is startServeWith with front adjusting the serveFront
+// before it runs: its address, its certificate.
+func startServeFront(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options), front func(*serveFront)) *served {
 	t.Helper()
 	t.Setenv(serveTokenEnv, "")
 	rig := startRig(t, m, rules, tweak, nil, false)
@@ -58,6 +78,9 @@ func startServeWith(t *testing.T, m *steps, rules policy.Rules, tweak func(*agen
 		out:      s.out,
 		tokenDir: s.dir,
 		ready:    func(url string) { ready <- url },
+	}
+	if front != nil {
+		front(f)
 	}
 	go func() { s.done <- f.Run(ctx, rig.sess) }()
 	t.Cleanup(func() {
@@ -96,12 +119,17 @@ func (s *served) attach() *tuiRig {
 	t.Cleanup(func() { pw.Close() })
 	r := &tuiRig{t: t, dir: s.rig.dir, in: pw, out: &syncBuf{}, pre: &syncBuf{}, done: make(chan error, 1), sess: s.rig.sess}
 	f := &attachFront{
+		hc:      s.hc,
 		name:    "dax",
 		exts:    []extension.Extension{coding.New(0), agents.New(agents.Options{})},
 		console: []console.Option{console.WithInput(pr), console.WithOutput(r.out), console.WithoutSignalHandler(), console.WithWindowSize(220, 50)},
 		out:     r.pre,
 	}
-	go func() { r.done <- f.Run(ctx, s.url, s.token) }()
+	url := s.url
+	if s.attachURL != "" {
+		url = s.attachURL
+	}
+	go func() { r.done <- f.Run(ctx, url, s.token) }()
 	return r
 }
 
@@ -425,6 +453,11 @@ func TestServeAndAttachRefusalsOnTheCommandLine(t *testing.T) {
 		{[]string{"serve", "-listen", ":0"}, "loopback only"},
 		{[]string{"attach"}, "want the URL dax serve printed"},
 		{[]string{"attach", "http://127.0.0.1:1"}, "no token"},
+		{[]string{"serve", "-tls-cert", "cert.pem"}, "-tls-cert and -tls-key go together"},
+		{[]string{"serve", "-tls-key", "key.pem", "-listen", "0.0.0.0:0"}, "-tls-cert and -tls-key go together"},
+		{[]string{"-tls-cert", "cert.pem", "-tls-key", "key.pem", "-p", "hi"}, "-tls-cert is dax serve's"},
+		{[]string{"attach", "http://192.0.2.1:7878"}, "in the clear"},
+		{[]string{"attach", "-tls-ca", "ca.pem", "http://127.0.0.1:1"}, "-tls-ca is for an https URL"},
 		{[]string{"attach", "-token-file", filepath.Join(t.TempDir(), "missing"), "http://127.0.0.1:1"}, "-token-file"},
 	} {
 		err := run(context.Background(), tc.args, p)
@@ -568,5 +601,173 @@ func TestAMoveTheServedSessionRefusesComesBack(t *testing.T) {
 	}
 	if err := act(ctx, client.ContinueFrom{EntryID: sess.Leaf()}); !errors.Is(err, agentturn.ErrRunning) {
 		t.Errorf("a move while a run goes: %v, want %v", err, agentturn.ErrRunning)
+	}
+}
+
+// selfSigned writes a self-signed certificate for 127.0.0.1, ::1 and
+// localhost, which is its own CA, and its key, as PEM files.
+func selfSigned(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "dax serve test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		DNSNames:              []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kder, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kder}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
+}
+
+// portOf is the port of a URL dax serve printed.
+func portOf(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Port()
+}
+
+// With a certificate dax serve serves HTTPS and may listen on any
+// address; a view attached over https with the certificate's CA drives
+// the session, and the token is still needed.
+func TestServingOverTLSTakesAnyAddress(t *testing.T) {
+	cert, key := selfSigned(t)
+	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) {
+		f.addr, f.tlsCert, f.tlsKey = "0.0.0.0:0", cert, key
+	})
+	if !strings.HasPrefix(s.url, "https://") {
+		t.Fatalf("dax serve printed %s, want an https URL", s.url)
+	}
+	if !strings.Contains(s.out.String(), "attach: dax attach [-tls-ca <the certificate's CA>] -token-file ") {
+		t.Errorf("dax serve's attach line does not name -tls-ca:\n%s", s.out.String())
+	}
+	s.attachURL = "https://127.0.0.1:" + portOf(t, s.url)
+	hc, err := attachHTTPClient(s.attachURL, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.hc = hc
+
+	for _, tc := range []struct {
+		token string
+		want  int
+	}{{"", http.StatusUnauthorized}, {s.token, http.StatusOK}} {
+		req, err := http.NewRequest(http.MethodGet, s.attachURL+controlPrefix+"/state", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.token != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("GET state over TLS with token %v: %d, want %d", tc.token != "", resp.StatusCode, tc.want)
+		}
+	}
+
+	r := s.attach()
+	r.type_("over tls\r")
+	r.waitOutput("all done")
+	r.quit()
+}
+
+// dax attach verifies the server's certificate: against the system's
+// roots, a self-signed one is refused, and nothing is sent the session.
+func TestAttachVerifiesTheServersCertificate(t *testing.T) {
+	cert, key := selfSigned(t)
+	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) {
+		f.tlsCert, f.tlsKey = cert, key
+	})
+	hc, err := attachHTTPClient(s.url, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	f := &attachFront{name: "dax", hc: hc, out: &syncBuf{}}
+	err = f.Run(ctx, s.url, s.token)
+	var unknown x509.UnknownAuthorityError
+	if !errors.As(err, &unknown) {
+		t.Errorf("attach without the CA: %v, want the certificate refused", err)
+	}
+}
+
+// dax attach refuses a URL that would send the token in the clear, and
+// any it cannot verify, before anything is sent.
+func TestAttachTakesOnlyAURLItCanSendTheTokenTo(t *testing.T) {
+	cert, _ := selfSigned(t)
+	for _, tc := range []struct {
+		url, ca, wants string
+	}{
+		{"http://192.0.2.1:7878", "", "in the clear"},
+		{"http://example.com", "", "in the clear"},
+		{"http://[2001:db8::1]:80", "", "in the clear"},
+		{"ftp://127.0.0.1:1", "", "want the http or https URL"},
+		{"http://127.0.0.1:1", cert, "-tls-ca is for an https URL"},
+		{"https://127.0.0.1:1", filepath.Join(t.TempDir(), "missing"), "-tls-ca"},
+		{"https://127.0.0.1:1", cert + "-not-pem", "-tls-ca"},
+	} {
+		if tc.ca == cert+"-not-pem" {
+			if err := os.WriteFile(tc.ca, []byte("not a certificate"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := attachHTTPClient(tc.url, tc.ca); err == nil || !strings.Contains(err.Error(), tc.wants) {
+			t.Errorf("%s with -tls-ca %q: %v, want %q", tc.url, tc.ca, err, tc.wants)
+		}
+	}
+	for _, ok := range []string{"http://127.0.0.1:1", "http://localhost:1", "http://[::1]:1", "https://example.com"} {
+		if _, err := attachHTTPClient(ok, ""); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+}
+
+// Without a certificate dax serve stays on loopback; with one it takes
+// any address, and one of the two files alone is refused.
+func TestServeTakesAnyAddressOnlyWithTLS(t *testing.T) {
+	for _, tc := range []struct {
+		addr, cert, key string
+		ok              bool
+	}{
+		{"0.0.0.0:0", "", "", false},
+		{"127.0.0.1:0", "", "", true},
+		{"0.0.0.0:0", "c", "k", true},
+		{"0.0.0.0:0", "c", "", false},
+		{"127.0.0.1:0", "", "k", false},
+	} {
+		if err := checkServeAddr(tc.addr, tc.cert, tc.key); (err == nil) != tc.ok {
+			t.Errorf("%s with cert %q key %q: %v, want ok=%v", tc.addr, tc.cert, tc.key, err, tc.ok)
+		}
 	}
 }

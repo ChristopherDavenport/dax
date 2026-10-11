@@ -15,12 +15,16 @@ package dax
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"iter"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -42,8 +46,9 @@ func runAttach(ctx context.Context, args []string, p program) error {
 	fs := flag.NewFlagSet(p.name+" attach", flag.ContinueOnError)
 	tokenFile := fs.String("token-file", "", "file holding the token dax serve wrote; without it, $"+serveTokenEnv)
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the session cost")
+	caFile := fs.String("tls-ca", "", "for an https URL: the CA certificate (PEM) to verify dax serve's certificate against, in place of the system's")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %s attach [-token-file file] URL\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %s attach [-token-file file] [-tls-ca file] URL\n", p.name)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -55,6 +60,12 @@ func runAttach(ctx context.Context, args []string, p program) error {
 	if fs.NArg() != 1 {
 		fs.Usage()
 		return errors.New("attach: want the URL dax serve printed")
+	}
+	// The token goes with every request, so the URL is checked before
+	// anything is sent.
+	hc, err := attachHTTPClient(fs.Arg(0), *caFile)
+	if err != nil {
+		return err
 	}
 	token, err := attachToken(*tokenFile)
 	if err != nil {
@@ -73,7 +84,47 @@ func runAttach(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
-	return (&attachFront{name: p.name, exts: exts, cost: cost}).Run(ctx, fs.Arg(0), token)
+	return (&attachFront{name: p.name, exts: exts, cost: cost, hc: hc}).Run(ctx, fs.Arg(0), token)
+}
+
+// attachHTTPClient is the client dax attach reaches base with. An https
+// URL is verified against the system's roots, or the CA in caFile in
+// their place; nothing skips the verification. An http URL is taken
+// only to a loopback host, since the token would otherwise cross the
+// network in the clear.
+func attachHTTPClient(base, caFile string) (*http.Client, error) {
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("attach: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if caFile != "" {
+			return nil, errors.New("attach: -tls-ca is for an https URL")
+		}
+		if !isLoopbackHost(u.Hostname()) {
+			return nil, fmt.Errorf("attach: %s is not loopback, and http would send the token in the clear: serve with -tls-cert and -tls-key and attach over https, or tunnel (ssh -L) and attach to 127.0.0.1", u.Host)
+		}
+		return http.DefaultClient, nil
+	default:
+		return nil, fmt.Errorf("attach: %q: want the http or https URL dax serve printed", base)
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("attach: -tls-ca: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("attach: -tls-ca %s holds no PEM certificate", caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = cfg
+	return &http.Client{Transport: t}, nil
 }
 
 // attachToken is the token to send: the file's, or the environment's.
@@ -100,6 +151,8 @@ type attachFront struct {
 	name string
 	exts []extension.Extension
 	cost client.Cost
+	// hc reaches the server (attachHTTPClient); nil is http.DefaultClient.
+	hc *http.Client
 	// console are the options console.Run is given; tests add the pipe.
 	console []console.Option
 	// out is where the resume command goes at exit; nil is standard
@@ -112,11 +165,15 @@ type attachFront struct {
 // Run attaches to the session served at base until the user leaves.
 func (f *attachFront) Run(ctx context.Context, base, token string) error {
 	base = strings.TrimSuffix(base, "/")
-	ctl, err := control.Dial(ctx, base+controlPrefix, control.WithBearerToken(token))
+	hc := f.hc
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	ctl, err := control.Dial(ctx, base+controlPrefix, control.WithBearerToken(token), control.WithHTTPClient(hc))
 	if err != nil {
 		return fmt.Errorf("attach: %w", err)
 	}
-	store, err := remote.Dial(base+storePrefix, remote.WithBearerToken(token))
+	store, err := remote.Dial(base+storePrefix, remote.WithBearerToken(token), remote.WithHTTPClient(hc))
 	if err != nil {
 		return fmt.Errorf("attach: %w", err)
 	}
