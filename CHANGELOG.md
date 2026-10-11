@@ -7,6 +7,18 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax serve` and `dax attach` (#64). `dax serve [flags]` runs a
+  session with no front of its own and serves its control (agentturn's
+  `front/control`, with the model, think, MCP and session info as named
+  commands) and its record (agentsession's `remote`, RFC 0003's read
+  side) on a loopback address (`-listen`, default `127.0.0.1:0`; any
+  other is refused, tunnel instead) behind one bearer token, from
+  `$DAX_SERVE_TOKEN` or made and written to a private file under
+  `~/.dax/serve`, never printed. `dax attach [-token-file f] URL` is the
+  terminal client over it, its slash commands run against the served
+  session. Every view attached to a session drives one conversation;
+  leaving a view leaves the session's run going.
+- Changed: requires agentsession v0.0.22.
 - Changed: every front drives the session as agentturn's control
   contract (#62). `*agent.Session` is an `agentturn.Control` over
   agentkit's `Kit.Control` (the run context, the engine's release of

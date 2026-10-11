@@ -48,10 +48,14 @@ the engine's release of held calls, the queued entries, the head move)
 with dax's own rules on top (the calls an abort left answered on the
 next prompt, `ErrHeld`, the questions no front here can answer not
 asked). What a view shows is the record, which leaves through
-agentsession (a Follower; RFC 0003 later), and the events: agentconsole
-is such a view, and it is not the controller. It takes the record and
-the events in and sends what the user asks out as intents, which the
-terminal client hands to the session (`client.Direct`).
+agentsession (a Follower here, RFC 0003's `remote` over a wire), and the
+events: agentconsole is such a view, and it is not the controller. It
+takes the record and the events in and sends what the user asks out as
+intents, which the terminal client hands to the session
+(`client.Direct`). `dax serve` puts a session's control and record on
+the wire (`serve.go`), and `dax attach` is the terminal client over them
+(`attach.go`). A session is one conversation: every view attached to it
+drives it, and independent work forks.
 
 A2A is not a plane. It is the boundary between two such systems, each
 with its own turn, planes and record: to the caller the other system is
@@ -65,15 +69,11 @@ was lent come back to the caller to run.
 
 Where dax does not keep to this yet, and what each needs:
 
-- The human plane: the contract and its wire are agentturn's
-  (`front/control`), but dax does not serve its sessions on it yet
-  (`dax serve`, `dax attach`), which waits for a view's record over the
-  wire (agentsession's RFC 0003 read and follow). dax's own controls
-  (`agent.Controls`: model, reasoning, MCP, the session's assembly) go
-  beside it on that wire as named commands (`front/control`'s
-  `WithCommands`). The contract names no run: `Abort` cancels whatever
-  runs, and agentconsole's `client.Direct` takes the first run start
-  it sees as its prompt's.
+- The human plane over a wire: `dax serve` listens on loopback only,
+  with no TLS (from elsewhere, tunnel), and a view cannot move the head
+  from the tree over it. agentconsole's `client.Direct` takes the first
+  run start it sees after a prompt as that prompt's, so a prompt refused
+  in the instant another view's run starts is reported as taken.
 - The execution plane: `dax execute` serves the tools over stdio MCP
   and `-executor` (`agent.Options.Executor`, `executor.Remote`) runs a
   session's tools there, reading the project's files (AGENTS.md,
@@ -318,7 +318,13 @@ events and answers permissions and questions on standard input; print
 (`-p`) is `agent.Drive`, a controller whose rules ask on standard input;
 the terminal client, agentconsole, is a view of the record and the
 session's events that sends the session intents (`client.Direct` over
-the session). A front's input is
+the session). `dax serve` is in place of a front: it serves the session
+(`front/control` with `agent.Controls` as its commands, the record
+through agentsession's `remote`) behind one bearer token, holding
+`Answering` while it serves, so questions wait for whoever attaches.
+`dax attach` is the terminal client over that wire, its slash commands
+through the served commands; leaving it leaves the session's run going.
+A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal
 client hands over with each submitted line (`console.WithSubmit`), and
@@ -410,8 +416,8 @@ What is not equal yet, and why:
   interface; the rest waits for `agentsession/remote`. `Session.Path`
   and the store's admin functions (`-list`, `-verify`, `-gc`) are the
   local store's.
-- A front driving a session elsewhere (agentconsole's backend over a
-  wire, ACP) is not built.
+- A front driving a session elsewhere over ACP is not built; over
+  agentturn's own wire it is `dax attach`.
 
 ## Extending
 

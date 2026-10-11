@@ -176,14 +176,23 @@ before the dax step that uses them, as the workspace's rules require.
      over `Kit.Control` with dax's controller rules on top; every front
      drives it, the terminal client through `client.Direct`;
      `agent.Turn` and `tuiadapter.go` are gone, **done**.
-   - Left: RFC 0003's read and follow in agentsession (a server over a
-     store and a client that is a view's record), then `dax serve`
-     (`front/control` over the session, dax's `Controls` as its
-     commands, the store's follow beside it) and `dax attach`
-     (`control.Dial` and the store client, handed to agentconsole). Run
-     identity in the contract: `Abort` names no run, and
-     `client.Direct` takes the first run start it sees as its prompt's,
-     so a second client's run can be aborted or mistaken for its own.
+   - RFC 0003's read side in agentsession (v0.0.22, package `remote`):
+     a server over a store (reading, following as server-sent events,
+     refs) and a client that verifies every entry it reads, **done**.
+   - `dax serve` and `dax attach` (#64): `dax serve` serves the session
+     on loopback, its control (`front/control`, dax's `Controls` as the
+     commands model, think, mcp-add, mcp-remove and info) and its record
+     (`remote`) behind one bearer token; `dax attach URL` runs the
+     terminal client over `control.Dial` and the store client. A session
+     is one conversation: every view attached to it drives it, there is
+     no client identity, and independent work forks. Leaving a view
+     does not stop the session's run, **done**.
+   - Known: `client.Direct` takes the first run start it sees after a
+     prompt as that prompt's, so a prompt refused in the instant another
+     view's run starts is reported as taken; a view sends a steer when
+     it sees a run going, so only that instant is exposed. Over the
+     wire: no TLS (tunnel), no head move from the tree, and no front/a2a
+     beside it yet (step 5).
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 
