@@ -87,7 +87,7 @@ repository exists to hold; a tension is named where there is one.
 | **agentkit** | assembly: one call that turns a product's choices into an `agentturn.Config`; no hidden seams | a release pinning agentsmd's `FS`. Optional, later: `Kit.Control(agent)`, the kit's agent as the control contract (what kitbackend does today) | Fits, provided `Kit.Control` is a helper over exported calls and hides no seam |
 | **agentsession** | the reference implementation of the Agent Session Format: one lossless record of what was sent, returned and done | RFC 0003 as drafted (the store over HTTP); a `peer` link relation in RFC 0001 | Fits: both are about the record, and a peer is one more thing the record links |
 | **agentturn** | one loop, one transcript type, one tool contract, hooks and queues; everything else is a front or a subscriber; the loop never learns a sub-agent concept | Optional, later: `Control` (the `*Agent` methods it already has, plus `Reply`), questions as events, `front/control`. Peers: cancel on abort, resume `input-required`, authentication for `front/a2a`, opt-in escalation | Fits: `front/control` is a front, questions are events to subscribers, and peers are a front and a tool. `Control` is a description of the loop's existing surface, not a new concept |
-| **agentconsole** | a terminal client; the record is the truth for what is committed, and live events carry only what is not | Optional, later: narrow to the view: consume agentturn's control contract and events plus a record follower; `client/native` and `client/kitbackend` move out | Fits its being a client of the record. **Tension**: its rule keeps live events for what is not committed, where this plan's view reads the record alone. RFC 0003's follow marks changes durable or not, which could carry the uncommitted part; that is agentconsole's call |
+| **agentconsole** | a terminal client; the record is the truth for what is committed, and live events carry only what is not | Optional, later: narrow to the view: consume agentturn's control contract and events plus a record follower; `client/native` and `client/kitbackend` move out | Fits its being a client of the record. Its rule, live events for what is not committed, stands: decided (see "Decided") |
 | **openresponses**, **agentmemory**, **toolbundle** | the model wire; memory between sessions; a tool set as a command-line program | nothing | Untouched. toolbundle remains the fallback for hosts with a shell and no MCP |
 
 ## Order
@@ -200,18 +200,26 @@ before the dax step that uses them, as the workspace's rules require.
      `dax attach` verifies the certificate against the system's roots or
      `-tls-ca`, and refuses `http://` to a host that is not loopback,
      **done**. Over the wire still: no front/a2a beside it yet (step 5).
-   - Step 4 is done (dax v0.0.14). What it left, each filed:
-     - The rest of RFC 0003 in agentsession's `remote` (agentsession#213):
-       writing, leases, objects and negotiation, exchange and push, log
-       and shallow reads, ref following, `durable=true`, a client method
-       for `path`, a bound on a follow's snapshot. `dax serve` needs
-       none of it; a session written through a server (a container,
-       another machine) does.
-     - A sub-agent's question is not on the record (dax#74): the record
-       holds its verdict and the call's decision, not the question, the
-       answer or the note, as a tool's own question's record does.
-     - The view and live events, under "Decisions still open".
-     - `client.Direct`'s narrow edge, under "Known" above.
+   - Step 4 is closed. What it left at dax v0.0.14 is done or decided:
+     - RFC 0003 whole in agentsession's `remote` (agentsession#213,
+       v0.0.23): writes under leases with fencing and idempotency, a
+       client that is a `Store` and `Writer`, objects and negotiation,
+       exchange, push, declare-record and handover, the log read,
+       `durable=true`, shallow `since-fold` reads, ref following, fetch
+       and take-back, and a bound on a follow's snapshot. What the
+       reference implementation leaves is named in the RFC's section on
+       it, chiefly that a plain follow sends no durable marks
+       (`durable_marks` is optional). `dax serve` reads only; a session
+       written through a server (a container, another machine) can now
+       be.
+     - A sub-agent's question is on the record (dax#74, v0.0.15): the
+       question under the call it is about, then the answer, the note
+       and that the human gave it, as a tool's own question is; and its
+       policy verdict (v0.0.14).
+     - The view and live events: decided (see "Decided").
+     - `client.Direct`'s narrow edge, under "Known" above: accepted. A
+       session is one conversation, so the contract names no run, and
+       the instant it exposes is one a view rarely meets.
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax, and `front/a2a` beside
    `front/control` in `dax serve`. The proposal is
@@ -289,14 +297,17 @@ before the dax step that uses them, as the workspace's rules require.
   between the policy's reading of a call's facts and the stamped one
   is closed by the per-decision pin (step 2).
 
+- **The view and live events** (decided 2026-10-11). agentconsole keeps
+  its rule: the record is the truth for what is committed, and live
+  events carry what is not. A "not durable" mark covers only entries
+  already appended; streamed text, tool progress and questions are not
+  in the record at all, so reading the record alone would need an
+  in-flight entry kind in the format. Where a store marks durability,
+  the mark is extra information about a committed entry, not a second
+  stream to reconcile.
+
 ## Decisions still open
 
-- **The view and live events.** The plan recommends that agentconsole
-  read the record alone, with uncommitted changes carried by RFC 0003's
-  follow (which marks each change durable or not), so there is one
-  stream to reconcile, not two. Its own rule keeps live events for what
-  is not committed, so the decision is agentconsole's, made when its
-  proposal is taken up.
 - **Where the policy engine runs** when control and execution are apart.
   Rules and decisions stay with control and facts with execution, as
   built; what is open is the cost: the engine reads a call's subjects
