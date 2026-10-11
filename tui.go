@@ -201,26 +201,33 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	}
 	// The client answers the questions asked while a call runs.
 	defer sess.Answering()()
-	run := f.run
-	if run == nil {
-		run = console.Run
-	}
-	// The input is dax's: a slash line is a command, as in the REPL,
-	// and /quit ends the client by ending the context it runs under.
-	cctx, quit := context.WithCancel(ctx)
-	defer quit()
-	var quitting atomic.Bool
-	opts := append([]console.Option{
-		console.WithToolRenderers(f.info.Renderers),
-		console.WithSubmit(submitLine(sess, sess, func() { quitting.Store(true); quit() })),
-	}, f.console...)
+	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers)}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	err = run(cctx, rec, sess, client.Direct(sess), opts...)
+	return runConsole(ctx, f.run, rec, sess, client.Direct(sess), sess, sess, opts)
+}
+
+// consoleRun is console.Run's shape, which tests replace.
+type consoleRun func(context.Context, client.Record, client.Source, client.Controller, ...console.Option) error
+
+// runConsole runs the terminal client over a record, a source of the
+// session's events and a controller, with dax's input: a slash line is
+// a command run through t and ctl, as in the REPL, and /quit ends the
+// client by ending the context it runs under, which is the user
+// leaving, not a failure. The local client and dax attach share it.
+func runConsole(ctx context.Context, run consoleRun, rec client.Record, src client.Source, act client.Controller, t agentturn.Control, ctl agent.Controls, opts []console.Option) error {
+	if run == nil {
+		run = console.Run
+	}
+	cctx, quit := context.WithCancel(ctx)
+	defer quit()
+	var quitting atomic.Bool
+	opts = append([]console.Option{
+		console.WithSubmit(submitLine(t, ctl, func() { quitting.Store(true); quit() })),
+	}, opts...)
+	err := run(cctx, rec, src, act, opts...)
 	if quitting.Load() && ctx.Err() == nil {
-		// The program ends with the context's error when /quit ends it,
-		// which is the user leaving, not a failure.
 		return nil
 	}
 	return err

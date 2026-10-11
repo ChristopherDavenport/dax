@@ -7,10 +7,12 @@ drives every front through it (#62). Where it differs from what follows:
 steer and follow-up are one `Queue(ctx, mode, items)`; a question's
 answer is an `agenttool.Answer` whose `Note` is what the user said; a run
 over `front/control` belongs to the agent, not to the connection that
-started it, and a caller's cancel sends an explicit abort. Left: run
-identity (`Abort` names no run), and dax serving it (`dax serve`), which
-waits for the record over the wire (agentsession's RFC 0003 read and
-follow).
+started it, and a caller's cancel sends an explicit abort. dax serves it
+(`dax serve`, #64) beside agentsession's `remote` for the record, and
+`dax attach` drives it from another terminal. There is no run identity to
+add: a session is one conversation, every view attached to it drives it,
+and `Abort` stops the session's run whoever sends it; independent work
+forks.
 
 Status: optional. The sandbox case does not need it (execution-boundary.md); this is for running the human or autonomous plane apart from the turn.
 

@@ -890,6 +890,46 @@ the next model call. `/model`, `/think` and `/mcp` wait for the run to
 end; the rest work during one. An unknown command is an error, not a
 prompt. `/compact` does not exist (use `-compact N`).
 
+## Serving a session: `dax serve` and `dax attach`
+
+`dax serve` runs a session with no front of its own and serves it, so a
+terminal elsewhere can drive it with `dax attach`. It takes the same
+flags as `dax` (the provider, the model, `-resume`, `-executor` and the
+rest) and `-listen`, the address (default `127.0.0.1:0`, a free port):
+
+```sh
+dax serve -resume 01a112e5-b4df-7081-bd11-baac746b29cc
+# serving at http://127.0.0.1:41753
+# token: /home/you/.dax/serve/01a112e5-....token
+# attach: dax attach -token-file /home/you/.dax/serve/01a112e5-....token http://127.0.0.1:41753
+
+dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
+```
+
+- **Loopback only.** dax serve refuses an address that is not
+  `127.0.0.1`, `::1` or `localhost`: the session runs tools and answers
+  what its policy asks, so it is not offered to the network, and the
+  wire has no TLS. From another machine, tunnel to it:
+  `ssh -L 7878:127.0.0.1:7878 host`, then attach to
+  `http://127.0.0.1:7878`.
+- **One token.** Every request needs it. It is `$DAX_SERVE_TOKEN` if
+  set; otherwise dax serve makes one and writes it to a file under
+  `~/.dax/serve` that only you can read, removed when it stops. The
+  token is never printed; attach reads it from `-token-file` or
+  `$DAX_SERVE_TOKEN`.
+- **One conversation.** Every view attached to a session drives the same
+  conversation: what one asks, the others show, and a permission or a
+  question is answered from whichever view answers first. Questions and
+  held calls wait for whoever attaches. For independent work, fork the
+  session instead.
+- **Leaving is not stopping.** `/quit` in an attached view leaves the
+  session's run going; ctrl+c in a view aborts it. dax serve stops on
+  ctrl+c or SIGTERM, aborting a run still going, and prints the command
+  that resumes the session.
+- **Commands.** The slash commands run against the served session:
+  `/model`, `/think`, `/mcp` and `/session` act there, through the
+  server's commands.
+
 ## In the REPL
 
 `dax -front repl` (the default when not on a terminal) is a line REPL

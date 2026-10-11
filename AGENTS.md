@@ -46,7 +46,14 @@ before changing the shape.
   agentconsole's `console.Run`, the default front on a terminal: the
   session's record (`client.RecordOf`) and the session as its source of
   events in, and the session as its controller (`client.Direct`) for
-  the intents it sends out.
+  the intents it sends out; `runConsole`, the client's run with dax's
+  slash input, which `attach.go` shares. `serve.go`: `dax serve`, a
+  session served on loopback behind one bearer token, its control
+  (agentturn's `front/control`, `agent.Controls` as named commands)
+  and its record (agentsession's `remote`). `attach.go`: `dax attach`,
+  a mode with flags of its own, the terminal client over that wire, a
+  record over the store client and an `agent.Controls` over the served
+  commands.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it) and `Renderers`.

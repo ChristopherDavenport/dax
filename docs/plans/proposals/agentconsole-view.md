@@ -9,9 +9,11 @@ as intents (`client.Prompt`, `Queue`, `Abort`, `Answer`, `Reply`,
 `client.Direct` maps them onto an `agentturn.Control`, and the TUI keeps
 no runs. dax hands it the session as both (#62); its own controller
 rules (`ErrHeld`, the questions no front here answers) are the
-session's. Left: a record over the wire (RFC 0003) for `dax attach`, a
-head move over `front/control`, and a response's usage and a turn's
-inputs, which the view has no place for yet.
+session's. `dax attach` (#64) hands it `control.Dial` and agentsession's
+`remote` client as the record, with a controller that leaves the
+session's run going when the view leaves. Left: a head move over
+`front/control`, and a response's usage and a turn's inputs, which the
+view has no place for yet.
 
 Status: optional, after agentturn-control.md. The sandbox case does not need it (execution-boundary.md).
 

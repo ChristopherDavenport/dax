@@ -62,6 +62,17 @@ func run(ctx context.Context, args []string, p program) error {
 	if len(args) > 0 && args[0] == "execute" {
 		return runExecute(ctx, args[1:], p)
 	}
+	// attach is a mode of its own too: the terminal client over a
+	// session another dax serves, which reads no config and opens none.
+	if len(args) > 0 && args[0] == "attach" {
+		return runAttach(ctx, args[1:], p)
+	}
+	// serve builds the session as the fronts do, from the same flags,
+	// and serves it in place of a front.
+	serving := len(args) > 0 && args[0] == "serve"
+	if serving {
+		args = args[1:]
+	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over stdio MCP; %[1]s execute -h)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
@@ -104,6 +115,7 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
+	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the loopback address to serve the session on; port 0 picks one")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -113,6 +125,22 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	if given["listen"] && !serving {
+		return errors.New("-listen is dax serve's")
+	}
+	if serving && (*once != "" || *frontName != "") {
+		return errors.New("dax serve has no front of its own: drop -p and -front, and attach with dax attach")
+	}
+	if serving && *root == "" {
+		return errors.New("dax serve needs a session store: an attached view follows the record; drop -sessions \"\"")
+	}
+	if serving {
+		// The address is checked before anything starts.
+		if _, err := checkLoopback(*listen); err != nil {
+			return err
+		}
+	}
 
 	dir, err := os.Getwd()
 	if err != nil {
@@ -353,12 +381,16 @@ func run(ctx context.Context, args []string, p program) error {
 	// The front is chosen here: -p prints one answer, otherwise -front
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
-	f, err := selectFront(*frontName, *once, frontInfo{
+	fi := frontInfo{
 		Name: p.name, Renderers: renderers,
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex), Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
-	}, processEnv(*root != ""))
-	if err != nil {
+	}
+	var f front
+	if serving {
+		// dax serve is in place of a front: the views attach to it.
+		f = &serveFront{info: fi, addr: *listen, signals: true}
+	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
 		return err
 	}
 	// The terminal client owns the screen, so a key command run while
