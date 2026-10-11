@@ -22,6 +22,7 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/charmbracelet/x/ansi"
 
@@ -471,15 +472,46 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	}
 }
 
-// recordedSubjects reads every session the store holds, sub-agents'
-// included, for the subjects of the policy's verdicts.
-func recordedSubjects(t *testing.T, sess *agent.Session) (subjects []string) {
+// checkRecordedQuestion checks the record holds a sub-agent's question,
+// asked about a call to tool with a message starting want, and its
+// answer, action and note, by the human, under the same call.
+func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action, note string) {
+	t.Helper()
+	var asked, answered *session.Elicitation
+	for _, e := range recordedCustom(t, sess, session.ElicitationNS) {
+		var q session.Elicitation
+		if err := json.Unmarshal(e, &q); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case q.Phase == session.ElicitationAsk && strings.HasPrefix(q.Message, want):
+			asked = &q
+		case q.Phase == session.ElicitationAnswer && asked != nil && q.Call == asked.Call:
+			answered = &q
+		}
+	}
+	switch {
+	case asked == nil:
+		t.Fatalf("no recorded question starts %q", want)
+	case asked.Tool != tool || asked.Call == "":
+		t.Errorf("the recorded question is about %q (call %q), want a call to %s", asked.Tool, asked.Call, tool)
+	case answered == nil:
+		t.Fatal("the question's answer is not on the record")
+	case answered.Action != action || answered.Note != note || answered.By != "human":
+		t.Errorf("recorded answer %q, note %q, by %q; want %q, %q, by human", answered.Action, answered.Note, answered.By, action, note)
+	}
+}
+
+// recordedCustom reads every session the store holds, sub-agents'
+// included, for the data of its custom entries under ns.
+func recordedCustom(t *testing.T, sess *agent.Session, ns string) []json.RawMessage {
 	t.Helper()
 	st := sess.Recorder().Store()
 	rd, ok := st.(agentsession.Reader)
 	if !ok {
 		t.Fatalf("the store %T cannot be read without a hold", st)
 	}
+	var out []json.RawMessage
 	for sum, err := range st.List(t.Context(), agentsession.ListFilter{}) {
 		if err != nil {
 			t.Fatal(err)
@@ -489,22 +521,27 @@ func recordedSubjects(t *testing.T, sess *agent.Session) (subjects []string) {
 			t.Fatal(err)
 		}
 		for _, e := range s.Entries() {
-			c, ok := e.(*agentsession.CustomEntry)
-			if !ok {
-				continue
+			if c, ok := e.(*agentsession.CustomEntry); ok && c.NS == ns {
+				out = append(out, c.Data)
 			}
-			if c.NS != agentpolicy.VerdictNS {
-				continue
-			}
-			var v struct {
-				Subject string `json:"subject"`
-			}
-			if err := json.Unmarshal(c.Data, &v); err != nil {
-				t.Fatal(err)
-			}
-			if v.Subject != "" {
-				subjects = append(subjects, v.Subject)
-			}
+		}
+	}
+	return out
+}
+
+// recordedSubjects reads every session the store holds, sub-agents'
+// included, for the subjects of the policy's verdicts.
+func recordedSubjects(t *testing.T, sess *agent.Session) (subjects []string) {
+	t.Helper()
+	for _, data := range recordedCustom(t, sess, agentpolicy.VerdictNS) {
+		var v struct {
+			Subject string `json:"subject"`
+		}
+		if err := json.Unmarshal(data, &v); err != nil {
+			t.Fatal(err)
+		}
+		if v.Subject != "" {
+			subjects = append(subjects, v.Subject)
 		}
 	}
 	return subjects
@@ -735,6 +772,7 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	if !strings.Contains(saw, "Reason: wrong file") {
 		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
 	}
+	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file")
 	r.quit()
 }
 
@@ -756,6 +794,7 @@ func TestAllowingASubagentsAskWithANoteTellsIt(t *testing.T) {
 	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
 		t.Errorf("the sub-agent saw %q, want the user's note", saw)
 	}
+	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "accept", "keep it short")
 	r.quit()
 }
 

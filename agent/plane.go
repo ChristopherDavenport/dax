@@ -194,6 +194,19 @@ func (s *Session) ask(ctx context.Context, q agenttool.Elicitation) (agenttool.A
 	return s.ag.QuestionElicitor()(ctx, q)
 }
 
+// askRecorded asks as ask does, through the kit's recorded question
+// elicitor (agentkit's Control.Elicitor): the question is on the run's
+// record before anyone is asked, and the answer, its note and who gave
+// it after, as a tool's own question is through the elicitor the kit
+// wraps. A question with no front answering is not asked, and so not
+// recorded as asked.
+func (s *Session) askRecorded(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
+	if s.answering.Load() == 0 {
+		return agenttool.Answer{}, errNoOne
+	}
+	return s.ctl.Elicitor()(ctx, q)
+}
+
 // errNoOne is a question asked with no front answering questions.
 var errNoOne = errors.New("nobody is answering questions")
 
