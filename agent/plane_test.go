@@ -58,7 +58,7 @@ func TestAControllerHoldingOnlyTheControlDrivesASession(t *testing.T) {
 				mu.Lock()
 				replied = append(replied, q.Call.Name+" "+string(q.Call.Args))
 				mu.Unlock()
-				turn.Reply(q.ID, agenttool.Answer{Action: agenttool.ActionAccept})
+				turn.Reply(ctx, q.ID, agenttool.Answer{Action: agenttool.ActionAccept})
 			}()
 			return nil
 		})()

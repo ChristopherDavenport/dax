@@ -48,15 +48,24 @@ func (f *forced) CreateStream(ctx context.Context, req openresponses.Request, si
 type scripted struct{ calls [][2]string }
 
 func (m *scripted) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	step := 0
+	// A user message right after the outputs is a note a person gave
+	// with an answer, said after the batch (agentturn v0.0.24), not a
+	// new prompt.
+	step, afterOutput := 0, false
 	for _, it := range req.Input {
 		switch v := it.(type) {
 		case *openresponses.Message:
-			if v.Role == openresponses.RoleUser {
+			switch {
+			case v.Role == openresponses.RoleAssistant:
+				afterOutput = false
+			case v.Role == openresponses.RoleUser && !afterOutput:
 				step = 0
 			}
 		case *openresponses.FunctionCallOutput:
 			step++
+			afterOutput = true
+		default:
+			afterOutput = false
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))

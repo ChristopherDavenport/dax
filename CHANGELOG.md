@@ -5,6 +5,40 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentturn and agentturn/session v0.0.27, up from
+  v0.0.22; agentpolicy v0.0.16, up from v0.0.15; agentkit v0.0.12, up
+  from v0.0.11; agentconsole v0.0.12, up from v0.0.11. With them, step 5
+  of the plan reaches dax: a held call's subject, held mark and the
+  policy's note survive a restart; whatever a person says reaches the
+  model once, after the outputs of the calls it is about, in their own
+  voice, and survives a crash; a held call is released from the
+  decision that held it; and the record says who answered a question.
+- Changed, public API: `agent.Session.Reply` takes a context, as
+  agentturn's `Control.Reply` does. Who answered is the answerer the
+  context names (`agentturn.ContextWithAnswerer`), which the record
+  writes beside the answer as its source. The new `agent.AtTerminal`
+  names the person at this terminal: the terminal client, the REPL and
+  `-p` name it on every reply they take from that person, and only on
+  replies, since a run's own context names who started it. An answer
+  given from `dax attach` names the served session's principal, as
+  front/control does. `agent.Rules` has a `By` field, the answerer
+  `Drive` names on the replies its rules give; the zero value names
+  nobody.
+- Changed: what a person says approving a sub-agent's call is their own
+  message to the sub-agent, after the outputs of its batch, where it
+  was a line of the policy's note ("The user said: ..."). The question
+  is put through `agentturn.Ask`, with dax's own text.
+- Note: `dax serve` gives its token no scope to choose who decided a
+  resumed call (front/control's `WithChosenBy`): an attached view
+  answers as the person, and nothing dax sends over the wire answers
+  as the policy, so every answer through it is recorded as a person's.
+- dax keeps its own question elicitor (`agentkit.WithToolElicitor`),
+  which puts a tool's question to the fronts answering as a question
+  event and cancels what no front here can show, so agentkit v0.0.12's
+  opt-in `WithQuestionEvents` is not needed (and is refused beside it).
+
 ## v0.0.15 - 2026-10-10
 
 - Fixed: a sub-agent's question is on the record (#74). When a call a

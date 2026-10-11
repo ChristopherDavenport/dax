@@ -4,19 +4,19 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
-	github.com/ChristopherDavenport/agentconsole v0.0.11
+	github.com/ChristopherDavenport/agentconsole v0.0.12
 	github.com/ChristopherDavenport/agenteval v0.0.10
-	github.com/ChristopherDavenport/agentkit v0.0.11
+	github.com/ChristopherDavenport/agentkit v0.0.12
 	github.com/ChristopherDavenport/agentmemory v0.0.10
-	github.com/ChristopherDavenport/agentpolicy v0.0.15
+	github.com/ChristopherDavenport/agentpolicy v0.0.16
 	github.com/ChristopherDavenport/agentsession v0.0.22
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
 	github.com/ChristopherDavenport/agenttool v0.0.22
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.22
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.22
-	github.com/ChristopherDavenport/agentturn v0.0.22
-	github.com/ChristopherDavenport/agentturn/session v0.0.22
+	github.com/ChristopherDavenport/agentturn v0.0.27
+	github.com/ChristopherDavenport/agentturn/session v0.0.27
 	github.com/ChristopherDavenport/agentworkspace v0.0.1
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15

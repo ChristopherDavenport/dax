@@ -117,9 +117,11 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(o.Dir, "FROM_REPL")); err != nil {
 		t.Errorf("the allowed call did not run: %v", err)
 	}
-	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
-		t.Errorf("the sub-agent saw %q, want the user's note", saw)
+	// The note is the person's own message, not a line of the policy's.
+	if saw := m.sawInChild(); !strings.Contains(saw, "keep it short") || strings.Contains(saw, "The user said") {
+		t.Errorf("the sub-agent saw %q, want the user's note as theirs", saw)
 	}
+	checkRecordedQuestion(t, sess, "the task sub-agent asks", "write", "accept", "keep it short", atTerminal)
 }
 
 // The REPL shows what a sub-agent's question is about from the asked

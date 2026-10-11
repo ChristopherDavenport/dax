@@ -172,6 +172,8 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			return replyOf(f.in.Text())
 		},
 		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
+		// The rules ask the person at this terminal.
+		By: agent.AtTerminal,
 	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
 	if err != nil {
@@ -360,7 +362,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				allow, note := answerLine(line)
 				switch {
 				case a.question != "":
-					t.Reply(a.question, replyOf(line))
+					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(line))
 				case allow:
 					ans := agentturn.Approve(a.call.CallID).WithBy(agentpolicy.ByHuman)
 					if note != "" {

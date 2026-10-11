@@ -34,15 +34,24 @@ type scripted struct {
 }
 
 func (m *scripted) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	step := 0
+	// A user message right after the outputs is a note a person gave
+	// with an answer, said after the batch (agentturn v0.0.24), not a
+	// new prompt.
+	step, afterOutput := 0, false
 	for _, it := range req.Input {
 		switch v := it.(type) {
 		case *openresponses.Message:
-			if v.Role == openresponses.RoleUser {
+			switch {
+			case v.Role == openresponses.RoleAssistant:
+				afterOutput = false
+			case v.Role == openresponses.RoleUser && !afterOutput:
 				step = 0
 			}
 		case *openresponses.FunctionCallOutput:
 			step++
+			afterOutput = true
+		default:
+			afterOutput = false
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
@@ -381,7 +390,7 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 	}{
 		"allowed":             {outcome{allow: true}, true, ""},
 		"refused":             {outcome{note: "not now"}, false, "Reason: not now"},
-		"allowed with a note": {outcome{allow: true, note: "keep it short"}, true, "The user said: keep it short"},
+		"allowed with a note": {outcome{allow: true, note: "keep it short"}, true, `{"type":"message","role":"user","content":[{"type":"input_text","text":"keep it short"}]}`},
 		"nobody to ask":       {outcome{err: errors.New("no client")}, false, "cannot ask you"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -431,10 +440,11 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 				last := model.childReqs[len(model.childReqs)-1]
 				model.mu.Unlock()
 				// A refusal's reason is in the call's output; an approval's
-				// note is beside it, a developer message after the batch.
+				// note is the person's own message after the batch.
 				saw, _ := json.Marshal(last.Input)
-				if !strings.Contains(string(saw), tc.childSaw) {
-					t.Errorf("the sub-agent saw %s, want %q", saw, tc.childSaw)
+				at := strings.Index(string(saw), tc.childSaw)
+				if at < 0 || at < strings.LastIndex(string(saw), `"function_call"`) {
+					t.Errorf("the sub-agent saw %s, want %q after its calls", saw, tc.childSaw)
 				}
 			}
 		})

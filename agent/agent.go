@@ -1174,8 +1174,9 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 // the stamp of the facts it was asked about, and a stamp the model
 // forged never reaches the tool. What the person said with the answer
 // reaches the model: a refusal's reason in its output, an approval's
-// note beside the result. The question and its answer are on the
-// record, under the call they are about, as a tool's own question is.
+// note as their own message after the batch's outputs. The question and
+// its answer are on the record, under the call they are about, as a
+// tool's own question is.
 func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
 	// What the question is about is the asked call's decision's Subject,
 	// which each front shows beside the question; the question's text,
@@ -1183,24 +1184,33 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 	reason := "the " + name + " sub-agent asks: " + why
 	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
 	call := agentturn.AskedCall{Parent: info.Parent, CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
-		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, By: agentpolicy.ByPolicy}}
-	r, err := s.askRecorded(agentturn.ContextWithAskedCall(ctx, call), agenttool.Elicitation{Message: reason})
+		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, Args: args, By: agentpolicy.ByPolicy}}
+	// agentturn.Ask puts it, so what the person says with an approval is
+	// theirs, a user message held with the call and appended after the
+	// batch's outputs, not a line of the decision's note; the question
+	// is dax's own text, put through the kit's recorded elicitor.
+	var (
+		ans    agenttool.Answer
+		askErr error
+	)
+	elicit := func(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
+		q.Message = reason
+		ans, askErr = s.askRecorded(ctx, q)
+		return ans, askErr
+	}
+	d, ok := agentturn.Ask(agenttool.ContextWithElicitor(ctx, elicit), call)
 	switch {
-	case errors.Is(err, errNoOne):
+	case errors.Is(askErr, errNoOne):
 		return cannot
-	case err != nil:
+	case askErr != nil:
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
-	case r.Action == agenttool.ActionAccept:
-		d := &agentturn.ToolDecision{Action: agentturn.Allow, Args: args, By: agentpolicy.ByHuman}
-		if r.Note != "" {
-			d.Note = "The user said: " + r.Note
-		}
+	case ok && d.Action == agentturn.Allow:
 		return d
-	case r.Action == agenttool.ActionDecline:
+	case ok && d.Action == agentturn.Block:
 		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
 		out := deniedOutput
-		if r.Note != "" {
-			out += " Reason: " + r.Note
+		if ans.Note != "" {
+			out += " Reason: " + ans.Note
 		}
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
 	}

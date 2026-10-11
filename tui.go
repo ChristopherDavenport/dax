@@ -205,7 +205,22 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	return runConsole(ctx, f.run, rec, sess, client.Direct(sess), sess, sess, opts)
+	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess), agent.AtTerminal), sess, sess, opts)
+}
+
+// answeredBy is act with by named as who answered on every Reply's
+// context (agentturn.ContextWithAnswerer), which the record writes
+// beside the answer: the view holds no identity, and the front knows
+// the person at its terminal. Only a Reply carries it: a prompt's or an
+// answer's context is its run's, and an answerer there would name by
+// for any reply made with that run's event context.
+func answeredBy(act client.Controller, by agentturn.Trigger) client.Controller {
+	return func(ctx context.Context, in client.Intent) error {
+		if _, ok := in.(client.Reply); ok {
+			ctx = agentturn.ContextWithAnswerer(ctx, by)
+		}
+		return act(ctx, in)
+	}
 }
 
 // consoleRun is console.Run's shape, which tests replace.

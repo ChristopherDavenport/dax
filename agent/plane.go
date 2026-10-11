@@ -164,8 +164,20 @@ func (s *Session) Subscribe(fn func(context.Context, agentturn.Event) error) fun
 }
 
 // Reply implements agentturn.Control: it answers a question asked
-// while a call runs. A question no longer waiting is an error.
-func (s *Session) Reply(id string, answer agenttool.Answer) error { return s.ctl.Reply(id, answer) }
+// while a call runs. A question no longer waiting is an error. Who
+// answered is the answerer ctx names (agentturn.ContextWithAnswerer),
+// which the record writes beside the answer: a front names the person
+// it took the answer from (AtTerminal), and a reply that names nobody
+// is unattributed. The run's own context, which a Question event is
+// delivered with, names who started the run, not who answers.
+func (s *Session) Reply(ctx context.Context, id string, answer agenttool.Answer) error {
+	return s.ctl.Reply(ctx, id, answer)
+}
+
+// AtTerminal is the person at this terminal, as who answered a
+// question: a front that takes the answer from them names it on
+// Reply's context with agentturn.ContextWithAnswerer.
+var AtTerminal = agentturn.Trigger{Kind: "human", Source: "terminal"}
 
 // ContinueFrom moves the session's head to the entry: the next prompt
 // continues the conversation from there, on a branch of the session,
@@ -300,6 +312,11 @@ type Rules struct {
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
+	// By is who answers the questions Reply answers, written beside
+	// each answer (agentturn.ContextWithAnswerer): AtTerminal for rules
+	// that ask a person, a trigger of the controller's own for rules
+	// that decide alone. The zero value leaves the answers unattributed.
+	By agentturn.Trigger
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -315,10 +332,16 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if a, ok := c.(interface{ Answering() func() }); ok {
 			defer a.Answering()()
 		}
+		// A reply goes under Drive's context, naming r.By, not the
+		// event's, which names who started the run.
+		rctx := ctx
+		if r.By.Kind != "" || r.By.Ref != "" || r.By.Source != "" {
+			rctx = agentturn.ContextWithAnswerer(ctx, r.By)
+		}
 		defer c.Subscribe(func(_ context.Context, ev agentturn.Event) error {
 			if q, ok := ev.(*agentturn.Question); ok {
 				q := *q
-				go c.Reply(q.ID, r.Reply(q))
+				go c.Reply(rctx, q.ID, r.Reply(q))
 			}
 			return nil
 		})()
