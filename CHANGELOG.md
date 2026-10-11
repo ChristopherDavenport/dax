@@ -21,6 +21,14 @@ versions may break flags and the config file.
   through it, so the next prompt, from any view, continues from that
   entry, with the move on the record as a leaf label. A move the
   session refuses is shown in the view that asked.
+- Added: TLS for `dax serve` (#69). With `-tls-cert` and `-tls-key`
+  (PEM) it serves HTTPS, TLS 1.2 at least, and `-listen` may be any
+  address; without them it stays on loopback, and one of the two alone
+  is refused. The token is needed either way. `dax attach` verifies the
+  certificate against the system's roots, or the CA given with
+  `-tls-ca`, with no way to skip the check, and refuses an `http://`
+  URL to a host that is not loopback, since the token would cross the
+  network in the clear.
 
 ## v0.0.13 - 2026-10-10
 

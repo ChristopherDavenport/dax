@@ -194,8 +194,12 @@ before the dax step that uses them, as the workspace's rules require.
    - The head move over the wire (#68): `dax serve` serves a
      `continue-from` command and attach's controller sends the view's
      `ContinueFrom` intent through it, so the tree continues from an
-     entry attached as locally, **done**. Over the wire still: no TLS
-     (tunnel), and no front/a2a beside it yet (step 5).
+     entry attached as locally, **done**.
+   - TLS for `dax serve` (#69): with `-tls-cert` and `-tls-key` it
+     serves HTTPS on any address; without them it stays on loopback.
+     `dax attach` verifies the certificate against the system's roots or
+     `-tls-ca`, and refuses `http://` to a host that is not loopback,
+     **done**. Over the wire still: no front/a2a beside it yet (step 5).
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 

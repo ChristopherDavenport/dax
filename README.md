@@ -906,12 +906,25 @@ dax serve -resume 01a112e5-b4df-7081-bd11-baac746b29cc
 dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
 ```
 
-- **Loopback only.** dax serve refuses an address that is not
-  `127.0.0.1`, `::1` or `localhost`: the session runs tools and answers
-  what its policy asks, so it is not offered to the network, and the
-  wire has no TLS. From another machine, tunnel to it:
-  `ssh -L 7878:127.0.0.1:7878 host`, then attach to
-  `http://127.0.0.1:7878`.
+- **Loopback, unless it has a certificate.** Without TLS, dax serve
+  refuses an address that is not `127.0.0.1`, `::1` or `localhost`: the
+  session runs tools and answers what its policy asks, so it is not
+  offered to the network in the clear. The simplest way in from another
+  machine is still a tunnel: `ssh -L 7878:127.0.0.1:7878 host`, then
+  attach to `http://127.0.0.1:7878`.
+- **HTTPS with a certificate.** Given a certificate and its key (PEM),
+  dax serve serves HTTPS and may listen on any address:
+
+  ```sh
+  dax serve -listen 0.0.0.0:7878 -tls-cert host.pem -tls-key host-key.pem
+  dax attach -token-file host.token https://host.example:7878
+  ```
+
+  dax attach verifies the certificate against the system's roots, or
+  against the CA you give it with `-tls-ca ca.pem` for a certificate of
+  your own; nothing skips the check. It refuses an `http://` URL to a
+  host that is not loopback, since the token would cross the network in
+  the clear. The certificate must name the host you attach to.
 - **One token.** Every request needs it. It is `$DAX_SERVE_TOKEN` if
   set; otherwise dax serve makes one and writes it to a file under
   `~/.dax/serve` that only you can read, removed when it stops. The

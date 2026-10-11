@@ -10,11 +10,14 @@ package dax
 // agentturn.Control, its rules included), with dax's settings as named
 // commands; the record is agentsession's remote, RFC 0003's read side,
 // over the session's store. Both sit behind one bearer token, and the
-// listener is on loopback only: from another machine, tunnel to it.
+// listener is on loopback only unless dax serve is given a certificate
+// (-tls-cert, -tls-key): from another machine, tunnel to it, or serve
+// HTTPS.
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,8 +56,11 @@ const (
 // until it is told to stop.
 type serveFront struct {
 	info frontInfo
-	// addr is where to listen; it must be a loopback address.
+	// addr is where to listen: a loopback address, or any with TLS.
 	addr string
+	// tlsCert and tlsKey are the certificate and key files dax serve
+	// serves HTTPS with; with neither it serves HTTP on loopback only.
+	tlsCert, tlsKey string
 	// out is where the start lines and the resume command go; nil is
 	// standard output.
 	out io.Writer
@@ -82,7 +89,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	if !si.Recorded {
 		return errors.New("dax serve needs a session store: an attached view follows the record; drop -sessions \"\"")
 	}
-	ln, err := listenLoopback(f.addr)
+	ln, scheme, err := f.listen()
 	if err != nil {
 		return err
 	}
@@ -103,17 +110,23 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 
-	url := "http://" + ln.Addr().String()
+	url := scheme + "://" + servedHost(ln.Addr())
 	for _, l := range banner(f.info, si) {
 		fmt.Fprintln(out, render.Clean(l))
 	}
-	fmt.Fprintln(out, "serving at "+url)
+	fmt.Fprintln(out, "serving at "+render.Clean(url))
+	// A certificate the attaching machine does not trust is named to it
+	// with -tls-ca.
+	ca := ""
+	if scheme == "https" {
+		ca = "[-tls-ca <the certificate's CA>] "
+	}
 	if tokenFile != "" {
 		fmt.Fprintln(out, "token: "+render.Clean(tokenFile))
-		fmt.Fprintln(out, "attach: "+render.Clean(f.info.Name)+" attach -token-file "+render.Clean(tokenFile)+" "+url)
+		fmt.Fprintln(out, "attach: "+render.Clean(f.info.Name)+" attach "+ca+"-token-file "+render.Clean(tokenFile)+" "+render.Clean(url))
 	} else {
 		fmt.Fprintln(out, "token: $"+serveTokenEnv)
-		fmt.Fprintln(out, "attach: "+serveTokenEnv+"=... "+render.Clean(f.info.Name)+" attach "+url)
+		fmt.Fprintln(out, "attach: "+serveTokenEnv+"=... "+render.Clean(f.info.Name)+" attach "+ca+render.Clean(url))
 	}
 	if f.ready != nil {
 		f.ready(url)
@@ -176,6 +189,73 @@ func listenLoopback(addr string) (net.Listener, error) {
 	return ln, nil
 }
 
+// listen is where dax serve serves: HTTPS on addr when it was given a
+// certificate, which may then be any address, and HTTP on a loopback
+// address otherwise. It returns the URL scheme.
+func (f *serveFront) listen() (net.Listener, string, error) {
+	cfg, err := serveTLS(f.tlsCert, f.tlsKey)
+	if err != nil {
+		return nil, "", err
+	}
+	if cfg == nil {
+		ln, err := listenLoopback(f.addr)
+		return ln, "http", err
+	}
+	ln, err := net.Listen("tcp", f.addr)
+	if err != nil {
+		return nil, "", err
+	}
+	return tls.NewListener(ln, cfg), "https", nil
+}
+
+// serveTLS is the TLS dax serve serves with: the certificate and key
+// files, both or neither (nil: no TLS). TLS 1.2 is the least it takes.
+func serveTLS(certFile, keyFile string) (*tls.Config, error) {
+	switch {
+	case certFile == "" && keyFile == "":
+		return nil, nil
+	case certFile == "" || keyFile == "":
+		return nil, errors.New("dax serve: -tls-cert and -tls-key go together")
+	}
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("dax serve: -tls-cert, -tls-key: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
+}
+
+// servedHost is the host and port to attach to: the listener's address,
+// or this machine's name in place of an address that names none
+// (0.0.0.0, ::), which is what a certificate would name.
+func servedHost(a net.Addr) string {
+	t, ok := a.(*net.TCPAddr)
+	if !ok || !t.IP.IsUnspecified() {
+		return a.String()
+	}
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return a.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(t.Port))
+}
+
+// checkServeAddr refuses, before anything starts, what dax serve would
+// refuse when it listens: an address that is not loopback without TLS,
+// and one of -tls-cert and -tls-key without the other.
+func checkServeAddr(addr, certFile, keyFile string) error {
+	if (certFile == "") != (keyFile == "") {
+		return errors.New("dax serve: -tls-cert and -tls-key go together")
+	}
+	if certFile != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return fmt.Errorf("-listen %q: %w", addr, err)
+		}
+		return nil
+	}
+	_, err := checkLoopback(addr)
+	return err
+}
+
 // checkLoopback refuses an address that is not a loopback one, and
 // returns the refusal for an address that resolves elsewhere once
 // listened on.
@@ -187,7 +267,7 @@ func checkLoopback(addr string) (refusal error, err error) {
 	if port == "" || port == "0" {
 		port = "7878"
 	}
-	refusal = fmt.Errorf("-listen %q: dax serve listens on loopback only (127.0.0.1, ::1 or localhost); from another machine, tunnel to it: ssh -L %s:127.0.0.1:%s <this host>", addr, port, port)
+	refusal = fmt.Errorf("-listen %q: without TLS dax serve listens on loopback only (127.0.0.1, ::1 or localhost); from another machine, tunnel to it: ssh -L %s:127.0.0.1:%s <this host>, or serve with -tls-cert and -tls-key", addr, port, port)
 	if !isLoopbackHost(host) {
 		return nil, refusal
 	}

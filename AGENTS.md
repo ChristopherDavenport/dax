@@ -48,13 +48,15 @@ before changing the shape.
   events in, and the session as its controller (`client.Direct`) for
   the intents it sends out; `runConsole`, the client's run with dax's
   slash input, which `attach.go` shares. `serve.go`: `dax serve`, a
-  session served on loopback behind one bearer token, its control
+  session served behind one bearer token, on loopback or over HTTPS
+  with a certificate (`-tls-cert`, `-tls-key`), its control
   (agentturn's `front/control`, `agent.Controls` and the head move as
   named commands) and its record (agentsession's `remote`).
   `attach.go`: `dax attach`, a mode with flags of its own, the terminal
-  client over that wire, a record over the store client, an
-  `agent.Controls` over the served commands, and a controller that
-  sends the head move through its command.
+  client over that wire (https verified against the system's roots or
+  `-tls-ca`), a record over the store client, an `agent.Controls` over
+  the served commands, and a controller that sends the head move
+  through its command.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it) and `Renderers`.
