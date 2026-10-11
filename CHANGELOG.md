@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.13 - 2026-10-10
 
 - Changed: a deferred call's recorded decision keeps the policy's
   reason as it gave it; "; about: <subject>" is no longer appended
