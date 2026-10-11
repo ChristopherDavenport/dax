@@ -249,7 +249,7 @@ func serveHandler(sess *agent.Session, dir, token string, logf func(error)) (h h
 		control.WithAuthenticator(control.BearerTokens(map[string]control.Principal{
 			token: {Name: "attach", Scopes: control.AllScopes},
 		})),
-		control.WithCommands(serveCommands(sess, dir)),
+		control.WithCommands(serveCommands(sess, sess, dir)),
 	)
 	store := remote.NewHandler(sess.Recorder().Store(),
 		remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
@@ -279,6 +279,9 @@ const (
 	cmdThink     = "think"
 	cmdMCPAdd    = "mcp-add"
 	cmdMCPRemove = "mcp-remove"
+	// cmdContinueFrom moves the session's head: the tree of an attached
+	// view continues from an entry, as a local view's does.
+	cmdContinueFrom = "continue-from"
 )
 
 type modelArgs struct {
@@ -298,9 +301,19 @@ type mcpLabel struct {
 	Label string `json:"label"`
 }
 
-// serveCommands are ctl's operations as front/control's named
-// commands.
-func serveCommands(ctl agent.Controls, dir string) map[string]control.Command {
+type continueArgs struct {
+	Entry string `json:"entry"`
+}
+
+// headMover is the session's head move (agent.Session.ContinueFrom), the
+// one control a view sends that is not agentturn's.
+type headMover interface {
+	ContinueFrom(ctx context.Context, entryID string) error
+}
+
+// serveCommands are ctl's operations, and head's move, as
+// front/control's named commands.
+func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]control.Command {
 	decode := func(raw json.RawMessage, v any) error {
 		if len(raw) == 0 {
 			return errors.New("arguments required")
@@ -352,6 +365,20 @@ func serveCommands(ctl agent.Controls, dir string) map[string]control.Command {
 					return nil, err
 				}
 				return json.Marshal(mcpLabel{Label: label})
+			},
+		},
+		cmdContinueFrom: {
+			Description: "move the session's head to an entry: the next prompt continues from there, on a branch",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"entry":{"type":"string"}},"required":["entry"]}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+				var a continueArgs
+				if err := decode(raw, &a); err != nil {
+					return nil, err
+				}
+				if strings.TrimSpace(a.Entry) == "" {
+					return nil, errors.New("no entry named")
+				}
+				return nil, head.ContinueFrom(ctx, a.Entry)
 			},
 		},
 		cmdMCPRemove: {

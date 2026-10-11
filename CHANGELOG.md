@@ -15,6 +15,12 @@ versions may break flags and the config file.
   under `agentpolicy:verdict`, as the main agent's are, so the rule,
   the reason and what a question was about are on the record for a
   sub-agent's calls too (#70).
+- Added: an attached view moves the served session's head (#68).
+  `dax serve` serves a `continue-from` command, and `dax attach` sends
+  the terminal client's continue (Ctrl-B on a row, `c` in the tree)
+  through it, so the next prompt, from any view, continues from that
+  entry, with the move on the record as a leaf label. A move the
+  session refuses is shown in the view that asked.
 
 ## v0.0.13 - 2026-10-10
 
