@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.14 - 2026-10-10
 
 - Changed: a sub-agent's question is the policy's own text ("the
   explore sub-agent asks: <reason>"); "; about: <subject>" is no longer
