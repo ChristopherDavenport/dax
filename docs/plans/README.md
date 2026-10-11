@@ -199,7 +199,7 @@ before the dax step that uses them, as the workspace's rules require.
      serves HTTPS on any address; without them it stays on loopback.
      `dax attach` verifies the certificate against the system's roots or
      `-tls-ca`, and refuses `http://` to a host that is not loopback,
-     **done**. Over the wire still: no front/a2a beside it yet (step 5).
+     **done**. Over the wire still: no front/a2a beside it yet (step 6).
    - Step 4 is closed. What it left at dax v0.0.14 is done or decided:
      - RFC 0003 whole in agentsession's `remote` (agentsession#213,
        v0.0.23): writes under leases with fencing and idempotency, a
@@ -220,7 +220,68 @@ before the dax step that uses them, as the workspace's rules require.
      - `client.Direct`'s narrow edge, under "Known" above: accepted. A
        session is one conversation, so the contract names no run, and
        the instant it exposes is one a view rarely meets.
-5. **Peers** (optional): agentsession's peer link, agentturn's peer
+5. **Meaning on the record, and the contract's loose ends.** Round 9
+   of the studies (agentstudies `round9/`, 2026-10-10) ran against the
+   tags step 4 shipped. No finding runs against step 4's decisions (a
+   view sends intents and is not a controller; a session is one
+   conversation; live events carry what is not committed; meaning
+   travels with each call), but the fourth is half done in places, and
+   a few findings reach the `Control` contract itself. Peers (step 6)
+   would carry each of these across processes, so they come first, in
+   this order:
+   1. **Held-ness and the subject on the record.** The hold decision
+      is written without `Held` or `Subject`, so after a restart
+      `Permissions` asks about a call the engine only held, and
+      `Resume` cannot release a run that waits on held calls alone: the
+      kit releases from the engine's memory and its last end, not from
+      what was recorded. Record both (agentturn/session), read them
+      back onto `PendingCall.Decision`, and have the kit release from
+      the decision, which also makes agentpolicy's release two-phase.
+      agentturn#238, agentkit#91, agentkit#92, agentpolicy#67,
+      agentpolicy#79.
+   2. **Who decided, over the wire.** `Reply` takes no context, so the
+      principal who answered a question is not recorded, and
+      `front/control` records whatever `By` a client sends with
+      `Resume`, `policy` included. The front stamps who answered from
+      its principal; `Reply` carries a context in the contract's next
+      breaking change. Attribution only: a session is one conversation,
+      and nobody owns a run. agentturn#240.
+   3. **One rule for a note.** An accept's note on a nested call never
+      reaches the model (`invoke` drops the decision's `Note`); a
+      resume's note is appended before the outputs of the calls it
+      releases, splitting calls from their outputs, which providers
+      refuse; a note on a tool's own question is recorded and told to
+      nobody. Decide where a note goes, once, and make every path keep
+      it. agentturn#245, agentturn#239.
+   4. **Questions belong to the run, not the kit.** `Kit.Control` puts
+      the first agent's question elicitor on the kit's shared config,
+      so on a kit serving several conversations one conversation's
+      views answer another's questions; and a question waits without
+      end on a host nobody attends. Route questions by run, and give
+      the wait an explicit, documented choice. agentkit#93,
+      agentkit#97.
+   5. **Subscribers observe.** `Subscribe`'s error return vetoes a
+      dispatch, which lets a view act as a controller. The contract
+      says a subscriber through `Control` observes, and a veto belongs
+      to `BeforeToolCall`. agentturn#119.
+   - Also: the open question at a cut on `PendingCall` (agentturn#241),
+     which the front's `State` then carries; and agentturn#80, which
+     `front/control` answers, is closed.
+   - Scheduled apart, not blocking step 6: per-session authorization in
+     `remote`, checked in the handler rather than a store wrapper that
+     a resumed follow bypasses, on every route that names a session
+     (agentsession#221); a ref pinning an uncommitted entry, now also
+     through `remote` (agentsession#217, #218, #219); and the ordinary
+     gaps round 9 filed: export and evaluation (agentsession#220,
+     #223–#225, agenteval#56–#59), sub-agents (agentturn#237, #242,
+     #243), call identity (agentturn#236, openresponses#30), handoffs
+     and instruction parts (agentturn#233–#235, agentpolicy#78),
+     facts (agentpolicy#80, #81, agenttool#84, #85, agentkit#96,
+     toolbundle#3, #4), the rest (agentturn#244, agentkit#94, #95,
+     agentsession#222, agentmemory#46, agentworkspace#3–#5).
+   - Done when items 1 to 5 are released and dax drives them; the
+     studies' probes for those issues flip.
+6. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax, and `front/a2a` beside
    `front/control` in `dax serve`. The proposal is
    [agentturn-peers.md](proposals/agentturn-peers.md).
