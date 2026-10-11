@@ -1104,7 +1104,11 @@ For a front of your own, build the session with `agent.New` and
 follow-up, answer the permissions a run stops on (`Session.Permissions`,
 `Resume`), reply to the questions asked while a call runs (the
 `agentturn.Question` events, `Reply`, after `Session.Answering`), and
-subscribe to the agent's events. `Session` is also `agent.Controls`
+subscribe to the agent's events. Name who answered on `Reply`'s
+context with `agentturn.ContextWithAnswerer` (`agent.AtTerminal` for
+the person at the terminal), and only for a reply that person gave:
+the record writes it beside the answer, and a reply that names nobody
+is unattributed. `Session` is also `agent.Controls`
 (model, reasoning, MCP servers, `Info`); `Session.Record` is the store
 to follow for a view, and `Session.Recorder` what agentconsole's
 `client.RecordOf` takes.

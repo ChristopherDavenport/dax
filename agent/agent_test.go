@@ -48,15 +48,24 @@ func (f *forced) CreateStream(ctx context.Context, req openresponses.Request, si
 type scripted struct{ calls [][2]string }
 
 func (m *scripted) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	step := 0
+	// A user message right after the outputs is a note a person gave
+	// with an answer, said after the batch (agentturn v0.0.24), not a
+	// new prompt.
+	step, afterOutput := 0, false
 	for _, it := range req.Input {
 		switch v := it.(type) {
 		case *openresponses.Message:
-			if v.Role == openresponses.RoleUser {
+			switch {
+			case v.Role == openresponses.RoleAssistant:
+				afterOutput = false
+			case v.Role == openresponses.RoleUser && !afterOutput:
 				step = 0
 			}
 		case *openresponses.FunctionCallOutput:
 			step++
+			afterOutput = true
+		default:
+			afterOutput = false
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
@@ -962,4 +971,91 @@ func localWorkspace(t *testing.T, dir string) *workspace.Local {
 	}
 	t.Cleanup(func() { ws.Close() })
 	return ws
+}
+
+// together makes all its calls in one response, then answers "done".
+type together struct{ calls [][2]string }
+
+func (m *together) CreateStream(_ context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
+	answered := slices.ContainsFunc(req.Input, func(it openresponses.Item) bool {
+		_, ok := it.(*openresponses.FunctionCallOutput)
+		return ok
+	})
+	if !answered {
+		for _, c := range m.calls {
+			call, err := em.FunctionCall("", c[0])
+			if err != nil {
+				return err
+			}
+			if err := call.Arguments(c[1]); err != nil {
+				return err
+			}
+			if err := call.Close(); err != nil {
+				return err
+			}
+		}
+		return em.Complete()
+	}
+	msg, err := em.Message(openresponses.PhaseFinalAnswer)
+	if err != nil {
+		return err
+	}
+	if err := msg.Text("done"); err != nil {
+		return err
+	}
+	if err := msg.Close(); err != nil {
+		return err
+	}
+	return em.Complete()
+}
+
+// After a restart, Drive asks only about the held call that waits on a
+// person, with the policy's question, not about the read the policy
+// held beside it, which the answer releases.
+func TestAfterARestartOnlyTheAskedCallIsAsked(t *testing.T) {
+	ctx := context.Background()
+	model := &together{calls: [][2]string{{"read", `{"path":"AGENTS.md"}`}, {"bash", `{"command":"echo ran"}`}}}
+	o := options(t, model)
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := s.ag.Prompt(ctx, openresponses.UserText("run it"))
+	if err != nil || end.Reason != agentturn.ReasonInputRequired {
+		t.Fatalf("first run: %v, %v; want input_required", end, err)
+	}
+	if n := len(s.Permissions(end)); n != 1 {
+		t.Fatalf("the live run asks about %d calls, want the bash call alone", n)
+	}
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var asked []string
+	approve := func(c *openresponses.FunctionCall, reason string) bool {
+		asked = append(asked, c.Name+": "+reason)
+		return true
+	}
+	if end, err = promptOn(ctx, s, "and then?", approve); err != nil || end.Reason != agentturn.ReasonDone {
+		t.Fatalf("resumed run: %v, %v", end, err)
+	}
+	if len(asked) != 1 || !strings.HasPrefix(asked[0], "bash: ") || strings.Contains(asked[0], heldReason) {
+		t.Fatalf("asked %q, want the bash call alone, with the policy's question", asked)
+	}
+	outs := 0
+	for _, it := range s.ag.State().Transcript {
+		if o, ok := it.(*openresponses.FunctionCallOutput); ok && o.Output.Text != deniedOutput {
+			outs++
+		}
+	}
+	if outs != 2 {
+		t.Errorf("%d calls ran, want the read and the bash call", outs)
+	}
 }

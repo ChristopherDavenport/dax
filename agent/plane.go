@@ -164,8 +164,20 @@ func (s *Session) Subscribe(fn func(context.Context, agentturn.Event) error) fun
 }
 
 // Reply implements agentturn.Control: it answers a question asked
-// while a call runs. A question no longer waiting is an error.
-func (s *Session) Reply(id string, answer agenttool.Answer) error { return s.ctl.Reply(id, answer) }
+// while a call runs. A question no longer waiting is an error. Who
+// answered is the answerer ctx names (agentturn.ContextWithAnswerer),
+// which the record writes beside the answer: a front names the person
+// it took the answer from (AtTerminal), and a reply that names nobody
+// is unattributed. The run's own context, which a Question event is
+// delivered with, names who started the run, not who answers.
+func (s *Session) Reply(ctx context.Context, id string, answer agenttool.Answer) error {
+	return s.ctl.Reply(ctx, id, answer)
+}
+
+// AtTerminal is the person at this terminal, as who answered a
+// question: a front that takes the answer from them names it on
+// Reply's context with agentturn.ContextWithAnswerer.
+var AtTerminal = agentturn.Trigger{Kind: "human", Source: "terminal"}
 
 // ContinueFrom moves the session's head to the entry: the next prompt
 // continues the conversation from there, on a branch of the session,
@@ -300,6 +312,14 @@ type Rules struct {
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
+	// By, when set, names who gave the reply Reply has just given to q,
+	// written beside the answer (agentturn.ContextWithAnswerer):
+	// AtTerminal for a person's answer, a trigger of the controller's
+	// own for a rule's. It is asked per reply, so rules that ask a
+	// person and answer for them when nobody can (a decline at the end
+	// of the input) name the person only for what the person said. The
+	// zero Trigger, or a nil By, leaves the reply unattributed.
+	By func(q agentturn.Question) agentturn.Trigger
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -318,7 +338,22 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		defer c.Subscribe(func(_ context.Context, ev agentturn.Event) error {
 			if q, ok := ev.(*agentturn.Question); ok {
 				q := *q
-				go c.Reply(q.ID, r.Reply(q))
+				// The rules may wait on a person: they answer off the
+				// event's delivery, so an abort is not held up behind
+				// them.
+				go func() {
+					ans := r.Reply(q)
+					// A reply goes under Drive's context, naming who
+					// gave it, not the event's, which names who
+					// started the run.
+					rctx := ctx
+					if r.By != nil {
+						if by := r.By(q); by.Kind != "" || by.Ref != "" || by.Source != "" {
+							rctx = agentturn.ContextWithAnswerer(ctx, by)
+						}
+					}
+					c.Reply(rctx, q.ID, ans)
+				}()
 			}
 			return nil
 		})()
@@ -343,11 +378,11 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 	var end *agentturn.RunEnd
 	var err error
 	if pending := c.State().Pending; slices.ContainsFunc(pending, held) {
+		// Only the calls that wait on a person are put to r.Permit; the
+		// ones held beside them are released by the answers.
 		var answers []agentturn.Answer
-		for _, p := range pending {
-			if held(p) {
-				answers = append(answers, permit(p.Call, "held for approval when the session stopped"))
-			}
+		for _, p := range HeldPermissions(c) {
+			answers = append(answers, permit(p.Call, p.Reason))
 		}
 		if len(items) > 0 {
 			if err := c.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
@@ -377,6 +412,34 @@ func Refusal(callID, note string) agentturn.Answer {
 	}
 	return agentturn.Output(openresponses.NewFunctionCallOutput(callID, out)).WithBy(agentpolicy.ByHuman)
 }
+
+// HeldPermissions are the calls a stopped session left held for
+// approval that wait on a person, as PermissionsOf reads them from a
+// run's end: after a restart, each with the question and the part of
+// the call the restored decision is about, and not the calls held only
+// beside another's question, which Resume releases. A call whose
+// decision did not survive is asked about as held when the session
+// stopped.
+func HeldPermissions(c agentturn.Control) []Permission {
+	st := c.State()
+	end := &agentturn.RunEnd{RunID: st.RunID, Reason: agentturn.ReasonInputRequired}
+	for _, p := range st.Pending {
+		if held(p) {
+			end.Pending = append(end.Pending, p)
+		}
+	}
+	perms := PermissionsOf(c, end)
+	for i := range perms {
+		if perms[i].Reason == "" {
+			perms[i].Reason = heldReason
+		}
+	}
+	return perms
+}
+
+// heldReason is the question about a held call whose decision says
+// nothing of why.
+const heldReason = "held for approval when the session stopped"
 
 // PermissionsOf are the calls a run that ended for input left for a
 // person: the Session's own Permissions when c is one, and otherwise

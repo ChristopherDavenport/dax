@@ -73,26 +73,36 @@ func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink 
 		m.childSaw = map[string]string{}
 	}
 	m.mu.Unlock()
+	// A user message right after the outputs is a note a person gave
+	// with an answer, said after the batch (agentturn v0.0.24), not a
+	// new prompt.
+	afterOutput := false
 	for _, it := range req.Input {
 		switch v := it.(type) {
 		case *openresponses.Message:
-			if v.Role == openresponses.RoleUser {
+			switch {
+			case v.Role == openresponses.RoleAssistant:
+				afterOutput = false
+			case v.Role == openresponses.RoleUser && !afterOutput:
 				step = 0
-			}
-			if isChild && v.Role == openresponses.RoleDeveloper {
-				// A note the user gave with an approval comes beside the
-				// call's output.
+			case isChild:
+				// A note given with an approval comes after the
+				// batch's outputs: the person's as a user message, a
+				// policy's as a developer one.
 				m.mu.Lock()
-				m.childSaw["developer: "+v.Text()] = v.Text()
+				m.childSaw[string(v.Role)+": "+v.Text()] = v.Text()
 				m.mu.Unlock()
 			}
 		case *openresponses.FunctionCallOutput:
 			step++
+			afterOutput = true
 			if isChild {
 				m.mu.Lock()
 				m.childSaw[v.CallID] = v.Output.Text
 				m.mu.Unlock()
 			}
+		default:
+			afterOutput = false
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
@@ -475,7 +485,10 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 // checkRecordedQuestion checks the record holds a sub-agent's question,
 // asked about a call to tool with a message starting want, and its
 // answer, action and note, by the human, under the same call.
-func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action, note string) {
+// atTerminal is agent.AtTerminal as the record writes it.
+var atTerminal = agentsession.Trigger{Kind: "human", Source: "terminal"}
+
+func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action, note string, who agentsession.Trigger) {
 	t.Helper()
 	var asked, answered *session.Elicitation
 	for _, e := range recordedCustom(t, sess, session.ElicitationNS) {
@@ -499,6 +512,12 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 		t.Fatal("the question's answer is not on the record")
 	case answered.Action != action || answered.Note != note || answered.By != "human":
 		t.Errorf("recorded answer %q, note %q, by %q; want %q, %q, by human", answered.Action, answered.Note, answered.By, action, note)
+	case who.Kind == "" && who.Ref == "" && who.Source == "" && answered.Source != nil:
+		// An answer nobody gave names nobody.
+		t.Errorf("recorded answerer %+v, want none", answered.Source)
+	case (who.Kind != "" || who.Ref != "" || who.Source != "") && (answered.Source == nil || answered.Source.Kind != who.Kind || answered.Source.Ref != who.Ref || answered.Source.Source != who.Source):
+		// Who answered is the person the front took the answer from.
+		t.Errorf("recorded answerer %+v, want %+v", answered.Source, who)
 	}
 }
 
@@ -772,7 +791,7 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	if !strings.Contains(saw, "Reason: wrong file") {
 		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
 	}
-	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file")
+	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)
 	r.quit()
 }
 
@@ -791,10 +810,11 @@ func TestAllowingASubagentsAskWithANoteTellsIt(t *testing.T) {
 	r.type_("keep it short\r")
 	r.waitFile("NOTED", true)
 	r.waitOutput("all done")
-	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
-		t.Errorf("the sub-agent saw %q, want the user's note", saw)
+	// The note is the person's own message, not a line of the policy's.
+	if saw := m.sawInChild(); !strings.Contains(saw, "keep it short") || strings.Contains(saw, "The user said") {
+		t.Errorf("the sub-agent saw %q, want the user's note as theirs", saw)
 	}
-	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "accept", "keep it short")
+	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "accept", "keep it short", atTerminal)
 	r.quit()
 }
 

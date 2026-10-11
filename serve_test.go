@@ -176,9 +176,13 @@ func TestASubagentsQuestionIsAnsweredWithANoteFromAnAttachedView(t *testing.T) {
 	r.type_("keep it short\r")
 	r.waitFile("NOTED", true)
 	r.waitOutput("all done")
-	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
-		t.Errorf("the sub-agent saw %q, want the user's note", saw)
+	// The note is the person's own message, not a line of the policy's.
+	if saw := m.sawInChild(); !strings.Contains(saw, "keep it short") || strings.Contains(saw, "The user said") {
+		t.Errorf("the sub-agent saw %q, want the user's note as theirs", saw)
 	}
+	// Who answered is the served session's principal, as front/control
+	// names it, not the attached view's terminal.
+	checkRecordedQuestion(t, s.rig.sess, "the task sub-agent asks", "write", "accept", "keep it short", agentsession.Trigger{Kind: "control", Ref: "attach"})
 	r.quit()
 }
 
