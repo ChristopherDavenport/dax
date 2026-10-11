@@ -442,7 +442,11 @@ func question(c *openresponses.FunctionCall, reason string) string {
 // asked: a sub-agent's call the policy asks about, or a tool's own.
 func questionText(q agentturn.Question) string {
 	if c := q.Call; c != nil {
-		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, q.Elicitation.Message)
+		msg := q.Elicitation.Message
+		if d := c.Decision; d != nil && d.Subject != "" && !strings.Contains(msg, d.Subject) {
+			msg += "; about: " + d.Subject
+		}
+		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg)
 	}
 	return "? " + render.Clean(q.Elicitation.Message) + " [y/N] "
 }

@@ -1107,6 +1107,7 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
 		}
+		s.recordVerdict(ctx, v)
 		var h *agentturn.ToolDecision
 		if hook != nil {
 			h, err = hook(bctx, info)
@@ -1143,6 +1144,25 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 	}
 }
 
+// recordVerdict writes a sub-agent's verdict to its run's session under
+// agentpolicy.VerdictNS, as the kit does for each of the main agent's
+// engine verdicts: the rule, the reason and the part of the call it was
+// about (its Subject) are on the record beside the call's decision,
+// which keeps the policy's reason as it gave it. The engine's Would
+// observes nothing, so the hook writes it. A write that fails is lost,
+// as an observer's is.
+func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
+	rec := agentkit.RecorderFromContext(ctx)
+	if rec == nil {
+		rec = s.Kit.Recorder()
+	}
+	if rec == nil {
+		return
+	}
+	ns, data := v.Record()
+	_, _ = rec.Annotate(ctx, ns, json.RawMessage(data))
+}
+
 // askChild puts a sub-agent's call the policy or a hook asks about to
 // the fronts answering the session's questions, from inside the
 // sub-agent's run: an agentturn.Question about the call, answered with
@@ -1156,10 +1176,10 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 // reaches the model: a refusal's reason in its output, an approval's
 // note beside the result.
 func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
+	// What the question is about is the asked call's decision's Subject,
+	// which each front shows beside the question; the question's text,
+	// which is recorded, is the sub-agent's and the policy's own.
 	reason := "the " + name + " sub-agent asks: " + why
-	if subject != "" && !strings.Contains(reason, subject) {
-		reason += "; about: " + subject
-	}
 	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
 	call := agentturn.AskedCall{CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
 		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, By: agentpolicy.ByPolicy}}

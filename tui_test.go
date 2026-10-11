@@ -440,6 +440,9 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	r.type_("go\r")
 	r.waitOutput("Question (1/1): bash")
 	r.waitOutput("the explore sub-agent asks")
+	// What it asks about is the decision's subject, shown beside the
+	// question rather than written into its text.
+	r.waitOutput("about: touch CHILD")
 	r.type_("n")
 	r.waitOutput("Reason for refusing")
 	r.type_("\r")
@@ -461,6 +464,50 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	if strings.Contains(saw, "abc123") {
 		t.Error("the child read .env")
 	}
+	// The child's session records the policy's verdict, with what it was
+	// about, beside the call's decision.
+	if subjects := recordedSubjects(t, r.sess); !slices.Contains(subjects, "touch CHILD") {
+		t.Errorf("no recorded verdict is about the child's command; subjects %q", subjects)
+	}
+}
+
+// recordedSubjects reads every session the store holds, sub-agents'
+// included, for the subjects of the policy's verdicts.
+func recordedSubjects(t *testing.T, sess *agent.Session) (subjects []string) {
+	t.Helper()
+	st := sess.Recorder().Store()
+	rd, ok := st.(agentsession.Reader)
+	if !ok {
+		t.Fatalf("the store %T cannot be read without a hold", st)
+	}
+	for sum, err := range st.List(t.Context(), agentsession.ListFilter{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := rd.Read(t.Context(), sum.Header.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range s.Entries() {
+			c, ok := e.(*agentsession.CustomEntry)
+			if !ok {
+				continue
+			}
+			if c.NS != agentpolicy.VerdictNS {
+				continue
+			}
+			var v struct {
+				Subject string `json:"subject"`
+			}
+			if err := json.Unmarshal(c.Data, &v); err != nil {
+				t.Fatal(err)
+			}
+			if v.Subject != "" {
+				subjects = append(subjects, v.Subject)
+			}
+		}
+	}
+	return subjects
 }
 
 func TestANoteDaxMakesWhileTheClientHasTheScreenIsShownAfter(t *testing.T) {

@@ -3,6 +3,7 @@ package dax
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -117,5 +119,29 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 	}
 	if saw := m.sawInChild(); !strings.Contains(saw, "The user said: keep it short") {
 		t.Errorf("the sub-agent saw %q, want the user's note", saw)
+	}
+}
+
+// The REPL shows what a sub-agent's question is about from the asked
+// call's decision, once, beside the question's own text.
+func TestTheREPLShowsWhatAQuestionIsAbout(t *testing.T) {
+	call := func(subject string) *agentturn.AskedCall {
+		return &agentturn.AskedCall{CallID: "c1", Name: "bash", Args: json.RawMessage(`{"command":"touch CHILD"}`),
+			Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Subject: subject}}
+	}
+	cases := []struct {
+		name, message, subject, want string
+	}{
+		{"a subject", "the explore sub-agent asks: approval required by default", "touch CHILD", "(the explore sub-agent asks: approval required by default; about: touch CHILD)"},
+		{"no subject", "the explore sub-agent asks: approval required by default", "", "(the explore sub-agent asks: approval required by default)"},
+		{"named already", "the explore sub-agent asks: touch CHILD needs approval", "touch CHILD", "(the explore sub-agent asks: touch CHILD needs approval)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := questionText(agentturn.Question{ID: "q1", Call: call(tc.subject), Elicitation: agenttool.Elicitation{Message: tc.message}})
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("questionText = %q, want it to hold %q", got, tc.want)
+			}
+		})
 	}
 }
