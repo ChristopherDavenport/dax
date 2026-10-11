@@ -423,10 +423,10 @@ func TestASwapBeforeTheCallIsRefusedByTheExecutor(t *testing.T) {
 }
 
 // A running command's output arrives as progress, a tool's question
-// reaches whoever holds the Turn and its answer the tool, and the
+// reaches the fronts answering as a question event and its answer the tool, and the
 // replay claim is the executor's.
 //
-// The command does not end until the update has reached the Turn: it
+// The command does not end until the update has reached a subscriber: it
 // prints, then waits for the file "seen", which the subscriber writes
 // when the update arrives. A command that ended at once could lose the
 // race: the go-sdk client hands a progress notification to a handler
@@ -446,7 +446,7 @@ func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 	defer s.Close()
 	var mu sync.Mutex
 	var updates []string
-	defer s.Turn().Subscribe(func(_ context.Context, e agentturn.Event) error {
+	defer s.Subscribe(func(_ context.Context, e agentturn.Event) error {
 		if u, ok := e.(*agentturn.ToolUpdate); ok {
 			mu.Lock()
 			updates = append(updates, u.Partial.Output.String())
@@ -462,12 +462,15 @@ func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 	var questions []string
 	rules := Rules{
 		Permit: func(*openresponses.FunctionCall, string) (bool, string) { return true, "" },
-		Reply: func(q Question) Reply {
-			questions = append(questions, q.Text)
-			return Reply{Accept: q.Call == nil}
+		Reply: func(q agentturn.Question) agenttool.Answer {
+			questions = append(questions, q.Elicitation.Message)
+			if q.Call == nil {
+				return agenttool.Answer{Action: agenttool.ActionAccept}
+			}
+			return agenttool.Answer{Action: agenttool.ActionDecline}
 		},
 	}
-	if _, err := Drive(ctx, s.Turn(), rules, openresponses.UserText("go")); err != nil {
+	if _, err := Drive(ctx, s, rules, openresponses.UserText("go")); err != nil {
 		t.Fatal(err)
 	}
 	outs := outputs(s)

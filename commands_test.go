@@ -7,22 +7,26 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 )
 
-// fakeTurn records what a command asked of the Turn; the methods a
-// command does not use are the nil interface's.
+// fakeTurn records what a command asked of the session's control; the
+// methods a command does not use are the nil interface's.
 type fakeTurn struct {
-	agent.Turn
+	agentturn.Control
 	aborted  bool
 	followed []string
 }
 
 func (f *fakeTurn) Abort() { f.aborted = true }
 
-func (f *fakeTurn) FollowUp(_ context.Context, items ...openresponses.Item) error {
+func (f *fakeTurn) Queue(_ context.Context, mode agentturn.QueueMode, items ...openresponses.Item) error {
+	if mode != agentturn.QueueFollowUp {
+		return errors.New("queued as " + string(mode) + ", want a follow-up")
+	}
 	for _, it := range items {
 		f.followed = append(f.followed, it.(*openresponses.Message).Text())
 	}

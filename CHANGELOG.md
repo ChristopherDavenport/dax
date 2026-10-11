@@ -5,6 +5,53 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: every front drives the session as agentturn's control
+  contract (#62). `*agent.Session` is an `agentturn.Control` over
+  agentkit's `Kit.Control` (the run context, the engine's release of
+  held calls, the queued entries, the head move with its skill grants),
+  with dax's rules on top: the calls an abort or a restart left
+  unanswered are answered on the next prompt, a prompt while calls held
+  for approval wait is refused with `agent.ErrHeld`, and a question no
+  front here can answer (a form, a page to visit, or any with no front
+  answering) is not asked.
+- Changed: `agent.Turn`, `Session.Turn`, `agent.Question` and
+  `agent.Reply` are removed. Drive the `Session` itself: `Resume` in
+  place of `Answer`, `Queue` with `agentturn.QueueSteer` or
+  `QueueFollowUp` in place of `Steer` and `FollowUp`. A question asked
+  while a call runs is an `agentturn.Question` event, answered with
+  `Reply(id, agenttool.Answer)`, what the user said in its `Note`; a
+  front that answers says so with `Session.Answering`.
+  `agent.Rules.Reply` takes an `agentturn.Question` and returns an
+  `agenttool.Answer`; `agent.Drive` takes any `agentturn.Control`.
+- Added: `Session.Permissions` reads the question and the part of the
+  call it is about from the decision that deferred the call (agentkit
+  v0.0.11); `agent.PermissionsOf` reads them from a run's end for a
+  control behind a wire. `agent.Refusal` is a person's refusal with its
+  reason. `Session.Recorder`, `Session.ContinueFrom`.
+- Changed: the terminal client is agentconsole's view of the session's
+  record and events, and sends what you ask to the session as intents
+  (`client.Direct`); `tuiadapter.go`, the glue over agentconsole's
+  native backend, is gone, and with it everything it faked. The client
+  no longer asks about a call the policy only held beside the one it
+  asks about; the question names the part of a command it is about from
+  the decision; a call started before it was held says it may have run;
+  the status line says why the last run stopped; a session resumed with
+  a call held for approval opens with it on the panel, and a prompt is
+  refused until it is answered.
+- Added: what you say with an answer reaches the model. `a` on a
+  question in the terminal client allows with a note; in the REPL and
+  under `-p`, `y keep it short` allows with a note and `n wrong file`
+  refuses with a reason (any other line refuses, the line its reason).
+  A sub-agent's call you allow with a note is run with "The user said:
+  …" beside its result; a rule's note under `agent.Drive` goes with an
+  approval as well as a refusal.
+- Fixed: a question a running call gave up (an abort) no longer waits
+  on a line in the REPL.
+- Changed: agentconsole v0.0.11, agentkit v0.0.11, agentpolicy v0.0.15,
+  agenttool v0.0.22, agentturn v0.0.22.
+
 ## v0.0.11 - 2026-10-10
 
 - Added: the terminal client takes the REPL's commands. A line that

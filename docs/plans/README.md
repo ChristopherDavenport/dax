@@ -151,6 +151,39 @@ before the dax step that uses them, as the workspace's rules require.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.
+   - agentturn's `Control` (v0.0.19): the contract, with `Queue` in
+     place of steer and follow-up, and questions as `Question` and
+     `QuestionClosed` events answered with `Reply` (agenttool v0.0.22's
+     `Answer.Note` carries what the user said, to the model through
+     `Ask` and to the record). A pending call carries the decision that
+     deferred it (`PendingCall.Decision`), with `Held` (v0.0.20) and the
+     part of the call it is about, `Subject` (v0.0.22), which agentpolicy
+     sets from its verdict (v0.0.14, v0.0.15), **done**.
+   - `front/control` (agentturn v0.0.21): the contract over HTTP, JSON
+     requests and the events as server-sent events, scoped bearer
+     tokens, a product's commands; a run belongs to the agent, not the
+     connection, **done**.
+   - agentkit's `Kit.Control` (v0.0.10, v0.0.11): a kit's agent as the
+     contract (the run context, `Release` on answers, queued entries,
+     `Requeue`, the question elicitor, the head move with skill grants;
+     `Permissions` from the decision), **done**.
+   - agentconsole as the view (v0.0.11): the record and agentturn's
+     events in, intents out to a `client.Controller` (`client.Direct`
+     maps them onto a Control). The view is not the controller and holds
+     nothing it can act on; `client/native` and `client/kitbackend` are
+     gone, **done**.
+   - dax on the contract (#62): the session is an `agentturn.Control`
+     over `Kit.Control` with dax's controller rules on top; every front
+     drives it, the terminal client through `client.Direct`;
+     `agent.Turn` and `tuiadapter.go` are gone, **done**.
+   - Left: RFC 0003's read and follow in agentsession (a server over a
+     store and a client that is a view's record), then `dax serve`
+     (`front/control` over the session, dax's `Controls` as its
+     commands, the store's follow beside it) and `dax attach`
+     (`control.Dial` and the store client, handed to agentconsole). Run
+     identity in the contract: `Abort` names no run, and
+     `client.Direct` takes the first run start it sees as its prompt's,
+     so a second client's run can be aborted or mistaken for its own.
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 

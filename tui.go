@@ -12,27 +12,32 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
-// tuiFront is the terminal client, agentconsole, a view of the
-// session's record that drives its Turn through the glue in
-// tuiadapter.go. Everything that asks the user is answered on its screen, and
-// nothing reads standard input once it has the terminal:
+// tuiFront is the terminal client, agentconsole: a view of the
+// session's record and its events, which sends what the user asks to
+// the session as intents (client.Direct over the session, dax's
+// controller: its rules, the kit's engine, the recorder). It holds
+// nothing it can act on. Everything that asks the user is answered on
+// its screen, and nothing reads standard input once it has the
+// terminal:
 //
 //   - A call the policy defers is a permission the client shows, y or n,
-//     answered through Control.Answer, which puts the answers through
-//     the kit's engine. The reason shown is the policy's, with what it
-//     was asking about added by the session: the rule, the secret path,
-//     the git config key, the part of a command line.
+//     answered with Resume, which puts the answers through the kit's
+//     engine. A call the engine only held beside it is not shown, since
+//     the answers release it. The reason shown is the policy's, with
+//     what it was asking about: the rule, the secret path, the git
+//     config key, the part of a command line.
 //   - A call a sub-agent (explore, task) makes that the policy asks
-//     about is a question the client asks while the run goes, y or n
-//     with an optional reason, answered through Control.Reply: the
-//     sub-agent's run waits inside the main agent's call, so it cannot
-//     be a permission, which a run that ended answers.
+//     about is a question the client asks while the run goes, y, a for
+//     yes with a note, or n with an optional reason, answered with
+//     Reply: the sub-agent's run waits inside the main agent's call, so
+//     it cannot be a permission, which a run that ended answers.
 //   - A question a tool asks mid-call (MCP elicitation) that is yes or
 //     no is asked the same way. One that is a form or a page to visit
 //     has no place in a question, and the session cancels it.
@@ -55,7 +60,7 @@ type tuiFront struct {
 	// opened; nil is standard error.
 	errOut io.Writer
 	// run is console.Run; tests replace it.
-	run func(context.Context, client.Backend, ...console.Option) error
+	run func(context.Context, client.Record, client.Source, client.Controller, ...console.Option) error
 
 	// warnings are what dax warns about (agent.CaptureWarnings), the
 	// executor's launcher's standard error among them, held back from
@@ -190,11 +195,12 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 			panic(r)
 		}
 	}()
-	be, err := newConsoleBackend(sess)
+	rec, err := client.RecordOf(sess.Recorder())
 	if err != nil {
 		return err
 	}
-	defer be.Close()
+	// The client answers the questions asked while a call runs.
+	defer sess.Answering()()
 	run := f.run
 	if run == nil {
 		run = console.Run
@@ -206,12 +212,12 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	var quitting atomic.Bool
 	opts := append([]console.Option{
 		console.WithToolRenderers(f.info.Renderers),
-		console.WithSubmit(submitLine(sess.Turn(), sess, func() { quitting.Store(true); quit() })),
+		console.WithSubmit(submitLine(sess, sess, func() { quitting.Store(true); quit() })),
 	}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	err = run(cctx, be, opts...)
+	err = run(cctx, rec, sess, client.Direct(sess), opts...)
 	if quitting.Load() && ctx.Err() == nil {
 		// The program ends with the context's error when /quit ends it,
 		// which is the user leaving, not a failure.
@@ -224,7 +230,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 // submits: a slash line is run as a command, its output the reply shown
 // over the input, and anything else is a prompt, or a steer while a run
 // goes.
-func submitLine(t agent.Turn, ctl agent.Controls, quit func()) func(context.Context, console.Line) (console.Submit, error) {
+func submitLine(t agentturn.Control, ctl agent.Controls, quit func()) func(context.Context, console.Line) (console.Submit, error) {
 	return func(ctx context.Context, l console.Line) (console.Submit, error) {
 		if isCommand(l.Text) {
 			r, err := command(ctx, t, ctl, l.Text, l.Running)

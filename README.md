@@ -835,6 +835,7 @@ drawn as the client draws any call, its name and arguments.
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
 | `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
+| `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
 | Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
@@ -846,15 +847,20 @@ drawn as the client draws any call, its name and arguments.
 A call the policy asks about is a permission: the panel shows the call and
 the reason, which is the policy's with what it is asking about added: the
 rule that fired, the secret-looking path, the git config key that names a
-program, the part of a command line. Everything that can ask is answered on
+program, the part of a command line. A call the policy only held beside
+the one it asks about is not shown: your answer to the batch decides it.
+A call that was started before it was held says it may have run. A
+session that stopped with a call held for approval opens with it on the
+panel, and a prompt waits until it is answered. Everything that can ask is answered on
 screen; nothing reads standard input once the client has the terminal. Two
 things cannot be a permission, which a run that ended answers, since the
 call that needs the answer is still running; the client asks them as
 questions while the run goes, ahead of any permission:
 
 - A call a **sub-agent** (`explore` or `task`) makes that the policy asks
-  about: `y` allows it, `n` refuses it with an optional reason, which the
-  sub-agent sees, and `Esc` goes back.
+  about: `y` allows it, `a` allows it with a note, `n` refuses it with an
+  optional reason, and `Esc` goes back. The sub-agent sees the note with
+  the call's result, and the reason in place of it.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
   One that is a form or a page to visit has no screen in the client, and
   is cancelled.
@@ -888,7 +894,10 @@ prompt. `/compact` does not exist (use `-compact N`).
 
 `dax -front repl` (the default when not on a terminal) is a line REPL
 with the same commands; a permission or a question is answered with `y`
-or `n` on the next line.
+or `n` on the next line, and what follows the first word is what you say
+with the answer, which the model is told: `y keep it short` allows with a
+note, `n not that file` refuses with a reason. Any other line refuses,
+the whole line its reason. `-p` reads its answers the same way.
 
 ## Sessions
 
@@ -1032,12 +1041,15 @@ program keeps the flags, the config files, the providers, the session
 store, MCP, and the three fronts.
 
 For a front of your own, build the session with `agent.New` and
-`Options.Extensions`, and drive its `Turn` (`Session.Turn`): prompt,
-steer, answer the permissions a run stops on (`Turn.Permissions`,
-`Turn.Answer`), reply to the questions asked while a call runs
-(`Turn.Questions`, `Turn.Reply`), and subscribe to the agent's events.
-`Session` is also `agent.Controls` (model, reasoning, MCP servers,
-`Info`) and `Session.Record` is the store to follow for a view.
+`Options.Extensions`, and drive it as agentturn's control contract
+(`*agent.Session` is an `agentturn.Control`): prompt, queue a steer or a
+follow-up, answer the permissions a run stops on (`Session.Permissions`,
+`Resume`), reply to the questions asked while a call runs (the
+`agentturn.Question` events, `Reply`, after `Session.Answering`), and
+subscribe to the agent's events. `Session` is also `agent.Controls`
+(model, reasoning, MCP servers, `Info`); `Session.Record` is the store
+to follow for a view, and `Session.Recorder` what agentconsole's
+`client.RecordOf` takes.
 `agent.Drive` is a controller that answers by rule, for running without
 a person. The terminal client is agentconsole; hand it
 `extension.Renderers(dir, exts)`. The public packages are `dax`,
@@ -1108,8 +1120,10 @@ What is not there yet:
   waits for agentsession's remote client. `Session.Path` is empty for a
   store that is not local.
 - A front over a wire (the terminal client driving a session elsewhere,
-  ACP) is not built. The contract it would carry is the session's
-  `agent.Turn`, which dax proposes for agentturn.
+  ACP) is not built. The contract it carries is agentturn's, which the
+  session implements, served by `agentturn/front/control`; what waits
+  is the record over the wire (agentsession's RFC 0003 read and follow)
+  for the view.
 
 ## Develop
 

@@ -1,5 +1,18 @@
 # agentconsole: narrow to the view of the record, over agentturn's control contract
 
+Built (2026-10-10): agentconsole v0.0.11. Where it differs from what
+follows: the view is not the controller. `console.Run(ctx, record,
+source, controller)` takes the record and agentturn's events in
+(`client.Source`: `Subscribe`, `State`) and sends what the user asks out
+as intents (`client.Prompt`, `Queue`, `Abort`, `Answer`, `Reply`,
+`ContinueFrom`) to a `client.Controller`, which decides what they do;
+`client.Direct` maps them onto an `agentturn.Control`, and the TUI keeps
+no runs. dax hands it the session as both (#62); its own controller
+rules (`ErrHeld`, the questions no front here answers) are the
+session's. Left: a record over the wire (RFC 0003) for `dax attach`, a
+head move over `front/control`, and a response's usage and a turn's
+inputs, which the view has no place for yet.
+
 Status: optional, after agentturn-control.md. The sandbox case does not need it (execution-boundary.md).
 
 Repository: agentconsole. Draft for filing after agentturn's control

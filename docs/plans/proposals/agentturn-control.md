@@ -1,5 +1,17 @@
 # A control contract for the human plane, with questions as events, and a native front that serves it
 
+Built (2026-10-10): agentturn v0.0.19 to v0.0.22 (`Control`, questions
+as events, `PendingCall.Decision` with `Held` and `Subject`,
+`front/control`) and agentkit v0.0.10 and v0.0.11 (`Kit.Control`); dax
+drives every front through it (#62). Where it differs from what follows:
+steer and follow-up are one `Queue(ctx, mode, items)`; a question's
+answer is an `agenttool.Answer` whose `Note` is what the user said; a run
+over `front/control` belongs to the agent, not to the connection that
+started it, and a caller's cancel sends an explicit abort. Left: run
+identity (`Abort` names no run), and dax serving it (`dax serve`), which
+waits for the record over the wire (agentsession's RFC 0003 read and
+follow).
+
 Status: optional. The sandbox case does not need it (execution-boundary.md); this is for running the human or autonomous plane apart from the turn.
 
 Repositories: agentturn (the contract, questions as events, `front/control`),
