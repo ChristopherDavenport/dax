@@ -1174,16 +1174,17 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 // the stamp of the facts it was asked about, and a stamp the model
 // forged never reaches the tool. What the person said with the answer
 // reaches the model: a refusal's reason in its output, an approval's
-// note beside the result.
+// note beside the result. The question and its answer are on the
+// record, under the call they are about, as a tool's own question is.
 func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
 	// What the question is about is the asked call's decision's Subject,
 	// which each front shows beside the question; the question's text,
 	// which is recorded, is the sub-agent's and the policy's own.
 	reason := "the " + name + " sub-agent asks: " + why
 	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
-	call := agentturn.AskedCall{CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
+	call := agentturn.AskedCall{Parent: info.Parent, CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
 		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, By: agentpolicy.ByPolicy}}
-	r, err := s.ask(agentturn.ContextWithAskedCall(ctx, call), agenttool.Elicitation{Message: reason})
+	r, err := s.askRecorded(agentturn.ContextWithAskedCall(ctx, call), agenttool.Elicitation{Message: reason})
 	switch {
 	case errors.Is(err, errNoOne):
 		return cannot

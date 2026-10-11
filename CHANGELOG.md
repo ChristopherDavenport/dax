@@ -5,6 +5,16 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: a sub-agent's question is on the record (#74). When a call a
+  sub-agent makes is put to the person, the question (its text, the
+  call it is about) is recorded before anyone is asked, and the answer,
+  the person's note and that the human gave it after, through the
+  kit's recorded question elicitor, as a tool's own question is. It
+  was never recorded before; only the call's decision and, since
+  v0.0.14, the policy's verdict were.
+
 ## v0.0.14 - 2026-10-10
 
 - Changed: a sub-agent's question is the policy's own text ("the
