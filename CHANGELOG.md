@@ -23,9 +23,17 @@ versions may break flags and the config file.
   `-p` name it on every reply they take from that person, and only on
   replies, since a run's own context names who started it. An answer
   given from `dax attach` names the served session's principal, as
-  front/control does. `agent.Rules` has a `By` field, the answerer
-  `Drive` names on the replies its rules give; the zero value names
-  nobody.
+  front/control does. `agent.Rules` has a `By` func, asked after each
+  reply for who gave it, which `Drive` names; nil, or a zero trigger,
+  names nobody. `-p` names the person only for an answer they typed:
+  the decline it gives when the input has ended is unattributed.
+- Fixed: `Drive` answers a question off the event's delivery, so an
+  interrupt stops a `-p` run while a question waits on a line.
+- Fixed: after a restart, the REPL and `-p` ask only about the held
+  calls that wait on a person, each with the question and the part of
+  the call the restored decision is about (`agent.HeldPermissions`, new),
+  as the terminal client does; the calls held only beside an answered
+  question are released with no answer.
 - Changed: what a person says approving a sub-agent's call is their own
   message to the sub-agent, after the outputs of its batch, where it
   was a line of the policy's note ("The user said: ..."). The question

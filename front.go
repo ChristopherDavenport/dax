@@ -154,6 +154,8 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	abortOnInterrupt(t)
 	showAssembly(ctl.Info())
 	showPending(t, "resumed")
+	// The questions the person typed an answer to, by ID.
+	var answered sync.Map
 	rules := agent.Rules{
 		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
 			fmt.Print(question(c, reason))
@@ -166,14 +168,21 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
 			if !f.in.Scan() {
+				// Nobody is left to answer: the decline is dax's.
 				fmt.Println()
 				return agenttool.Answer{Action: agenttool.ActionDecline}
 			}
+			answered.Store(q.ID, true)
 			return replyOf(f.in.Text())
 		},
 		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
-		// The rules ask the person at this terminal.
-		By: agent.AtTerminal,
+		// The person at this terminal, for what they typed.
+		By: func(q agentturn.Question) agentturn.Trigger {
+			if _, ok := answered.LoadAndDelete(q.ID); ok {
+				return agent.AtTerminal
+			}
+			return agentturn.Trigger{}
+		},
 	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
 	if err != nil {
@@ -320,13 +329,21 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				// The session stopped with calls held for approval: they
 				// are answered first, and the prompt steers that run.
 				steerText = sent
-				var perms []agent.Permission
-				for _, pc := range t.State().Pending {
-					if pc.Reason == agentturn.PendingDeferred && !pc.Dispatched {
-						perms = append(perms, agent.Permission{Call: pc.Call, Reason: "held for approval when the session stopped"})
-					}
+				if perms := agent.HeldPermissions(t); len(perms) > 0 {
+					ask(perms)
+					continue
 				}
-				ask(perms)
+				// Every held call was held only beside a question
+				// already answered: the kit releases them with no
+				// answers, and the prompt steers that run.
+				text := steerText
+				steerText = ""
+				start(func() (*agentturn.RunEnd, error) {
+					if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+						return nil, err
+					}
+					return t.Resume(ctx)
+				})
 				continue
 			case r.err != nil:
 				fmt.Fprintln(os.Stderr, "\nerror:", r.err)

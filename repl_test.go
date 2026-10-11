@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 
@@ -145,5 +146,75 @@ func TestTheREPLShowsWhatAQuestionIsAbout(t *testing.T) {
 				t.Errorf("questionText = %q, want it to hold %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// printSession is a recorded session with dax-coding and dax-agents
+// under the shipped policy, on m, for -p's tests.
+func printSession(t *testing.T, ctx context.Context, m *steps) (*agent.Session, string) {
+	t.Helper()
+	base := t.TempDir()
+	o := agent.Options{
+		Model: "scripted", Streamer: m, Dir: filepath.Join(base, "project"), Root: filepath.Join(base, "sessions"),
+		UserDir:    filepath.Join(base, "user"),
+		Extensions: []extension.Extension{coding.New(0), agents.New(agents.Options{})},
+		Policy:     &policy.Settings{Builtin: true, Fallback: "ask"},
+	}
+	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := agent.New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	return sess, o.Dir
+}
+
+// -p with its input at an end declines a sub-agent's question itself:
+// nobody answered, so the record names nobody, not the person at the
+// terminal.
+func TestPrintAtTheEndOfItsInputAnswersForNobody(t *testing.T) {
+	ctx := context.Background()
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"NEVER","content":"x"}`}},
+	}
+	sess, _ := printSession(t, ctx, m)
+	f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(""))}
+	if err := f.run(ctx, sess, sess); err != nil {
+		t.Fatal(err)
+	}
+	checkRecordedQuestion(t, sess, "the task sub-agent asks", "write", "decline", "", agentsession.Trigger{})
+}
+
+// An interrupt stops a -p run while a question waits on a line: the
+// rules wait off the question's delivery, so the abort is not held
+// behind them.
+func TestPrintStopsWhileAQuestionWaitsOnALine(t *testing.T) {
+	ctx := context.Background()
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"NEVER","content":"x"}`}},
+	}
+	sess, dir := printSession(t, ctx, m)
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		if _, ok := ev.(*agentturn.Question); ok {
+			go sess.Abort()
+		}
+		return nil
+	})()
+	f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(pr)}
+	done := make(chan error, 1)
+	go func() { done <- f.run(ctx, sess, sess) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the run did not stop while the question waited on a line")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
+		t.Error("the call the question was about ran")
 	}
 }

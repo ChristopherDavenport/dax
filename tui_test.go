@@ -101,6 +101,8 @@ func (m *steps) CreateStream(_ context.Context, req openresponses.Request, sink 
 				m.childSaw[v.CallID] = v.Output.Text
 				m.mu.Unlock()
 			}
+		default:
+			afterOutput = false
 		}
 	}
 	em := openresponses.NewEmitter(sink, openresponses.NewResponse(req))
@@ -510,7 +512,10 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 		t.Fatal("the question's answer is not on the record")
 	case answered.Action != action || answered.Note != note || answered.By != "human":
 		t.Errorf("recorded answer %q, note %q, by %q; want %q, %q, by human", answered.Action, answered.Note, answered.By, action, note)
-	case answered.Source == nil || answered.Source.Kind != who.Kind || answered.Source.Ref != who.Ref || answered.Source.Source != who.Source:
+	case who.Kind == "" && who.Ref == "" && who.Source == "" && answered.Source != nil:
+		// An answer nobody gave names nobody.
+		t.Errorf("recorded answerer %+v, want none", answered.Source)
+	case (who.Kind != "" || who.Ref != "" || who.Source != "") && (answered.Source == nil || answered.Source.Kind != who.Kind || answered.Source.Ref != who.Ref || answered.Source.Source != who.Source):
 		// Who answered is the person the front took the answer from.
 		t.Errorf("recorded answerer %+v, want %+v", answered.Source, who)
 	}
