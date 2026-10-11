@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.15 - 2026-10-10
 
 - Fixed: a sub-agent's question is on the record (#74). When a call a
   sub-agent makes is put to the person, the question (its text, the
