@@ -5,6 +5,17 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: a sub-agent's question is the policy's own text ("the
+  explore sub-agent asks: <reason>"); "; about: <subject>" is no longer
+  appended (#70). The terminal client shows the subject from the asked
+  call's decision, and the REPL now does too.
+- Added: a sub-agent's policy verdict is recorded on its run's session
+  under `agentpolicy:verdict`, as the main agent's are, so the rule,
+  the reason and what a question was about are on the record for a
+  sub-agent's calls too (#70).
+
 ## v0.0.13 - 2026-10-10
 
 - Changed: a deferred call's recorded decision keeps the policy's
