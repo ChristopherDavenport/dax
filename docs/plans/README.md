@@ -190,9 +190,12 @@ before the dax step that uses them, as the workspace's rules require.
    - Known: `client.Direct` takes the first run start it sees after a
      prompt as that prompt's, so a prompt refused in the instant another
      view's run starts is reported as taken; a view sends a steer when
-     it sees a run going, so only that instant is exposed. Over the
-     wire: no TLS (tunnel), no head move from the tree, and no front/a2a
-     beside it yet (step 5).
+     it sees a run going, so only that instant is exposed.
+   - The head move over the wire (#68): `dax serve` serves a
+     `continue-from` command and attach's controller sends the view's
+     `ContinueFrom` intent through it, so the tree continues from an
+     entry attached as locally, **done**. Over the wire still: no TLS
+     (tunnel), and no front/a2a beside it yet (step 5).
 5. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax.
 

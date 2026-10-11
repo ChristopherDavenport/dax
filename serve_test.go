@@ -2,18 +2,24 @@ package dax
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/front/control"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
@@ -425,5 +431,142 @@ func TestServeAndAttachRefusalsOnTheCommandLine(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.wants) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.wants)
 		}
+	}
+}
+
+// recorded reads the served session's record as it is now.
+func (s *served) recorded() *agentsession.Session {
+	s.t.Helper()
+	rec, err := client.RecordOf(s.rig.sess.Recorder())
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	sess, err := rec.Read(s.t.Context(), "")
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return sess
+}
+
+// userTexts are the user's messages on the path to the session's head.
+func userTexts(sess *agentsession.Session) []string {
+	var out []string
+	for _, e := range sess.Path(sess.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if m, ok := it.Item.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
+				out = append(out, m.Text())
+			}
+		}
+	}
+	return out
+}
+
+// leafLabels counts the head moves on the record.
+func leafLabels(sess *agentsession.Session) int {
+	n := 0
+	for _, e := range sess.Entries() {
+		if l, ok := e.(*agentsession.LabelEntry); ok && l.Label != nil && *l.Label == agentsession.LeafLabel {
+			n++
+		}
+	}
+	return n
+}
+
+// waitPath waits until the head's path holds exactly the user's
+// messages want, in order.
+func (s *served) waitPath(want ...string) *agentsession.Session {
+	s.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		sess := s.recorded()
+		if got := userTexts(sess); slices.Equal(got, want) && !s.rig.sess.State().Running {
+			return sess
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("the head's path holds %q, want %q", userTexts(sess), want)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// An attached view continues from an earlier entry as a local one does:
+// the served session's head moves there, the move is on the record as a
+// leaf label, and the next prompt continues from there.
+func TestAnAttachedViewContinuesFromAnEarlierEntry(t *testing.T) {
+	s := startServe(t, &steps{}, policy.Rules{})
+	r := s.attach()
+	r.waitOutput("say something")
+	r.type_("first question\r")
+	s.waitPath("first question")
+	r.type_("second question\r")
+	s.waitPath("first question", "second question")
+	// The row cursor goes up from the last row: the second reply, the
+	// second question, then the first reply.
+	for range 3 {
+		r.type_("\x10") // ctrl+p
+	}
+	// The view takes the move once it has seen the second run end, which
+	// can be after the record has its entries; until then it says a run
+	// goes, and the key is pressed again.
+	for deadline := time.Now().Add(15 * time.Second); !strings.Contains(ansi.Strip(r.out.String()), "head moved to"); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the head never moved; output:\n%q", r.out.String())
+		}
+		r.type_("\x02") // ctrl+b
+		time.Sleep(200 * time.Millisecond)
+	}
+	r.type_("third question\r")
+	sess := s.waitPath("first question", "third question")
+	if leafLabels(sess) == 0 {
+		t.Error("the record has no leaf label for the move")
+	}
+	r.quit()
+}
+
+// A move the served session refuses comes back to the attached view's
+// controller as the session's own error: an entry that leaves a call
+// without its output, and any move while a run goes.
+func TestAMoveTheServedSessionRefusesComesBack(t *testing.T) {
+	g := &gated{steps: &steps{parent: [][2]string{{"bash", `{"command":"touch MOVED"}`}}}, release: make(chan struct{})}
+	g.let()
+	s := startServeWith(t, g.steps, policy.Rules{Allow: []string{"bash(touch:*)"}}, func(o *agent.Options) { o.Streamer = g })
+	ctx := t.Context()
+	ctl, err := control.Dial(ctx, s.url+controlPrefix, control.WithBearerToken(s.token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := attachController(ctl, &remoteControls{c: ctl})
+	if err := act(ctx, client.Prompt{Items: []openresponses.Item{openresponses.UserText("go")}}); err != nil {
+		t.Fatal(err)
+	}
+	sess := s.waitPath("go")
+	var call string
+	for _, e := range sess.Path(sess.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if _, ok := it.Item.(*openresponses.FunctionCall); ok {
+				call = e.Base().ID
+			}
+		}
+	}
+	if call == "" {
+		t.Fatal("no call on the record")
+	}
+	err = act(ctx, client.ContinueFrom{EntryID: call})
+	if err == nil || !strings.Contains(err.Error(), "without an output") {
+		t.Errorf("continuing from the call: %v, want the session's refusal", err)
+	}
+	if n := leafLabels(s.recorded()); n != 0 {
+		t.Errorf("a refused move left %d leaf label(s) on the record", n)
+	}
+
+	// While a run goes, the session refuses every move.
+	g.release = make(chan struct{})
+	g.once = sync.Once{}
+	t.Cleanup(g.let)
+	if err := act(ctx, client.Prompt{Items: []openresponses.Item{openresponses.UserText("again")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := act(ctx, client.ContinueFrom{EntryID: sess.Leaf()}); !errors.Is(err, agentturn.ErrRunning) {
+		t.Errorf("a move while a run goes: %v, want %v", err, agentturn.ErrRunning)
 	}
 }

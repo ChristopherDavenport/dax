@@ -5,8 +5,10 @@ package dax
 // the record (agentsession's remote client, which verifies every entry
 // it reads) and the session's events (front/control's client) in, and
 // what the user asks out as intents, through client.Direct, to the
-// served session, whose own rules decide them. A slash line runs dax's
-// command as it does locally, through the served commands.
+// served session, whose own rules decide them; the head move, which
+// agentturn's contract does not carry, goes through the served
+// continue-from command. A slash line runs dax's command as it does
+// locally, through the served commands.
 //
 // Every view attached to a session drives the same conversation; there
 // is no client of its own to own a run. Independent work forks.
@@ -141,13 +143,29 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 		opts = append(opts, console.WithCost(f.cost))
 	}
 	rec := &remoteRecord{store: store, controls: controls}
-	err = runConsole(ctx, f.run, rec, ctl, detaching(client.Direct(ctl)), ctl, controls, opts)
+	err = runConsole(ctx, f.run, rec, ctl, attachController(ctl, controls), ctl, controls, opts)
 	out := f.out
 	if out == nil {
 		out = os.Stdout
 	}
 	fmt.Fprintln(out, resumeLine(f.name, served.Info.ID))
 	return err
+}
+
+// attachController is the attached view's controller: the session's
+// own rules decide every intent, through client.Direct on control's
+// client, except the head move, which agentturn's contract does not
+// carry and the served session offers as a command. A move the session
+// refuses (a run going, an entry that leaves calls unanswered) comes
+// back as the command's error, which the view shows as it does locally.
+func attachController(ctl *control.Client, controls *remoteControls) client.Controller {
+	act := detaching(client.Direct(ctl))
+	return func(ctx context.Context, in client.Intent) error {
+		if m, ok := in.(client.ContinueFrom); ok {
+			return controls.ContinueFrom(ctx, m.EntryID)
+		}
+		return act(ctx, in)
+	}
 }
 
 // detaching is act for a view that may leave while the session's run
@@ -300,6 +318,12 @@ func (r *remoteControls) RemoveMCP(label string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 	_, err := r.call(ctx, cmdMCPRemove, mcpLabel{Label: label})
+	return err
+}
+
+// ContinueFrom moves the served session's head to the entry.
+func (r *remoteControls) ContinueFrom(ctx context.Context, entryID string) error {
+	_, err := r.call(ctx, cmdContinueFrom, continueArgs{Entry: entryID})
 	return err
 }
 

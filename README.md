@@ -929,6 +929,11 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
 - **Commands.** The slash commands run against the served session:
   `/model`, `/think`, `/mcp` and `/session` act there, through the
   server's commands.
+- **The tree.** Continuing from an entry (Ctrl-B on a row, `c` in the
+  tree) moves the served session's head, as it does locally: the next
+  prompt, from any view, continues from there. A move the session
+  refuses, while a run goes or from a call whose output is not on the
+  path, is shown in the view that asked.
 
 ## In the REPL
 
