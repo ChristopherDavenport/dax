@@ -5,6 +5,15 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: a deferred call's recorded decision keeps the policy's
+  reason as it gave it; "; about: <subject>" is no longer appended
+  (#66). What the question is about travels on the decision
+  (`ToolDecision.Subject`), which the terminal client, the REPL and
+  `Drive` show, and is recorded with the policy's verdict under
+  `agentpolicy:verdict`.
+
 ## v0.0.12 - 2026-10-10
 
 - Added: `dax serve` and `dax attach` (#64). `dax serve [flags]` runs a

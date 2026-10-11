@@ -3,6 +3,7 @@ package dax
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"maps"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/charmbracelet/x/ansi"
@@ -377,6 +380,51 @@ func TestATUISessionShowsTheGitConfigKeyInTheQuestion(t *testing.T) {
 	r.waitOutput("Reason for refusing")
 	r.type_("\r")
 	r.quit()
+	// The record keeps the policy's reason as it gave it, and what the
+	// question was about with the verdict, not appended to the reason.
+	reasons, subjects := recordedDecisions(t, r.sess)
+	for _, why := range reasons {
+		if strings.Contains(why, "; about: ") {
+			t.Errorf("a recorded decision's reason has the subject appended: %q", why)
+		}
+	}
+	if !slices.ContainsFunc(subjects, func(s string) bool { return strings.Contains(s, "core.fsmonitor") }) {
+		t.Errorf("no recorded verdict is about the config key; subjects %q", subjects)
+	}
+}
+
+// recordedDecisions reads the session's record: the reasons of its
+// decision entries, and the subjects of the policy's verdicts.
+func recordedDecisions(t *testing.T, sess *agent.Session) (reasons, subjects []string) {
+	t.Helper()
+	rec, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := rec.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range s.Entries() {
+		switch e := e.(type) {
+		case *agentsession.DecisionEntry:
+			reasons = append(reasons, e.Reason)
+		case *agentsession.CustomEntry:
+			if e.NS != agentpolicy.VerdictNS {
+				continue
+			}
+			var v struct {
+				Subject string `json:"subject"`
+			}
+			if err := json.Unmarshal(e.Data, &v); err != nil {
+				t.Fatal(err)
+			}
+			if v.Subject != "" {
+				subjects = append(subjects, v.Subject)
+			}
+		}
+	}
+	return reasons, subjects
 }
 
 // The explore child's held calls are questions on the screen, one at a
