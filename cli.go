@@ -322,6 +322,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Agents:       settings.Agents, SubagentModel: m.SubagentName,
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
 		MemoryDir: settings.MemoryDir,
+		Peers:     settings.Peers,
 	})
 	if err != nil {
 		return err

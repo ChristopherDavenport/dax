@@ -84,9 +84,12 @@ Where dax does not keep to this yet, and what each needs:
   (`workspace.Starter`, which an executor's view is); in a workspace
   that cannot, it starts where the turn runs, and with an executor
   that cannot, it does not start.
-- Peers: a call to one is not linked in the caller's record as a
-  sub-agent's session is, an abort does not cancel the remote task,
-  and `front/a2a` has no authentication.
+- Peers: dax calls the user's (dax-a2a), and an abort sends
+  `tasks/cancel` for a subsession's task without waiting; but with
+  agentturn/session v0.0.28 the callee is recorded as a custom entry
+  beside the call, not yet as the `subsession` or `peer` link
+  agentsession's format has (agentturn#252), and `dax serve` does not
+  mount `front/a2a`, so nothing calls a dax.
 
 ## Who owns what
 
@@ -95,7 +98,8 @@ Where dax does not keep to this yet, and what each needs:
 | Wire types, the provider client | `openresponses` and its `providers/anthropic`, `providers/gemini` | `internal/provider` picks one from the config; `vertex` routes each request by model family to the anthropic or the gemini adapter over Vertex AI clients |
 | The agent loop, events, steering, follow-ups, retry | `agentturn` | `agent` configures and drives it |
 | Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
-| What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory) |
+| What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory), `ext/a2a` (dax-a2a) |
+| A remote agent as a tool | `agentturn/tools/a2a` over a2a-go's client | dax-a2a: the user's `peers`, the card fetched at start, the client's token guard and `ObserveEndpoint`, the relation, the remote's question put to the session's |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
 | Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each model response's facts read together for its decisions, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
@@ -306,7 +310,8 @@ Three layers, each overriding the one below: the user's
 through a workspace over the project, the flags. The files are strict
 JSON: an unknown field is an error naming the file. A project file comes
 from a repository, so it may only tighten the policy: it may not set the
-provider, model, endpoint, instructions, skills, memory or MCP servers.
+provider, model, endpoint, instructions, skills, memory, MCP servers
+or peers.
 See the README for the schema.
 
 ## Fronts
@@ -432,10 +437,31 @@ own are built from the same fields a program's are:
 | dax-agents | `ext/agents` | explore and task, from every extension's tools; the delegation guide |
 | dax-skills | `ext/skills` | the skill tool and catalogue; grants under `-trust-skills` |
 | dax-memory | `ext/memory` | the memory tools and block |
+| dax-a2a | `ext/a2a` | a tool per peer in the user's config; renderers; no rules |
 
-`dax.Main` builds dax-coding always and the others as the settings say,
-less those `WithoutExtension` names, then the program's from
-`WithExtension`.
+`dax.Main` builds dax-coding and dax-a2a always (dax-a2a offers nothing
+without peers) and the others as the settings say, less those
+`WithoutExtension` names, then the program's from `WithExtension`.
+
+dax-a2a's tools are control, added through its `Kit` and named in
+`Owns`, as memory's are: a peer is reached from where the session runs,
+with the user's token from this process's environment, and `dax
+execute`, which reads no config, could not serve it. Each is
+agentturn's `tools/a2a` over an a2a-go client of the peer's card,
+fetched when the session's kit is built, within five seconds; a peer
+whose card or token is missing is left out with one note. The client
+sends the token only to the configured URL's origin and refuses an
+endpoint the card names that is not https (or http to loopback), and
+carries `ObserveEndpoint`, so the record names the URL called, never
+the card's claims. The relation is the user's: `subsession` (cancelled
+when the call is given up, sent and not awaited) or `peer`
+(`WithoutCancelOnAbort`). A remote agent's question is put through the
+call's elicitor, the session's, so it is a tool's question to whoever
+answers (`Answering`); a yes carries the reply on the same task, a no
+ends the call and gives the task up, and with no one answering the call
+ends input-required. dax-a2a is in the root module, not a nested module
+as the peers proposal had it: dax is a product with no dependency
+boundary, and `dax serve` will need `front/a2a` here anyway.
 
 A session builds its extensions in two phases. First every extension's
 `Tools`, over an `extension.ToolEnv`: the session's `Workspace`, the

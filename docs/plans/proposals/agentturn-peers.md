@@ -118,10 +118,14 @@ with the authenticated principal.
 
 ## What dax does with it
 
-An `a2a` extension (`ext/a2a`, a nested module for a2a-go's weight, as
-agentkit keeps it out of its core: `agentkit/docs/composition.md:93-107`)
-offers configured peers as tools, with its own rules (`extension:a2a`)
-and renderers, and wires `WithInputRequired` to the agent's questions.
+An `a2a` extension (`ext/a2a`, dax-a2a) offers configured peers as
+tools, with its own rules (`extension:dax-a2a`, none shipped, so every
+call asks) and renderers, and wires `WithInputRequired` to the agent's
+questions. It is in dax's root module, not a nested module for a2a-go's
+weight as this proposal first said (after agentkit, which keeps it out
+of its core: `agentkit/docs/composition.md:93-107`): dax is a product
+with no dependency boundary, and `dax serve` needs `front/a2a` in the
+root anyway, so a nested module would buy nothing.
 `dax serve` mounts `front/a2a` beside `front/control` (agentturn-control.md), with the
 authenticator it uses for that wire, and offers escalation as a serve
 flag for an unattended session host.

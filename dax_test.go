@@ -3,6 +3,7 @@ package dax
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/ext/memory"
@@ -97,6 +99,28 @@ func TestTheProgramsExtensionsFollowDaxsLessThoseLeftOut(t *testing.T) {
 	WithoutExtension("dax-codnig")(&p)
 	if _, err := p.extensions(defaults); err == nil || !strings.Contains(err.Error(), "dax-codnig") {
 		t.Errorf("leaving out an extension dax does not have: err = %v", err)
+	}
+}
+
+// dax-a2a is always one of dax's, offering a tool per peer the settings
+// name and nothing without them, and can be left out like the others.
+func TestDaxA2AIsADefault(t *testing.T) {
+	var p program
+	exts, err := p.selected(choice{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(exts, func(e extension.Extension) bool { return e.Name == a2a.Name })
+	if i < 0 || exts[i].Kit != nil || exts[i].Owns != nil {
+		t.Fatalf("extensions %v: want dax-a2a offering nothing", exts)
+	}
+	exts, _ = p.selected(choice{Peers: []a2a.Remote{{Name: "reviewer", URL: "https://r.example"}}})
+	if i = slices.IndexFunc(exts, func(e extension.Extension) bool { return e.Name == a2a.Name }); i < 0 || !slices.Equal(exts[i].Owns, []string{"reviewer"}) {
+		t.Fatalf("with a peer: %+v", exts)
+	}
+	WithoutExtension(a2a.Name)(&p)
+	if exts, err = p.selected(choice{}); err != nil || hasExtension(exts, a2a.Name) {
+		t.Errorf("left out: %v, %v", exts, err)
 	}
 }
 

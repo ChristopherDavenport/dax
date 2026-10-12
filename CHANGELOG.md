@@ -5,6 +5,35 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: dax-a2a (`ext/a2a`), a default extension that offers the A2A
+  agents named in the user's config (`peers`) as tools, one per peer by
+  the configured name, over agentturn's `tools/a2a`. Each peer's card is
+  read when the session starts, within five seconds; a peer whose card
+  cannot be read, or whose `token_env` is unset, is not offered, and the
+  session says why once. A bearer token comes from the variable
+  `token_env` names, goes only to the configured URL's origin, and is
+  never printed, logged or recorded; `url` is https, or http to
+  loopback. `relation` is `subsession` (the default: an abandoned call
+  sends `tasks/cancel` and does not wait) or `peer` (never cancelled).
+  A remote agent's question during a call is put to whoever answers the
+  session's questions; a yes carries the reply on the same task, a no
+  ends the call with the question and the note, and with nobody
+  answering the call ends with the question for the model. The record
+  names the URL each call reached. Every call asks unless the user's
+  config allows it; dax-a2a ships no rule. A project's config may not
+  set `peers`. The terminal client draws a peer's call as its request
+  and the start of its answer (`toolrender.Peers`).
+- Changed, public API: `ext/a2a` is new, `toolrender.Peers` is new, and
+  `WithoutExtension` takes `dax-a2a`.
+- Dependencies: agentturn and agentturn/session v0.0.28, up from
+  v0.0.27, and agentturn/tools/a2a v0.0.28 (with a2a-go v0.3.15);
+  agentkit v0.0.13, up from v0.0.12; agentpolicy v0.0.17, up from
+  v0.0.16; agentsession v0.0.24, up from v0.0.22. agentsession's format
+  is now 0.12: a session dax appends to is raised, and a dax before this
+  one refuses to read it.
+
 ## v0.0.16 - 2026-10-11
 
 - Dependencies: agentturn and agentturn/session v0.0.27, up from

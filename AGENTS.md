@@ -6,7 +6,7 @@ product that assembles the sibling libraries, and a minimal core meant to
 be extended: the session knows no tool, and everything the model can do
 comes from an `extension.Extension`. dax's own capabilities are
 extensions like any other (dax-coding, dax-agents, dax-skills,
-dax-memory), and a Go program runs `dax.Main` with its own. Where the
+dax-memory, dax-a2a), and a Go program runs `dax.Main` with its own. Where the
 tools act is a `workspace.Workspace` (the agentworkspace module), and
 this machine's directory is one implementation of it: dax should behave the same whether its tools
 act here or elsewhere. The design,
@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -83,6 +83,13 @@ before changing the shape.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`.
 - `ext/memory` (dax-memory): the store, the scopes, the memory tools.
+- `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
+  layer only), each agentturn's `tools/a2a` over a client of its card,
+  added through the kit (control, as memory's tools are); the client's
+  guard (a token to the configured origin only, no endpoint
+  `checkURL` refuses) and `ObserveEndpoint`; a remote agent's question
+  put through the call's elicitor. It is in the root module: dax is a
+  product, with no dependency boundary to keep a2a-go out of.
 - The workspace is not a package here: the `Workspace` interface the
   session and every tool act through (root, file system, writes,
   environment, `Exec`, descriptor), `Starter` for a long-lived process
@@ -98,8 +105,8 @@ before changing the shape.
   `Factual`: what a call would touch and the rewrite it runs with if
   allowed, bash's stamped plan) becomes agentpolicy's subjects and the
   session's one rewrite hook.
-- `toolrender`: the terminal client's renderers of dax-coding's and
-  dax-agents' calls (`toolview.Renderer`s), from the record's arguments
+- `toolrender`: the terminal client's renderers of dax-coding's,
+  dax-agents' and dax-a2a's calls (`toolview.Renderer`s), from the record's arguments
   and output alone. It does not import `tool`; its tests run the real
   tools, so a change to a tool's output format fails them.
 - `internal/executor`: the execution plane: the `Executor` the
