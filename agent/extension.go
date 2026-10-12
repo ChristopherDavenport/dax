@@ -20,6 +20,7 @@ import (
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/internal/prompt"
+	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -341,7 +342,7 @@ func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return slices.Clone
 func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
 func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
 func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }
-func (e *sessionEnv) Log(format string, args ...any)       { e.s.opts.log(format, args...) }
+func (e *sessionEnv) Log(format string, args ...any)       { e.s.opts.log("%s", logText(format, args...)) }
 func (e *sessionEnv) SystemPrompt(except ...string) string { return e.s.systemPrompt(except...) }
 
 func (e *sessionEnv) Live() (string, bool) {
@@ -375,4 +376,12 @@ func (s *Session) systemPrompt(except ...string) string {
 		}
 	}
 	return prompt.Build(o.Name, s.ws.Root(), append(extra, o.Instructions)...)
+}
+
+// logText is an extension's note as the session prints it: cleaned of
+// the escape sequences and control characters a remote's text it quotes
+// may carry (a card's URL, a server's status line), whichever extension
+// it is, since the note goes straight to the user's terminal.
+func logText(format string, args ...any) string {
+	return render.Clean(fmt.Sprintf(format, args...))
 }

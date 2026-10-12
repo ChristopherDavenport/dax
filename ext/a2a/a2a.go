@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -167,6 +168,11 @@ func New(o Options) extension.Extension {
 		names[i] = r.Name
 	}
 	e.Owns = names
+	for _, r := range o.Remotes {
+		if r.TokenEnv != "" {
+			e.Secrets = append(e.Secrets, r.TokenEnv)
+		}
+	}
 	e.Renderers = func(string) toolview.Renderers { return toolrender.Peers(names...) }
 	e.Kit = func(env extension.Env) ([]agentkit.Option, error) {
 		for _, r := range o.Remotes {
@@ -203,9 +209,13 @@ func New(o Options) extension.Extension {
 	return e
 }
 
-// connect fetches r's card and builds its tool over a client that sends
-// the token only to r's origin, refuses an endpoint checkURL would, and
-// tells each call the endpoint it reached (ObserveEndpoint).
+// connect fetches r's card and builds its tool over a client of the
+// card's JSON-RPC endpoint, which must be at r's origin: the card, not
+// the user, names it, so a card that sends the work elsewhere (another
+// host, a port on this machine) is refused here and the peer is not
+// offered. The client sends the token, refuses a redirect to another
+// origin, and tells each call the endpoint it reached
+// (ObserveEndpoint).
 func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.Tool, error) {
 	token := ""
 	if r.TokenEnv != "" {
@@ -221,14 +231,27 @@ func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.To
 	if token != "" {
 		ropts = append(ropts, agentcard.WithRequestHeader("Authorization", "Bearer "+token))
 	}
-	card, err := agentcard.NewResolver(&http.Client{Timeout: timeout, CheckRedirect: g.redirect}).Resolve(ctx, r.URL, ropts...)
+	cardClient := &http.Client{Timeout: timeout, CheckRedirect: g.redirect, Transport: limitBody{rt: transport(), n: maxCardBytes}}
+	card, err := agentcard.NewResolver(cardClient).Resolve(ctx, r.URL, ropts...)
 	if err != nil {
 		return nil, fmt.Errorf("its agent card: %w", err)
 	}
+	endpoint, ok := jsonRPCEndpoint(card)
+	if !ok {
+		return nil, errors.New("its agent card names no JSON-RPC endpoint")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || origin(u) != g.origin || checkURL(endpointOf(u)) != nil {
+		return nil, fmt.Errorf("its agent card names the endpoint %q, which is not at %s", endpoint, g.origin)
+	}
+	// The client is built over the one endpoint checked, whatever else
+	// the card lists.
+	one := *card
+	one.URL, one.PreferredTransport, one.AdditionalInterfaces = endpoint, a2a.TransportProtocolJSONRPC, nil
 	// The JSON-RPC client has no deadline of its own: a task runs as
 	// long as its call does, and an abort ends the call.
-	client, err := a2aclient.NewFromCard(ctx, card,
-		a2aclient.WithJSONRPCTransport(&http.Client{CheckRedirect: g.redirect}),
+	client, err := a2aclient.NewFromCard(ctx, &one,
+		a2aclient.WithJSONRPCTransport(&http.Client{CheckRedirect: g.redirect, Transport: transport()}),
 		a2aclient.WithInterceptors(g, a2atool.ObserveEndpoint()))
 	if err != nil {
 		return nil, fmt.Errorf("its agent card: %w", err)
@@ -236,17 +259,86 @@ func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.To
 	opts := []a2atool.Option{
 		a2atool.WithName(r.Name),
 		a2atool.WithDescription(describe(r, card)),
-		a2atool.WithInputRequired(answerer(r.Name)),
+		a2atool.WithInputRequired(answerer(r)),
 	}
 	if r.Relation == Peer {
 		opts = append(opts, a2atool.WithoutCancelOnAbort())
 	}
-	return a2atool.New(client, card, opts...), nil
+	return a2atool.New(client, &one, opts...), nil
 }
 
-// guard is the client's interceptor: it refuses a request to an
-// endpoint checkURL refuses, which the card, not the user, named, and
-// adds the token to a request to the configured origin alone.
+// jsonRPCEndpoint is the URL of the first JSON-RPC interface the card
+// names, in its order of preference: its own URL, whose transport is
+// JSON-RPC when the card names none, then its additional interfaces.
+func jsonRPCEndpoint(card *a2a.AgentCard) (string, bool) {
+	if card.URL != "" && (card.PreferredTransport == "" || card.PreferredTransport == a2a.TransportProtocolJSONRPC) {
+		return card.URL, true
+	}
+	for _, i := range card.AdditionalInterfaces {
+		if i.Transport == a2a.TransportProtocolJSONRPC && i.URL != "" {
+			return i.URL, true
+		}
+	}
+	return "", false
+}
+
+// testTransport replaces the HTTP transport in tests, to trust a test
+// server's certificate.
+var testTransport http.RoundTripper
+
+func transport() http.RoundTripper {
+	if testTransport != nil {
+		return testTransport
+	}
+	return http.DefaultTransport
+}
+
+// maxCardBytes bounds an agent card's body: a card is a few kilobytes,
+// and the start of a session must not read a stream into memory.
+const maxCardBytes = 1 << 20
+
+// limitBody fails a response whose body runs past n bytes.
+type limitBody struct {
+	rt http.RoundTripper
+	n  int64
+}
+
+func (l limitBody) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := l.rt.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &capped{rc: resp.Body, left: l.n}
+	return resp, nil
+}
+
+type capped struct {
+	rc   io.ReadCloser
+	left int64
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		// One byte more tells a body at the bound from one past it.
+		var b [1]byte
+		if n, _ := c.rc.Read(b[:]); n > 0 {
+			return 0, fmt.Errorf("the card is over %d bytes", maxCardBytes)
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.rc.Read(p)
+	c.left -= int64(n)
+	return n, err
+}
+
+func (c *capped) Close() error { return c.rc.Close() }
+
+// guard is the client's interceptor: it refuses a request to any origin
+// but the configured one, which connect checked the card's endpoint
+// against, and adds the token.
 type guard struct {
 	a2aclient.PassthroughInterceptor
 	origin, token string
@@ -254,25 +346,28 @@ type guard struct {
 
 func (g guard) Before(ctx context.Context, req *a2aclient.Request) (context.Context, error) {
 	u, err := url.Parse(req.BaseURL)
-	if err != nil {
-		return ctx, fmt.Errorf("the agent card's endpoint: %w", err)
+	if err != nil || origin(u) != g.origin {
+		return ctx, fmt.Errorf("the endpoint %q is not at %s", req.BaseURL, g.origin)
 	}
-	if err := checkURL(endpointOf(u)); err != nil {
-		return ctx, fmt.Errorf("the agent card's endpoint %w", err)
-	}
-	if g.token != "" && origin(u) == g.origin {
+	if g.token != "" {
 		req.Meta.Append("Authorization", "Bearer "+g.token)
 	}
 	return ctx, nil
 }
 
-// redirect refuses a redirect checkURL would refuse. Go's client drops
-// the Authorization header on a redirect to another host itself.
+// redirect refuses a redirect to another origin, on the card's fetch
+// and on a call alike. Go's client keeps the Authorization header on a
+// redirect to a subdomain, to another port and from https to http, so
+// a redirect to anywhere but the configured origin is not followed at
+// all.
 func (g guard) redirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
-	return checkURL(endpointOf(req.URL))
+	if origin(req.URL) != g.origin {
+		return fmt.Errorf("a redirect to %s, another origin than %s, is not followed", origin(req.URL), g.origin)
+	}
+	return nil
 }
 
 // endpointOf is u without its query and fragment, which an endpoint may
@@ -328,58 +423,58 @@ func describe(r Remote, card *a2a.AgentCard) string {
 // it.
 const maxQuestion = 1000
 
-// answerer puts a remote agent's question, asked while a call to name
+// answerer puts a remote agent's question, asked while a call to r
 // runs, to whoever answers the session's questions, through the
-// elicitor on the call's context, as a tool's own question goes. A yes
-// sends what was said with it, or "yes" when nothing was, on the same
-// task. A no ends the call with the question and what was said with
-// the no, and the task is given up as an aborted call's is. With nobody
-// to ask, or a question not answered, the call ends input-required, the
-// question for the model: nothing answers in the person's place.
-func answerer(name string) a2atool.InputRequired {
+// elicitor on the call's context, as a tool's own question goes: a
+// question for a line of text (extension.TextQuestion). An answer is
+// sent on the same task. A refusal ends the call with the question,
+// and the task is given up as an aborted call's is; so is a call
+// aborted while the question waits. With nobody to ask, or a question
+// not answered, the call ends input-required, the question for the
+// model: nothing answers in the person's place.
+func answerer(r Remote) a2atool.InputRequired {
 	return func(ctx context.Context, _ a2atool.TaskInfo, q *a2a.Message) ([]a2a.Part, error) {
 		elicit, ok := agenttool.ElicitorFrom(ctx)
 		if !ok {
 			return nil, agentturn.ErrInputRequired
 		}
 		question := questionOf(q)
-		ans, err := elicit(ctx, agenttool.Elicitation{
-			Message: fmt.Sprintf("%s (an A2A agent) asks: %s — answer yes and your reply, or no to refuse", name, question),
-		})
+		// Who asks comes first, then how to answer, and the remote's
+		// text last and quoted, so it cannot pass for either.
+		ask := extension.TextQuestion(fmt.Sprintf("the A2A agent %s (%s) needs an answer to go on: reply with it, or refuse. It says: %s", r.Name, r.URL, question))
+		ans, err := elicit(ctx, ask)
+		if cerr := ctx.Err(); cerr != nil {
+			// Given up while the question waited: the task is stopped
+			// as an aborted call's.
+			return nil, cerr
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", agentturn.ErrInputRequired, err)
 		}
-		switch ans.Action {
-		case agenttool.ActionAccept:
-			reply := strings.TrimSpace(ans.Note)
-			if reply == "" {
-				reply = "yes"
-			}
+		if reply, ok := extension.TextAnswer(ask, ans); ok {
 			return []a2a.Part{a2a.TextPart{Text: reply}}, nil
-		case agenttool.ActionDecline:
-			return nil, &DeclinedError{Peer: name, Question: question, Note: ans.Note}
+		}
+		if ans.Action == agenttool.ActionDecline {
+			return nil, &DeclinedError{Peer: r.Name, Question: question, Note: ans.Note}
 		}
 		return nil, agentturn.ErrInputRequired
 	}
 }
 
 // DeclinedError ends a call whose remote agent asked a question that was
-// refused: the model reads the question and what was said with the
-// refusal.
+// refused. The model reads the question; what the person said with the
+// refusal, Note, reaches it once, in the person's own voice, as every
+// note on a question does, and is not repeated here.
 type DeclinedError struct {
 	Peer, Question, Note string
 }
 
 func (e *DeclinedError) Error() string {
-	msg := fmt.Sprintf("%s asked %q and the question was declined", e.Peer, e.Question)
-	if e.Note != "" {
-		msg += "; the user said: " + e.Note
-	}
-	return msg
+	return fmt.Sprintf("%s asked %s and the question was declined", e.Peer, e.Question)
 }
 
-// questionOf is the text of a remote agent's question, clipped, with a
-// count of the parts that are not text.
+// questionOf is the text of a remote agent's question, clipped and
+// quoted, with a count of the parts that are not text.
 func questionOf(q *a2a.Message) string {
 	var b strings.Builder
 	other := 0
@@ -394,9 +489,11 @@ func questionOf(q *a2a.Message) string {
 	}
 	s := strings.TrimSpace(b.String())
 	if s == "" {
-		s = "(no text)"
+		return "nothing (an empty question)"
 	}
-	s = clip(s, maxQuestion)
+	// Quoted, its newlines and control characters escaped, so the
+	// remote's text reads as one quotation and redraws nothing.
+	s = strconv.Quote(clip(s, maxQuestion))
 	if other > 0 {
 		s += " (and " + strconv.Itoa(other) + " parts that are not text)"
 	}

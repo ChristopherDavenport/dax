@@ -1,9 +1,12 @@
 package a2a_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -15,6 +18,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/session"
 	a2atool "github.com/ChristopherDavenport/agentturn/tools/a2a"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
@@ -23,6 +27,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	daxa2a "github.com/ChristopherDavenport/dax/ext/a2a"
+	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -97,6 +102,22 @@ type remote struct {
 }
 
 func serve(t *testing.T, exec a2asrv.AgentExecutor) *remote {
+	return serveWith(t, exec, serveOpts{})
+}
+
+// serveOpts change what serve serves.
+type serveOpts struct {
+	// endpoint is the URL the card names, given the server's own; the
+	// server's own when nil.
+	endpoint func(self string) string
+	// route answers a request before the card and the agent do, when it
+	// returns true.
+	route func(w http.ResponseWriter, req *http.Request) bool
+	// tls serves https.
+	tls bool
+}
+
+func serveWith(t *testing.T, exec a2asrv.AgentExecutor, o serveOpts) *remote {
 	t.Helper()
 	r := &remote{}
 	card := &a2a.AgentCard{
@@ -105,20 +126,39 @@ func serve(t *testing.T, exec a2asrv.AgentExecutor) *remote {
 		Capabilities: a2a.AgentCapabilities{Streaming: true}, PreferredTransport: a2a.TransportProtocolJSONRPC,
 	}
 	rpc := a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(exec))
-	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		r.auth = append(r.auth, req.Header.Get("Authorization"))
 		r.mu.Unlock()
+		if o.route != nil && o.route(w, req) {
+			return
+		}
 		if req.URL.Path == a2asrv.WellKnownAgentCardPath {
 			c := *card
 			c.URL = r.URL
+			if o.endpoint != nil {
+				c.URL = o.endpoint(r.URL)
+			}
 			_ = json.NewEncoder(w).Encode(&c)
 			return
 		}
 		rpc.ServeHTTP(w, req)
-	}))
+	})
+	if o.tls {
+		r.Server = httptest.NewTLSServer(h)
+		t.Cleanup(daxa2a.SetTransport(r.Client().Transport))
+	} else {
+		r.Server = httptest.NewServer(h)
+	}
 	t.Cleanup(r.Close)
 	return r
+}
+
+// requests is how many requests the server has had.
+func (r *remote) requests() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.auth)
 }
 
 func (r *remote) authorizations() []string {
@@ -453,42 +493,110 @@ func TestACallAsksThenCompletes(t *testing.T) {
 	})
 }
 
-// A token goes to the configured origin alone: a card that names an
-// endpoint elsewhere gets none, and one over http to another host is
-// not called at all.
-func TestTheTokenStaysWithTheConfiguredOrigin(t *testing.T) {
+// The card, not the user, names the endpoint, so a card that sends the
+// work to another origin (another port here, a host over http, this
+// machine for an https peer) is not offered, and nothing is sent there.
+func TestACardNamingAnotherOriginIsNotOffered(t *testing.T) {
 	other := serve(t, echoing{})
 	t.Setenv("PEER_TOKEN", "s3cret-token")
 	for _, tc := range []struct {
-		name, endpoint string
-		reached        bool
+		name string
+		o    serveOpts
 	}{
-		{"another loopback origin", other.URL, true},
-		{"http to another host", "http://peer.invalid", false},
+		{"another port on this machine", serveOpts{endpoint: func(string) string { return other.URL }}},
+		{"http to another host", serveOpts{endpoint: func(string) string { return "http://peer.invalid" }}},
+		{"this machine, named by an https peer", serveOpts{tls: true, endpoint: func(string) string { return other.URL }}},
+		{"another scheme at the same host and port", serveOpts{tls: true, endpoint: func(self string) string { return strings.Replace(self, "https:", "http:", 1) }}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before := len(other.authorizations())
-			card := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_ = json.NewEncoder(w).Encode(&a2a.AgentCard{Name: "x", URL: tc.endpoint, PreferredTransport: a2a.TransportProtocolJSONRPC})
-			}))
-			t.Cleanup(card.Close)
-			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: card.URL, TokenEnv: "PEER_TOKEN"}}, []string{"painter"}, "paint")
-			if _, err := agent.Drive(t.Context(), s, agent.Rules{}, openresponses.UserText("go")); err != nil {
-				t.Fatal(err)
+			before := other.requests()
+			card := serveWith(t, echoing{}, tc.o)
+			s, log := open(t, []daxa2a.Remote{{Name: "painter", URL: card.URL, TokenEnv: "PEER_TOKEN"}}, []string{"painter"}, "paint")
+			if slices.Contains(offered(s), "painter") {
+				t.Errorf("tools %v offer a peer whose card names another origin", offered(s))
 			}
-			got := other.authorizations()[before:]
-			if tc.reached != (len(got) > 0) {
-				t.Errorf("requests at the endpoint %v, want reached=%v", got, tc.reached)
+			if n := strings.Count(log.String(), "peer painter not offered: its agent card names the endpoint"); n != 1 {
+				t.Errorf("notes %q, want the endpoint named once", log.String())
 			}
-			for _, a := range got {
-				if a != "" {
-					t.Errorf("the endpoint got Authorization %q", a)
-				}
-			}
-			if !tc.reached && !strings.Contains(output(t, s), "loopback") {
-				t.Errorf("output %q, want the endpoint refused", output(t, s))
+			if other.requests() != before {
+				t.Error("a request reached the other origin")
 			}
 		})
+	}
+}
+
+// A redirect to another origin is not followed, on the card's fetch or
+// on a call, since Go's client would carry the token to a subdomain, to
+// another port, or from https to http; one within the origin is.
+func TestARedirectToAnotherOriginIsNotFollowed(t *testing.T) {
+	other := serve(t, echoing{})
+	t.Setenv("PEER_TOKEN", "s3cret-token")
+	away := func(path string) func(http.ResponseWriter, *http.Request) bool {
+		return func(w http.ResponseWriter, req *http.Request) bool {
+			if req.URL.Path != path || req.URL.Query().Get("moved") != "" {
+				return false
+			}
+			http.Redirect(w, req, other.URL+path, http.StatusTemporaryRedirect)
+			return true
+		}
+	}
+
+	t.Run("the card", func(t *testing.T) {
+		before := other.requests()
+		card := serveWith(t, echoing{}, serveOpts{route: away(a2asrv.WellKnownAgentCardPath)})
+		s, log := open(t, []daxa2a.Remote{{Name: "painter", URL: card.URL, TokenEnv: "PEER_TOKEN"}}, nil, "")
+		if slices.Contains(offered(s), "painter") || !strings.Contains(log.String(), "another origin") {
+			t.Errorf("tools %v, notes %q", offered(s), log.String())
+		}
+		if other.requests() != before {
+			t.Error("the card's fetch followed the redirect")
+		}
+	})
+
+	t.Run("a call", func(t *testing.T) {
+		before := other.requests()
+		up := serveWith(t, echoing{}, serveOpts{route: away("/")})
+		s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, TokenEnv: "PEER_TOKEN"}}, []string{"painter"}, "paint")
+		if _, err := agent.Drive(t.Context(), s, agent.Rules{}, openresponses.UserText("go")); err != nil {
+			t.Fatal(err)
+		}
+		if got := output(t, s); !strings.Contains(got, "another origin") {
+			t.Errorf("output %q, want the redirect refused", got)
+		}
+		if other.requests() != before {
+			t.Error("the call followed the redirect")
+		}
+		noToken(t, s)
+	})
+
+	t.Run("within the origin", func(t *testing.T) {
+		var up *remote
+		up = serveWith(t, echoing{}, serveOpts{route: func(w http.ResponseWriter, req *http.Request) bool {
+			if req.URL.Path != a2asrv.WellKnownAgentCardPath || req.URL.Query().Get("moved") != "" {
+				return false
+			}
+			http.Redirect(w, req, up.URL+a2asrv.WellKnownAgentCardPath+"?moved=1", http.StatusTemporaryRedirect)
+			return true
+		}})
+		s, log := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, TokenEnv: "PEER_TOKEN"}}, nil, "")
+		if !slices.Contains(offered(s), "painter") {
+			t.Errorf("tools %v, notes %q: a redirect within the origin was refused", offered(s), log.String())
+		}
+	})
+}
+
+// noToken fails when the session's record carries the token.
+func noToken(t *testing.T, s *agent.Session) {
+	t.Helper()
+	rd := s.Recorder().Store().(agentsession.Reader)
+	sess, err := rd.Read(t.Context(), s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range sess.Entries() {
+		if b, _ := json.Marshal(e); strings.Contains(string(b), "s3cret") {
+			t.Errorf("the record carries the token: %s", b)
+		}
 	}
 }
 
@@ -550,47 +658,65 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 }
 
 // A remote agent's question reaches whoever answers the session's
-// questions, and the answer goes on the same task; a refusal ends the
-// call and gives the task up; with nobody answering, the call ends with
-// the question for the model and nothing answers in a person's place.
+// questions, as a question for text, and the answer goes on the same
+// task; a refusal ends the call and gives the task up; with nobody
+// answering, the call ends with the question for the model and nothing
+// answers in a person's place. The record holds the question, the
+// answer and what was said with a refusal, and never the token.
 func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
+	t.Setenv("PEER_TOKEN", "s3cret-token")
 	for _, tc := range []struct {
 		name      string
 		reply     func(agentturn.Question) agenttool.Answer
 		want      string
+		action    string // the recorded answer's
+		content   string
+		note      string
 		cancelled bool
 	}{
-		{"answered", func(agentturn.Question) agenttool.Answer {
+		{"answered with a note, as the terminal client does", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionAccept, Note: "blue"}
-		}, "painted blue", false},
+		}, "painted blue", "accept", `{"answer":"blue"}`, "", false},
+		{"answered with the form, as the REPL does", func(agentturn.Question) agenttool.Answer {
+			return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{"answer":"green"}`)}
+		}, "painted green", "accept", `{"answer":"green"}`, "", false},
 		{"a bare yes", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionAccept}
-		}, "painted yes", false},
+		}, "painted yes", "accept", `{"answer":"yes"}`, "", false},
 		{"declined", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionDecline, Note: "pick one yourself"}
-		}, `painter asked "which colour?" and the question was declined; the user said: pick one yourself`, true},
-		{"nobody answering", nil, "the agent needs more input: which colour?", false},
+		}, `painter asked "which colour?" and the question was declined`, "decline", "", "pick one yourself", true},
+		{"nobody answering", nil, "the agent needs more input: which colour?", "", "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agentSide := asking{cancelled: make(chan a2a.TaskID, 4)}
 			up := serve(t, agentSide)
-			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL}}, []string{"painter"}, "paint the fence")
-			var asked []string
+			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, TokenEnv: "PEER_TOKEN"}}, []string{"painter"}, "paint the fence")
+			var asked []agentturn.Question
 			rules := agent.Rules{}
 			if tc.reply != nil {
 				rules.Reply = func(q agentturn.Question) agenttool.Answer {
-					asked = append(asked, q.Elicitation.Message)
+					asked = append(asked, q)
 					return tc.reply(q)
 				}
 			}
 			if _, err := agent.Drive(t.Context(), s, rules, openresponses.UserText("go")); err != nil {
 				t.Fatal(err)
 			}
-			if got := output(t, s); !strings.Contains(got, tc.want) {
+			got := output(t, s)
+			if !strings.Contains(got, tc.want) {
 				t.Errorf("output %q, want %q", got, tc.want)
 			}
-			if tc.reply != nil && (len(asked) != 1 || !strings.Contains(asked[0], "painter (an A2A agent) asks: which colour?")) {
-				t.Errorf("asked %q", asked)
+			if tc.note != "" && strings.Contains(got, tc.note) {
+				t.Errorf("output %q repeats the person's note, which reaches the model as theirs", got)
+			}
+			if tc.reply != nil {
+				want := `a tool asks: the A2A agent painter (` + up.URL + `) needs an answer to go on: reply with it, or refuse. It says: "which colour?"`
+				if len(asked) != 1 || asked[0].Elicitation.Message != want {
+					t.Errorf("asked %+v, want %q", asked, want)
+				} else if _, text := extension.AsksForText(asked[0].Elicitation); !text {
+					t.Errorf("the question does not ask for text: %s", asked[0].Elicitation.Schema)
+				}
 			}
 			select {
 			case id := <-agentSide.cancelled:
@@ -605,6 +731,149 @@ func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 			if cs := callees(t, s); len(cs) != 1 {
 				t.Errorf("callees %+v, want one task for the call and its answer", cs)
 			}
+			if tc.action != "" {
+				q, a := recordedQuestion(t, s)
+				if !strings.Contains(q.Message, `It says: "which colour?"`) || a.Action != tc.action || string(a.Content) != tc.content || a.Note != tc.note {
+					t.Errorf("recorded %q; answer %q content %s note %q", q.Message, a.Action, a.Content, a.Note)
+				}
+			}
+			noToken(t, s)
 		})
+	}
+}
+
+// recordedQuestion is the session's recorded question and its answer.
+func recordedQuestion(t *testing.T, s *agent.Session) (ask, answer session.Elicitation) {
+	t.Helper()
+	rd := s.Recorder().Store().(agentsession.Reader)
+	sess, err := rd.Read(t.Context(), s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range sess.Entries() {
+		c, ok := e.(*agentsession.CustomEntry)
+		if !ok || c.NS != session.ElicitationNS {
+			continue
+		}
+		var q session.Elicitation
+		if err := json.Unmarshal(c.Data, &q); err != nil {
+			t.Fatal(err)
+		}
+		switch q.Phase {
+		case session.ElicitationAsk:
+			ask = q
+		case session.ElicitationAnswer:
+			answer = q
+		}
+	}
+	return ask, answer
+}
+
+// An abort while the remote agent's question waits gives a subsession's
+// task up, as an abort of a working task does; a peer's is left.
+func TestAnAbortWhileTheQuestionWaits(t *testing.T) {
+	t.Setenv("PEER_TOKEN", "s3cret-token")
+	for _, rel := range []string{daxa2a.Subsession, daxa2a.Peer} {
+		t.Run(rel, func(t *testing.T) {
+			agentSide := asking{cancelled: make(chan a2a.TaskID, 4)}
+			up := serve(t, agentSide)
+			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, Relation: rel, TokenEnv: "PEER_TOKEN"}}, []string{"painter"}, "paint")
+			asked := make(chan struct{}, 1)
+			release := make(chan struct{})
+			defer close(release)
+			done := make(chan *agentturn.RunEnd, 1)
+			go func() {
+				end, _ := agent.Drive(context.Background(), s, agent.Rules{Reply: func(agentturn.Question) agenttool.Answer {
+					asked <- struct{}{}
+					<-release
+					return agenttool.Answer{Action: agenttool.ActionAccept, Note: "late"}
+				}}, openresponses.UserText("go"))
+				done <- end
+			}()
+			select {
+			case <-asked:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the question never came")
+			}
+			s.Abort()
+			select {
+			case end := <-done:
+				if end == nil || end.Reason != agentturn.ReasonAborted {
+					t.Errorf("run ended %+v, want aborted", end)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the abort waited on the question")
+			}
+			select {
+			case id := <-agentSide.cancelled:
+				if rel == daxa2a.Peer {
+					t.Errorf("a peer's task %s was cancelled", id)
+				}
+			case <-time.After(time.Second):
+				if rel == daxa2a.Subsession {
+					t.Error("the remote agent saw no tasks/cancel")
+				}
+			}
+			noToken(t, s)
+		})
+	}
+}
+
+// What the session notes of a peer is cleaned of escape sequences: a
+// card's status line is the remote's text.
+func TestANoteCarriesNoEscapes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_, _ = bufio.NewReader(c).ReadString('\n')
+				_, _ = io.WriteString(c, "HTTP/1.1 503 \x1b]0;pwned\x07\x1b[2Jgone\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+			}()
+		}
+	}()
+	s, log := open(t, []daxa2a.Remote{{Name: "painter", URL: "http://" + ln.Addr().String()}}, nil, "")
+	notes := log.String()
+	if slices.Contains(offered(s), "painter") || !strings.Contains(notes, "peer painter not offered") || !strings.Contains(notes, "gone") {
+		t.Fatalf("tools %v, notes %q", offered(s), notes)
+	}
+	if strings.ContainsAny(notes, "\x1b\x07") {
+		t.Errorf("the note carries control characters: %q", notes)
+	}
+}
+
+// A peer named like another extension's tool fails the session's start,
+// saying whose the name is.
+func TestAPeerNamedLikeAnotherToolFailsTheStart(t *testing.T) {
+	up := serve(t, echoing{})
+	_, err := agent.New(context.Background(), agent.Options{
+		Model: "scripted", Streamer: &scripted{}, Dir: t.TempDir(), UserDir: t.TempDir(), Store: agentsession.NewMemoryStore(),
+		Extensions: []extension.Extension{coding.New(0), daxa2a.New(daxa2a.Options{Remotes: []daxa2a.Remote{{Name: "read", URL: up.URL}}})},
+	})
+	if err == nil || !strings.Contains(err.Error(), `extension dax-a2a: tool "read": extension dax-coding has that name`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// A card is read up to a bound: one past it is not offered.
+func TestABigCardIsNotRead(t *testing.T) {
+	big := serveWith(t, echoing{}, serveOpts{route: func(w http.ResponseWriter, req *http.Request) bool {
+		if req.URL.Path != a2asrv.WellKnownAgentCardPath {
+			return false
+		}
+		_, _ = io.WriteString(w, `{"name":"x","description":"`+strings.Repeat("x", 2<<20)+`"}`)
+		return true
+	}})
+	s, log := open(t, []daxa2a.Remote{{Name: "painter", URL: big.URL}}, nil, "")
+	if slices.Contains(offered(s), "painter") || !strings.Contains(log.String(), "the card is over") {
+		t.Errorf("tools %v, notes %q", offered(s), log.String())
 	}
 }

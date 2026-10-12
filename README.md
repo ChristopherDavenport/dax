@@ -250,31 +250,47 @@ the model as a tool, by a name you give it in your own config:
 
 Each call sends the model's request to the agent as one task and returns
 its answer. When a session starts, each peer's agent card is read from
-`<url>/.well-known/agent-card.json`, within five seconds; a peer whose
-card cannot be read, or whose `token_env` is not set, is not offered,
-and the session says why once. The card's name never replaces yours,
-and the session's record names the URL each call reached.
+`<url>/.well-known/agent-card.json`, within five seconds and up to 1 MiB;
+a peer whose card cannot be read, whose `token_env` is not set, or whose
+card names an endpoint at another origin than `url` is not offered, and
+the session says why once. The card's name never replaces yours, and
+the session's record names the URL each call reached.
 
 - `url` is `https`, or `http` to this machine only, with no credentials,
   query or fragment.
-- `token_env` names the variable holding a bearer token, sent only to
-  `url`'s origin: an endpoint the card names elsewhere gets no token,
-  and one over `http` to another host is not called. The token is never
-  printed, logged or recorded.
+- The card must name its JSON-RPC endpoint at `url`'s origin (scheme,
+  host and port): the card, not you, says where the work goes, so a card
+  that points elsewhere (another host, or a port on this machine) is
+  refused. No redirect to another origin is followed, on the card's fetch
+  or on a call.
+- `token_env` names the variable holding a bearer token, which is sent
+  to that origin alone. dax takes the variable out of the environment
+  of bash, MCP servers and an executor's command, whatever its name,
+  and refuses a `pass_env` or `executor.pass_env` that names it; the
+  token is never printed, logged or recorded.
 - `relation` is what an abandoned call does. `subsession` (the default):
   the task is the call's own work, so when the call is given up (an
-  abort, say) dax sends the agent `tasks/cancel` and goes on without
-  waiting for it. `peer`: the agent's work outlives the call and is
-  never cancelled.
-- A question the agent asks during a call is put to you like a tool's
-  own question: answer yes with your reply (`y blue` in the REPL and
-  `-p`), which goes back on the same task (a bare yes sends "yes"), or no
-  to refuse, which ends the call with the question
-  and what you said, and gives up a subsession's task. When nobody is
-  answering questions, the call ends with the question for the model;
-  nothing answers in your place.
+  abort, say, even while the agent's question waits) dax sends the agent
+  `tasks/cancel` and goes on without waiting for it. `peer`: the
+  agent's work outlives the call and is never cancelled.
+- A question the agent asks during a call is put to you as a question
+  for text, naming the peer and its URL first; the agent's own words come
+  last, quoted. In the REPL and `-p` a reply that is not an explicit `n`
+  or `no` is the answer (`blue`, or `y blue`; a bare `y` sends "yes"); in
+  the terminal client `a` and the text answer, `y` sends "yes". The answer
+  goes back on the same task. `n` refuses: the call ends with the
+  question, what you said reaches the model once, as yours, and a
+  subsession's task is given up. When nobody is answering questions, or
+  `-p` has reached the end of its input, nobody answered (the record
+  says so) and the call ends with the question for the model; nothing
+  answers in your place. A known gap: a subsession's task that ends that
+  way is left waiting on the remote agent, which dax cannot resume
+  either (agentturn#253).
 - Every call asks unless your config allows the peer by name
-  (`"allow": ["reviewer"]`); `dax-a2a` ships no rule.
+  (`"allow": ["reviewer"]`); `dax-a2a` ships no rule. The card's
+  description and skills go into the tool's description, which the model
+  reads: text the remote agent wrote, worth reading before you allow a
+  peer by name.
 
 Peers run where the session runs, never in an executor, and only the
 main agent calls them. A repository's `.dax/config.json` may not name
@@ -342,7 +358,7 @@ names the file and the field.
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below). `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
-| `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). A later file's peer of a name replaces an earlier one's |
+| `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `policy` | see below |
 
@@ -910,7 +926,9 @@ questions while the run goes, ahead of any permission:
   optional reason, and `Esc` goes back. The sub-agent sees the note with
   the call's result, and the reason in place of it.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
-  One that is a form or a page to visit has no screen in the client, and
+  One that asks for a line of text (a form of one text field, such as a
+  peer's question) is answered with `a` and the text, or `y` for "yes";
+  any other form, or a page to visit, has no screen in the client, and
   is cancelled.
 
 A call stamped as auto-allowed that changed before it ran fails with "the

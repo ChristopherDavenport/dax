@@ -661,7 +661,7 @@ type Settings struct {
 	Executor         []string // the executor's program and arguments; empty: the tools run in this process
 	ExecutorPassEnv  []string // what only the executor's command is given
 	MCP              []MCP
-	Peers            []a2a.Remote // by name; a later layer's peer of a name replaces an earlier's
+	Peers            []a2a.Remote // the user's, sorted by name
 	PassEnv          []string
 	MaxReadBytes     int64
 	Policy           PolicySettings
@@ -938,6 +938,18 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if err := checkExecutorEnv("executor.pass_env", s.ExecutorPassEnv, s.APIKeyEnv); err != nil {
 		return s, err
+	}
+	// A peer's token is the peer's alone: no command, server or
+	// launcher may be handed it.
+	for _, p := range s.Peers {
+		for _, list := range []struct {
+			field string
+			names []string
+		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
+			if p.TokenEnv != "" && slices.Contains(list.names, p.TokenEnv) {
+				return s, fmt.Errorf("%s: %s holds peer %s's token (token_env), which only that peer is sent; take it out of %s", list.field, p.TokenEnv, p.Name, list.field)
+			}
+		}
 	}
 	if s.APIKeyEnv != "" {
 		if !envName.MatchString(s.APIKeyEnv) {

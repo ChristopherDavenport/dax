@@ -44,6 +44,11 @@ type ExecutorOptions struct {
 	// reaches the sandbox.
 	PassEnv []string
 	KeyEnv  string
+	// Secrets name more variables that hold credentials (the
+	// extensions' Secrets: extension.SecretsOf). Like KeyEnv's, the
+	// command that starts the executor never gets them, whatever names
+	// them.
+	Secrets []string
 	// LauncherEnv names more variables the command that starts the
 	// executor is given, credentials included: ssh's SSH_AUTH_SOCK, the
 	// token a kubectl credential plugin reads. They are that command's
@@ -82,20 +87,23 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 
 // launcherEnv is base, this machine's environment, as the command that
 // starts the executor gets it: without credentials but those PassEnv
-// and LauncherEnv name, and without KeyEnv's variable even if PassEnv
-// names it.
+// and LauncherEnv name, and without KeyEnv's variable or Secrets' even
+// if PassEnv names them.
 func launcherEnv(base []string, o ExecutorOptions) ([]string, error) {
 	if o.KeyEnv != "" && slices.Contains(o.LauncherEnv, o.KeyEnv) {
 		return nil, fmt.Errorf("executor: %s holds the model's key, which never reaches the executor; take it out of executor.pass_env", o.KeyEnv)
 	}
-	env := tool.ChildEnv(base, slices.Concat(o.PassEnv, o.LauncherEnv), o.KeyEnv)
-	if o.KeyEnv != "" {
-		env = slices.DeleteFunc(env, func(kv string) bool {
-			name, _, _ := strings.Cut(kv, "=")
-			return name == o.KeyEnv
-		})
+	for _, n := range o.Secrets {
+		if slices.Contains(o.LauncherEnv, n) {
+			return nil, fmt.Errorf("executor: %s holds an extension's credential (a peer's token_env), which never reaches the executor; take it out of executor.pass_env", n)
+		}
 	}
-	return env, nil
+	never := slices.Concat(o.Secrets, []string{o.KeyEnv})
+	env := tool.ChildEnv(base, slices.Concat(o.PassEnv, o.LauncherEnv), never...)
+	return slices.DeleteFunc(env, func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return name != "" && slices.Contains(never, name)
+	}), nil
 }
 
 // connectExecutor connects to an executor over t.

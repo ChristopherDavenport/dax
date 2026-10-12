@@ -59,7 +59,10 @@ before changing the shape.
   through its command.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
-  over), `Env` (the session as kit options see it) and `Renderers`.
+  over), `Env` (the session as kit options see it), `Renderers`,
+  `SecretsOf` (the variables every child environment loses), and
+  `TextQuestion`, `AsksForText` and `TextAnswer`, a tool's question for
+  a line of text, which every front answers.
 - `agent`: one `agentkit.New` per session; the two-phase build of the
   extensions and their checks (`agent/extension.go`), the policy built
   from them, the sub-agents' policy hook, and the session-store
@@ -85,10 +88,11 @@ before changing the shape.
 - `ext/memory` (dax-memory): the store, the scopes, the memory tools.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
-  added through the kit (control, as memory's tools are); the client's
-  guard (a token to the configured origin only, no endpoint
-  `checkURL` refuses) and `ObserveEndpoint`; a remote agent's question
-  put through the call's elicitor. It is in the root module: dax is a
+  added through the kit (control, as memory's tools are); the card's
+  endpoint held to the configured origin, the client's guard (that
+  origin only, no redirect off it) and `ObserveEndpoint`; the token
+  variables as `Secrets`; a remote agent's question put through the
+  call's elicitor as a `TextQuestion`. It is in the root module: dax is a
   product, with no dependency boundary to keep a2a-go out of.
 - The workspace is not a package here: the `Workspace` interface the
   session and every tool act through (root, file system, writes,

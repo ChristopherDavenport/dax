@@ -449,17 +449,24 @@ with the user's token from this process's environment, and `dax
 execute`, which reads no config, could not serve it. Each is
 agentturn's `tools/a2a` over an a2a-go client of the peer's card,
 fetched when the session's kit is built, within five seconds; a peer
-whose card or token is missing is left out with one note. The client
-sends the token only to the configured URL's origin and refuses an
-endpoint the card names that is not https (or http to loopback), and
-carries `ObserveEndpoint`, so the record names the URL called, never
+whose card or token is missing, or whose card names an endpoint at
+another origin, is left out with one note (an extension's notes are
+cleaned of escape sequences). The client sends the token to the
+configured origin, refuses any other, and carries `ObserveEndpoint`, so the record names the URL called, never
 the card's claims. The relation is the user's: `subsession` (cancelled
 when the call is given up, sent and not awaited) or `peer`
 (`WithoutCancelOnAbort`). A remote agent's question is put through the
-call's elicitor, the session's, so it is a tool's question to whoever
-answers (`Answering`); a yes carries the reply on the same task, a no
-ends the call and gives the task up, and with no one answering the call
-ends input-required. dax-a2a is in the root module, not a nested module
+call's elicitor, the session's, as a question for text
+(`extension.TextQuestion`, a form of one string field, which the
+session asks rather than cancelling as a form, and the fronts answer
+with a line); the answer goes on the same task, a no ends the call and
+gives the task up, an abort while it waits gives it up too, and with no
+one answering (or `-p` at the end of its input, a cancel) the call ends
+input-required, the task left waiting (agentturn#253). The card must
+name its endpoint at the configured origin, no redirect to another
+origin is followed, and the peers' token variables are the extension's
+`Secrets`, which the session takes out of every child environment.
+dax-a2a is in the root module, not a nested module
 as the peers proposal had it: dax is a product with no dependency
 boundary, and `dax serve` will need `front/a2a` here anyway.
 

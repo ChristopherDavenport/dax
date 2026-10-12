@@ -610,19 +610,27 @@ func TestPeersPrecedence(t *testing.T) {
 	if len(s.Peers) != 0 {
 		t.Fatalf("peers by default: %+v", s.Peers)
 	}
+	// The user's file names them; no flag does, and a project's file
+	// may not (TestValidation), so the user's are the session's.
 	user := parse(t, `{"peers":{"reviewer":{"url":"https://r.example","token_env":"R_TOKEN"},"builder":{"url":"http://localhost:9000","relation":"peer"}}}`, false)
-	later := parse(t, `{"peers":{"reviewer":{"url":"https://r2.example"}}}`, false)
-	s, err := Resolve([]Layer{user, later}, Flags{}, "")
+	tighter := parse(t, `{"policy":{"ask":["reviewer"]}}`, true)
+	s, err := Resolve([]Layer{user, tighter}, Flags{Model: ptr("m")}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []a2a.Remote{
 		{Name: "builder", URL: "http://localhost:9000", Relation: "peer"},
-		// A later layer's peer of a name replaces the earlier whole.
-		{Name: "reviewer", URL: "https://r2.example"},
+		{Name: "reviewer", URL: "https://r.example", TokenEnv: "R_TOKEN"},
 	}
 	if !slices.Equal(s.Peers, want) {
 		t.Errorf("peers %+v, want %+v", s.Peers, want)
+	}
+	// A peer's token goes to no command, server or launcher.
+	for _, field := range []string{`"pass_env":["R_TOKEN"]`, `"executor":{"pass_env":["R_TOKEN"]}`} {
+		l := parse(t, `{"peers":{"reviewer":{"url":"https://r.example","token_env":"R_TOKEN"}},`+field+`}`, false)
+		if _, err := Resolve([]Layer{l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "R_TOKEN holds peer reviewer's token") {
+			t.Errorf("%s: err = %v", field, err)
+		}
 	}
 	// A project layer that got past Parse adds none.
 	proj := Layer{Project: true, Path: "/work/proj/.dax/config.json", Config: Config{Peers: map[string]Peer{"evil": {URL: "https://evil.example"}}}}

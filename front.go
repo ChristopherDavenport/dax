@@ -22,6 +22,7 @@ package dax
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
@@ -168,12 +170,17 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
 			if !f.in.Scan() {
-				// Nobody is left to answer: the decline is dax's.
 				fmt.Println()
+				if q.Call == nil {
+					// A tool's own question: nobody is left to answer
+					// it, which is not a no.
+					return agenttool.Answer{Action: agenttool.ActionCancel}
+				}
+				// Nobody is left to answer: the decline is dax's.
 				return agenttool.Answer{Action: agenttool.ActionDecline}
 			}
 			answered.Store(q.ID, true)
-			return replyOf(f.in.Text())
+			return replyOf(q.Elicitation, f.in.Text())
 		},
 		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
 		// The person at this terminal, for what they typed.
@@ -206,6 +213,9 @@ type waiting struct {
 	// call is set for a permission, question for a question.
 	call     *openresponses.FunctionCall
 	question string
+	// ask is the question's elicitation, which says whether it asks
+	// for text.
+	ask agenttool.Elicitation
 }
 
 // result is how a run the REPL started ended.
@@ -301,7 +311,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		for _, ev := range evs {
 			switch e := ev.(type) {
 			case *agentturn.Question:
-				asks = append(asks, waiting{q: questionText(*e), question: e.ID})
+				asks = append(asks, waiting{q: questionText(*e), question: e.ID, ask: e.Elicitation})
 				if len(asks) == 1 {
 					next()
 				}
@@ -379,7 +389,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				allow, note := answerLine(line)
 				switch {
 				case a.question != "":
-					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(line))
+					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(a.ask, line))
 				case allow:
 					ans := agentturn.Approve(a.call.CallID).WithBy(agentpolicy.ByHuman)
 					if note != "" {
@@ -467,6 +477,9 @@ func questionText(q agentturn.Question) string {
 		}
 		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg)
 	}
+	if _, ok := extension.AsksForText(q.Elicitation); ok {
+		return "? " + render.Clean(q.Elicitation.Message) + " [your answer, or n] "
+	}
 	return "? " + render.Clean(q.Elicitation.Message) + " [y/N] "
 }
 
@@ -489,7 +502,26 @@ func answerLine(line string) (allow bool, note string) {
 }
 
 // replyOf is a line's answer to a question asked while a call runs.
-func replyOf(line string) agenttool.Answer {
+// For a question that asks for text (extension.AsksForText), a line
+// that is not an explicit no is the answer: "blue" answers "blue", and a
+// bare y or yes "yes".
+func replyOf(q agenttool.Elicitation, line string) agenttool.Answer {
+	if field, ok := extension.AsksForText(q); ok {
+		line = strings.TrimSpace(line)
+		word, rest, _ := strings.Cut(line, " ")
+		switch strings.TrimRight(strings.ToLower(word), ",:;.") {
+		case "n", "no", "":
+			return agenttool.Answer{Action: agenttool.ActionDecline, Note: strings.TrimSpace(rest)}
+		case "y", "yes":
+			// "y blue" answers "blue"; a bare yes, "yes".
+			line = "yes"
+			if r := strings.TrimSpace(rest); r != "" {
+				line = r
+			}
+		}
+		content, _ := json.Marshal(map[string]string{field: line})
+		return agenttool.Answer{Action: agenttool.ActionAccept, Content: content}
+	}
 	allow, note := answerLine(line)
 	if allow {
 		return agenttool.Answer{Action: agenttool.ActionAccept, Note: note}

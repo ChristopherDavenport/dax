@@ -13,6 +13,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/provider"
 )
@@ -485,5 +486,36 @@ func TestTheLaunchersVariablesDoNotReachTheToolsHere(t *testing.T) {
 		if got := strings.TrimSpace(string(out.Stdout)); got != "sock=[] token=[tok]" {
 			t.Errorf("flags %+v: the tools saw %q", flags, got)
 		}
+	}
+}
+
+// A peer's token variable reaches no tool on this machine, whatever its
+// name: the settings' peers become dax-a2a's Secrets, which the tools'
+// environment is scrubbed of.
+func TestAPeersTokenReachesNoToolHere(t *testing.T) {
+	h := home(t)
+	t.Setenv("REVIEWER_BEARER", "s3cret-bearer")
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"peers":{"reviewer":{"url":"https://r.example","token_env":"REVIEWER_BEARER"}}}`)
+	proj := t.TempDir()
+	s, err := settingsOf(local(t, proj), "", config.Flags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p program
+	exts, err := p.selected(choice{Peers: s.Peers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.NewLocal(proj, toolsEnv(s, "", extension.SecretsOf(exts)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	out, err := ws.Exec(context.Background(), workspace.Command{Args: []string{"sh", "-c", "echo bearer=[$REVIEWER_BEARER]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "bearer=[]" {
+		t.Errorf("the tools saw %q", got)
 	}
 }

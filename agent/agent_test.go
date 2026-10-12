@@ -14,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentmemory/filestore"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
@@ -1057,5 +1058,35 @@ func TestAfterARestartOnlyTheAskedCallIsAsked(t *testing.T) {
 	}
 	if outs != 2 {
 		t.Errorf("%d calls ran, want the read and the bash call", outs)
+	}
+}
+
+// An extension's Secrets (a peer's token_env) are taken out of the
+// environment the session's tools and MCP servers get, whatever their
+// names: REVIEWER_BEARER looks like no credential.
+func TestAnExtensionsSecretsReachNoTool(t *testing.T) {
+	t.Setenv("REVIEWER_BEARER", "s3cret-bearer")
+	t.Setenv("DAX_PLAIN", "plain")
+	o := Options{
+		Model: "scripted", Streamer: &echo.Adapter{}, Dir: t.TempDir(), UserDir: t.TempDir(),
+		Store:      agentsession.NewMemoryStore(),
+		Extensions: []extension.Extension{{Name: "acme-peers", Secrets: []string{"REVIEWER_BEARER"}}},
+	}
+	s, err := New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	out, err := s.ws.Exec(context.Background(), workspace.Command{Args: []string{"sh", "-c", "echo bearer=[$REVIEWER_BEARER] plain=[$DAX_PLAIN]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "bearer=[] plain=[plain]" {
+		t.Errorf("bash saw %q", got)
+	}
+	for _, kv := range s.env {
+		if strings.HasPrefix(kv, "REVIEWER_BEARER=") {
+			t.Errorf("an MCP server's environment carries %s", kv)
+		}
 	}
 }

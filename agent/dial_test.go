@@ -693,6 +693,11 @@ func TestTheLaunchersEnvironment(t *testing.T) {
 		{"never the key, though pass_env names it", ExecutorOptions{KeyEnv: "MODELKEY", PassEnv: []string{"MODELKEY"}}, "PATH=/bin PLAIN=p", ""},
 		{"the key named for the launcher", ExecutorOptions{KeyEnv: "MODELKEY", LauncherEnv: []string{"SSH_AUTH_SOCK", "MODELKEY"}}, "", "MODELKEY holds the model's key"},
 		{"no key variable (a key command)", ExecutorOptions{LauncherEnv: []string{"OPENAI_API_KEY"}}, "PATH=/bin MODELKEY=sk OPENAI_API_KEY=sk-openai PLAIN=p", ""},
+		// An extension's secret (a peer's token_env) whose name looks
+		// like nothing's.
+		{"never an extension's secret", ExecutorOptions{KeyEnv: "MODELKEY", Secrets: []string{"PLAIN"}}, "PATH=/bin", ""},
+		{"never an extension's secret, though pass_env names it", ExecutorOptions{Secrets: []string{"PLAIN"}, PassEnv: []string{"PLAIN"}}, "PATH=/bin MODELKEY=sk", ""},
+		{"an extension's secret named for the launcher", ExecutorOptions{Secrets: []string{"PLAIN"}, LauncherEnv: []string{"PLAIN"}}, "", "PLAIN holds an extension's credential"},
 	} {
 		env, err := launcherEnv(base, tc.o)
 		if tc.err != "" {
