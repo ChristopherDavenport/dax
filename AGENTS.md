@@ -61,8 +61,9 @@ before changing the shape.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
-  `TextQuestion`, `AsksForText` and `TextAnswer`, a tool's question for
-  a line of text, which every front answers.
+  `TextQuestion`, `IsTextQuestion`, `TextAnswer` and `TextContent`,
+  dax's own marked form asking for a line of text, which every front
+  answers (anyone else's form is cancelled).
 - `agent`: one `agentkit.New` per session; the two-phase build of the
   extensions and their checks (`agent/extension.go`), the policy built
   from them, the sub-agents' policy hook, and the session-store

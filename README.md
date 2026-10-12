@@ -278,7 +278,8 @@ the session's record names the URL each call reached.
   last, quoted. In the REPL and `-p` a reply that is not an explicit `n`
   or `no` is the answer (`blue`, or `y blue`; a bare `y` sends "yes"); in
   the terminal client `a` and the text answer, `y` sends "yes". The answer
-  goes back on the same task. `n` refuses: the call ends with the
+  goes back on the same task, and the call's result tells the model what
+  the agent asked and what you answered. `n` refuses: the call ends with the
   question, what you said reaches the model once, as yours, and a
   subsession's task is given up. When nobody is answering questions, or
   `-p` has reached the end of its input, nobody answered (the record
@@ -926,10 +927,10 @@ questions while the run goes, ahead of any permission:
   optional reason, and `Esc` goes back. The sub-agent sees the note with
   the call's result, and the reason in place of it.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
-  One that asks for a line of text (a form of one text field, such as a
-  peer's question) is answered with `a` and the text, or `y` for "yes";
-  any other form, or a page to visit, has no screen in the client, and
-  is cancelled.
+  dax's own question for a line of text (a peer's question) is answered
+  with `a` and the text, or `y` for "yes"; any other form, an MCP
+  server's included, or a page to visit, has no screen in the client,
+  and is cancelled.
 
 A call stamped as auto-allowed that changed before it ran fails with "the
 command changed since it was allowed ... ask again", which shows in the

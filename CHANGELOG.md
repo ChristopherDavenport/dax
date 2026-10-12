@@ -18,7 +18,8 @@ versions may break flags and the config file.
   loopback. `relation` is `subsession` (the default: an abandoned call
   sends `tasks/cancel` and does not wait) or `peer` (never cancelled).
   A remote agent's question during a call is put to whoever answers the
-  session's questions; the answer goes on the same task, a no ends the
+  session's questions; the answer goes on the same task, and the call's
+  output says what the agent asked and what was answered; a no ends the
   call with the question (the note reaches the model once, as the
   person's), an abort while it waits gives a subsession's task up, and
   with nobody answering the call ends with the question for the model
@@ -34,12 +35,12 @@ versions may break flags and the config file.
   MCP servers and an executor's command whatever their names, and a
   `pass_env` or `executor.pass_env` naming one is refused.
 - Added: a tool's question for a line of text. `extension.TextQuestion`
-  is a form of one string field, which the session now asks rather than
-  cancelling as a form; every front answers it: in the REPL and `-p` a
-  line that is not an explicit no is the answer and a bare yes is "yes",
-  and the terminal client answers with `a` and the text. A peer's
-  question is one. An MCP server's form of one text field is answered
-  the same way.
+  is dax's own form of one string field, marked as dax's, which the
+  session asks rather than cancelling as a form; every front answers
+  it: in the REPL and `-p` a line that is not an explicit no is the
+  answer and a bare yes is "yes", and the terminal client answers with
+  `a` and the text (the question says so). A peer's question is one.
+  Any other form, an MCP server's included, is cancelled as before.
 - Changed: `-p` at the end of its input answers a tool's own question
   with a cancel (nobody answered), where it declined in the person's
   place; a sub-agent's call it is asked about is still declined.
@@ -47,7 +48,8 @@ versions may break flags and the config file.
   cleaned of escape sequences and control characters, as tool output is.
 - Changed, public API: `ext/a2a` is new; `toolrender.Peers`,
   `extension.Extension.Secrets`, `extension.SecretsOf`,
-  `extension.TextQuestion`, `AsksForText`, `TextAnswer` and
+  `extension.TextQuestion`, `IsTextQuestion`, `TextAnswer`,
+  `TextContent` and
   `agent.ExecutorOptions.Secrets` are new; `WithoutExtension` takes
   `dax-a2a`.
 - Dependencies: agentturn and agentturn/session v0.0.28, up from

@@ -9,23 +9,27 @@ import (
 
 func TestAQuestionForText(t *testing.T) {
 	q := TextQuestion("which colour?")
-	if f, ok := AsksForText(q); !ok || f != "answer" {
-		t.Fatalf("TextQuestion asks for %q, %v", f, ok)
+	if !IsTextQuestion(q) {
+		t.Fatal("a TextQuestion is not one")
 	}
 	for _, tc := range []struct {
 		name   string
 		schema string
-		field  string
+		want   bool
 	}{
-		{"an MCP server's one text field", `{"type":"object","properties":{"branch":{"type":"string"}}}`, "branch"},
-		{"a number", `{"type":"object","properties":{"n":{"type":"number"}}}`, ""},
-		{"two fields", `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}}`, ""},
-		{"no form", ``, ""},
+		{"the same form, reordered and spaced", `{ "required": ["answer"], "properties": {"answer": {"type": "string"}}, "x-dax": "text-question", "type": "object" }`, true},
+		{"an MCP server's one text field", `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`, false},
+		{"an enum", `{"type":"object","x-dax":"text-question","properties":{"answer":{"type":"string","enum":["a","b"]}},"required":["answer"]}`, false},
+		{"a number", `{"type":"object","properties":{"n":{"type":"number"}}}`, false},
+		{"no form", ``, false},
 	} {
-		f, ok := AsksForText(agenttool.Elicitation{Message: "m", Schema: json.RawMessage(tc.schema)})
-		if f != tc.field || ok != (tc.field != "") {
-			t.Errorf("%s: %q, %v", tc.name, f, ok)
+		if got := IsTextQuestion(agenttool.Elicitation{Message: "m", Schema: json.RawMessage(tc.schema)}); got != tc.want {
+			t.Errorf("%s: %v", tc.name, got)
 		}
+	}
+	foreign := agenttool.Elicitation{Message: "m", Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)}
+	if text, ok := TextAnswer(foreign, agenttool.Answer{Action: agenttool.ActionAccept}); ok || text != "" {
+		t.Errorf("another's form got %q from a bare yes", text)
 	}
 	for _, tc := range []struct {
 		name string

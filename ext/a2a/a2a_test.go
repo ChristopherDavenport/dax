@@ -146,13 +146,18 @@ func serveWith(t *testing.T, exec a2asrv.AgentExecutor, o serveOpts) *remote {
 	})
 	if o.tls {
 		r.Server = httptest.NewTLSServer(h)
-		t.Cleanup(daxa2a.SetTransport(r.Client().Transport))
+		tlsTransport = r.Client().Transport
+		t.Cleanup(func() { tlsTransport = nil })
 	} else {
 		r.Server = httptest.NewServer(h)
 	}
 	t.Cleanup(r.Close)
 	return r
 }
+
+// tlsTransport trusts the https test server serveWith last started,
+// for open to give dax-a2a.
+var tlsTransport http.RoundTripper
 
 // requests is how many requests the server has had.
 func (r *remote) requests() int {
@@ -319,7 +324,7 @@ func open(t *testing.T, remotes []daxa2a.Remote, allow []string, input string) (
 		Dir: t.TempDir(), UserDir: t.TempDir(),
 		Store:      agentsession.NewMemoryStore(),
 		Policy:     &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: allow}},
-		Extensions: []extension.Extension{daxa2a.New(daxa2a.Options{Remotes: remotes, CardTimeout: 2 * time.Second})},
+		Extensions: []extension.Extension{daxa2a.New(daxa2a.Options{Remotes: remotes, CardTimeout: 2 * time.Second}.WithTransport(tlsTransport))},
 		Log:        log.log,
 	}
 	s, err := agent.New(context.Background(), o)
@@ -676,13 +681,13 @@ func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 	}{
 		{"answered with a note, as the terminal client does", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionAccept, Note: "blue"}
-		}, "painted blue", "accept", `{"answer":"blue"}`, "", false},
+		}, "painted blue\n\npainter asked \"which colour?\" and the user answered \"blue\".", "accept", `{"answer":"blue"}`, "", false},
 		{"answered with the form, as the REPL does", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionAccept, Content: json.RawMessage(`{"answer":"green"}`)}
-		}, "painted green", "accept", `{"answer":"green"}`, "", false},
+		}, "painted green\n\npainter asked \"which colour?\" and the user answered \"green\".", "accept", `{"answer":"green"}`, "", false},
 		{"a bare yes", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionAccept}
-		}, "painted yes", "accept", `{"answer":"yes"}`, "", false},
+		}, "painted yes\n\npainter asked \"which colour?\" and the user answered \"yes\".", "accept", `{"answer":"yes"}`, "", false},
 		{"declined", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionDecline, Note: "pick one yourself"}
 		}, `painter asked "which colour?" and the question was declined`, "decline", "", "pick one yourself", true},
@@ -714,7 +719,7 @@ func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 				want := `a tool asks: the A2A agent painter (` + up.URL + `) needs an answer to go on: reply with it, or refuse. It says: "which colour?"`
 				if len(asked) != 1 || asked[0].Elicitation.Message != want {
 					t.Errorf("asked %+v, want %q", asked, want)
-				} else if _, text := extension.AsksForText(asked[0].Elicitation); !text {
+				} else if !extension.IsTextQuestion(asked[0].Elicitation) {
 					t.Errorf("the question does not ask for text: %s", asked[0].Elicitation.Schema)
 				}
 			}

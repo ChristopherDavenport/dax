@@ -249,25 +249,30 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 	return err
 }
 
-// textQuestions is src with a question that asks for text
-// (extension.AsksForText) shown to the terminal client without its
-// form, which the client cannot fill: it answers such a question as any
-// other, y for a bare yes, a with the text typed as the note, n to
-// refuse, and the session takes the note as the answer.
+// textQuestions is src with dax's question for text
+// (extension.TextQuestion) shown to the terminal client without its
+// form, which the client cannot fill, and with a hint: it answers such
+// a question as any other, a with the text typed as the note, y for a
+// bare yes, n to refuse, and the session takes the note as the answer.
 type textQuestions struct{ client.Source }
 
 func (t textQuestions) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
 	return t.Source.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
 		if q, ok := ev.(*agentturn.Question); ok {
-			if _, text := extension.AsksForText(q.Elicitation); text {
+			if extension.IsTextQuestion(q.Elicitation) {
 				c := *q
 				c.Elicitation.Schema = nil
+				c.Elicitation.Message += textHint
 				ev = &c
 			}
 		}
 		return fn(ctx, ev)
 	})
 }
+
+// textHint is what the terminal client adds to dax's question for text,
+// whose keys are those of a yes-or-no question.
+const textHint = " (press a and type your answer, y for yes, n to refuse)"
 
 // submitLine is what the terminal client does with a line the user
 // submits: a slash line is run as a command, its output the reply shown

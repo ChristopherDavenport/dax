@@ -22,7 +22,6 @@ package dax
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -477,7 +476,7 @@ func questionText(q agentturn.Question) string {
 		}
 		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg)
 	}
-	if _, ok := extension.AsksForText(q.Elicitation); ok {
+	if extension.IsTextQuestion(q.Elicitation) {
 		return "? " + render.Clean(q.Elicitation.Message) + " [your answer, or n] "
 	}
 	return "? " + render.Clean(q.Elicitation.Message) + " [y/N] "
@@ -502,11 +501,11 @@ func answerLine(line string) (allow bool, note string) {
 }
 
 // replyOf is a line's answer to a question asked while a call runs.
-// For a question that asks for text (extension.AsksForText), a line
-// that is not an explicit no is the answer: "blue" answers "blue", and a
-// bare y or yes "yes".
+// For dax's question for text (extension.TextQuestion), a line that is
+// not an explicit no is the answer: "blue" answers "blue", and a bare y
+// or yes "yes".
 func replyOf(q agenttool.Elicitation, line string) agenttool.Answer {
-	if field, ok := extension.AsksForText(q); ok {
+	if extension.IsTextQuestion(q) {
 		line = strings.TrimSpace(line)
 		word, rest, _ := strings.Cut(line, " ")
 		switch strings.TrimRight(strings.ToLower(word), ",:;.") {
@@ -519,8 +518,7 @@ func replyOf(q agenttool.Elicitation, line string) agenttool.Answer {
 				line = r
 			}
 		}
-		content, _ := json.Marshal(map[string]string{field: line})
-		return agenttool.Answer{Action: agenttool.ActionAccept, Content: content}
+		return agenttool.Answer{Action: agenttool.ActionAccept, Content: extension.TextContent(line)}
 	}
 	allow, note := answerLine(line)
 	if allow {

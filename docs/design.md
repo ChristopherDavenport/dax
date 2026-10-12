@@ -457,9 +457,15 @@ the card's claims. The relation is the user's: `subsession` (cancelled
 when the call is given up, sent and not awaited) or `peer`
 (`WithoutCancelOnAbort`). A remote agent's question is put through the
 call's elicitor, the session's, as a question for text
-(`extension.TextQuestion`, a form of one string field, which the
-session asks rather than cancelling as a form, and the fronts answer
-with a line); the answer goes on the same task, a no ends the call and
+(`extension.TextQuestion`, dax's own marked form of one string field,
+which the session asks rather than cancelling as a form, and the
+fronts answer with a line; anyone else's form, an MCP server's
+included, is still cancelled, since its constraints are not the
+fronts' to check); the answer goes on the same task, and the call's
+output ends with what the agent asked and what was answered, so the
+model knows what the agent was told in the person's name: that is the
+call's own exchange, not a note, and a note the person gave is still
+said once, by the loop, in their voice. A no ends the call and
 gives the task up, an abort while it waits gives it up too, and with no
 one answering (or `-p` at the end of its input, a cancel) the call ends
 input-required, the task left waiting (agentturn#253). The card must

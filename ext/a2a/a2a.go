@@ -43,6 +43,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	a2atool "github.com/ChristopherDavenport/agentturn/tools/a2a"
+	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/a2aproject/a2a-go/a2aclient/agentcard"
@@ -94,6 +95,11 @@ type Options struct {
 	Remotes []Remote
 	// CardTimeout bounds each card's fetch; zero is DefaultCardTimeout.
 	CardTimeout time.Duration
+
+	// transport carries the clients' requests; nil is
+	// http.DefaultTransport. Only this package's tests set it, to trust
+	// a test server's certificate.
+	transport http.RoundTripper
 }
 
 var (
@@ -190,7 +196,7 @@ func New(o Options) extension.Extension {
 		errs := make([]error, len(o.Remotes))
 		var wg sync.WaitGroup
 		for i, r := range o.Remotes {
-			wg.Go(func() { tools[i], errs[i] = connect(context.Background(), r, timeout) })
+			wg.Go(func() { tools[i], errs[i] = connect(context.Background(), r, timeout, o.transport) })
 		}
 		wg.Wait()
 		var offered []agenttool.Tool
@@ -216,7 +222,10 @@ func New(o Options) extension.Extension {
 // offered. The client sends the token, refuses a redirect to another
 // origin, and tells each call the endpoint it reached
 // (ObserveEndpoint).
-func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.Tool, error) {
+func connect(ctx context.Context, r Remote, timeout time.Duration, rt http.RoundTripper) (agenttool.Tool, error) {
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
 	token := ""
 	if r.TokenEnv != "" {
 		if token = os.Getenv(r.TokenEnv); token == "" {
@@ -231,7 +240,7 @@ func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.To
 	if token != "" {
 		ropts = append(ropts, agentcard.WithRequestHeader("Authorization", "Bearer "+token))
 	}
-	cardClient := &http.Client{Timeout: timeout, CheckRedirect: g.redirect, Transport: limitBody{rt: transport(), n: maxCardBytes}}
+	cardClient := &http.Client{Timeout: timeout, CheckRedirect: g.redirect, Transport: limitBody{rt: rt, n: maxCardBytes}}
 	card, err := agentcard.NewResolver(cardClient).Resolve(ctx, r.URL, ropts...)
 	if err != nil {
 		return nil, fmt.Errorf("its agent card: %w", err)
@@ -251,7 +260,7 @@ func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.To
 	// The JSON-RPC client has no deadline of its own: a task runs as
 	// long as its call does, and an abort ends the call.
 	client, err := a2aclient.NewFromCard(ctx, &one,
-		a2aclient.WithJSONRPCTransport(&http.Client{CheckRedirect: g.redirect, Transport: transport()}),
+		a2aclient.WithJSONRPCTransport(&http.Client{CheckRedirect: g.redirect, Transport: rt}),
 		a2aclient.WithInterceptors(g, a2atool.ObserveEndpoint()))
 	if err != nil {
 		return nil, fmt.Errorf("its agent card: %w", err)
@@ -264,7 +273,50 @@ func connect(ctx context.Context, r Remote, timeout time.Duration) (agenttool.To
 	if r.Relation == Peer {
 		opts = append(opts, a2atool.WithoutCancelOnAbort())
 	}
-	return a2atool.New(client, &one, opts...), nil
+	return exchanged{a2atool.New(client, &one, opts...)}, nil
+}
+
+// exchanged is a peer's tool whose output, or error, ends with the
+// call's own exchange with the person: what the agent asked and what
+// was answered in the person's name, so the model knows what the agent
+// was told. It is the call's result, not a note: a note the person
+// gave is said once, by the loop, in their voice.
+type exchanged struct{ agenttool.Tool }
+
+func (t exchanged) Execute(ctx context.Context, call agenttool.Call) (agenttool.Result, error) {
+	x := &exchange{}
+	res, err := t.Tool.Execute(context.WithValue(ctx, exchangeKey{}, x), call)
+	said := x.text()
+	switch {
+	case said == "":
+	case err != nil:
+		err = fmt.Errorf("%w\n\n%s", err, said)
+	case len(res.Output.Parts) > 0:
+		res.Output.Parts = append(res.Output.Parts, &openresponses.Text{Text: "\n\n" + said})
+	default:
+		res.Output.Text += "\n\n" + said
+	}
+	return res, err
+}
+
+type exchangeKey struct{}
+
+// exchange is what one call's answers said, in order.
+type exchange struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (x *exchange) add(line string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.lines = append(x.lines, line)
+}
+
+func (x *exchange) text() string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return strings.Join(x.lines, "\n")
 }
 
 // jsonRPCEndpoint is the URL of the first JSON-RPC interface the card
@@ -280,17 +332,6 @@ func jsonRPCEndpoint(card *a2a.AgentCard) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// testTransport replaces the HTTP transport in tests, to trust a test
-// server's certificate.
-var testTransport http.RoundTripper
-
-func transport() http.RoundTripper {
-	if testTransport != nil {
-		return testTransport
-	}
-	return http.DefaultTransport
 }
 
 // maxCardBytes bounds an agent card's body: a card is a few kilobytes,
@@ -452,6 +493,9 @@ func answerer(r Remote) a2atool.InputRequired {
 			return nil, fmt.Errorf("%w: %v", agentturn.ErrInputRequired, err)
 		}
 		if reply, ok := extension.TextAnswer(ask, ans); ok {
+			if x, ok := ctx.Value(exchangeKey{}).(*exchange); ok {
+				x.add(fmt.Sprintf("%s asked %s and the user answered %s.", r.Name, question, strconv.Quote(reply)))
+			}
 			return []a2a.Part{a2a.TextPart{Text: reply}}, nil
 		}
 		if ans.Action == agenttool.ActionDecline {
