@@ -9,7 +9,7 @@
 // extension.Extension, and dax's own are extensions like any other:
 // dax-coding (package ext/coding) has the file tools and bash,
 // dax-agents the explore and task sub-agents, dax-skills skills,
-// dax-memory memory. A program built on dax adds its own with
+// dax-memory memory, dax-a2a the user's A2A peers. A program built on dax adds its own with
 // WithExtension, on the same terms, and may leave one of dax's out with
 // WithoutExtension; it keeps the flags, the config files, the
 // providers, the session store and the fronts.
@@ -41,6 +41,7 @@ import (
 	"slices"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/ext/memory"
@@ -75,7 +76,7 @@ func WithExtension(e extension.Extension) Option {
 }
 
 // WithoutExtension leaves out the dax extension called name (dax-coding,
-// dax-agents, dax-skills or dax-memory), whatever the settings say. A
+// dax-agents, dax-skills, dax-memory or dax-a2a), whatever the settings say. A
 // name that is none of them is an error at start.
 func WithoutExtension(name string) Option {
 	return func(p *program) { p.without = append(p.without, name) }
@@ -109,7 +110,7 @@ func Main(ctx context.Context, args []string, opts ...Option) int {
 }
 
 // daxExtensions are the names WithoutExtension takes.
-var daxExtensions = []string{coding.Name, agents.Name, skills.Name, memory.Name}
+var daxExtensions = []string{coding.Name, agents.Name, skills.Name, memory.Name, a2a.Name}
 
 // extensions are defaults, dax's as the settings chose them, less those
 // the program left out, then the program's.
@@ -143,6 +144,9 @@ type choice struct {
 	TrustSkills bool
 	// MemoryDir builds dax-memory over it when not empty.
 	MemoryDir string
+	// Peers are dax-a2a's remote agents. dax-a2a is always built, and
+	// offers nothing without them.
+	Peers []a2a.Remote
 }
 
 // selected are dax's extensions as c chooses them, less those the
@@ -159,6 +163,7 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 	if c.MemoryDir != "" {
 		defaults = append(defaults, memory.New(c.MemoryDir))
 	}
+	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}))
 	return p.extensions(defaults)
 }
 

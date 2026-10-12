@@ -19,7 +19,11 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentkit"
@@ -140,6 +144,16 @@ type Extension struct {
 	// policy is off is an error at start.
 	Kit func(Env) ([]agentkit.Option, error)
 
+	// Secrets name the environment variables the extension reads
+	// credentials from: dax-a2a's peers' token variables, say. The
+	// session takes them out of the environment its tools and MCP
+	// servers get, whatever their names, unless the user's pass_env
+	// names one, and always out of the environment of the command that
+	// starts an executor, as it does the model's key. A name that looks
+	// like a credential's (*_TOKEN, *_API_KEY) is taken out anyway; one
+	// that does not is only taken out if it is here.
+	Secrets []string
+
 	// Renderers draw the extension's tool calls in the terminal client,
 	// by tool name, for a session rooted at dir. A renderer reads only
 	// the record, and declines (ok false) a call whose arguments or
@@ -232,6 +246,81 @@ func Renderers(dir string, exts []Extension) (toolview.Renderers, error) {
 	}
 	return out, nil
 }
+
+// SecretsOf are the Secrets of exts, in order, each once.
+func SecretsOf(exts []Extension) []string {
+	var out []string
+	for _, e := range exts {
+		for _, n := range e.Secrets {
+			if n != "" && !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
+// textSchema is the form of a TextQuestion: one string property,
+// "answer", and dax's mark, which tells it from anyone else's form.
+const textSchema = `{"type":"object","x-dax":"text-question","properties":{"answer":{"type":"string"}},"required":["answer"]}`
+
+// TextQuestion is a question a tool asks the user for a line of text,
+// not a yes or a no: a remote agent's "which colour?". It is a form of
+// one string property with dax's mark, which every front of dax's
+// answers with what the user typed: a reply that is not an explicit no
+// is the answer, and a bare yes is "yes". Read the answer with
+// TextAnswer. Only this form is answered so; any other form, an MCP
+// server's of one text field included, is cancelled as before, since
+// its constraints (an enum, a pattern) are not the fronts' to check.
+func TextQuestion(message string) agenttool.Elicitation {
+	return agenttool.Elicitation{Message: message, Schema: json.RawMessage(textSchema)}
+}
+
+// IsTextQuestion reports whether q is a TextQuestion: its form is
+// exactly the one TextQuestion builds, mark included, however the JSON
+// was spaced or ordered on its way.
+func IsTextQuestion(q agenttool.Elicitation) bool {
+	if len(q.Schema) == 0 || q.URL != "" {
+		return false
+	}
+	var got, want any
+	if json.Unmarshal(q.Schema, &got) != nil || json.Unmarshal([]byte(textSchema), &want) != nil {
+		return false
+	}
+	return reflect.DeepEqual(got, want)
+}
+
+// TextAnswer is the text an accepted answer to the TextQuestion q gave:
+// its form's field, or, from a front that answers with a note, the
+// note, or "yes" for a bare yes. ok is false for a decline, a cancel,
+// or a question that is not a TextQuestion.
+func TextAnswer(q agenttool.Elicitation, a agenttool.Answer) (text string, ok bool) {
+	if a.Action != agenttool.ActionAccept || !IsTextQuestion(q) {
+		return "", false
+	}
+	if len(a.Content) > 0 {
+		var form map[string]any
+		if json.Unmarshal(a.Content, &form) == nil {
+			if s, ok := form[textField].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s), true
+			}
+		}
+	}
+	if n := strings.TrimSpace(a.Note); n != "" {
+		return n, true
+	}
+	return "yes", true
+}
+
+// TextContent is the form a front answers a TextQuestion with: text as
+// its field.
+func TextContent(text string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{textField: text})
+	return b
+}
+
+// textField is a TextQuestion's one property.
+const textField = "answer"
 
 // FixedMatchers is a Matchers for matchers that read only a call's
 // arguments, a glob over one of them say, and so need nothing of the

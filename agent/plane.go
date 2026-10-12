@@ -21,6 +21,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
@@ -44,8 +45,10 @@ var ErrHeld = errors.New("calls held for approval when the session stopped wait 
 //     approval wait;
 //   - Resume answers a pending call no one waits on (one an abort cut
 //     off) the same way, beside the answers it is given;
-//   - a question no front here can answer is not asked: a form or a
-//     page to visit is cancelled, and noted, and with no front
+//   - a question no front here can answer is not asked: a form (but
+//     dax's own question for text, extension.TextQuestion, which the
+//     fronts answer with a line) or a page to visit is cancelled, and
+//     noted, and with no front
 //     answering questions (Answering) a tool's question is cancelled and
 //     a sub-agent's call the policy asks about is refused with a note
 //     to make it from the main agent.
@@ -223,14 +226,17 @@ func (s *Session) askRecorded(ctx context.Context, q agenttool.Elicitation) (age
 var errNoOne = errors.New("nobody is answering questions")
 
 // elicit is the session's ToolElicitor: a tool's question goes to the
-// fronts answering as a question event. A form or a page to visit is
-// one no front here can show, so it is cancelled, and noted.
+// fronts answering as a question event. dax's own question for a line
+// of text (extension.TextQuestion) the fronts answer with what the user
+// typed; any other form, or a page to visit, is one no front here can
+// show, so it is cancelled, and noted.
 func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
+	text := extension.IsTextQuestion(q)
 	switch {
 	case q.URL != "":
 		s.opts.log("[a tool asks you to visit %s: %s]", render.Clean(q.URL), render.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
-	case hasFields(q.Schema):
+	case hasFields(q.Schema) && !text:
 		s.opts.log("[a tool asks for a form dax cannot show: %s]", render.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
@@ -239,6 +245,15 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 	switch {
 	case err != nil:
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
+	case ans.Action == agenttool.ActionAccept && text:
+		// A front that answers a text question with a note (the
+		// terminal client's) gave the answer as the note: it is the
+		// form's field, said once, and not a note besides.
+		reply, _ := extension.TextAnswer(q, ans)
+		if reply == strings.TrimSpace(ans.Note) {
+			ans.Note = ""
+		}
+		ans.Content = extension.TextContent(reply)
 	case ans.Action == agenttool.ActionAccept && ans.Content == nil:
 		// A yes asks for no field, and MCP wants the content anyway.
 		ans.Content = json.RawMessage(`{}`)

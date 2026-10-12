@@ -184,7 +184,8 @@ type Options struct {
 	PassEnv []string
 	// KeyEnv is the variable the provider's key was read from. It is
 	// removed from the same environments even when its name does not
-	// look like a credential's, unless PassEnv names it.
+	// look like a credential's, unless PassEnv names it, as are the
+	// variables the extensions name in Secrets.
 	KeyEnv string
 	// Log receives dax's own notes: compactions, denials, skill grants.
 	// nil discards them.
@@ -376,7 +377,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 	}
 	if ws == nil {
-		local, err := workspace.NewLocal(o.Dir, tool.DefaultEnv(o.PassEnv, o.KeyEnv))
+		local, err := workspace.NewLocal(o.Dir, tool.DefaultEnv(o.PassEnv, o.secrets()...))
 		if err != nil {
 			return nil, fmt.Errorf("workspace: %w", err)
 		}
@@ -407,7 +408,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// An MCP server runs in the workspace when it can start one, and
 	// otherwise on this machine, with this machine's environment
 	// scrubbed (mcpServer).
-	env := tool.DefaultEnv(o.PassEnv, o.KeyEnv)
+	env := tool.DefaultEnv(o.PassEnv, o.secrets()...)
 	s.env = env
 	te := extension.ToolEnv{Workspace: ws, Files: s.files, MaxReadBytes: o.MaxReadBytes}
 	// The extensions' tools run in the executor; the session decides
@@ -1216,4 +1217,15 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 	}
 	// Cancelled: the front could not answer it.
 	return cannot
+}
+
+// secrets are the variables taken out of the environment the session's
+// tools and MCP servers get whatever their names: the model's key's and
+// the extensions' Secrets.
+func (o Options) secrets() []string {
+	out := extension.SecretsOf(o.Extensions)
+	if o.KeyEnv != "" {
+		out = append(out, o.KeyEnv)
+	}
+	return out
 }

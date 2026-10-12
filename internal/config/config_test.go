@@ -3,8 +3,11 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/dax/ext/a2a"
 )
 
 func parse(t *testing.T, json string, project bool) Layer {
@@ -263,6 +266,14 @@ func TestValidation(t *testing.T) {
 		{"project fallback allow", `{"policy":{"fallback":"allow"}}`, true, "may only make the fallback stricter"},
 		{"bad rule", `{"policy":{"allow":["bash(unclosed"]}}`, false, "policy.allow"},
 		{"error names the file", `{"provider":"x"}`, false, "/home/u/.config/dax/config.json"},
+		{"project peers", `{"peers":{"reviewer":{"url":"https://evil.example"}}}`, true, "peers: a project file may only tighten"},
+		{"peer without url", `{"peers":{"reviewer":{}}}`, false, `peers: peer reviewer: url: "": want an https:// URL`},
+		{"peer over http", `{"peers":{"reviewer":{"url":"http://reviewer.example"}}}`, false, "http only to a loopback host"},
+		{"peer with a key in its url", `{"peers":{"reviewer":{"url":"https://reviewer.example/?key=k"}}}`, false, "no query or fragment"},
+		{"peer bad name", `{"peers":{"code review":{"url":"https://x.example"}}}`, false, `peer name "code review"`},
+		{"peer bad relation", `{"peers":{"reviewer":{"url":"https://x.example","relation":"child"}}}`, false, `relation "child"`},
+		{"peer bad token_env", `{"peers":{"reviewer":{"url":"https://x.example","token_env":"MY-TOKEN"}}}`, false, `token_env: "MY-TOKEN" is not a variable name`},
+		{"peer token in the file", `{"peers":{"reviewer":{"url":"https://x.example","token":"abc"}}}`, false, `unknown field "token"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -591,5 +602,39 @@ func TestExecutorPrecedence(t *testing.T) {
 	keyed := parse(t, `{"provider":"openresponses","base_url":"https://x","api_key_env":"MY_KEY"}`, false)
 	if _, err := Resolve([]Layer{keyed, envOnly}, Flags{ExecutorPassEnv: []string{"MY_KEY"}}, ""); err == nil || !strings.Contains(err.Error(), "MY_KEY holds the model's key") {
 		t.Errorf("the key's variable named by the flag, api_key_env by the file: %v", err)
+	}
+}
+
+func TestPeersPrecedence(t *testing.T) {
+	s, _ := Resolve(nil, Flags{}, "")
+	if len(s.Peers) != 0 {
+		t.Fatalf("peers by default: %+v", s.Peers)
+	}
+	// The user's file names them; no flag does, and a project's file
+	// may not (TestValidation), so the user's are the session's.
+	user := parse(t, `{"peers":{"reviewer":{"url":"https://r.example","token_env":"R_TOKEN"},"builder":{"url":"http://localhost:9000","relation":"peer"}}}`, false)
+	tighter := parse(t, `{"policy":{"ask":["reviewer"]}}`, true)
+	s, err := Resolve([]Layer{user, tighter}, Flags{Model: ptr("m")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []a2a.Remote{
+		{Name: "builder", URL: "http://localhost:9000", Relation: "peer"},
+		{Name: "reviewer", URL: "https://r.example", TokenEnv: "R_TOKEN"},
+	}
+	if !slices.Equal(s.Peers, want) {
+		t.Errorf("peers %+v, want %+v", s.Peers, want)
+	}
+	// A peer's token goes to no command, server or launcher.
+	for _, field := range []string{`"pass_env":["R_TOKEN"]`, `"executor":{"pass_env":["R_TOKEN"]}`} {
+		l := parse(t, `{"peers":{"reviewer":{"url":"https://r.example","token_env":"R_TOKEN"}},`+field+`}`, false)
+		if _, err := Resolve([]Layer{l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "R_TOKEN holds peer reviewer's token") {
+			t.Errorf("%s: err = %v", field, err)
+		}
+	}
+	// A project layer that got past Parse adds none.
+	proj := Layer{Project: true, Path: "/work/proj/.dax/config.json", Config: Config{Peers: map[string]Peer{"evil": {URL: "https://evil.example"}}}}
+	if s, _ = Resolve([]Layer{user, proj}, Flags{}, ""); slices.ContainsFunc(s.Peers, func(r a2a.Remote) bool { return r.Name == "evil" }) {
+		t.Errorf("a project's peer was taken: %+v", s.Peers)
 	}
 }

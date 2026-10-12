@@ -30,6 +30,7 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
+	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -115,6 +116,25 @@ type Config struct {
 	// execute` where they are to act. The user sets it; a project
 	// cannot, since it says where the session's commands run.
 	Executor *Executor `json:"executor,omitempty"`
+	// Peers are remote A2A agents offered to the model as tools, by
+	// the tool's name. The user sets them; a project cannot, since a
+	// peer is an endpoint the session's work and a token are sent to.
+	Peers map[string]Peer `json:"peers,omitempty"`
+}
+
+// Peer is one remote A2A agent (dax-a2a).
+type Peer struct {
+	// URL is the agent's base URL, where its card is: https, or http
+	// to a loopback host.
+	URL string `json:"url"`
+	// Relation is subsession (the default: the call's task is
+	// cancelled when the call is given up) or peer (its work outlives
+	// the call).
+	Relation string `json:"relation,omitempty"`
+	// TokenEnv names the environment variable holding the bearer
+	// token sent to the agent; the token itself never goes in a config
+	// file.
+	TokenEnv string `json:"token_env,omitempty"`
 }
 
 // Executor is how to start the executor.
@@ -350,7 +370,7 @@ func (l *Layer) validate() error {
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"peers", len(c.Peers) > 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -372,6 +392,11 @@ func (l *Layer) validate() error {
 		}
 		if err := checkExecutorEnv("executor.pass_env", x.PassEnv, c.APIKeyEnv); err != nil {
 			return err
+		}
+	}
+	for _, name := range sortedKeys(c.Peers) {
+		if err := c.Peers[name].remote(name).Check(); err != nil {
+			return fmt.Errorf("peers: %w", err)
 		}
 	}
 	for name, s := range c.MCPServers {
@@ -412,6 +437,11 @@ func (l *Layer) validate() error {
 		}
 	}
 	return nil
+}
+
+// remote is p as dax-a2a takes it.
+func (p Peer) remote(name string) a2a.Remote {
+	return a2a.Remote{Name: name, URL: p.URL, Relation: p.Relation, TokenEnv: p.TokenEnv}
 }
 
 // executorSchemes are the forms of an executor's address that are not
@@ -631,6 +661,7 @@ type Settings struct {
 	Executor         []string // the executor's program and arguments; empty: the tools run in this process
 	ExecutorPassEnv  []string // what only the executor's command is given
 	MCP              []MCP
+	Peers            []a2a.Remote // the user's, sorted by name
 	PassEnv          []string
 	MaxReadBytes     int64
 	Policy           PolicySettings
@@ -659,6 +690,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default"},
 	}
 	servers := map[string]MCP{}
+	peers := map[string]a2a.Remote{}
 	// model, subagent_model, base_url, api_key_env, api_key_command,
 	// api_key_login, session_header and client_header belong to the
 	// provider in force where they were set; setFor records which one
@@ -739,6 +771,13 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		for n, m := range l.MCPServers {
 			servers[n] = MCP{Name: n, Command: m.Command}
+		}
+		if !l.Project {
+			// Refused in a project's file when it was read; a layer
+			// built some other way adds none either.
+			for n, p := range l.Peers {
+				peers[n] = p.remote(n)
+			}
 		}
 		if p := l.Policy; p != nil {
 			if p.Builtin != nil {
@@ -877,6 +916,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	for _, n := range sortedKeys(servers) {
 		s.MCP = append(s.MCP, servers[n])
 	}
+	for _, n := range sortedKeys(peers) {
+		s.Peers = append(s.Peers, peers[n])
+	}
 	if !slices.Contains(Providers, s.Provider) {
 		return s, fmt.Errorf("provider %q: want one of %s", s.Provider, strings.Join(Providers, ", "))
 	}
@@ -896,6 +938,18 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if err := checkExecutorEnv("executor.pass_env", s.ExecutorPassEnv, s.APIKeyEnv); err != nil {
 		return s, err
+	}
+	// A peer's token is the peer's alone: no command, server or
+	// launcher may be handed it.
+	for _, p := range s.Peers {
+		for _, list := range []struct {
+			field string
+			names []string
+		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
+			if p.TokenEnv != "" && slices.Contains(list.names, p.TokenEnv) {
+				return s, fmt.Errorf("%s: %s holds peer %s's token (token_env), which only that peer is sent; take it out of %s", list.field, p.TokenEnv, p.Name, list.field)
+			}
+		}
 	}
 	if s.APIKeyEnv != "" {
 		if !envName.MatchString(s.APIKeyEnv) {

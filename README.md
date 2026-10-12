@@ -16,8 +16,8 @@ dax is a minimal core meant to be extended. The session (the model,
 the store, the policy, the workspace, AGENTS.md, MCP servers,
 compaction) knows no tool. Everything the model can do comes from an
 extension, and dax's own are extensions like any other: `dax-coding`
-(the file tools and bash), `dax-agents` (the sub-agents), `dax-skills`
-and `dax-memory`. A Go program runs dax with extensions of its own on
+(the file tools and bash), `dax-agents` (the sub-agents), `dax-skills`,
+`dax-memory` and `dax-a2a` (your A2A peers). A Go program runs dax with extensions of its own on
 the same terms, or leaves one of dax's out; see
 [Building on dax](#building-on-dax).
 
@@ -234,6 +234,70 @@ turns them off. They are the `dax-agents` extension, which ships an
 allow rule for starting one, since what a sub-agent then does is decided
 call by call by the same policy.
 
+## Peers: other agents over A2A
+
+An agent that serves [A2A](https://a2a-protocol.org) can be offered to
+the model as a tool, by a name you give it in your own config:
+
+```json
+{
+  "peers": {
+    "reviewer": { "url": "https://reviewer.example", "token_env": "REVIEWER_TOKEN" },
+    "builder": { "url": "http://localhost:9000", "relation": "peer" }
+  }
+}
+```
+
+Each call sends the model's request to the agent as one task and returns
+its answer. When a session starts, each peer's agent card is read from
+`<url>/.well-known/agent-card.json`, within five seconds and up to 1 MiB;
+a peer whose card cannot be read, whose `token_env` is not set, or whose
+card names an endpoint at another origin than `url` is not offered, and
+the session says why once. The card's name never replaces yours, and
+the session's record names the URL each call reached.
+
+- `url` is `https`, or `http` to this machine only, with no credentials,
+  query or fragment.
+- The card must name its JSON-RPC endpoint at `url`'s origin (scheme,
+  host and port): the card, not you, says where the work goes, so a card
+  that points elsewhere (another host, or a port on this machine) is
+  refused. No redirect to another origin is followed, on the card's fetch
+  or on a call.
+- `token_env` names the variable holding a bearer token, which is sent
+  to that origin alone. dax takes the variable out of the environment
+  of bash, MCP servers and an executor's command, whatever its name,
+  and refuses a `pass_env` or `executor.pass_env` that names it; the
+  token is never printed, logged or recorded.
+- `relation` is what an abandoned call does. `subsession` (the default):
+  the task is the call's own work, so when the call is given up (an
+  abort, say, even while the agent's question waits) dax sends the agent
+  `tasks/cancel` and goes on without waiting for it. `peer`: the
+  agent's work outlives the call and is never cancelled.
+- A question the agent asks during a call is put to you as a question
+  for text, naming the peer and its URL first; the agent's own words come
+  last, quoted. In the REPL and `-p` a reply that is not an explicit `n`
+  or `no` is the answer (`blue`, or `y blue`; a bare `y` sends "yes"); in
+  the terminal client `a` and the text answer, `y` sends "yes". The answer
+  goes back on the same task, and the call's result tells the model what
+  the agent asked and what you answered. `n` refuses: the call ends with the
+  question, what you said reaches the model once, as yours, and a
+  subsession's task is given up. When nobody is answering questions, or
+  `-p` has reached the end of its input, nobody answered (the record
+  says so) and the call ends with the question for the model; nothing
+  answers in your place. A known gap: a subsession's task that ends that
+  way is left waiting on the remote agent, which dax cannot resume
+  either (agentturn#253).
+- Every call asks unless your config allows the peer by name
+  (`"allow": ["reviewer"]`); `dax-a2a` ships no rule. The card's
+  description and skills go into the tool's description, which the model
+  reads: text the remote agent wrote, worth reading before you allow a
+  peer by name.
+
+Peers run where the session runs, never in an executor, and only the
+main agent calls them. A repository's `.dax/config.json` may not name
+one. `dax attach` shows their calls as raw arguments, since it reads no
+config.
+
 ## Config
 
 Settings come from three layers, each overriding the one before:
@@ -295,6 +359,7 @@ names the file and the field.
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below). `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
+| `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `policy` | see below |
 
@@ -306,7 +371,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `mcp_servers` or `executor`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `mcp_servers`, `executor` or `peers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -539,8 +604,8 @@ the one whose rule decided it: `extension:dax-coding`, say):
 - **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
   bash commands listed below (dax-coding's), `explore` and `task`
   (dax-agents'), `skill` (dax-skills') and `memory_search` (dax-memory's);
-- **asks**: `write`, `edit`, every other command, memory writes, and every
-  MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
+- **asks**: `write`, `edit`, every other command, memory writes, every
+  peer (dax-a2a's) and every MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile
   repository would run code as you on the model's say-so.
 
@@ -862,8 +927,10 @@ questions while the run goes, ahead of any permission:
   optional reason, and `Esc` goes back. The sub-agent sees the note with
   the call's result, and the reason in place of it.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
-  One that is a form or a page to visit has no screen in the client, and
-  is cancelled.
+  dax's own question for a line of text (a peer's question) is answered
+  with `a` and the text, or `y` for "yes"; any other form, an MCP
+  server's included, or a page to visit, has no screen in the client,
+  and is cancelled.
 
 A call stamped as auto-allowed that changed before it ran fails with "the
 command changed since it was allowed ... ask again", which shows in the
@@ -1015,9 +1082,11 @@ dax's own extensions are built the same way, from the same fields:
 | `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`) |
 | `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
 | `dax-memory` | `ext/memory` | the memory tools and block |
+| `dax-a2a` | `ext/a2a` | a tool per configured peer, added through its kit as memory's are; their renderers; no rules |
 
-`dax-coding` is always on; the others follow `agents`, `skills` and
-`memory` in the settings. `WithoutExtension` leaves one of the four out
+`dax-coding` and `dax-a2a` are always on (`dax-a2a` offers nothing
+without `peers`); the others follow `agents`, `skills` and
+`memory` in the settings. `WithoutExtension` leaves one of the five out
 whatever the settings say (any other name is an error), and
 `WithExtension` adds the program's after them.
 

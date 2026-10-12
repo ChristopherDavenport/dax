@@ -16,6 +16,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
@@ -241,12 +242,37 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 	opts = append([]console.Option{
 		console.WithSubmit(submitLine(t, ctl, func() { quitting.Store(true); quit() })),
 	}, opts...)
-	err := run(cctx, rec, src, act, opts...)
+	err := run(cctx, rec, textQuestions{src}, act, opts...)
 	if quitting.Load() && ctx.Err() == nil {
 		return nil
 	}
 	return err
 }
+
+// textQuestions is src with dax's question for text
+// (extension.TextQuestion) shown to the terminal client without its
+// form, which the client cannot fill, and with a hint: it answers such
+// a question as any other, a with the text typed as the note, y for a
+// bare yes, n to refuse, and the session takes the note as the answer.
+type textQuestions struct{ client.Source }
+
+func (t textQuestions) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	return t.Source.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+		if q, ok := ev.(*agentturn.Question); ok {
+			if extension.IsTextQuestion(q.Elicitation) {
+				c := *q
+				c.Elicitation.Schema = nil
+				c.Elicitation.Message += textHint
+				ev = &c
+			}
+		}
+		return fn(ctx, ev)
+	})
+}
+
+// textHint is what the terminal client adds to dax's question for text,
+// whose keys are those of a yes-or-no question.
+const textHint = " (press a and type your answer, y for yes, n to refuse)"
 
 // submitLine is what the terminal client does with a line the user
 // submits: a slash line is run as a command, its output the reply shown

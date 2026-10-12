@@ -284,6 +284,22 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
+	// What the session offers the model: dax's extensions as the
+	// settings say, then the program's. They are chosen before the
+	// executor starts, whose command must not get their credentials;
+	// what chooses them is the user's and the flags', which a project's
+	// layer, read only once the executor runs, cannot set.
+	exts, err := p.selected(choice{
+		MaxReadBytes: settings.MaxReadBytes,
+		Agents:       settings.Agents, SubagentModel: m.SubagentName,
+		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
+		MemoryDir: settings.MemoryDir,
+		Peers:     settings.Peers,
+	})
+	if err != nil {
+		return err
+	}
+	secrets := extension.SecretsOf(exts)
 	// Where the tools act: this directory, or an executor elsewhere
 	// whose tools act where it runs. A container or a remote runtime
 	// is another workspace.Workspace, given to the session and to the
@@ -298,7 +314,7 @@ func run(ctx context.Context, args []string, p program) error {
 		// without credentials, the model's key's variable among them,
 		// less those pass_env and executor.pass_env name; the latter are
 		// that command's alone.
-		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, LauncherEnv: settings.ExecutorPassEnv})
+		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv})
 		if err != nil {
 			return fmt.Errorf("-executor: %w", err)
 		}
@@ -308,23 +324,12 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		wsRoot = ex.Workspace().Root()
 	} else {
-		local, err := workspace.NewLocal(dir, toolsEnv(settings, m.KeyEnv))
+		local, err := workspace.NewLocal(dir, toolsEnv(settings, m.KeyEnv, secrets...))
 		if err != nil {
 			return fmt.Errorf("workspace: %w", err)
 		}
 		defer local.Close()
 		ws = local
-	}
-	// What the session offers the model: dax's extensions as the
-	// settings say, then the program's.
-	exts, err := p.selected(choice{
-		MaxReadBytes: settings.MaxReadBytes,
-		Agents:       settings.Agents, SubagentModel: m.SubagentName,
-		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
-		MemoryDir: settings.MemoryDir,
-	})
-	if err != nil {
-		return err
 	}
 	opts := agent.Options{
 		Extensions: exts,
@@ -468,10 +473,11 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 
 // toolsEnv is the environment the tools and MCP servers of a session
 // on this machine get: this machine's, less its credentials but those
-// pass_env names, and less the model's key's variable, keyEnv.
+// pass_env names, and less the model's key's variable, keyEnv, and the
+// extensions' secrets (a peer's token_env), whatever their names.
 // executor.pass_env is the executor's launcher's alone and is not here.
-func toolsEnv(s config.Settings, keyEnv string) []string {
-	return tool.DefaultEnv(s.PassEnv, keyEnv)
+func toolsEnv(s config.Settings, keyEnv string, secrets ...string) []string {
+	return tool.DefaultEnv(s.PassEnv, append([]string{keyEnv}, secrets...)...)
 }
 
 // executorLine is the banner's line about the executor, "" for none.

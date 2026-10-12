@@ -1,7 +1,8 @@
 // Package toolrender draws dax's tool calls in the terminal client: a
 // [toolview.Renderer] for each of dax-coding's read, write, edit, glob,
-// grep, ls and bash (Renderers), and for dax-agents' task and explore
-// (SubAgents). Each extension hands its own through
+// grep, ls and bash (Renderers), for dax-agents' task and explore
+// (SubAgents), and for dax-a2a's calls to remote agents (Peers). Each
+// extension hands its own through
 // extension.Extension.Renderers, and a front gives the client the
 // extensions' together (extension.Renderers) through
 // console.WithToolRenderers.
@@ -53,6 +54,17 @@ func SubAgents() toolview.Renderers {
 		"task":    agentRenderer{props: []string{"input", "context", "model"}},
 		"explore": agentRenderer{props: []string{"input"}},
 	}
+}
+
+// Peers are the renderers of dax-a2a's calls to the remote agents
+// called names: the request, and the start of the answer, or the
+// question the agent asked that nobody answered.
+func Peers(names ...string) toolview.Renderers {
+	out := toolview.Renderers{}
+	for _, n := range names {
+		out[n] = peerRenderer{}
+	}
+	return out
 }
 
 const (

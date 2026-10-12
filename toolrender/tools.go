@@ -393,3 +393,40 @@ func (r agentRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) 
 	}
 	return out, true
 }
+
+// ---- dax-a2a's peers
+
+// peerRenderer shows a call to a remote agent as the first line of the
+// request, and the answer's first lines once it ends. A call that ended
+// with the agent asking for input shows the question, which the model
+// reads, rather than as a failure.
+type peerRenderer struct{}
+
+// needsInput is how tools/a2a's InputRequiredError begins.
+const needsInput = "the agent needs more input"
+
+func (peerRenderer) Head(c view.Call) (toolview.Line, bool) {
+	return agentRenderer{props: []string{"input"}}.Head(c)
+}
+
+func (peerRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
+	if msg, failed := failure(c); failed {
+		if q, ok := strings.CutPrefix(msg, needsInput); ok {
+			q = strings.TrimSpace(strings.TrimPrefix(q, ":"))
+			if q == "" || strings.HasPrefix(q, "before it can continue") {
+				return []toolview.Line{dim("asks for more input")}, true
+			}
+			out := []toolview.Line{{toolview.S(toolview.Dim, "asks: "), toolview.S(toolview.Emphasis, clip(lines(q)[0]))}}
+			if rest := lines(q)[1:]; len(rest) > 0 {
+				if !expanded {
+					return append(out, more(len(rest))), true
+				}
+				for _, l := range rest {
+					out = append(out, toolview.Line{toolview.S(toolview.Plain, l)})
+				}
+			}
+			return out, true
+		}
+	}
+	return agentRenderer{props: []string{"input"}}.Body(c, expanded)
+}
