@@ -118,6 +118,8 @@ func run(ctx context.Context, args []string, p program) error {
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
 	tlsCert := fs.String("tls-cert", "", "dax serve: serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "dax serve: the private key (PEM) of -tls-cert")
+	a2aFlag := fs.Bool("a2a", false, "dax serve: also serve the session's agent over A2A (/a2a, its card at /.well-known/agent-card.json) behind the same token; each A2A conversation is a session of its own")
+	a2aEscalate := fs.Bool("a2a-escalate", false, "dax serve -a2a: put a call the policy asks about to the A2A caller, for a host nobody attaches to; without it the served session's views answer")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -128,7 +130,7 @@ func run(ctx context.Context, args []string, p program) error {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
-	for _, name := range []string{"listen", "tls-cert", "tls-key"} {
+	for _, name := range []string{"listen", "tls-cert", "tls-key", "a2a", "a2a-escalate"} {
 		if given[name] && !serving {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
@@ -144,6 +146,9 @@ func run(ctx context.Context, args []string, p program) error {
 		// starts.
 		if err := checkServeAddr(*listen, *tlsCert, *tlsKey); err != nil {
 			return err
+		}
+		if *a2aEscalate && !*a2aFlag {
+			return errors.New("-a2a-escalate goes with -a2a")
 		}
 	}
 
@@ -392,14 +397,14 @@ func run(ctx context.Context, args []string, p program) error {
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
-		Name: p.name, Renderers: renderers,
+		Name: p.name, Version: p.version, Renderers: renderers,
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex), Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
-		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true}
+		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, sessions: *root}
 	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
 		return err
 	}

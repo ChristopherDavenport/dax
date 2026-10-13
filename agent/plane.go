@@ -201,11 +201,13 @@ func (s *Session) Answering() (done func()) {
 }
 
 // ask puts a question to the fronts answering, as an agentturn.Question
-// event; errNoOne when none is.
+// event, naming the A2A caller's conversation it comes from, if any
+// (forPeer); errNoOne when none is.
 func (s *Session) ask(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
 	if s.answering.Load() == 0 {
 		return agenttool.Answer{}, errNoOne
 	}
+	q.Message = forPeer(ctx, q.Message)
 	return s.ag.QuestionElicitor()(ctx, q)
 }
 
@@ -219,6 +221,7 @@ func (s *Session) askRecorded(ctx context.Context, q agenttool.Elicitation) (age
 	if s.answering.Load() == 0 {
 		return agenttool.Answer{}, errNoOne
 	}
+	q.Message = forPeer(ctx, q.Message)
 	return s.ctl.Elicitor()(ctx, q)
 }
 
@@ -240,7 +243,11 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 		s.opts.log("[a tool asks for a form dax cannot show: %s]", render.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
-	q.Message = "a tool asks: " + q.Message
+	// A call an A2A caller's conversation asks about (front/a2a puts
+	// it with agentturn.Ask) is the policy's question, not a tool's.
+	if call, ok := agentturn.AskedCallFrom(ctx); !ok || call.Parent != "" {
+		q.Message = "a tool asks: " + q.Message
+	}
 	ans, err := s.ask(ctx, q)
 	switch {
 	case err != nil:

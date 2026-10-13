@@ -7,6 +7,41 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax serve -a2a` serves the session's agent over A2A beside its
+  control: agentturn's `front/a2a` at `/a2a` and the agent card at
+  `/.well-known/agent-card.json`, on serve's listener and TLS. Every
+  call needs serve's token, under the control's principal; the card is
+  served to anyone and names the bearer scheme and the endpoint at the
+  origin the caller reached (a tunnel's end, the certificate's name), no
+  token. Each A2A context is a conversation of its own, run under the
+  served agent's model, extensions, policy and workspace, and recorded
+  in a dax session of its own (listed by `-list`, each run naming the
+  caller), never in the served session. A conversation is its creator's;
+  conversations, owners and escalated calls are kept under `~/.dax/a2a/`
+  (private, one directory per working directory and session store), so a
+  restart continues them. A call the policy asks about goes to the
+  served session's views, naming the conversation, and waits for whoever
+  attaches; it is refused when the caller gives up, never allowed.
+  `-a2a-escalate` puts it to the caller instead (front/a2a's
+  escalation). The conversations and the served session share the
+  workspace at the same time. Off by default.
+- Changed, public API: `agent.Session.PeerConfig`,
+  `agent.Session.OpenPeer` and `agent.PeerRecord` are new, the
+  configuration and the record of an A2A caller's conversation on a host
+  serving the session.
+- Changed: a question about a call that front/a2a puts to the session
+  (`agentturn.Ask` with no parent) is no longer prefixed "a tool asks:",
+  and a question from an A2A caller's conversation starts with
+  `[A2A caller <principal>, conversation "<id>" (session <id>)]`, the
+  caller's context ID quoted and cut to 64 bytes.
+- Dependencies: agentturn, `agentturn/session` and `agentturn/tools/a2a`
+  v0.0.29, and `agentturn/front/a2a` v0.0.29, new. With them a peer's
+  call is recorded as the call's `subsession` or `peer` link
+  (agentsession's `Callees` reads it), not a custom entry; a
+  subsession's call that ends input-required gives its task up with
+  `tasks/cancel`, where it left it waiting; and under `dax serve -a2a` a
+  caller's cancel of a task waiting on it refuses the calls the task left
+  pending, on the conversation's record, so nothing stays held.
 - Added: dax-a2a (`ext/a2a`), a default extension that offers the A2A
   agents named in the user's config (`peers`) as tools, one per peer by
   the configured name, over agentturn's `tools/a2a`. Each peer's card is
@@ -23,7 +58,8 @@ versions may break flags and the config file.
   call with the question (the note reaches the model once, as the
   person's), an abort while it waits gives a subsession's task up, and
   with nobody answering the call ends with the question for the model
-  (the task is left waiting: agentturn#253). The record
+  (a subsession's task given up with `tasks/cancel`, a peer's left
+  asking). The record
   names the URL each call reached. Every call asks unless the user's
   config allows it; dax-a2a ships no rule. A project's config may not
   set `peers`. The terminal client draws a peer's call as its request

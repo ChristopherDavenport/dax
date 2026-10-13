@@ -12,7 +12,9 @@ package dax
 // over the session's store. Both sit behind one bearer token, and the
 // listener is on loopback only unless dax serve is given a certificate
 // (-tls-cert, -tls-key): from another machine, tunnel to it, or serve
-// HTTPS.
+// HTTPS. With -a2a, agentturn's front/a2a is served beside them, behind
+// the same token, each A2A conversation a session of its own
+// (serve_a2a.go).
 
 import (
 	"context"
@@ -35,6 +37,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentsession/remote"
 	"github.com/ChristopherDavenport/agentturn/front/control"
+	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/private"
@@ -74,6 +77,13 @@ type serveFront struct {
 	ready func(url string)
 	// drain bounds the wait for an aborted run to end at shutdown.
 	drain time.Duration
+	// a2a mounts agentturn's front/a2a beside the control
+	// (serve_a2a.go); a2aEscalate puts a call the policy asks about to
+	// the caller. a2aDir is where its conversations are kept; empty is
+	// under ~/.dax/a2a, by the session store's root (sessions) and the
+	// working directory.
+	a2a, a2aEscalate bool
+	a2aDir, sessions string
 }
 
 // Prepare leaves the session's notes printed as they come: nothing
@@ -99,7 +109,27 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		return err
 	}
 	defer cleanup()
-	h, closeStore := serveHandler(sess, f.info.Dir, token, func(err error) {
+	url := scheme + "://" + servedHost(ln.Addr())
+	// The A2A conversations' runs end when serving does.
+	peersCtx, endPeers := context.WithCancel(context.WithoutCancel(ctx))
+	defer endPeers()
+	var peers *a2aPeers
+	if f.a2a {
+		dir := f.a2aDir
+		if dir == "" {
+			dir = a2aDir(f.sessions, f.info.Dir)
+		}
+		peers, err = newA2APeers(ctx, sess, a2aOptions{
+			url: url, version: f.info.Version, dir: dir,
+			tokens:   map[string]string{token: servePrincipal},
+			escalate: f.a2aEscalate,
+			stop:     peersCtx,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	h, closeStore := serveHandler(sess, f.info.Dir, token, peers, func(err error) {
 		fmt.Fprintln(out, render.Clean("dax serve: "+err.Error()))
 	})
 	// Questions and held calls wait for whoever attaches, for as long
@@ -110,11 +140,17 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 
-	url := scheme + "://" + servedHost(ln.Addr())
 	for _, l := range banner(f.info, si) {
 		fmt.Fprintln(out, render.Clean(l))
 	}
 	fmt.Fprintln(out, "serving at "+render.Clean(url))
+	if peers != nil {
+		line := "a2a: " + render.Clean(url+a2aPath) + ", card at " + render.Clean(url+a2asrv.WellKnownAgentCardPath)
+		if f.a2aEscalate {
+			line += "; the policy's questions go to the caller"
+		}
+		fmt.Fprintln(out, line)
+	}
 	// A certificate the attaching machine does not trust is named to it
 	// with -tls-ca.
 	ca := ""
@@ -145,14 +181,18 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	}
 
 	// A run still going is aborted and given time to write its end, so
-	// the record says how it stopped; then the follows end and the
-	// listener closes.
+	// the record says how it stopped, an A2A conversation's included;
+	// then the follows end and the listener closes.
+	drain := f.drain
+	if drain == 0 {
+		drain = 3 * time.Second
+	}
+	endPeers()
+	if peers != nil {
+		peers.close(drain)
+	}
 	if sess.State().Running {
 		sess.Abort()
-		drain := f.drain
-		if drain == 0 {
-			drain = 3 * time.Second
-		}
 		for deadline := time.Now().Add(drain); sess.State().Running && time.Now().Before(deadline); {
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -322,24 +362,27 @@ func serveToken(id, dir string) (token, file string, cleanup func(), err error) 
 }
 
 // serveHandler serves the session's control under controlPrefix and its
-// record under storePrefix, both behind token. closeStore ends the
-// record's follows.
-func serveHandler(sess *agent.Session, dir, token string, logf func(error)) (h http.Handler, closeStore func()) {
+// record under storePrefix, both behind token, and with peers front/a2a
+// under a2aPath and its card. closeStore ends the record's follows.
+func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
 	ctl := control.Handler(sess,
 		control.WithAuthenticator(control.BearerTokens(map[string]control.Principal{
-			token: {Name: "attach", Scopes: control.AllScopes},
+			token: {Name: servePrincipal, Scopes: control.AllScopes},
 		})),
 		control.WithCommands(serveCommands(sess, sess, dir)),
 	)
 	store := remote.NewHandler(sess.Recorder().Store(),
 		remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
-			token: {Name: "attach", Scopes: []remote.Scope{remote.ScopeRead}},
+			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
 		})),
 		remote.WithErrorLog(logf),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(controlPrefix+"/", http.StripPrefix(controlPrefix, ctl))
 	mux.Handle(storePrefix+"/", http.StripPrefix(storePrefix, store))
+	if peers != nil {
+		peers.mount(mux)
+	}
 	return mux, func() { store.Close() }
 }
 

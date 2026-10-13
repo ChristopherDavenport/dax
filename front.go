@@ -47,8 +47,8 @@ import (
 // frontInfo is what a front shows the user about the session.
 type frontInfo struct {
 	// Name is the program's, which the banner and the resume command
-	// name.
-	Name string
+	// name, and Version its version, which dax serve -a2a's card names.
+	Name, Version string
 	// Renderers draw tool calls in the terminal client: dax's, with
 	// the extensions' laid over them.
 	Renderers            toolview.Renderers

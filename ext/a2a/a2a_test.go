@@ -355,8 +355,9 @@ func output(t *testing.T, s *agent.Session) string {
 	return ""
 }
 
-// callees are the Callee records the session holds, which agentturn's
-// recorder writes beside the call.
+// callees are the callees the session's record names, the links
+// agentturn's recorder writes for the call's Callee records (a cancel
+// notice names no new one).
 func callees(t *testing.T, s *agent.Session) []a2atool.Callee {
 	t.Helper()
 	rd := s.Recorder().Store().(agentsession.Reader)
@@ -366,12 +367,8 @@ func callees(t *testing.T, s *agent.Session) []a2atool.Callee {
 	}
 	var out []a2atool.Callee
 	for _, e := range sess.Entries() {
-		if c, ok := e.(*agentsession.CustomEntry); ok && c.NS == a2atool.CalleeNS {
-			var cl a2atool.Callee
-			if err := json.Unmarshal(c.Data, &cl); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, cl)
+		if l, ok := e.(*agentsession.LinkEntry); ok && l.URL != "" && l.Cancel == "" {
+			out = append(out, a2atool.Callee{URL: l.URL, Task: l.Task, Context: l.Context, Relation: l.Rel})
 		}
 	}
 	return out
@@ -665,8 +662,8 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 // A remote agent's question reaches whoever answers the session's
 // questions, as a question for text, and the answer goes on the same
 // task; a refusal ends the call and gives the task up; with nobody
-// answering, the call ends with the question for the model and nothing
-// answers in a person's place. The record holds the question, the
+// answering, the call ends with the question for the model, nothing
+// answers in a person's place, and the subsession's task is given up. The record holds the question, the
 // answer and what was said with a refusal, and never the token.
 func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 	t.Setenv("PEER_TOKEN", "s3cret-token")
@@ -691,7 +688,7 @@ func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 		{"declined", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionDecline, Note: "pick one yourself"}
 		}, `painter asked "which colour?" and the question was declined`, "decline", "", "pick one yourself", true},
-		{"nobody answering", nil, "the agent needs more input: which colour?", "", "", "", false},
+		{"nobody answering", nil, "the agent needs more input: which colour?", "", "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agentSide := asking{cancelled: make(chan a2a.TaskID, 4)}
