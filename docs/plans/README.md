@@ -279,14 +279,73 @@ before the dax step that uses them, as the workspace's rules require.
      facts (agentpolicy#80, #81, agenttool#84, #85, agentkit#96,
      toolbundle#3, #4), the rest (agentturn#244, agentkit#94, #95,
      agentsession#222, agentmemory#46, agentworkspace#3–#5).
-   - Done when items 1 to 5 are released and dax drives them; the
-     studies' probes for those issues flip.
+   - Step 5 is closed (2026-10-11). Items 1 to 5 are released and dax
+     drives them (dax v0.0.16):
+     - agentturn v0.0.23–v0.0.27: the hold's held mark, subject and
+       note on the record and read back; the open question on a
+       pending call; `Reply` with a context and the answerer recorded
+       as the answer's source; `front/control` records a Resume as
+       `human` unless the principal holds the host's `WithChosenBy`
+       scope; one rule for a note (see "Decided"), held notes on the
+       pending calls, on the record and restored after a restart or a
+       crash; a subscriber observes, and a dispatch it failed is
+       marked withdrawn.
+     - agentpolicy v0.0.16, v0.0.17: release in two phases (`Release`
+       builds the answers, `Resumed` settles what the resumed run no
+       longer lists), held calls known from the decision after a
+       restart, `WithAskInRun`, and a batch hold that does not depend
+       on the order of its calls (agentpolicy#83).
+     - agentkit v0.0.12, v0.0.13: `Control.Resume` and `Permissions`
+       from the decision; questions routed by the run's context, the
+       kit's elicitor only under `WithQuestionEvents`, and
+       `Kit.QuestionsFor` for a product working by hand (agentkit#99).
+     - agentconsole v0.0.12: `client.Direct` replies with its caller's
+       context, so the embedder names who answered.
+     - dax v0.0.16: every reply names its answerer (the terminal, or
+       `front/control`'s principal over `dax attach`); after a restart
+       only the calls that wait on a person are asked.
+     - The round 9 probes for those issues flip (agentstudies#12).
+       Left: agentturn#119's reader half in agentsession, a dispatch
+       withdrawn in the format (agentsession#226, scheduled apart);
+       `-p` still records `Permit`'s end-of-input refusal as the
+       person's.
 6. **Peers** (optional): agentsession's peer link, agentturn's peer
    changes, an `ext/a2a` extension in dax, and `front/a2a` beside
    `front/control` in `dax serve`. The proposal is
-   [agentturn-peers.md](proposals/agentturn-peers.md).
+   [agentturn-peers.md](proposals/agentturn-peers.md); its two open
+   questions are decided (see "Decided": a peer and a subsession, and
+   cancelling a peer's task).
 
 ## Decided
+
+- **A peer and a subsession** (decided 2026-10-11). The link follows
+  the callee's lifetime, not whether it publishes a store. A callee the
+  caller starts, whose context ends with the caller's, is a
+  `subsession`; for A2A that is a task the caller cancels when its call
+  is aborted (`tools/a2a`'s default). A callee whose context outlives
+  the caller's writes its own session and is a `peer`
+  (`WithoutCancelOnAbort`). One switch decides both.
+
+- **Cancelling a subsession's task** (decided 2026-10-11). When no one
+  is asking for the work any more, the callee is told: `tools/a2a`
+  sends `tasks/cancel` and returns at once, without waiting for the
+  task's `canceled`. The caller's record says the cancel was sent, not
+  that the work stopped. A peer is never cancelled.
+
+- **One rule for a note** (step 5). A note reaches the model once,
+  after all the outputs of the batch it belongs to, never between a
+  call and its output, and is never dropped: it waits with the calls
+  it is about, on the record, until they are answered. It speaks in
+  the voice of whoever gave it: a person's as a user message, a
+  policy's or a reviewer's as a developer message. A held call's
+  policy note is said by the loop when the call is released.
+
+- **A question waits only where someone can answer** (step 5).
+  agentkit installs its question elicitor only when the product asks
+  for question events; a host with nobody to answer keeps agentturn's
+  default, unasked, or answers in process by rule. In the run, only a
+  hook's `Terminate` stops a batch; a person's in-run decline refuses
+  that call alone.
 
 - **Memory stays with control.** It is the user's knowledge across
   projects, not the sandbox's: dax-memory's store and tools run where
