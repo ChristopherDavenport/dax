@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	fronta2a "github.com/ChristopherDavenport/agentturn/front/a2a"
+	"github.com/ChristopherDavenport/agentturn/front/control"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2aclient"
@@ -33,15 +36,16 @@ import (
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
-// The tokens of the two principals an A2A rig serves: alice holds
-// serve's token, bob another.
+// The tokens an A2A rig serves: serve's own, for the control and the
+// store, and two A2A tokens, alice's and bob's.
 const (
+	serveTok   = "serve-token-not-on-the-card"
 	aliceToken = "alice-token-not-on-the-card"
 	bobToken   = "bob-token-not-on-the-card"
 )
 
 // a2aServed is a session served with front/a2a beside its control, on
-// an httptest server, to two principals.
+// an httptest server, to two A2A principals.
 type a2aServed struct {
 	t     *testing.T
 	rig   *tuiRig
@@ -57,23 +61,25 @@ func startA2A(t *testing.T, m *steps, rules policy.Rules, escalate bool) *a2aSer
 }
 
 // serveA2A serves rig's session with front/a2a, its conversations kept
-// in dir; close stops it, as a restart would.
+// in dir, and holds its questions for whoever attaches, as dax serve
+// does; close stops it, as a restart would.
 func serveA2A(t *testing.T, rig *tuiRig, escalate bool, dir string) *a2aServed {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
 	url := "http://" + srv.Listener.Addr().String()
 	stop, cancel := context.WithCancel(context.Background())
-	peers, err := newA2APeers(t.Context(), rig.sess, a2aOptions{
-		url: url, version: "test", dir: dir,
+	peers, err := newA2APeers(rig.sess, a2aOptions{
+		version: "test", dir: dir,
 		tokens:   map[string]string{aliceToken: "alice", bobToken: "bob"},
 		escalate: escalate, stop: stop,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, closeStore := serveHandler(rig.sess, rig.dir, aliceToken, peers, func(error) {})
+	h, closeStore := serveHandler(rig.sess, rig.dir, serveTok, peers, func(error) {})
 	srv.Config.Handler = h
 	srv.Start()
+	answering := rig.sess.Answering()
 	var once sync.Once
 	s := &a2aServed{t: t, rig: rig, url: url, dir: dir, peers: peers, close: func() {
 		once.Do(func() {
@@ -81,6 +87,7 @@ func serveA2A(t *testing.T, rig *tuiRig, escalate bool, dir string) *a2aServed {
 			peers.close(5 * time.Second)
 			closeStore()
 			srv.Close()
+			answering()
 		})
 	}}
 	t.Cleanup(s.close)
@@ -100,15 +107,49 @@ func (b bearer) Before(ctx context.Context, req *a2aclient.Request) (context.Con
 	return ctx, nil
 }
 
-// client is an A2A client of the served card, sending token.
+// client is an A2A client of the served endpoint, sending token.
 func (s *a2aServed) client(token string) *a2aclient.Client {
 	s.t.Helper()
-	c, err := a2aclient.NewFromCard(s.t.Context(), s.peers.card,
+	card := &a2a.AgentCard{URL: s.url + a2aPath, PreferredTransport: a2a.TransportProtocolJSONRPC, ProtocolVersion: string(a2a.Version)}
+	c, err := a2aclient.NewFromCard(s.t.Context(), card,
 		a2aclient.WithJSONRPCTransport(http.DefaultClient), a2aclient.WithInterceptors(bearer{token: token}))
 	if err != nil {
 		s.t.Fatal(err)
 	}
 	return c
+}
+
+// get is a GET of url with token (none for ""), the request changed by
+// tweak, and its status, body and headers.
+func get(t *testing.T, hc *http.Client, url, token string, tweak func(*http.Request)) (int, []byte, http.Header) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if tweak != nil {
+		tweak(req)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, resp.Header
+}
+
+// cardOf decodes a card.
+func cardOf(t *testing.T, body []byte) a2a.AgentCard {
+	t.Helper()
+	var card a2a.AgentCard
+	if err := json.Unmarshal(body, &card); err != nil {
+		t.Fatalf("the card: %v: %s", err, body)
+	}
+	return card
 }
 
 // say is a user's message in the conversation contextID.
@@ -230,11 +271,14 @@ func TestAnA2AConversationIsASessionOfItsOwn(t *testing.T) {
 	}
 }
 
-// Every A2A call needs serve's token, or another principal's; the card,
-// which says so, is served to anyone and carries no token.
+// Every A2A call needs an A2A token, and so does the card, which names
+// the bearer scheme and the endpoint and no token; serve's own token,
+// which the control and the store take, is not one. No cross-origin
+// header lets a page in a browser read the card.
 func TestA2ANeedsAToken(t *testing.T) {
 	s := startA2A(t, &steps{}, policy.Rules{}, false)
-	for _, tc := range []struct{ name, token string }{{"no token", ""}, {"a wrong token", "not-a-token"}} {
+	cardURL := s.url + a2asrv.WellKnownAgentCardPath
+	for _, tc := range []struct{ name, token string }{{"no token", ""}, {"a wrong token", "not-a-token"}, {"serve's token", serveTok}} {
 		if _, err := send(t, s.client(tc.token), say("c1", "hello")); err == nil || !strings.Contains(err.Error(), "401") {
 			t.Errorf("%s: send = %v, want 401", tc.name, err)
 		}
@@ -250,49 +294,147 @@ func TestA2ANeedsAToken(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s: POST %s = %d, want 401", tc.name, a2aPath, resp.StatusCode)
 		}
+		code, body, h := get(t, http.DefaultClient, cardURL, tc.token, func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") })
+		if code != http.StatusUnauthorized || h.Get("Access-Control-Allow-Origin") != "" || strings.Contains(string(body), "skills") {
+			t.Errorf("%s: GET the card = %d, %q, Access-Control-Allow-Origin %q; want 401 and nothing of it", tc.name, code, body, h.Get("Access-Control-Allow-Origin"))
+		}
 	}
-	if _, err := s.peers.store.sessionOf("c1"); err != nil {
-		t.Fatal(err)
-	}
-	if id, _ := s.peers.store.sessionOf("c1"); id != "" {
-		t.Errorf("a refused message started session %s", id)
+	if id, err := s.peers.store.sessionOf("c1"); err != nil || id != "" {
+		t.Errorf("a refused message started session %q (%v)", id, err)
 	}
 
-	resp, err := http.Get(s.url + a2asrv.WellKnownAgentCardPath)
-	if err != nil {
-		t.Fatal(err)
+	code, body, h := get(t, http.DefaultClient, cardURL, aliceToken, func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") })
+	if code != http.StatusOK {
+		t.Fatalf("GET the card with the A2A token = %d", code)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET the card = %d", resp.StatusCode)
+	if h.Get("Access-Control-Allow-Origin") != "" || h.Get("Access-Control-Allow-Credentials") != "" {
+		t.Errorf("the card is sent with cross-origin headers: %v", h)
 	}
-	for _, secret := range []string{aliceToken, bobToken} {
+	for _, secret := range []string{serveTok, aliceToken, bobToken} {
 		if strings.Contains(string(body), secret) {
 			t.Error("the card carries a token")
 		}
 	}
-	var card a2a.AgentCard
-	if err := json.Unmarshal(body, &card); err != nil {
-		t.Fatal(err)
-	}
+	card := cardOf(t, body)
 	scheme, ok := card.SecuritySchemes["bearer"].(a2a.HTTPAuthSecurityScheme)
 	if card.URL != s.url+a2aPath || !ok || !strings.EqualFold(scheme.Scheme, "bearer") || len(card.Security) != 1 {
 		t.Errorf("card URL %q, schemes %+v, security %+v; want %s behind the bearer scheme", card.URL, card.SecuritySchemes, card.Security, s.url+a2aPath)
 	}
+	if !slices.ContainsFunc(card.Skills, func(sk a2a.AgentSkill) bool { return sk.Name == "bash" }) {
+		t.Errorf("the card's skills %v lack the agent's tools", card.Skills)
+	}
 
 	// Reached through a tunnel, or by a name serve does not know, the
-	// card names the endpoint where the caller reached it.
-	req, _ := http.NewRequest(http.MethodGet, s.url+a2asrv.WellKnownAgentCardPath, nil)
-	req.Host = "tunnel.example:9000"
-	resp, err = http.DefaultClient.Do(req)
+	// card names the endpoint where the caller reached it; a forwarded
+	// scheme, which any client can claim, is not taken.
+	_, body, _ = get(t, http.DefaultClient, cardURL, aliceToken, func(r *http.Request) {
+		r.Host = "tunnel.example:9000"
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("Forwarded", "proto=https;host=elsewhere.example")
+		r.Header.Set("X-Forwarded-Host", "elsewhere.example")
+	})
+	if got := cardOf(t, body).URL; got != "http://tunnel.example:9000"+a2aPath {
+		t.Errorf("the card reached as tunnel.example:9000 names %q", got)
+	}
+}
+
+// The A2A token reaches A2A and nothing else: not the control, which
+// answers the session's questions and starts MCP servers, nor the
+// store; and serve's token does not reach A2A. Each token is in a file
+// of its own that only the user can read.
+func TestTheA2ATokenReachesOnlyA2A(t *testing.T) {
+	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) { f.a2a, f.a2aDir = true, t.TempDir() })
+	a2aToken := s.a2aToken()
+	if a2aToken == s.token {
+		t.Fatal("A2A has serve's token")
+	}
+	if fi, err := os.Stat(s.a2aTokenFile()); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the A2A token's file: %v, %v; want private", fi, err)
+	}
+	if !strings.Contains(s.out.String(), "a2a token: "+s.a2aTokenFile()) {
+		t.Errorf("dax serve's lines do not name the A2A token's file:\n%s", s.out.String())
+	}
+	for _, tc := range []struct {
+		path, token string
+		want        int
+	}{
+		{controlPrefix + "/state", a2aToken, http.StatusUnauthorized},
+		{controlPrefix + "/commands", a2aToken, http.StatusUnauthorized},
+		{storePrefix + "/v1/sessions", a2aToken, http.StatusUnauthorized},
+		{storePrefix + "/v1/sessions/" + s.rig.sess.ID(), a2aToken, http.StatusUnauthorized},
+		{storePrefix + "/v1/sessions", s.token, http.StatusOK},
+		{a2asrv.WellKnownAgentCardPath, s.token, http.StatusUnauthorized},
+		{controlPrefix + "/state", s.token, http.StatusOK},
+		{a2asrv.WellKnownAgentCardPath, a2aToken, http.StatusOK},
+	} {
+		if code, _, _ := get(t, http.DefaultClient, s.url+tc.path, tc.token, nil); code != tc.want {
+			t.Errorf("GET %s with %s = %d, want %d", tc.path, map[bool]string{true: "the A2A token", false: "serve's token"}[tc.token == a2aToken], code, tc.want)
+		}
+	}
+	req, _ := http.NewRequest(http.MethodPost, s.url+a2aPath, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{}}`))
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = json.NewDecoder(resp.Body).Decode(&card)
 	resp.Body.Close()
-	if err != nil || card.URL != "http://tunnel.example:9000"+a2aPath {
-		t.Errorf("the card reached as tunnel.example:9000 names %q (%v)", card.URL, err)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("POST %s with serve's token = %d, want 401", a2aPath, resp.StatusCode)
+	}
+}
+
+// -a2a-url names the endpoint on the card, as behind a proxy that ends
+// TLS; without it, served over TLS, the card names https at the origin
+// reached.
+func TestTheCardNamesWhereServeIsReached(t *testing.T) {
+	behind := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) {
+		f.a2a, f.a2aDir, f.a2aURL = true, t.TempDir(), "https://agent.example/dax/"
+	})
+	_, body, _ := get(t, http.DefaultClient, behind.url+a2asrv.WellKnownAgentCardPath, behind.a2aToken(), nil)
+	if got := cardOf(t, body).URL; got != "https://agent.example/dax"+a2aPath {
+		t.Errorf("with -a2a-url the card names %q", got)
+	}
+	if !strings.Contains(behind.out.String(), "a2a: https://agent.example/dax"+a2aPath) {
+		t.Errorf("dax serve's lines do not name -a2a-url:\n%s", behind.out.String())
+	}
+
+	cert, key := selfSigned(t)
+	tlsServed := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) {
+		f.a2a, f.a2aDir, f.tlsCert, f.tlsKey = true, t.TempDir(), cert, key
+	})
+	hc, err := attachHTTPClient(tlsServed.url, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ = get(t, hc, tlsServed.url+a2asrv.WellKnownAgentCardPath, tlsServed.a2aToken(), nil)
+	if got, want := cardOf(t, body).URL, tlsServed.url+a2aPath; got != want || !strings.HasPrefix(got, "https://") {
+		t.Errorf("over TLS the card names %q, want %q", got, want)
+	}
+}
+
+// -a2a-url is https, or http to loopback, with a host and nothing a
+// URL could hide in.
+func TestTheA2AURLIsChecked(t *testing.T) {
+	for _, tc := range []struct {
+		url string
+		ok  bool
+	}{
+		{"https://agent.example", true},
+		{"https://agent.example:8443/dax/", true},
+		{"http://127.0.0.1:7878", true},
+		{"http://localhost:7878", true},
+		{"http://[::1]:7878", true},
+		{"http://agent.example", false},
+		{"ftp://agent.example", false},
+		{"https://", false},
+		{"agent.example", false},
+		{"https://user:pw@agent.example", false},
+		{"https://agent.example/?q=1", false},
+		{"https://agent.example/#x", false},
+	} {
+		if _, err := checkA2AURL(tc.url); (err == nil) != tc.ok {
+			t.Errorf("checkA2AURL(%q) = %v, want ok %v", tc.url, err, tc.ok)
+		}
 	}
 }
 
@@ -372,16 +514,17 @@ func TestAnA2AConversationIsItsCreatorsAcrossARestart(t *testing.T) {
 	}
 }
 
-// answeringView answers the served session's questions as an attached view
-// would, with action (none for ""), and keeps what it was asked.
+// answeringView is a view attached to the served session as the control
+// attaches one (viewed): it answers the session's questions with action
+// (none for "") and keeps what it was asked. detach detaches it.
 type answeringView struct {
-	mu    sync.Mutex
-	asked []string
+	mu     sync.Mutex
+	asked  []string
+	detach func()
 }
 
 func (v *answeringView) attach(t *testing.T, sess *agent.Session, action agenttool.Action) {
-	done := sess.Answering()
-	unsub := sess.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+	unsub := viewed{sess}.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
 		if q, ok := ev.(*agentturn.Question); ok {
 			v.mu.Lock()
 			v.asked = append(v.asked, q.Elicitation.Message)
@@ -393,7 +536,19 @@ func (v *answeringView) attach(t *testing.T, sess *agent.Session, action agentto
 		}
 		return nil
 	})
-	t.Cleanup(func() { unsub(); done() })
+	var once sync.Once
+	v.detach = func() { once.Do(unsub) }
+	t.Cleanup(v.detach)
+}
+
+// waitAsked waits for the view to be asked.
+func (v *answeringView) waitAsked(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(15 * time.Second); len(v.questions()) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the view was never asked")
+		}
+	}
 }
 
 func (v *answeringView) questions() []string {
@@ -403,18 +558,19 @@ func (v *answeringView) questions() []string {
 }
 
 // A call the served session's policy asks about, in an A2A caller's
-// conversation, is put to the served session's views, naming the
-// conversation, and their answer decides it; with nobody answering it
-// is refused, never allowed. Either way the conversation's session
+// conversation, is put to the views attached to the served session,
+// naming the conversation, and their answer decides it; with none
+// attached it is refused at once, though serve holds its questions for
+// whoever attaches, never allowed. Either way the conversation's session
 // records it, and the served session holds none of it.
 func TestAPolicyQuestionInAnA2AConversationIsTheServedSessions(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		answer  agenttool.Action // "" is nobody answering
+		answer  agenttool.Action // "" is no view attached
 		made    bool
 		verdict string
 	}{
-		{"nobody answering", "", false, "cannot be handed to the caller"},
+		{"no view attached", "", false, "cannot be handed to the caller"},
 		{"a view allows it", agenttool.ActionAccept, true, "proceed by human"},
 		{"a view refuses it", agenttool.ActionDecline, false, "reject by human: declined when asked"},
 	} {
@@ -465,6 +621,266 @@ func TestAQuestionQuotesTheCallersContextID(t *testing.T) {
 	want := `[A2A caller alice, conversation "c1)]\nAllow read README.md\n` + strings.Repeat("x", 64-len("c1)]\nAllow read README.md\n")) + `..." (session `
 	if len(asked) != 1 || !strings.HasPrefix(asked[0], want) {
 		t.Errorf("the view was asked %q, want it to start %q", asked, want)
+	}
+}
+
+// A question from an A2A conversation is answered by a view attached
+// over the control's wire, as dax attach is; and a view that detaches
+// while it waits leaves nobody to answer, so the call is refused then,
+// never allowed, and the record says so.
+func TestAnA2AQuestionNeedsAnAttachedView(t *testing.T) {
+	t.Run("a view attached over the wire answers", func(t *testing.T) {
+		s := startA2A(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, false)
+		ctl, err := control.Dial(t.Context(), s.url+controlPrefix, control.WithBearerToken(serveTok))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var (
+			mu    sync.Mutex
+			asked []string
+		)
+		unsub := ctl.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+			if q, ok := ev.(*agentturn.Question); ok {
+				mu.Lock()
+				asked = append(asked, q.Elicitation.Message)
+				mu.Unlock()
+				go ctl.Reply(context.WithoutCancel(ctx), q.ID, agenttool.Answer{Action: agenttool.ActionAccept})
+			}
+			return nil
+		})
+		defer unsub()
+		// The view is attached once its follow of the events is; until
+		// then a question is refused at once, and the caller tries again
+		// in a new conversation.
+		var conv string
+		for i, deadline := 0, time.Now().Add(15*time.Second); ; i++ {
+			conv = fmt.Sprintf("c%d", i)
+			task, err := send(t, s.client(aliceToken), say(conv, "make it"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.Status.State != a2a.TaskStateCompleted {
+				t.Fatalf("task %s, want completed", task.Status.State)
+			}
+			if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the attached view never allowed the call")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		mu.Lock()
+		n := len(asked)
+		mu.Unlock()
+		if n == 0 {
+			t.Error("the view was not asked")
+		}
+		if got := strings.Join(decisions(s.session(conv)), "\n"); !strings.Contains(got, "proceed by human") {
+			t.Errorf("the conversation's decisions:\n%s\nwant the view's allow", got)
+		}
+	})
+	t.Run("the last view detaches while it waits", func(t *testing.T) {
+		s := startA2A(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, false)
+		v := &answeringView{}
+		v.attach(t, s.rig.sess, "")
+		done := make(chan *a2a.Task, 1)
+		go func() {
+			task, _ := send(t, s.client(aliceToken), say("c1", "make it"))
+			done <- task
+		}()
+		v.waitAsked(t)
+		v.detach()
+		var task *a2a.Task
+		select {
+		case task = <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatal("the question still waits with no view attached")
+		}
+		if task == nil || task.Status.State != a2a.TaskStateCompleted {
+			t.Fatalf("task %+v, want completed with the call refused", task)
+		}
+		if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); err == nil {
+			t.Error("the call ran")
+		}
+		if got := strings.Join(decisions(s.session("c1")), "\n"); !strings.Contains(got, "cannot be handed to the caller") {
+			t.Errorf("the conversation's decisions:\n%s\nwant the refusal", got)
+		}
+	})
+}
+
+// A sub-agent's call the policy asks about, in an A2A conversation, is
+// put to a view attached to the served session, with -a2a-escalate as
+// without, since front/a2a puts only the model's own calls to the
+// caller; with no view attached it is refused at once and the sub-agent
+// told so.
+func TestASubagentsQuestionInAnA2AConversationNeedsAView(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		escalate, view bool
+	}{
+		{"no view attached", false, false},
+		{"a view attached", false, true},
+		{"a view attached, under -a2a-escalate", true, true},
+		{"no view attached, under -a2a-escalate", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &steps{
+				parent: [][2]string{{"task", `{"input":"write the file"}`}},
+				child:  [][2]string{{"write", `{"path":"NOTED","content":"x"}`}},
+			}
+			s := startA2A(t, m, policy.Rules{Allow: []string{"task"}}, tc.escalate)
+			v := &answeringView{}
+			if tc.view {
+				v.attach(t, s.rig.sess, agenttool.ActionAccept)
+			}
+			task, err := send(t, s.client(aliceToken), say("c1", "go"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.Status.State != a2a.TaskStateCompleted {
+				t.Fatalf("task %s, want completed: the sub-agent's question is not the caller's", task.Status.State)
+			}
+			if _, err := os.Stat(filepath.Join(s.rig.dir, "NOTED")); (err == nil) != tc.view {
+				t.Errorf("NOTED written: %v, want %v", err == nil, tc.view)
+			}
+			if asked := v.questions(); tc.view && (len(asked) != 1 || !strings.Contains(asked[0], "the task sub-agent asks")) {
+				t.Errorf("the view was asked %q", asked)
+			}
+			if !tc.view {
+				// The sub-agent's decisions are in its own session, the
+				// conversation's subsession.
+				var got []string
+				for _, e := range s.session("c1").Entries() {
+					if l, ok := e.(*agentsession.LinkEntry); ok && l.Rel == agentsession.RelSubsession && l.Session != "" {
+						child, err := s.rig.sess.Recorder().Store().Open(t.Context(), l.Session)
+						if err != nil {
+							t.Fatal(err)
+						}
+						got = append(got, decisions(child)...)
+					}
+				}
+				if got := strings.Join(got, "\n"); !strings.Contains(got, "cannot ask you") {
+					t.Errorf("the conversation's decisions:\n%s\nwant the sub-agent told nobody could be asked", got)
+				}
+			}
+		})
+	}
+}
+
+// Two conversations at once run side by side, each recorded in a
+// session of its own.
+func TestTwoA2AConversationsAtOnce(t *testing.T) {
+	s := startA2A(t, &steps{}, policy.Rules{}, false)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, c := range []string{"c1", "c2"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task, err := send(t, s.client(aliceToken), say(c, "hello from "+c))
+			if err == nil && task.Status.State != a2a.TaskStateCompleted {
+				err = fmt.Errorf("%s: task %s", c, task.Status.State)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	one, two := s.session("c1"), s.session("c2")
+	if one.ID() == two.ID() || one.ID() == s.rig.sess.ID() || two.ID() == s.rig.sess.ID() {
+		t.Fatalf("sessions %s and %s, served %s: want two of their own", one.ID(), two.ID(), s.rig.sess.ID())
+	}
+	for sess, want := range map[*agentsession.Session]string{one: "hello from c1", two: "hello from c2"} {
+		if got := userTexts(sess); !slices.Equal(got, []string{want}) {
+			t.Errorf("session %s holds %q, want %q", sess.ID(), got, want)
+		}
+	}
+}
+
+// One dax serve keeps a directory's conversations at a time: a second
+// is refused while the first holds it, and takes it once it lets go.
+// What a write cut short left is swept when the store opens.
+func TestTheConversationsDirectoryIsOneServes(t *testing.T) {
+	rig := startRig(t, &steps{}, policy.Rules{}, nil, nil, false)
+	dir := t.TempDir()
+	first, err := newA2APeers(rig.sess, a2aOptions{dir: dir, tokens: map[string]string{aliceToken: "alice"}, stop: t.Context()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newA2APeers(rig.sess, a2aOptions{dir: dir, tokens: map[string]string{aliceToken: "alice"}, stop: t.Context()}); err == nil || !strings.Contains(err.Error(), "another dax serve -a2a keeps its conversations in "+dir) {
+		t.Errorf("a second serve on the directory: %v, want refused", err)
+	}
+	left := filepath.Join(dir, "conversations", ".tmp-123")
+	if err := os.WriteFile(left, []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first.close(time.Second)
+	again, err := newA2APeers(rig.sess, a2aOptions{dir: dir, tokens: map[string]string{aliceToken: "alice"}, stop: t.Context()})
+	if err != nil {
+		t.Fatalf("after the first let go: %v", err)
+	}
+	defer again.close(time.Second)
+	if _, err := os.Stat(left); err == nil {
+		t.Error("a write cut short was left in place")
+	}
+}
+
+// The directory is one per session store and workspace: a store spelled
+// another way is the same, and two workspaces with one root, two
+// containers say, are two.
+func TestTheConversationsDirectoryIsKeyedByStoreAndWorkspace(t *testing.T) {
+	local := workspace.Descriptor{Kind: workspace.KindLocal, Root: "/work"}
+	a := workspace.Descriptor{Kind: workspace.KindContainer, Ref: "image-a", Root: "/workspace"}
+	b := workspace.Descriptor{Kind: workspace.KindContainer, Ref: "image-b", Root: "/workspace"}
+	if a2aDir("/store", a) == a2aDir("/store", b) {
+		t.Error("two containers with one root share a directory")
+	}
+	if a2aDir("/store", local) == a2aDir("/other", local) {
+		t.Error("two stores share a directory")
+	}
+	if again := (workspace.Descriptor{Kind: workspace.KindLocal, Root: "/work"}); a2aDir("/store", local) != a2aDir("/store", again) {
+		t.Error("one place has two directories")
+	}
+
+	rig := startRig(t, &steps{}, policy.Rules{}, nil, nil, false)
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	if got, want := storeRoot(rig.sess, link+"/"), storeRoot(rig.sess, real); got != want {
+		t.Errorf("a store named through a link resolves to %q, by its own name %q", got, want)
+	}
+}
+
+// A call the policy asked about with no rewrite is kept as it was, and
+// read back so: "Args": null is no rewrite, not arguments of null.
+func TestAnEscalatedCallReadsBackAsKept(t *testing.T) {
+	store, err := openA2AStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+	call := &openresponses.FunctionCall{CallID: "call-1", Name: "bash", Arguments: `{"command":"touch PEER"}`}
+	kept := []fronta2a.Escalated{
+		{Task: "t1", Call: call, Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: "asks"}},
+		{Task: "t1", Call: call, Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: "rewrites", Args: json.RawMessage(`{"command":"x"}`)}},
+	}
+	if err := store.SaveEscalated(t.Context(), "c1", kept); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LoadEscalated(t.Context(), "c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Decision.Args != nil || string(got[1].Decision.Args) != `{"command":"x"}` || got[0].Call.Arguments != call.Arguments {
+		t.Errorf("read back %+v %+v", got[0].Decision, got[1].Decision)
 	}
 }
 
@@ -649,7 +1065,7 @@ func TestACanceledEscalationIsSettled(t *testing.T) {
 }
 
 // Without -a2a dax serve mounts no A2A; with it, the endpoint is
-// behind the token and the card names where serve is reached.
+// and the card are behind the A2A token.
 func TestServeMountsA2AOnlyWhenAsked(t *testing.T) {
 	get := func(t *testing.T, url, token string) int {
 		t.Helper()
@@ -677,8 +1093,11 @@ func TestServeMountsA2AOnlyWhenAsked(t *testing.T) {
 
 	dir := t.TempDir()
 	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) { f.a2a, f.a2aDir = true, dir })
-	if code := get(t, s.url+a2asrv.WellKnownAgentCardPath, ""); code != http.StatusOK {
-		t.Errorf("with -a2a, the card = %d, want 200", code)
+	if code := get(t, s.url+a2asrv.WellKnownAgentCardPath, ""); code != http.StatusUnauthorized {
+		t.Errorf("with -a2a, the card without the token = %d, want 401", code)
+	}
+	if code := get(t, s.url+a2asrv.WellKnownAgentCardPath, s.a2aToken()); code != http.StatusOK {
+		t.Errorf("with -a2a, the card with the A2A token = %d, want 200", code)
 	}
 	if code := get(t, s.url+a2aPath, ""); code != http.StatusUnauthorized {
 		t.Errorf("with -a2a, %s without the token = %d, want 401", a2aPath, code)
@@ -695,7 +1114,7 @@ func TestServeMountsA2AOnlyWhenAsked(t *testing.T) {
 // conversation in a session of its own.
 func TestADaxCallsAServedDax(t *testing.T) {
 	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) { f.a2a, f.a2aDir = true, t.TempDir() })
-	t.Setenv("BUILDER_TOKEN", s.token)
+	t.Setenv("BUILDER_TOKEN", s.a2aToken())
 	through := "http://" + tunnel(t, strings.TrimPrefix(s.url, "http://"))
 	callerModel := &steps{parent: [][2]string{{"builder", `{"input":"build it"}`}}}
 	caller, err := agent.New(t.Context(), agent.Options{
@@ -754,7 +1173,7 @@ func TestADaxCallsAServedDax(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if slices.Equal(userTexts(sess), []string{"build it"}) && slices.Equal(triggers(sess), []string{"a2a/" + servePrincipal}) {
+		if slices.Equal(userTexts(sess), []string{"build it"}) && slices.Equal(triggers(sess), []string{"a2a/" + a2aPrincipal}) {
 			found = true
 		}
 	}

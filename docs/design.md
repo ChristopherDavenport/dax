@@ -68,26 +68,35 @@ about is answered by the callee's own human plane; the caller's tools it
 was lent come back to the caller to run.
 
 `dax serve -a2a` is dax as the callee (`serve_a2a.go`): front/a2a on
-serve's listener, behind serve's token under the control's principal,
-its card at the well-known path. Each A2A context is a conversation, so
-it is a session of its own (one session, one conversation): an agent
-per task under the served agent's configuration
-(`agent.Session.PeerConfig`: the same model, extensions, policy and
-workspace), seeded from front/a2a's conversation store and recorded
-through `WithRecorderFor` in a dax session in the served session's store
-(`agent.Session.OpenPeer`, `PeerRecord.Attach`), never in the served
-one. The run's context carries that session's recorder, so the kit's
-hooks write their verdicts there, and the conversation it comes from,
-which every question names. A call the policy asks about goes to the
-served session's views as its own questions do, waiting for whoever
-attaches, and is refused, never allowed, when the caller gives the task
-up or nobody answers; `-a2a-escalate` puts it to the caller
-(`WithEscalation`) instead, for a host nobody attaches to. The
-transcripts, the owners and the escalated calls are kept in a private
-directory under `~/.dax/a2a`, one per working directory and session
-store, so a restart keeps them; a2a-go's tasks are not. The conversations and the served
-session act in one workspace at the same time, as parallel sub-agents
-do.
+serve's listener, its JSON-RPC and its card behind an A2A token of their
+own under the principal `a2a`, which the control and the store do not
+take, so a caller lent the agent is not lent the human plane or the
+store. Each A2A context is a conversation, so it is a session of its own
+(one session, one conversation): an agent per task under the served
+agent's configuration (`agent.Session.PeerConfig`: the same model,
+extensions, policy, MCP servers and workspace), seeded from front/a2a's
+conversation store and recorded through `WithRecorderFor` in a dax
+session in the served session's store (`agent.Session.OpenPeer`,
+`PeerRecord.Attach`, opened for each task and let go after it, with the
+task's skill grants), never in the served one. The run's context carries
+that session's recorder, so the kit's hooks write their verdicts there,
+and the conversation it comes from, which every question names. A
+question from a conversation, a call the policy asks about, a
+sub-agent's asked call or a tool's own, is asked only of a view attached
+when it is asked, one following the control's events
+(`agent.Session.Viewing`), not of serve's hold on the session's
+questions: with none it is refused at once, and it is refused when the
+last view detaches while it waits, never allowed. `-a2a-escalate` puts
+the model's own calls the policy asks about to the caller
+(`WithEscalation`) instead, for a host nobody attaches to; front/a2a
+leaves a nested call to the loop, so a sub-agent's asked call and a
+tool's question still go to a view. The transcripts, the owners, the
+escalated calls and the waiting tasks are kept in a private directory
+under `~/.dax/a2a`, one per session store (its resolved root) and
+workspace (its kind, ref and root), locked by the serve that keeps it,
+so a restart keeps them and two serves never share them; a2a-go's tasks
+are not kept. The conversations and the served session act in one
+workspace at the same time, as parallel sub-agents do.
 
 Where dax does not keep to this yet, and what each needs:
 
@@ -117,8 +126,9 @@ Where dax does not keep to this yet, and what each needs:
   task; front/a2a writes a conversation's transcript, its escalated
   calls and the task it waits on in three calls, each replacing the one
   record whole, so a crash between them leaves the record a step behind,
-  not torn; and a conversation runs under the configuration serve
-  started with, not a later `/model`.
+  not torn; and a conversation runs under the model and reasoning serve
+  started with, not a later `/model`, though its MCP servers are the
+  session's as they are.
 
 ## Who owns what
 
@@ -129,7 +139,7 @@ Where dax does not keep to this yet, and what each needs:
 | Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory), `ext/a2a` (dax-a2a) |
 | A remote agent as a tool | `agentturn/tools/a2a` over a2a-go's client | dax-a2a: the user's `peers`, the card fetched at start, the client's token guard and `ObserveEndpoint`, the relation, the remote's question put to the session's |
-| The agent served to A2A callers | `agentturn/front/a2a` over a2a-go's server | `serve_a2a.go`: the mount, the token, a session per conversation, the conversations kept on disk; `agent.Session.PeerConfig` and `OpenPeer` |
+| The agent served to A2A callers | `agentturn/front/a2a` over a2a-go's server | `serve_a2a.go`: the mount, the A2A token, the card, a session per conversation, the conversations kept on disk under a lock; `agent.Session.PeerConfig`, `OpenPeer` and `Viewing` |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
 | Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each model response's facts read together for its decisions, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
@@ -362,9 +372,10 @@ through agentsession's `remote`) behind one bearer token, holding
 `Answering` while it serves, so questions wait for whoever attaches.
 `dax attach` is the terminal client over that wire, its slash commands
 through the served commands; leaving it leaves the session's run going.
-With `-a2a` dax serve also serves A2A callers, each conversation a
-session of its own (see Planes); their questions reach the served
-session's views, each naming the conversation it is about.
+With `-a2a` dax serve also serves A2A callers, behind a token of their
+own, each conversation a session of its own (see Planes); their
+questions reach only the views attached when they are asked, each
+naming the conversation it is about.
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal

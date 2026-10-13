@@ -8,11 +8,13 @@ package dax
 // in a dax session of its own (agent.Session.OpenPeer), and never
 // written into the served one: one session, one conversation.
 //
-// The JSON-RPC endpoint is behind the token the control is, under the
-// same principal, and the agent card is served unauthenticated at the
-// well-known path so a caller can learn the scheme. The conversations,
-// who owns each, and the calls a task put to its caller are kept in a
-// private directory, so a restart keeps them.
+// The JSON-RPC endpoint and the agent card are behind a token of their
+// own, under the principal a2aPrincipal, which the control and the
+// store do not take: an A2A caller reaches the agent and nothing else of
+// the session, and serve's token does not reach A2A. The
+// conversations, who owns each, the calls a task put to its caller and
+// the task each waits on are kept in a private directory, so a restart
+// keeps them, and one dax serve at a time keeps them there.
 
 import (
 	"context"
@@ -21,16 +23,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentturn"
 	fronta2a "github.com/ChristopherDavenport/agentturn/front/a2a"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
 
@@ -42,54 +47,65 @@ import (
 // a2asrv.WellKnownAgentCardPath.
 const a2aPath = "/a2a"
 
-// servePrincipal is who holds serve's token, on the control and on A2A
-// alike, so the record names one principal for both.
-const servePrincipal = "attach"
+// servePrincipal is who holds serve's token, on the control and the
+// store; a2aPrincipal is who holds the A2A token, on A2A alone, which
+// the record names as the caller of each conversation's runs.
+const (
+	servePrincipal = "attach"
+	a2aPrincipal   = "a2a"
+)
+
+// a2aTokenEnv names the variable that holds the A2A token. Without it,
+// dax serve -a2a makes one and writes it beside serve's.
+const a2aTokenEnv = "DAX_SERVE_A2A_TOKEN"
 
 // a2aPeers is front/a2a over a served session: the executor, the card,
 // and the conversations' runs, which end when serving does.
 type a2aPeers struct {
-	sess  *agent.Session
-	store *a2aStore
-	exec  *fronta2a.Executor
-	card  *a2a.AgentCard
+	sess    *agent.Session
+	store   *a2aStore
+	exec    *fronta2a.Executor
+	cfg     agentturn.Config
+	version string
+	// base is the URL the card names the endpoint under (-a2a-url); nil
+	// is the origin each request reached.
+	base *url.URL
 
 	// stop ends every conversation's run; serve cancels it when it
 	// stops.
 	stop context.Context
 
 	mu      sync.Mutex
-	records map[string]*agent.PeerRecord // by context ID
 	closing bool
 	runs    sync.WaitGroup
 }
 
 // a2aOptions are what serve mounts front/a2a with.
 type a2aOptions struct {
-	// url is the served base URL, which the card names when a request
-	// does not say where it reached serve.
-	url, version string
+	// base is the public base URL the card names (-a2a-url), checked by
+	// checkA2AURL; nil names the origin each request reached.
+	base    *url.URL
+	version string
 	// dir is where the conversations are kept.
 	dir string
-	// tokens map each bearer token to its principal: serve's one token
-	// to servePrincipal.
+	// tokens map each bearer token to its principal: the A2A token to
+	// a2aPrincipal.
 	tokens map[string]string
 	// escalate puts a call the policy asks about to the caller
 	// (front/a2a's WithEscalation), in place of the served session's
-	// fronts.
+	// views.
 	escalate bool
 	// stop ends the conversations' runs.
 	stop context.Context
 }
 
-// newA2APeers builds front/a2a over sess.
-func newA2APeers(ctx context.Context, sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
+// newA2APeers builds front/a2a over sess. It holds o.dir until close.
+func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 	store, err := openA2AStore(o.dir)
 	if err != nil {
 		return nil, err
 	}
-	p := &a2aPeers{sess: sess, store: store, stop: o.stop, records: map[string]*agent.PeerRecord{}}
-	cfg := sess.PeerConfig()
+	p := &a2aPeers{sess: sess, store: store, cfg: sess.PeerConfig(), version: o.version, base: o.base, stop: o.stop}
 	opts := []fronta2a.Option{
 		fronta2a.WithConversationStore(store),
 		fronta2a.WithAuthenticator(fronta2a.BearerTokens(o.tokens)),
@@ -98,33 +114,75 @@ func newA2APeers(ctx context.Context, sess *agent.Session, o a2aOptions) (*a2aPe
 	if o.escalate {
 		opts = append(opts, fronta2a.WithEscalation())
 	}
-	p.exec = fronta2a.New(cfg, opts...)
-	p.card = p.exec.Secure(fronta2a.AgentCard(ctx, cfg, o.url+a2aPath, o.version))
+	p.exec = fronta2a.New(p.cfg, opts...)
 	return p, nil
 }
 
-// mount serves the JSON-RPC endpoint and the card on mux.
+// mount serves the JSON-RPC endpoint and the card on mux, both behind
+// the A2A token.
 func (p *a2aPeers) mount(mux *http.ServeMux) {
 	mux.Handle(a2aPath, p.exec.Handler(a2asrv.NewJSONRPCHandler(p.exec.RequestHandler())))
-	mux.HandleFunc(a2asrv.WellKnownAgentCardPath, p.serveCard)
+	mux.Handle("GET "+a2asrv.WellKnownAgentCardPath, p.exec.Handler(http.HandlerFunc(p.serveCard)))
 }
 
-// serveCard serves the card naming the endpoint at the origin the
-// request reached, a tunnel's end or the name a certificate is for,
-// which a caller holds the endpoint to (dax-a2a does), where the
-// address serve listens on may be neither. The card carries no secret,
-// so the request's Host names only what the caller already used.
-func (p *a2aPeers) serveCard(w http.ResponseWriter, r *http.Request) {
-	card := *p.card
-	if r.Host != "" {
-		u := url.URL{Scheme: "http", Host: r.Host, Path: a2aPath}
-		if r.TLS != nil {
-			u.Scheme = "https"
-		}
-		card.URL = u.String()
+// card is the agent card a request is answered with: the agent's tools
+// as they are now, an MCP server added since serve started included,
+// and the endpoint at -a2a-url, else at the origin the request reached,
+// which a caller holds the endpoint to (dax-a2a does).
+func (p *a2aPeers) card(r *http.Request) *a2a.AgentCard {
+	u := url.URL{Scheme: "http", Host: r.Host, Path: a2aPath}
+	if r.TLS != nil {
+		u.Scheme = "https"
 	}
+	if p.base != nil {
+		u = *p.base
+		u.Path = strings.TrimSuffix(u.Path, "/") + a2aPath
+	}
+	return p.exec.Secure(fronta2a.AgentCard(r.Context(), p.cfg, u.String(), p.version))
+}
+
+// serveCard writes the card as JSON. It is served to the token's holder
+// only, with none of the cross-origin headers a2a-go's card handler
+// sends: no page in a browser has a use for it.
+func (p *a2aPeers) serveCard(w http.ResponseWriter, r *http.Request) {
+	data, err := json.Marshal(p.card(r))
+	if err != nil {
+		http.Error(w, "the agent card", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	a2asrv.NewStaticAgentCardHandler(&card).ServeHTTP(w, r)
+	w.Write(data)
+}
+
+// checkA2AURL checks -a2a-url, the base URL a caller reaches serve at,
+// which the card names: https, or http to loopback, with a host and no
+// credentials, query or fragment. A path is a prefix a proxy strips.
+func checkA2AURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("-a2a-url: %w", err)
+	}
+	switch {
+	case u.Host == "" || u.Opaque != "":
+		return nil, fmt.Errorf("-a2a-url %q: want an absolute URL with a host", raw)
+	case u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
+		return nil, fmt.Errorf("-a2a-url %q: want no credentials, query or fragment", raw)
+	case u.Scheme == "https":
+	case u.Scheme == "http" && loopbackHost(u.Hostname()):
+	default:
+		return nil, fmt.Errorf("-a2a-url %q: want https, or http to loopback; a token sent in the clear to another host is anyone's", raw)
+	}
+	return u, nil
+}
+
+// loopbackHost reports whether host names this machine's loopback.
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // recorderFor is front/a2a's RecorderFor: the conversation's run is
@@ -168,15 +226,13 @@ func (p *a2aPeers) recorderFor(ctx context.Context, contextID string, a *agenttu
 	}, nil
 }
 
-// record is the conversation's session: the one this process opened,
-// the one the store says records it, or a new one, which the store
-// then names.
+// record opens the conversation's session for one task: the one the
+// store says records it, or a new one, which the store then names.
+// Nothing is kept of it after the task, so a conversation costs nothing
+// between its messages. front/a2a runs one task of a conversation at a
+// time, so no two open one conversation's session at once, and no lock
+// of this process is held across the store's reads and writes.
 func (p *a2aPeers) record(ctx context.Context, contextID string) (*agent.PeerRecord, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if rec, ok := p.records[contextID]; ok {
-		return rec, nil
-	}
 	id, err := p.store.sessionOf(contextID)
 	if err != nil {
 		return nil, err
@@ -190,13 +246,12 @@ func (p *a2aPeers) record(ctx context.Context, contextID string) (*agent.PeerRec
 			return nil, err
 		}
 	}
-	p.records[contextID] = rec
 	return rec, nil
 }
 
 // close refuses new runs and waits, for at most drain, for those
 // going, which stop has ended, so their ends are on the record before
-// the session closes.
+// the session closes; then it lets go of the directory.
 func (p *a2aPeers) close(drain time.Duration) {
 	p.mu.Lock()
 	p.closing = true
@@ -210,16 +265,35 @@ func (p *a2aPeers) close(drain time.Duration) {
 	case <-done:
 	case <-time.After(drain):
 	}
+	p.store.close()
 }
 
-// a2aDir is where the conversations of the session served in dir, and
-// recorded in the store at root, are kept: under the user's dax
-// directory, one directory per workspace and store, so a restart in the
-// same place continues them and one elsewhere, or recording elsewhere,
-// does not find sessions its store lacks.
-func a2aDir(root, dir string) string {
-	sum := sha256.Sum256([]byte(root + "\x00" + dir))
+// a2aDir is where the conversations of a session are kept: under the
+// user's dax directory, one directory per session store (root, as the
+// store resolves it) and workspace (its kind, ref and root, so two
+// containers with one root are two places), so a restart in the same
+// place continues them and one elsewhere does not find sessions its
+// store lacks.
+func a2aDir(root string, ws workspace.Descriptor) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{root, ws.Kind, ws.Ref, ws.Root}, "\x00")))
 	return filepath.Join(agent.DefaultUserDir(), "a2a", hex.EncodeToString(sum[:8]))
+}
+
+// storeRoot is the root of the session's store, resolved, so two
+// spellings of one directory are one key: the store's own when it says,
+// else flag, the -sessions it was opened from.
+func storeRoot(sess *agent.Session, flag string) string {
+	root := flag
+	if r, ok := sess.Recorder().Store().(interface{ Root() string }); ok {
+		root = r.Root()
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	return root
 }
 
 // a2aStore keeps what front/a2a must not lose to a restart, in files
@@ -232,6 +306,8 @@ func a2aDir(root, dir string) string {
 type a2aStore struct {
 	dir string
 	mu  sync.Mutex
+	// lock holds the directory's lock file, locked for the store's life.
+	lock *os.File
 }
 
 var (
@@ -250,13 +326,39 @@ type a2aConversation struct {
 	Waiting    string               `json:"waiting,omitempty"`
 }
 
+// openA2AStore opens the store in dir and locks it: a second store
+// over dir, in this process or another dax serve, is refused until
+// close, so two never write one conversation. What a write cut short
+// left (.tmp-* files) is swept, which the lock makes safe.
 func openA2AStore(dir string) (*a2aStore, error) {
-	for _, d := range []string{dir, filepath.Join(dir, "conversations"), filepath.Join(dir, "owners")} {
+	subs := []string{filepath.Join(dir, "conversations"), filepath.Join(dir, "owners")}
+	for _, d := range append([]string{dir}, subs...) {
 		if err := private.SecureDir(d); err != nil {
 			return nil, fmt.Errorf("a2a: %w", err)
 		}
 	}
-	return &a2aStore{dir: dir}, nil
+	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("a2a: %w", err)
+	}
+	if err := lockFile(lock); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("a2a: another dax serve -a2a keeps its conversations in %s (%w); stop it, or serve elsewhere", dir, err)
+	}
+	for _, d := range subs {
+		left, _ := filepath.Glob(filepath.Join(d, ".tmp-*"))
+		for _, f := range left {
+			os.Remove(f)
+		}
+	}
+	return &a2aStore{dir: dir, lock: lock}, nil
+}
+
+// close lets go of the directory.
+func (s *a2aStore) close() {
+	if s.lock != nil {
+		s.lock.Close()
+	}
 }
 
 // hashedName is a file's name for a key a caller chose: a hash, so no ID
@@ -316,7 +418,7 @@ func (s *a2aStore) update(contextID string, change func(*a2aConversation)) error
 }
 
 // writePrivate writes data to path through a file only the user can
-// read, renamed into place.
+// read, renamed into place, and the rename made durable.
 func writePrivate(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
@@ -335,7 +437,20 @@ func writePrivate(path string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+// syncDir makes the names in dir durable, a rename or a link into it.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // Load implements fronta2a.ConversationStore.
@@ -427,7 +542,11 @@ func (s *a2aStore) Claim(ctx context.Context, key, principal string) (string, er
 	if err != nil {
 		return "", err
 	}
-	if err := os.Link(tmp, path); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := os.Link(tmp, path); err == nil {
+		if err := syncDir(filepath.Dir(path)); err != nil {
+			return "", err
+		}
+	} else if !errors.Is(err, os.ErrExist) {
 		return "", err
 	}
 	owner, ok, err := s.Owner(ctx, key)

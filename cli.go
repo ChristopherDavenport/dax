@@ -118,8 +118,9 @@ func run(ctx context.Context, args []string, p program) error {
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
 	tlsCert := fs.String("tls-cert", "", "dax serve: serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "dax serve: the private key (PEM) of -tls-cert")
-	a2aFlag := fs.Bool("a2a", false, "dax serve: also serve the session's agent over A2A (/a2a, its card at /.well-known/agent-card.json) behind the same token; each A2A conversation is a session of its own")
-	a2aEscalate := fs.Bool("a2a-escalate", false, "dax serve -a2a: put a call the policy asks about to the A2A caller, for a host nobody attaches to; without it the served session's views answer")
+	a2aFlag := fs.Bool("a2a", false, "dax serve: also serve the session's agent over A2A (/a2a, its card at /.well-known/agent-card.json) behind a token of its own ($"+a2aTokenEnv+" or a file beside serve's); each A2A conversation is a session of its own")
+	a2aEscalate := fs.Bool("a2a-escalate", false, "dax serve -a2a: put a call the policy asks about to the A2A caller, for a host nobody attaches to; without it a view attached to the served session answers, and with none attached it is refused")
+	a2aURL := fs.String("a2a-url", "", "dax serve -a2a: the base URL callers reach serve at, which the agent card names (https, or http to loopback), as behind a proxy that ends TLS; without it the card names the origin each request reached")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -130,7 +131,7 @@ func run(ctx context.Context, args []string, p program) error {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
-	for _, name := range []string{"listen", "tls-cert", "tls-key", "a2a", "a2a-escalate"} {
+	for _, name := range []string{"listen", "tls-cert", "tls-key", "a2a", "a2a-escalate", "a2a-url"} {
 		if given[name] && !serving {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
@@ -149,6 +150,14 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		if *a2aEscalate && !*a2aFlag {
 			return errors.New("-a2a-escalate goes with -a2a")
+		}
+		if given["a2a-url"] {
+			if !*a2aFlag {
+				return errors.New("-a2a-url goes with -a2a")
+			}
+			if _, err := checkA2AURL(*a2aURL); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -404,7 +413,7 @@ func run(ctx context.Context, args []string, p program) error {
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
-		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, sessions: *root}
+		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: *root}
 	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
 		return err
 	}

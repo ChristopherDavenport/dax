@@ -245,6 +245,9 @@ type Session struct {
 	detach func()
 	// answering counts the fronts answering questions (Answering).
 	answering atomic.Int32
+	// views counts the views attached to it (Viewing), which an A2A
+	// caller's conversation's questions need.
+	views views
 }
 
 // live is what /think and /model have set, read by each sub-agent

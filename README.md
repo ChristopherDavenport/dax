@@ -1022,76 +1022,93 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
 `-a2a` serves the session's agent over [A2A](https://a2a-protocol.org)
 as well, so another agent (a dax with this one in its `peers`, or any
 A2A client) can call it. It is off by default: it lends the agent's
-tools to whoever holds the token.
+tools, in this workspace, to whoever holds the A2A token.
 
 ```sh
 dax serve -a2a -listen 127.0.0.1:7878
 # serving at http://127.0.0.1:7878
 # a2a: http://127.0.0.1:7878/a2a, card at http://127.0.0.1:7878/.well-known/agent-card.json
+# a2a token: /home/you/.dax/serve/01a112e5-....a2a.token
 ```
 
 | Flag | What it does |
 |---|---|
-| `-a2a` | mount A2A's JSON-RPC at `/a2a` and the agent card at `/.well-known/agent-card.json`, on serve's listener and TLS |
-| `-a2a-escalate` | with `-a2a`: put a call the policy asks about to the caller instead of the served session's views, for a host nobody attaches to |
+| `-a2a` | mount A2A's JSON-RPC at `/a2a` and the agent card at `/.well-known/agent-card.json`, on serve's listener and TLS, behind the A2A token |
+| `-a2a-escalate` | with `-a2a`: put a call the model makes that the policy asks about to the caller instead of the attached views, for a host nobody attaches to |
+| `-a2a-url URL` | with `-a2a`: the base URL callers reach serve at, which the card names (https, or http to loopback), for serve behind a proxy that ends TLS; without it the card names the origin each request reached, `https` when serve itself serves TLS |
 
-- **The same token.** Every A2A call needs serve's token, as the
-  control does, and is made under the same principal (`attach`); one
-  without it gets 401 and runs nothing. The card is served to anyone,
-  so a caller can learn how to authenticate: it names the bearer
-  scheme, the URL serve is reached at (`<url>/a2a`), the agent's name
-  and description and its tools by name and description, and no token.
+- **Two tokens.** serve's token (`<id>.token`, or `$DAX_SERVE_TOKEN`)
+  is the control and the store: whoever holds it drives the session,
+  answers its questions, adds MCP servers (which start commands on this
+  machine) and reads every session in the store. The A2A token
+  (`<id>.a2a.token` beside it, only you can read it, or
+  `$DAX_SERVE_A2A_TOKEN`, which must differ) reaches `/a2a` and the card
+  and nothing else; it is what you give a peer. Neither works in the
+  other's place: 401. A2A calls are made under the principal `a2a`.
+- **The card is behind the token.** It names the bearer scheme, the
+  endpoint, the agent's name and description and its tools as they are
+  when it is asked (an MCP server added since serve started included),
+  and no token; it is sent with no cross-origin headers, so a page in a
+  browser cannot read it.
 - **A conversation is a session.** Each A2A context is a conversation
   of its own, recorded in a dax session of its own in the store, with
   the served session's working directory: `dax -list` in the project
-  shows it, and each run names the caller (a trigger `a2a/<principal>`).
+  shows it, and each run names the caller (a trigger `a2a/a2a`).
   Nothing of it is written into the served session, and a view attached
   to that session does not see its transcript. A conversation belongs to
   the principal whose message started it; another cannot continue it or
-  read its tasks. The conversations, who owns each and the calls a task
-  put to its caller are kept under `~/.dax/a2a/` (one directory per
-  working directory and session store, only you can read it), so a
-  restart in the same place continues them in the same sessions. The tasks themselves are
-  not kept: after a restart a task's ID is unknown, and the caller goes
-  on with a new message in the same context.
+  read its tasks. The conversations, who owns each, the calls a task put
+  to its caller and the task each waits on are kept under `~/.dax/a2a/`
+  (one directory per session store and workspace, only you can read
+  it), so a restart in the same place continues them in the same
+  sessions. One `dax serve -a2a` at a time keeps a directory: a second in
+  the same place refuses to start. The tasks themselves are not kept:
+  after a restart a task's ID is unknown, and the caller goes on with a
+  new message in the same context.
 - **The same agent, the same workspace.** A conversation runs under the
-  served session's model, reasoning, extensions, policy and MCP servers,
-  as they stood when serve started, and its tools act in the same
-  workspace. The conversations and the served session run at the same
-  time, on the same files, as parallel sub-agents do; nothing orders
-  them. One conversation runs one task at a time: a message while one is
-  in flight is refused, and the caller sends it again.
-- **Who answers the policy.** A call the policy asks about in a
-  conversation is put to the views attached to the served session, as
-  its own questions are, naming the caller and the conversation
-  (`[A2A caller attach, conversation "<id>" (session <id>)] Allow bash
-  ...`). It waits for whoever attaches, as the served session's own
-  questions do, until the caller gives the task up, when the call is
-  refused and the conversation's record says it was asked and not
-  answered. Nothing is allowed in anyone's place. With `-a2a-escalate` the call goes to the
-  caller instead: the task waits for input, listing the call and the
-  policy's reason, and the caller's approval runs the call as the policy
-  decided it, its refusal refuses it, both on the record under the
-  caller's principal. A dax calling with dax-a2a cannot answer such an
-  approval yet; a host nobody attaches to and a caller that can answer
-  are what it is for.
+  served session's model and reasoning as they stood when serve
+  started, and its extensions, policy and MCP servers as they are: an
+  MCP server added or removed in an attached view is added or removed
+  for the conversations too. Its tools act in the same workspace. The
+  conversations and the served session run at the same time, on the
+  same files, as parallel sub-agents do; nothing orders them. One
+  conversation runs one task at a time: a message while one is in
+  flight is refused, and the caller sends it again.
+- **Who answers.** A question in a conversation, a call the policy
+  asks about, a sub-agent's asked call or a tool's own question, is put
+  to the views attached to the served session (`dax attach`), naming
+  the caller and the conversation (`[A2A caller a2a, conversation
+  "<id>" (session <id>)] Allow bash ...`). Only a view attached when it
+  is asked is asked: with none attached the question is not asked and
+  the call is refused at once, and when the last view detaches while it
+  waits it is refused then; the conversation's record holds the
+  refusal. Nothing is allowed in anyone's place. With `-a2a-escalate`
+  a call the model makes that the policy asks about goes to the caller
+  instead: the task waits for input, listing the call and the policy's
+  reason, and the caller's approval runs the call as the policy decided
+  it, its refusal refuses it, both on the record under the caller's
+  principal. Escalation covers only those calls: a sub-agent's asked
+  call and a tool's own question still go to an attached view, by the
+  same rule. A dax calling with dax-a2a cannot answer an approval yet;
+  a host nobody attaches to and a caller that can answer are what it is
+  for.
 
 To call it from another dax, name it as a peer in that dax's config,
-with its token in a variable:
+with the A2A token in a variable:
 
 ```json
 { "peers": { "builder": { "url": "http://127.0.0.1:7878", "token_env": "BUILDER_TOKEN", "relation": "peer" } } }
 ```
 
 ```sh
-BUILDER_TOKEN=$(cat ~/.dax/serve/<id>.token) dax
+BUILDER_TOKEN=$(cat ~/.dax/serve/<id>.a2a.token) dax
 ```
 
-The card names its endpoint at the origin the caller reached it at,
-and dax-a2a holds the endpoint to the configured `url`, so the `url` is
-the one dax serve printed or, from another machine, the tunnel's end or
-the name the certificate is for. Set `DAX_SERVE_TOKEN` on
-the serving side to keep one token across restarts.
+dax-a2a holds the card's endpoint to the configured `url`'s origin, so
+the `url` is the one dax serve printed or, from another machine, the
+tunnel's end, the name the certificate is for, or `-a2a-url` behind a
+proxy. Set `DAX_SERVE_A2A_TOKEN` on the serving side to keep one A2A
+token across restarts.
 
 ## In the REPL
 

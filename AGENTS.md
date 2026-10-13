@@ -52,12 +52,15 @@ before changing the shape.
   with a certificate (`-tls-cert`, `-tls-key`), its control
   (agentturn's `front/control`, `agent.Controls` and the head move as
   named commands) and its record (agentsession's `remote`).
-  `serve_a2a.go`: `dax serve -a2a`, agentturn's `front/a2a` beside
-  them behind the same token, each A2A context a session of its own
-  (`agent.Session.OpenPeer`) under the served agent's configuration
-  (`PeerConfig`), `-a2a-escalate` for `WithEscalation`, and the
-  conversations, their owners and escalated calls kept in a private
-  directory (`a2aStore`).
+  `serve_a2a.go`: `dax serve -a2a`, agentturn's `front/a2a` and its card
+  beside them behind a token of their own (principal `a2a`), each A2A
+  context a session of its own (`agent.Session.OpenPeer`) under the
+  served agent's configuration (`PeerConfig`), `-a2a-escalate` for
+  `WithEscalation`, `-a2a-url` for the card, and the conversations,
+  their owners, escalated calls and waiting tasks kept in a private
+  directory, locked while serve runs (`a2aStore`; `lock_unix.go`).
+  `viewed` in `serve.go` counts each follower of the control's events as
+  a view attached (`agent.Session.Viewing`).
   `attach.go`: `dax attach`, a mode with flags of its own, the terminal
   client over that wire (https verified against the system's roots or
   `-tls-ca`), a record over the store client, an `agent.Controls` over
@@ -82,7 +85,8 @@ before changing the shape.
   a new question is an `agentturn.Question` event, answered with
   `Reply`. `agent/peers.go`: an A2A caller's conversation on a host
   serving the session, `PeerConfig` and its record, `OpenPeer`, whose
-  questions name the conversation.
+  questions name the conversation and are asked only of a view
+  attached (`Viewing`).
 - `policy`: generic. Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern

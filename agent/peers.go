@@ -9,9 +9,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
 )
@@ -19,13 +21,16 @@ import (
 // PeerConfig is the configuration an A2A caller's conversation runs
 // under when the session's host serves A2A beside it (agentturn's
 // front/a2a): the session's agent's, so the same model and reasoning,
-// extensions, policy and workspace, read when it is called. A call the
-// policy asks about, or a tool's question, goes to the fronts answering
-// the session's questions as the session's own do, naming the caller's
-// conversation (PeerRecord.Attach), and with no front answering it is
-// not asked: the policy's question becomes a refusal. Its ToolRecorder
-// is nil; PeerRecord.Attach routes a run's records to the
-// conversation's session.
+// extensions, policy and workspace, read when it is called; its tools
+// are the kit's, so an MCP server added or removed later is added or
+// removed for the conversations too. A call the policy asks about, a
+// sub-agent's asked call, or a tool's question, goes to the views
+// attached to the session (Viewing), naming the caller's conversation
+// (PeerRecord.Attach). With none attached it is not asked, and when the
+// last one goes while it waits it is given up: the policy's question
+// becomes a refusal, never an allow. Its ToolRecorder is nil;
+// PeerRecord.Attach routes a run's records to the conversation's
+// session.
 //
 // The conversations share the workspace with the session, and with each
 // other, as parallel sub-agents do.
@@ -75,20 +80,26 @@ func (p *PeerRecord) ID() string { return p.rec.SessionID() }
 // recorder the session's hooks write their verdicts with, the session
 // for the model calls and memory, and who the questions of the run come
 // from, which a front is told with each (who: the caller, say). detach
-// undoes it once the run is over.
+// undoes it once the run is over, and revokes the skill grants the run
+// made, as the session's own end at its next message, so the kit keeps
+// nothing for a conversation between its tasks.
 func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string) (context.Context, func(), error) {
 	cfg := a.Config()
 	cfg.ToolRecorder = p.rec.RecordFunc()
 	if err := a.SetConfig(cfg); err != nil {
 		return nil, nil, err
 	}
-	detach := p.rec.Attach(a)
+	unsubscribe := p.rec.Attach(a)
 	id := p.rec.SessionID()
 	ctx = agentkit.ContextWithRecorder(ctx, p.rec)
 	ctx = session.ContextWithSessionID(ctx, id)
 	ctx = agentmemory.WithSession(ctx, id)
 	ctx = context.WithValue(ctx, peerKey{}, who+" (session "+id+")")
-	return ctx, detach, nil
+	grants := context.WithoutCancel(ctx)
+	return ctx, func() {
+		unsubscribe()
+		p.s.Kit.RevokeSkillGrants(grants)
+	}, nil
 }
 
 type peerKey struct{}
@@ -101,4 +112,73 @@ func forPeer(ctx context.Context, msg string) string {
 		return "[" + who + "] " + msg
 	}
 	return msg
+}
+
+// views counts the views attached to a session; gone is closed when the
+// last one goes.
+type views struct {
+	mu   sync.Mutex
+	n    int
+	gone chan struct{}
+}
+
+// Viewing says a view is attached to the session, one that sees its
+// events and can answer its questions, until the returned func is
+// called. A host serving the session counts each follower of its
+// events. Answering says questions may wait for a view; Viewing says
+// one is there, which an A2A caller's conversation needs: its questions
+// are put only to a view attached when they are asked.
+func (s *Session) Viewing() (done func()) {
+	v := &s.views
+	v.mu.Lock()
+	if v.n == 0 {
+		v.gone = make(chan struct{})
+	}
+	v.n++
+	v.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			v.mu.Lock()
+			defer v.mu.Unlock()
+			if v.n--; v.n == 0 {
+				close(v.gone)
+			}
+		})
+	}
+}
+
+// peerAsk is the context a question is asked under: for an A2A caller's
+// conversation, one that ends when the last view goes, and ok false
+// when no view is attached; for any other, ctx. done ends it.
+func (s *Session) peerAsk(ctx context.Context) (_ context.Context, done func(), ok bool) {
+	if _, peer := ctx.Value(peerKey{}).(string); !peer {
+		return ctx, func() {}, true
+	}
+	s.views.mu.Lock()
+	n, gone := s.views.n, s.views.gone
+	s.views.mu.Unlock()
+	if n == 0 {
+		return ctx, nil, false
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	go func() {
+		select {
+		case <-gone:
+			cancel(errNoOne)
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, func() { cancel(nil) }, true
+}
+
+// orNoOne is an answer as asked under ctx, errNoOne when the last view
+// went while it waited.
+func orNoOne(ctx context.Context) func(agenttool.Answer, error) (agenttool.Answer, error) {
+	return func(ans agenttool.Answer, err error) (agenttool.Answer, error) {
+		if errors.Is(context.Cause(ctx), errNoOne) {
+			return agenttool.Answer{}, errNoOne
+		}
+		return ans, err
+	}
 }

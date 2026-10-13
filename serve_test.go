@@ -68,6 +68,7 @@ func startServeWith(t *testing.T, m *steps, rules policy.Rules, tweak func(*agen
 func startServeFront(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options), front func(*serveFront)) *served {
 	t.Helper()
 	t.Setenv(serveTokenEnv, "")
+	t.Setenv(a2aTokenEnv, "")
 	rig := startRig(t, m, rules, tweak, nil, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &served{t: t, rig: rig, out: &syncBuf{}, done: make(chan error, 1), stop: cancel, dir: t.TempDir()}
@@ -107,6 +108,19 @@ func startServeFront(t *testing.T, m *steps, rules policy.Rules, tweak func(*age
 }
 
 func (s *served) tokenFile() string { return filepath.Join(s.dir, s.rig.sess.ID()+".token") }
+
+// a2aTokenFile is where dax serve -a2a wrote the A2A token, and
+// a2aToken the token.
+func (s *served) a2aTokenFile() string { return filepath.Join(s.dir, s.rig.sess.ID()+".a2a.token") }
+
+func (s *served) a2aToken() string {
+	s.t.Helper()
+	data, err := os.ReadFile(s.a2aTokenFile())
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(data))
+}
 
 // attach runs dax attach's terminal client against the served session,
 // on a pipe.
@@ -463,6 +477,9 @@ func TestServeAndAttachRefusalsOnTheCommandLine(t *testing.T) {
 		{[]string{"-a2a", "-p", "hi"}, "-a2a is dax serve's"},
 		{[]string{"-a2a-escalate", "-p", "hi"}, "-a2a-escalate is dax serve's"},
 		{[]string{"serve", "-a2a-escalate"}, "-a2a-escalate goes with -a2a"},
+		{[]string{"-a2a-url", "https://agent.example", "-p", "hi"}, "-a2a-url is dax serve's"},
+		{[]string{"serve", "-a2a-url", "https://agent.example"}, "-a2a-url goes with -a2a"},
+		{[]string{"serve", "-a2a", "-a2a-url", "http://agent.example"}, "want https, or http to loopback"},
 		{[]string{"attach", "http://192.0.2.1:7878"}, "in the clear"},
 		{[]string{"attach", "-tls-ca", "ca.pem", "http://127.0.0.1:1"}, "-tls-ca is for an https URL"},
 		{[]string{"attach", "-token-file", filepath.Join(t.TempDir(), "missing"), "http://127.0.0.1:1"}, "-token-file"},

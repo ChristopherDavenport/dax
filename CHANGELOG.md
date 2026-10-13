@@ -9,31 +9,41 @@ versions may break flags and the config file.
 
 - Added: `dax serve -a2a` serves the session's agent over A2A beside its
   control: agentturn's `front/a2a` at `/a2a` and the agent card at
-  `/.well-known/agent-card.json`, on serve's listener and TLS. Every
-  call needs serve's token, under the control's principal; the card is
-  served to anyone and names the bearer scheme and the endpoint at the
-  origin the caller reached (a tunnel's end, the certificate's name), no
-  token. Each A2A context is a conversation of its own, run under the
-  served agent's model, extensions, policy and workspace, and recorded
-  in a dax session of its own (listed by `-list`, each run naming the
-  caller), never in the served session. A conversation is its creator's;
-  conversations, owners and escalated calls are kept under `~/.dax/a2a/`
-  (private, one directory per working directory and session store), so a
-  restart continues them. A call the policy asks about goes to the
-  served session's views, naming the conversation, and waits for whoever
-  attaches; it is refused when the caller gives up, never allowed.
-  `-a2a-escalate` puts it to the caller instead (front/a2a's
-  escalation). The conversations and the served session share the
-  workspace at the same time. Off by default.
+  `/.well-known/agent-card.json`, on serve's listener and TLS. Both are
+  behind an A2A token of their own (`<id>.a2a.token` beside serve's, or
+  `$DAX_SERVE_A2A_TOKEN`), under the principal `a2a`, which the control
+  and the store do not take, nor does A2A take serve's token: a caller
+  is lent the agent, not the human plane or the store. The card names
+  the bearer scheme, the endpoint at `-a2a-url` or else at the origin
+  the caller reached (`https` when serve serves TLS; forwarded headers
+  are not taken), and the tools as they are when it is asked, and no
+  token, with no cross-origin headers. Each A2A context is a
+  conversation of its own, run under the served agent's model,
+  extensions, policy, MCP servers and workspace, and recorded in a dax
+  session of its own (listed by `-list`, each run naming the caller),
+  never in the served session. A conversation is its creator's;
+  conversations, owners, escalated calls and waiting tasks are kept
+  under `~/.dax/a2a/` (private, one directory per session store and
+  workspace, locked: a second `dax serve -a2a` there refuses to start),
+  so a restart continues them. A question from a conversation goes only
+  to a view attached when it is asked, naming the conversation: with
+  none it is refused at once, and when the last view detaches while it
+  waits it is refused then, never allowed. `-a2a-escalate` puts the
+  model's own calls the policy asks about to the caller instead
+  (front/a2a's escalation); a sub-agent's asked call and a tool's own
+  question still go to a view. The conversations and the served session
+  share the workspace at the same time. Off by default.
 - Changed, public API: `agent.Session.PeerConfig`,
-  `agent.Session.OpenPeer` and `agent.PeerRecord` are new, the
-  configuration and the record of an A2A caller's conversation on a host
-  serving the session.
+  `agent.Session.OpenPeer`, `agent.PeerRecord` and
+  `agent.Session.Viewing` are new, the configuration, the record and the
+  attached views of an A2A caller's conversation on a host serving the
+  session, and `agent.Info.Workspace` says where the session's tools
+  act.
 - Changed: a question about a call that front/a2a puts to the session
   (`agentturn.Ask` with no parent) is no longer prefixed "a tool asks:",
-  and a question from an A2A caller's conversation starts with
-  `[A2A caller <principal>, conversation "<id>" (session <id>)]`, the
-  caller's context ID quoted and cut to 64 bytes.
+  and a question from an A2A caller's conversation starts with `[A2A
+  caller <principal>, conversation "<id>" (session <id>)]`, the caller's
+  context ID quoted and cut to 64 bytes.
 - Dependencies: agentturn, `agentturn/session` and `agentturn/tools/a2a`
   v0.0.29, `agentturn/front/a2a` v0.0.29 (new), agentsession v0.0.25 and
   agentconsole v0.0.13. With them a peer's call is recorded as the

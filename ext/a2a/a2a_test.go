@@ -609,8 +609,12 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 			agentSide, up := newStalling(t)
 			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, Relation: rel}}, []string{"painter"}, "paint slowly")
 			done := make(chan *agentturn.RunEnd, 1)
+			// The run ends with the test, so a failure before the abort does
+			// not leave its stream open on the server, whose Close waits on it.
+			runCtx, endRun := context.WithCancel(context.Background())
+			t.Cleanup(endRun)
 			go func() {
-				end, _ := agent.Drive(context.Background(), s, agent.Rules{}, openresponses.UserText("go"))
+				end, _ := agent.Drive(runCtx, s, agent.Rules{}, openresponses.UserText("go"))
 				done <- end
 			}()
 			var task a2a.TaskID
@@ -796,8 +800,12 @@ func TestAnAbortWhileTheQuestionWaits(t *testing.T) {
 			release := make(chan struct{})
 			defer close(release)
 			done := make(chan *agentturn.RunEnd, 1)
+			// The run ends with the test, so a failure before the abort does
+			// not leave its stream open on the server, whose Close waits on it.
+			runCtx, endRun := context.WithCancel(context.Background())
+			t.Cleanup(endRun)
 			go func() {
-				end, _ := agent.Drive(context.Background(), s, agent.Rules{Reply: func(agentturn.Question) agenttool.Answer {
+				end, _ := agent.Drive(runCtx, s, agent.Rules{Reply: func(agentturn.Question) agenttool.Answer {
 					asked <- struct{}{}
 					<-release
 					return agenttool.Answer{Action: agenttool.ActionAccept, Note: "late"}

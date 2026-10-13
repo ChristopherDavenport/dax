@@ -13,7 +13,7 @@ package dax
 // listener is on loopback only unless dax serve is given a certificate
 // (-tls-cert, -tls-key): from another machine, tunnel to it, or serve
 // HTTPS. With -a2a, agentturn's front/a2a is served beside them, behind
-// the same token, each A2A conversation a session of its own
+// a token of its own, each A2A conversation a session of its own
 // (serve_a2a.go).
 
 import (
@@ -27,6 +27,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -36,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentsession/remote"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/front/control"
 	"github.com/a2aproject/a2a-go/a2asrv"
 
@@ -79,10 +81,12 @@ type serveFront struct {
 	drain time.Duration
 	// a2a mounts agentturn's front/a2a beside the control
 	// (serve_a2a.go); a2aEscalate puts a call the policy asks about to
-	// the caller. a2aDir is where its conversations are kept; empty is
-	// under ~/.dax/a2a, by the session store's root (sessions) and the
-	// working directory.
+	// the caller; a2aURL, checked, is the base URL its card names. a2aDir
+	// is where its conversations are kept; empty is under ~/.dax/a2a, by
+	// the session store's root (sessions, the -sessions it was opened
+	// from) and the workspace.
 	a2a, a2aEscalate bool
+	a2aURL           string
 	a2aDir, sessions string
 }
 
@@ -113,15 +117,36 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	// The A2A conversations' runs end when serving does.
 	peersCtx, endPeers := context.WithCancel(context.WithoutCancel(ctx))
 	defer endPeers()
-	var peers *a2aPeers
+	var (
+		peers                  *a2aPeers
+		a2aToken, a2aTokenFile string
+	)
 	if f.a2a {
+		// A2A has a token of its own: a caller lent the agent is not
+		// lent the control, which answers the questions its
+		// conversation asks and adds MCP servers, or the store.
+		var cleanupA2A func()
+		a2aToken, a2aTokenFile, cleanupA2A, err = makeToken(a2aTokenEnv, f.tokenDir, si.ID+".a2a.token")
+		if err != nil {
+			return err
+		}
+		defer cleanupA2A()
+		if a2aToken == token {
+			return errors.New("dax serve: $" + a2aTokenEnv + " is serve's token; A2A takes a token of its own")
+		}
+		var base *neturl.URL
+		if f.a2aURL != "" {
+			if base, err = checkA2AURL(f.a2aURL); err != nil {
+				return err
+			}
+		}
 		dir := f.a2aDir
 		if dir == "" {
-			dir = a2aDir(f.sessions, f.info.Dir)
+			dir = a2aDir(storeRoot(sess, f.sessions), si.Workspace)
 		}
-		peers, err = newA2APeers(ctx, sess, a2aOptions{
-			url: url, version: f.info.Version, dir: dir,
-			tokens:   map[string]string{token: servePrincipal},
+		peers, err = newA2APeers(sess, a2aOptions{
+			base: base, version: f.info.Version, dir: dir,
+			tokens:   map[string]string{a2aToken: a2aPrincipal},
 			escalate: f.a2aEscalate,
 			stop:     peersCtx,
 		})
@@ -145,11 +170,20 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	}
 	fmt.Fprintln(out, "serving at "+render.Clean(url))
 	if peers != nil {
-		line := "a2a: " + render.Clean(url+a2aPath) + ", card at " + render.Clean(url+a2asrv.WellKnownAgentCardPath)
+		at := url
+		if f.a2aURL != "" {
+			at = strings.TrimSuffix(f.a2aURL, "/")
+		}
+		line := "a2a: " + render.Clean(at+a2aPath) + ", card at " + render.Clean(at+a2asrv.WellKnownAgentCardPath)
 		if f.a2aEscalate {
 			line += "; the policy's questions go to the caller"
 		}
 		fmt.Fprintln(out, line)
+		if a2aTokenFile != "" {
+			fmt.Fprintln(out, "a2a token: "+render.Clean(a2aTokenFile))
+		} else {
+			fmt.Fprintln(out, "a2a token: $"+a2aTokenEnv)
+		}
 	}
 	// A certificate the attaching machine does not trust is named to it
 	// with -tls-ca.
@@ -326,7 +360,14 @@ func isLoopbackHost(host string) bool {
 // environment's, or one made here and written to a file only the user
 // can read, which cleanup removes. The token is never printed.
 func serveToken(id, dir string) (token, file string, cleanup func(), err error) {
-	if t := os.Getenv(serveTokenEnv); t != "" {
+	return makeToken(serveTokenEnv, dir, id+".token")
+}
+
+// makeToken is a token: the one env holds, or one made here and written
+// to name in dir (~/.dax/serve when empty), a file only the user can
+// read, which cleanup removes.
+func makeToken(env, dir, name string) (token, file string, cleanup func(), err error) {
+	if t := os.Getenv(env); t != "" {
 		return t, "", func() {}, nil
 	}
 	buf := make([]byte, 32)
@@ -340,7 +381,7 @@ func serveToken(id, dir string) (token, file string, cleanup func(), err error) 
 	if err := private.SecureDir(dir); err != nil {
 		return "", "", nil, fmt.Errorf("serve token: %w", err)
 	}
-	file = filepath.Join(dir, id+".token")
+	file = filepath.Join(dir, name)
 	fh, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("serve token: %w", err)
@@ -363,9 +404,10 @@ func serveToken(id, dir string) (token, file string, cleanup func(), err error) 
 
 // serveHandler serves the session's control under controlPrefix and its
 // record under storePrefix, both behind token, and with peers front/a2a
-// under a2aPath and its card. closeStore ends the record's follows.
+// under a2aPath and its card, behind the A2A token peers takes, which
+// is not token. closeStore ends the record's follows.
 func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
-	ctl := control.Handler(sess,
+	ctl := control.Handler(viewed{sess},
 		control.WithAuthenticator(control.BearerTokens(map[string]control.Principal{
 			token: {Name: servePrincipal, Scopes: control.AllScopes},
 		})),
@@ -515,5 +557,19 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 				return nil, ctl.RemoveMCP(a.Label)
 			},
 		},
+	}
+}
+
+// viewed is the session as its control serves it: each follower of its
+// events is a view attached (agent.Session.Viewing) while it follows,
+// which an A2A conversation's question needs to be asked.
+type viewed struct{ *agent.Session }
+
+func (v viewed) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	done := v.Viewing()
+	unsubscribe := v.Session.Subscribe(fn)
+	return func() {
+		unsubscribe()
+		done()
 	}
 }
