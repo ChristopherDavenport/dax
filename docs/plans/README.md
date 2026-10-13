@@ -315,16 +315,39 @@ before the dax step that uses them, as the workspace's rules require.
    [agentturn-peers.md](proposals/agentturn-peers.md); its two open
    questions are decided (see "Decided": a peer and a subsession, and
    cancelling a peer's task).
-   - dax calls peers with dax-a2a (#81), **done**.
-   - `dax serve -a2a` (#82): front/a2a on serve's listener behind an A2A
-     token of its own, each A2A context a dax session of its own, its
-     questions asked only of an attached view, conversations,
-     owners, escalated calls and the waiting task kept in a private
-     directory, `-a2a-escalate` for a host nobody attaches to; on
-     agentturn v0.0.29, so the callee is the call's link and a caller's
-     cancel settles what its task left pending. Left: dax-a2a cannot
-     answer an escalated call, and a2a-go's tasks do not survive a
-     restart.
+   - Step 6 is closed (2026-10-13). Peers work both ways (dax v0.0.17):
+     - agentsession v0.0.24, v0.0.25: format 0.12, the `peer` relation,
+       callee members on a link (`url`, `task`, `context`) and the cancel
+       notice (`cancel: "sent"`, `target` the callee link), read back by
+       `Session.Callees`; every store, SQLite included, holds a new
+       entry to the writer's rules.
+     - agentturn v0.0.28, v0.0.29: `tools/a2a` records the callee it
+       reached (`ObserveEndpoint`, the URL called, never the card's
+       claim), answers a remote question through `WithInputRequired`,
+       and sends `tasks/cancel`, not awaited, for every subsession task
+       it leaves, aborted or left asking; `front/a2a` authenticates,
+       holds each conversation to its owner, escalates on request, and
+       settles what a cancelled task left pending, in the caller's
+       voice; the session recorder writes the callee and cancel records
+       as links, copies them when the head moves within the session,
+       and never into a fork.
+     - agentconsole v0.0.13: the tree labels peers and callee
+       subsessions, folds a cancel notice into its link as "cancel
+       sent", and opens only a link with a session.
+     - dax v0.0.17: dax-a2a (#81) offers the user's peers as tools,
+       user config only, the token sent only to the configured origin
+       and hidden from every child process; `dax serve -a2a` (#82) serves
+       the session's agent to callers behind a token of its own, each
+       A2A context a dax session of its own, its questions asked only of
+       an attached view, `-a2a-escalate` for a host nobody watches.
+     - `ext/a2a` is in dax's root module, not a nested one as the
+       proposal had it: dax is a product with no dependency boundary,
+       and `dax serve` needs `front/a2a` there anyway.
+       Left: dax-a2a cannot answer an escalated call (dax#83); a2a-go's
+       tasks do not survive a restart (agentturn#257); escalation does
+       not carry a sub-agent's asks or a tool's own questions
+       (agentturn#258); an A2A conversation runs under the model and
+       reasoning `dax serve` started with.
 
 ## Decided
 
@@ -341,6 +364,17 @@ before the dax step that uses them, as the workspace's rules require.
   sends `tasks/cancel` and returns at once, without waiting for the
   task's `canceled`. The caller's record says the cancel was sent, not
   that the work stopped. A peer is never cancelled.
+
+- **A question from a caller's conversation** (decided 2026-10-13).
+  A served dax asks a question an A2A conversation raises only of a
+  view attached when it is asked, and refuses it, on the record, when
+  none is, or when the last one leaves and does not come back within a
+  short grace. Nothing answers in a person's place, and a question does
+  not wait for someone who may never attach. A caller's cancel of a
+  task that waits settles its calls as refused in the caller's voice,
+  the principal in the run's trigger and the reason: the format's `by`
+  has no slot for a remote principal, and escalation records the same
+  way.
 
 - **One rule for a note** (step 5). A note reaches the model once,
   after all the outputs of the batch it belongs to, never between a
