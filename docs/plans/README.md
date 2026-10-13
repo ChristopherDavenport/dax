@@ -286,7 +286,7 @@ before the dax step that uses them, as the workspace's rules require.
    `front/control` in `dax serve`. The proposal is
    [agentturn-peers.md](proposals/agentturn-peers.md).
    - dax calls peers with dax-a2a (#81), **done**.
-   - `dax serve -a2a`: front/a2a on serve's listener behind serve's
+   - `dax serve -a2a` (#82): front/a2a on serve's listener behind serve's
      token, each A2A context a dax session of its own, conversations,
      owners, escalated calls and the waiting task kept in a private
      directory, `-a2a-escalate` for a host nobody attaches to; on
