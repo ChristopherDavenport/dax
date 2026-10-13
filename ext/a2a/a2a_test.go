@@ -19,7 +19,6 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
-	a2atool "github.com/ChristopherDavenport/agentturn/tools/a2a"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
@@ -355,23 +354,22 @@ func output(t *testing.T, s *agent.Session) string {
 	return ""
 }
 
-// callees are the callees the session's record names, the links
-// agentturn's recorder writes for the call's Callee records (a cancel
-// notice names no new one).
-func callees(t *testing.T, s *agent.Session) []a2atool.Callee {
+// callees are the callees on the session's path, as agentsession reads
+// the subsession and peer links agentturn's recorder writes for the
+// call: each with its dispatch, whether a cancel was sent to it and
+// whether it answered the call.
+func callees(t *testing.T, s *agent.Session) []agentsession.CalleeLink {
 	t.Helper()
 	rd := s.Recorder().Store().(agentsession.Reader)
 	sess, err := rd.Read(t.Context(), s.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []a2atool.Callee
-	for _, e := range sess.Entries() {
-		if l, ok := e.(*agentsession.LinkEntry); ok && l.URL != "" && l.Cancel == "" {
-			out = append(out, a2atool.Callee{URL: l.URL, Task: l.Task, Context: l.Context, Relation: l.Rel})
-		}
+	cs, err := sess.Callees(sess.Leaf())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return out
+	return cs
 }
 
 // Each peer whose card is fetched is one tool, by the configured name;
@@ -476,8 +474,8 @@ func TestACallAsksThenCompletes(t *testing.T) {
 			}
 		}
 		cs := callees(t, s)
-		if len(cs) != 1 || cs[0].URL != up.URL || cs[0].Relation != daxa2a.Subsession || cs[0].Task == "" {
-			t.Errorf("callees %+v, want the task at %s as a subsession", cs, up.URL)
+		if len(cs) != 1 || cs[0].URL != up.URL || cs[0].Rel != agentsession.RelSubsession || cs[0].Task == "" || !cs[0].Answered || cs[0].Cancelled || cs[0].Dispatch == "" {
+			t.Errorf("callees %+v, want the task at %s as a subsession that answered the call", cs, up.URL)
 		}
 		rd := s.Recorder().Store().(agentsession.Reader)
 		sess, err := rd.Read(t.Context(), s.ID())
@@ -627,7 +625,7 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 					t.Fatal("the call never recorded its callee")
 				}
 			}
-			if cs := callees(t, s); cs[0].Relation != rel || string(task) != cs[0].Task {
+			if cs := callees(t, s); cs[0].Rel != rel || string(task) != cs[0].Task {
 				t.Errorf("callee %+v, want task %s as a %s", cs[0], task, rel)
 			}
 			s.Abort()
@@ -645,6 +643,9 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 					t.Errorf("a peer's task %s was cancelled", id)
 				case <-time.After(300 * time.Millisecond):
 				}
+				if cs := callees(t, s); len(cs) != 1 || cs[0].Rel != agentsession.RelPeer || cs[0].Cancelled {
+					t.Errorf("callees %+v, want the peer's link with no cancel sent", cs)
+				}
 				return
 			}
 			select {
@@ -654,6 +655,17 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("the remote agent saw no tasks/cancel")
+			}
+			// The cancel is on the record as sent to the subsession's
+			// link, which did not answer the call.
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				cs := callees(t, s)
+				if len(cs) == 1 && cs[0].Rel == agentsession.RelSubsession && cs[0].Cancelled && !cs[0].Answered {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("callees %+v, want the subsession's link with its cancel sent", cs)
+				}
 			}
 		})
 	}

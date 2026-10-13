@@ -690,8 +690,9 @@ func TestServeMountsA2AOnlyWhenAsked(t *testing.T) {
 
 // A dax whose config names another dax serve -a2a as a peer calls it,
 // through a tunnel to it, as from another machine: the peer's tool
-// reaches the served agent, its reply is the call's output, and the
-// served side records the conversation in a session of its own.
+// reaches the served agent, its reply is the call's output, the
+// caller's record holds the peer link, and the served side records the
+// conversation in a session of its own.
 func TestADaxCallsAServedDax(t *testing.T) {
 	s := startServeFront(t, &steps{}, policy.Rules{}, nil, func(f *serveFront) { f.a2a, f.a2aDir = true, t.TempDir() })
 	t.Setenv("BUILDER_TOKEN", s.token)
@@ -726,6 +727,19 @@ func TestADaxCallsAServedDax(t *testing.T) {
 	}
 	if !strings.Contains(out, "all done") {
 		t.Errorf("the call's output = %q, want the served agent's reply", out)
+	}
+	// The caller's record names the served dax as the call's peer, at
+	// the endpoint the call reached, and as what answered it.
+	callerSess, err := caller.Recorder().Store().Open(t.Context(), caller.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, err := callerSess.Callees(callerSess.Leaf())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs) != 1 || cs[0].Rel != agentsession.RelPeer || cs[0].URL != through+a2aPath || cs[0].Task == "" || !cs[0].Answered || cs[0].Cancelled {
+		t.Errorf("the caller's callees = %+v, want the served dax at %s as the peer that answered", cs, through+a2aPath)
 	}
 	listed, err := agent.List(t.Context(), s.rig.o.Root, s.rig.dir)
 	if err != nil {

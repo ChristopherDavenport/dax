@@ -14,8 +14,8 @@ cloud.google.com/go/auth/oauth2adapt v0.2.8 h1:keo8NaayQZ6wimpNSmW5OPc283g65QNIi
 cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31RkqZCcwJWNSx2Xvric3RrU88hAYYbjDWYDL+c=
 cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdBtwLoEkH9Zs=
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
-github.com/ChristopherDavenport/agentconsole v0.0.12 h1:daKVAuFzkZEgSnKLSqQPgWmTcjB1ZKplwX7y8SXjfAA=
-github.com/ChristopherDavenport/agentconsole v0.0.12/go.mod h1:egs/2FxqeylV8goEr4y1qduF9LSEpALkkFggQbgylnA=
+github.com/ChristopherDavenport/agentconsole v0.0.13 h1:7sT06F021KBEdrJnyDz6g847PcjaQnxmd/AzHE3AdgA=
+github.com/ChristopherDavenport/agentconsole v0.0.13/go.mod h1:vjIYqkDaFDoztr6yYmP17c1oGegqg0PCCFWnd3I6S4s=
 github.com/ChristopherDavenport/agenteval v0.0.10 h1:ayYITHeYn4DhD+tHn7/6MKUVbYSiHbKPlqFwLjCrpyA=
 github.com/ChristopherDavenport/agenteval v0.0.10/go.mod h1:LWATGxIqi7Irko12XeJaIF0UN2zI1OedA5R2sJZRCFw=
 github.com/ChristopherDavenport/agentkit v0.0.13 h1:Mu0G9ojoWMVHj8S76d7Ya/CRUJXt8hViwiNeq5iajf8=
@@ -24,8 +24,8 @@ github.com/ChristopherDavenport/agentmemory v0.0.10 h1:LH/PN+ujmawwhUesRVPugpZLz
 github.com/ChristopherDavenport/agentmemory v0.0.10/go.mod h1:Eh0ed0u/Xg/olppz+8yiz2LEiFFn0eVP8pc/VmGWp7w=
 github.com/ChristopherDavenport/agentpolicy v0.0.17 h1:dwdM0b3H7vrKxNv8sT3OMpHgT+dedGIPGRsd6JkvJ30=
 github.com/ChristopherDavenport/agentpolicy v0.0.17/go.mod h1:RMZfIGi8NsGODuO/oAsqduj9YPiDpSxnOE4xSdIu9AU=
-github.com/ChristopherDavenport/agentsession v0.0.24 h1:0ChpDnmnl4hZSUCenQzI4G+g6pXWXTRAxO3SnT13XK4=
-github.com/ChristopherDavenport/agentsession v0.0.24/go.mod h1:lZf8gypPbx95D867i491HRT0OXyX6B8S5wM8zS4YzOA=
+github.com/ChristopherDavenport/agentsession v0.0.25 h1:AcTpntEupJe8wSWYlX9ZbujsdcOTAgAtnOKViwdAdA0=
+github.com/ChristopherDavenport/agentsession v0.0.25/go.mod h1:lZf8gypPbx95D867i491HRT0OXyX6B8S5wM8zS4YzOA=
 github.com/ChristopherDavenport/agentskill v0.0.12 h1:8rAmdk+CC5TNnbGjKjfEObAZM9ZzsXd0iyz5kp3wAsE=
 github.com/ChristopherDavenport/agentskill v0.0.12/go.mod h1:T69z4M/C/M1lqSVnI94h4DWVDed64OtS7zrsk4Y9w7g=
 github.com/ChristopherDavenport/agentsmd v0.0.3 h1:l3moYkzUJdkFUVdjHF/oSSrIUE2Iwnw4dPgJXQf9fBg=

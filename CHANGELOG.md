@@ -35,13 +35,15 @@ versions may break flags and the config file.
   `[A2A caller <principal>, conversation "<id>" (session <id>)]`, the
   caller's context ID quoted and cut to 64 bytes.
 - Dependencies: agentturn, `agentturn/session` and `agentturn/tools/a2a`
-  v0.0.29, and `agentturn/front/a2a` v0.0.29, new. With them a peer's
-  call is recorded as the call's `subsession` or `peer` link
-  (agentsession's `Callees` reads it), not a custom entry; a
-  subsession's call that ends input-required gives its task up with
+  v0.0.29, `agentturn/front/a2a` v0.0.29 (new), agentsession v0.0.25 and
+  agentconsole v0.0.13. With them a peer's call is recorded as the
+  call's `subsession` or `peer` link (agentsession's `Callees` reads
+  it), not a custom entry, and the terminal client's tree and a call's
+  detail pane show it, its URL and task, and "cancel sent" when one was;
+  a subsession's call that ends input-required gives its task up with
   `tasks/cancel`, where it left it waiting; and under `dax serve -a2a` a
-  caller's cancel of a task waiting on it refuses the calls the task left
-  pending, on the conversation's record, so nothing stays held.
+  caller's cancel of a task waiting on it refuses the calls the task
+  left pending, on the conversation's record, so nothing stays held.
 - Added: dax-a2a (`ext/a2a`), a default extension that offers the A2A
   agents named in the user's config (`peers`) as tools, one per peer by
   the configured name, over agentturn's `tools/a2a`. Each peer's card is
