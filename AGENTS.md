@@ -60,7 +60,7 @@ before changing the shape.
   their owners, escalated calls and waiting tasks kept in a private
   directory, locked while serve runs (`a2aStore`; `lock_unix.go`).
   `viewed` in `serve.go` counts each follower of the control's events as
-  a view attached (`agent.Session.Viewing`).
+  a view attached (`agent.Session.SubscribeView`).
   `attach.go`: `dax attach`, a mode with flags of its own, the terminal
   client over that wire (https verified against the system's roots or
   `-tls-ca`), a record over the store client, an `agent.Controls` over
@@ -86,7 +86,8 @@ before changing the shape.
   `Reply`. `agent/peers.go`: an A2A caller's conversation on a host
   serving the session, `PeerConfig` and its record, `OpenPeer`, whose
   questions name the conversation and are asked only of a view
-  attached (`Viewing`).
+  attached (`Viewing`, `SubscribeView`), waiting `Options.ViewGrace`
+  for one to come back.
 - `policy`: generic. Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern

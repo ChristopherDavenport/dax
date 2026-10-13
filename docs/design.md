@@ -78,25 +78,35 @@ extensions, policy, MCP servers and workspace), seeded from front/a2a's
 conversation store and recorded through `WithRecorderFor` in a dax
 session in the served session's store (`agent.Session.OpenPeer`,
 `PeerRecord.Attach`, opened for each task and let go after it, with the
-task's skill grants), never in the served one. The run's context carries
+task's skill grants). A grant therefore lasts for its task: under
+`-a2a-escalate` a grant made before the task went input-required is gone
+when the caller's approval resumes it, so a later call the grant would
+have let run is asked again, which fails closed, where the served
+session keeps its grants across an approval. The run's context carries
 that session's recorder, so the kit's hooks write their verdicts there,
 and the conversation it comes from, which every question names. A
 question from a conversation, a call the policy asks about, a
 sub-agent's asked call or a tool's own, is asked only of a view attached
 when it is asked, one following the control's events
-(`agent.Session.Viewing`), not of serve's hold on the session's
-questions: with none it is refused at once, and it is refused when the
-last view detaches while it waits, never allowed. `-a2a-escalate` puts
-the model's own calls the policy asks about to the caller
-(`WithEscalation`) instead, for a host nobody attaches to; front/a2a
-leaves a nested call to the loop, so a sub-agent's asked call and a
-tool's question still go to a view. The transcripts, the owners, the
-escalated calls and the waiting tasks are kept in a private directory
-under `~/.dax/a2a`, one per session store (its resolved root) and
-workspace (its kind, ref and root), locked by the serve that keeps it,
-so a restart keeps them and two serves never share them; a2a-go's tasks
-are not kept. The conversations and the served session act in one
-workspace at the same time, as parallel sub-agents do.
+(`agent.Session.Viewing`, `SubscribeView`), not of serve's hold on the
+session's questions: with none it is refused at once. When the last view
+goes while it waits, it waits a grace (`Options.ViewGrace`, five
+seconds) for a view to attach again, as a client reconnecting after a
+broken stream does, which the agent shows the questions still waiting;
+past the grace it is refused, never allowed, and a reply that came first
+stands. `-a2a-escalate` puts the model's own calls the policy asks about
+to the caller (`WithEscalation`) instead, for a host nobody attaches to;
+front/a2a leaves a nested call to the loop, so a sub-agent's asked call
+and a tool's question still go to a view. The transcripts, the owners,
+the escalated calls and the waiting tasks are kept in a private
+directory under `~/.dax/a2a`, one per session store (its resolved root),
+working directory on this machine and workspace (its kind, ref and
+root), locked by the serve that keeps it, so a restart keeps them and
+two serves never share them. Closing stops taking A2A work first, then
+ends and waits for the runs, then refuses every write to the directory
+before it lets go of the lock. a2a-go's tasks are not kept. The
+conversations and the served session act in one workspace at the same
+time, as parallel sub-agents do.
 
 Where dax does not keep to this yet, and what each needs:
 

@@ -1059,10 +1059,12 @@ dax serve -a2a -listen 127.0.0.1:7878
   the principal whose message started it; another cannot continue it or
   read its tasks. The conversations, who owns each, the calls a task put
   to its caller and the task each waits on are kept under `~/.dax/a2a/`
-  (one directory per session store and workspace, only you can read
-  it), so a restart in the same place continues them in the same
-  sessions. One `dax serve -a2a` at a time keeps a directory: a second in
-  the same place refuses to start. The tasks themselves are not kept:
+  (one directory per session store, working directory and workspace,
+  only you can read it), so a restart in the same place continues them
+  in the same sessions. One `dax serve -a2a` at a time keeps a
+  directory: a second in the same place refuses to start. When dax
+  serve stops it refuses new A2A requests (503) before it ends the
+  conversations' runs. The tasks themselves are not kept:
   after a restart a task's ID is unknown, and the caller goes on with a
   new message in the same context.
 - **The same agent, the same workspace.** A conversation runs under the
@@ -1074,24 +1076,28 @@ dax serve -a2a -listen 127.0.0.1:7878
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in
   flight is refused, and the caller sends it again.
-- **Who answers.** A question in a conversation, a call the policy
-  asks about, a sub-agent's asked call or a tool's own question, is put
-  to the views attached to the served session (`dax attach`), naming
-  the caller and the conversation (`[A2A caller a2a, conversation
-  "<id>" (session <id>)] Allow bash ...`). Only a view attached when it
-  is asked is asked: with none attached the question is not asked and
-  the call is refused at once, and when the last view detaches while it
-  waits it is refused then; the conversation's record holds the
-  refusal. Nothing is allowed in anyone's place. With `-a2a-escalate`
-  a call the model makes that the policy asks about goes to the caller
-  instead: the task waits for input, listing the call and the policy's
-  reason, and the caller's approval runs the call as the policy decided
-  it, its refusal refuses it, both on the record under the caller's
-  principal. Escalation covers only those calls: a sub-agent's asked
-  call and a tool's own question still go to an attached view, by the
-  same rule. A dax calling with dax-a2a cannot answer an approval yet;
-  a host nobody attaches to and a caller that can answer are what it is
-  for.
+- **Who answers.** A question in a conversation, a call the policy asks
+  about, a sub-agent's asked call or a tool's own question, is put to
+  the views attached to the served session (`dax attach`), naming the
+  caller and the conversation (`[A2A caller a2a, conversation "<id>"
+  (session <id>)] Allow bash ...`). Only a view attached when it is
+  asked is asked: with none attached the question is not asked and the
+  call is refused at once. When the last view detaches while it waits,
+  it waits five seconds for a view to come back, as `dax attach` does
+  after a broken connection, and is shown again when one does; past that
+  it is refused. The conversation's record holds the refusal, and a
+  reply given first stands. Nothing is allowed in anyone's place. With
+  `-a2a-escalate` a call the model makes that the policy asks about goes
+  to the caller instead: the task waits for input, listing the call and
+  the policy's reason, and the caller's approval runs the call as the
+  policy decided it, its refusal refuses it, both on the record under
+  the caller's principal. Escalation covers only those calls: a
+  sub-agent's asked call and a tool's own question still go to an
+  attached view, by the same rule. A skill's grant lasts for the task
+  that read it, so a call it would have let run after an approval
+  resumes the task is asked again. A dax calling with dax-a2a cannot
+  answer an approval yet; a host nobody attaches to and a caller that
+  can answer are what it is for.
 
 To call it from another dax, name it as a peer in that dax's config,
 with the A2A token in a variable:
@@ -1107,8 +1113,10 @@ BUILDER_TOKEN=$(cat ~/.dax/serve/<id>.a2a.token) dax
 dax-a2a holds the card's endpoint to the configured `url`'s origin, so
 the `url` is the one dax serve printed or, from another machine, the
 tunnel's end, the name the certificate is for, or `-a2a-url` behind a
-proxy. Set `DAX_SERVE_A2A_TOKEN` on the serving side to keep one A2A
-token across restarts.
+proxy. With `-a2a-url` every caller, one on this machine too, is given
+that URL on the card, so configure the peer with it. Set
+`DAX_SERVE_A2A_TOKEN` on the serving side to keep one A2A token across
+restarts.
 
 ## In the REPL
 

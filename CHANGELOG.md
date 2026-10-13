@@ -11,34 +11,41 @@ versions may break flags and the config file.
   control: agentturn's `front/a2a` at `/a2a` and the agent card at
   `/.well-known/agent-card.json`, on serve's listener and TLS. Both are
   behind an A2A token of their own (`<id>.a2a.token` beside serve's, or
-  `$DAX_SERVE_A2A_TOKEN`), under the principal `a2a`, which the control
-  and the store do not take, nor does A2A take serve's token: a caller
-  is lent the agent, not the human plane or the store. The card names
-  the bearer scheme, the endpoint at `-a2a-url` or else at the origin
-  the caller reached (`https` when serve serves TLS; forwarded headers
-  are not taken), and the tools as they are when it is asked, and no
-  token, with no cross-origin headers. Each A2A context is a
-  conversation of its own, run under the served agent's model,
-  extensions, policy, MCP servers and workspace, and recorded in a dax
-  session of its own (listed by `-list`, each run naming the caller),
-  never in the served session. A conversation is its creator's;
+  `$DAX_SERVE_A2A_TOKEN`, which must differ from serve's), under the
+  principal `a2a`, which the control and the store do not take, nor does
+  A2A take serve's token: a caller is lent the agent, not the human
+  plane or the store. The card names the bearer scheme, the endpoint at
+  `-a2a-url` or else at the origin the caller reached (`https` when
+  serve serves TLS; forwarded headers are not taken), and the tools as
+  they are when it is asked, and no token, with no cross-origin headers.
+  Each A2A context is a conversation of its own, run under the served
+  agent's model, extensions, policy, MCP servers and workspace, and
+  recorded in a dax session of its own (listed by `-list`, each run
+  naming the caller), never in the served session; a skill's grant lasts
+  for the task that read it. A conversation is its creator's;
   conversations, owners, escalated calls and waiting tasks are kept
-  under `~/.dax/a2a/` (private, one directory per session store and
-  workspace, locked: a second `dax serve -a2a` there refuses to start),
-  so a restart continues them. A question from a conversation goes only
-  to a view attached when it is asked, naming the conversation: with
-  none it is refused at once, and when the last view detaches while it
-  waits it is refused then, never allowed. `-a2a-escalate` puts the
-  model's own calls the policy asks about to the caller instead
-  (front/a2a's escalation); a sub-agent's asked call and a tool's own
-  question still go to a view. The conversations and the served session
-  share the workspace at the same time. Off by default.
+  under `~/.dax/a2a/` (private, one directory per session store, working
+  directory and workspace, locked: a second `dax serve -a2a` there
+  refuses to start), so a restart continues them. A question from a
+  conversation goes only to a view attached when it is asked, naming the
+  conversation: with none it is refused at once, and when the last view
+  detaches while it waits it waits five seconds for one to come back,
+  which is shown it, and is refused after, never allowed; a reply given
+  first stands. `-a2a-escalate` puts the model's own calls the policy
+  asks about to the caller instead (front/a2a's escalation); a
+  sub-agent's asked call and a tool's own question still go to a view.
+  When serve stops it refuses new A2A requests before it ends the
+  conversations' runs, and writes nothing to the directory once it lets
+  go of it. The conversations and the served session share the workspace
+  at the same time. Off by default.
 - Changed, public API: `agent.Session.PeerConfig`,
-  `agent.Session.OpenPeer`, `agent.PeerRecord` and
-  `agent.Session.Viewing` are new, the configuration, the record and the
-  attached views of an A2A caller's conversation on a host serving the
-  session, and `agent.Info.Workspace` says where the session's tools
-  act.
+  `agent.Session.OpenPeer`, `agent.PeerRecord`, `agent.Session.Viewing`
+  and `agent.Session.SubscribeView` are new, the configuration, the
+  record and the attached views of an A2A caller's conversation on a
+  host serving the session; `agent.Options.ViewGrace` (default
+  `agent.DefaultViewGrace`, five seconds) is how long such a question
+  waits for a view to come back; and `agent.Info.Workspace` says where
+  the session's tools act.
 - Changed: a question about a call that front/a2a puts to the session
   (`agentturn.Ask` with no parent) is no longer prefixed "a tool asks:",
   and a question from an A2A caller's conversation starts with `[A2A

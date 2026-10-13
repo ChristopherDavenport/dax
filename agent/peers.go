@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
@@ -98,7 +99,9 @@ func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string)
 	grants := context.WithoutCancel(ctx)
 	return ctx, func() {
 		unsubscribe()
-		p.s.Kit.RevokeSkillGrants(grants)
+		if n := p.s.Kit.RevokeSkillGrants(grants); n > 0 {
+			p.s.opts.log("[A2A conversation in session %s: its task's skill grants ended (%d rules)]", id, n)
+		}
 	}, nil
 }
 
@@ -122,12 +125,17 @@ type views struct {
 	gone chan struct{}
 }
 
+// DefaultViewGrace is how long an A2A conversation's question waits for
+// a view to come back once the last one has gone, when
+// Options.ViewGrace is zero.
+const DefaultViewGrace = 5 * time.Second
+
 // Viewing says a view is attached to the session, one that sees its
 // events and can answer its questions, until the returned func is
 // called. A host serving the session counts each follower of its
-// events. Answering says questions may wait for a view; Viewing says
-// one is there, which an A2A caller's conversation needs: its questions
-// are put only to a view attached when they are asked.
+// events (SubscribeView). Answering says questions may wait for a view;
+// Viewing says one is there, which an A2A caller's conversation needs:
+// its questions are put only to a view attached when they are asked.
 func (s *Session) Viewing() (done func()) {
 	v := &s.views
 	v.mu.Lock()
@@ -148,9 +156,24 @@ func (s *Session) Viewing() (done func()) {
 	}
 }
 
+// SubscribeView subscribes fn as a view attached (Viewing) until the
+// returned func is called. The agent sends a new subscriber the
+// questions still waiting first, so a view that reconnects, or attaches
+// while an A2A conversation's question waits, is shown it.
+func (s *Session) SubscribeView(fn func(context.Context, agentturn.Event) error) (unsubscribe func()) {
+	done := s.Viewing()
+	unsub := s.Subscribe(fn)
+	return func() {
+		unsub()
+		done()
+	}
+}
+
 // peerAsk is the context a question is asked under: for an A2A caller's
-// conversation, one that ends when the last view goes, and ok false
-// when no view is attached; for any other, ctx. done ends it.
+// conversation, one that ends when no view has been attached for the
+// grace (Options.ViewGrace), so a view that reconnects keeps it, and ok
+// false when no view is attached when it is asked; for any other, ctx.
+// done ends it.
 func (s *Session) peerAsk(ctx context.Context) (_ context.Context, done func(), ok bool) {
 	if _, peer := ctx.Value(peerKey{}).(string); !peer {
 		return ctx, func() {}, true
@@ -161,22 +184,41 @@ func (s *Session) peerAsk(ctx context.Context) (_ context.Context, done func(), 
 	if n == 0 {
 		return ctx, nil, false
 	}
+	grace := s.opts.ViewGrace
+	if grace <= 0 {
+		grace = DefaultViewGrace
+	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	go func() {
-		select {
-		case <-gone:
-			cancel(errNoOne)
-		case <-ctx.Done():
+		for {
+			select {
+			case <-gone:
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case <-time.After(grace):
+			case <-ctx.Done():
+				return
+			}
+			s.views.mu.Lock()
+			n, gone = s.views.n, s.views.gone
+			s.views.mu.Unlock()
+			if n == 0 {
+				cancel(errNoOne)
+				return
+			}
 		}
 	}()
 	return ctx, func() { cancel(nil) }, true
 }
 
-// orNoOne is an answer as asked under ctx, errNoOne when the last view
-// went while it waited.
+// orNoOne is an answer as asked under ctx: errNoOne when the question
+// was given up because no view was left, and the answer itself when a
+// view's reply came first, which stands.
 func orNoOne(ctx context.Context) func(agenttool.Answer, error) (agenttool.Answer, error) {
 	return func(ans agenttool.Answer, err error) (agenttool.Answer, error) {
-		if errors.Is(context.Cause(ctx), errNoOne) {
+		if err != nil && errors.Is(context.Cause(ctx), errNoOne) {
 			return agenttool.Answer{}, errNoOne
 		}
 		return ans, err

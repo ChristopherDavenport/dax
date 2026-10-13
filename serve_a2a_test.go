@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,7 +32,9 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	daxa2a "github.com/ChristopherDavenport/dax/ext/a2a"
+	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -680,8 +683,9 @@ func TestAnA2AQuestionNeedsAnAttachedView(t *testing.T) {
 			t.Errorf("the conversation's decisions:\n%s\nwant the view's allow", got)
 		}
 	})
-	t.Run("the last view detaches while it waits", func(t *testing.T) {
-		s := startA2A(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, false)
+	t.Run("the last view detaches and none comes back within the grace", func(t *testing.T) {
+		rig := startRig(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, func(o *agent.Options) { o.ViewGrace = 200 * time.Millisecond }, nil, false)
+		s := serveA2A(t, rig, false, t.TempDir())
 		v := &answeringView{}
 		v.attach(t, s.rig.sess, "")
 		done := make(chan *a2a.Task, 1)
@@ -768,6 +772,167 @@ func TestASubagentsQuestionInAnA2AConversationNeedsAView(t *testing.T) {
 	}
 }
 
+// A view that reconnects within the grace is shown the question still
+// waiting, and its answer decides the call; and a reply that comes
+// first stands though the last view then detaches.
+func TestAWaitingA2AQuestionOutlivesAReconnect(t *testing.T) {
+	rig := startRig(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, func(o *agent.Options) { o.ViewGrace = 10 * time.Second }, nil, false)
+	s := serveA2A(t, rig, false, t.TempDir())
+	first := &answeringView{}
+	first.attach(t, s.rig.sess, "")
+	done := make(chan *a2a.Task, 1)
+	go func() {
+		task, _ := send(t, s.client(aliceToken), say("c1", "make it"))
+		done <- task
+	}()
+	first.waitAsked(t)
+	first.detach()
+	// The view comes back a moment later, as dax attach's client
+	// resubscribes after a broken stream, and the agent shows it what
+	// waits.
+	time.Sleep(300 * time.Millisecond)
+	again := &answeringView{}
+	again.attach(t, s.rig.sess, agenttool.ActionAccept)
+	var task *a2a.Task
+	select {
+	case task = <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the question was never answered")
+	}
+	if task == nil || task.Status.State != a2a.TaskStateCompleted {
+		t.Fatalf("task %+v, want completed", task)
+	}
+	if asked := again.questions(); len(asked) != 1 || asked[0] != first.questions()[0] {
+		t.Errorf("the view that came back was asked %q, want the waiting question %q", asked, first.questions())
+	}
+	if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); err != nil {
+		t.Error("the call the view that came back allowed did not run")
+	}
+	if got := strings.Join(decisions(s.session("c1")), "\n"); !strings.Contains(got, "proceed by human") {
+		t.Errorf("the conversation's decisions:\n%s\nwant the view's allow", got)
+	}
+}
+
+// byPrompt is a scripted model that plays the steps named by the
+// conversation's last user message.
+type byPrompt map[string]*steps
+
+func (b byPrompt) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	last := ""
+	for _, it := range req.Input {
+		if m, ok := it.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
+			last = m.Text()
+		}
+	}
+	m, ok := b[last]
+	if !ok {
+		m = &steps{}
+	}
+	return m.CreateStream(ctx, req, sink)
+}
+
+// A skill's grant made in an A2A conversation's task lasts for that
+// task: it lets the task's own call run unasked, but not a call in
+// another conversation while it lasts, nor one in the conversation's
+// next task.
+func TestASkillGrantLastsForItsTask(t *testing.T) {
+	model := byPrompt{
+		"greet": {parent: [][2]string{{"skill", `{"name":"greet"}`}, {"bash", `{"command":"echo hello"}`}, {"write", `{"path":"W","content":"x"}`}}},
+		"echo":  {parent: [][2]string{{"bash", `{"command":"echo hello"}`}}},
+	}
+	rig := startRig(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
+		o.Streamer = model
+		o.ViewGrace = 200 * time.Millisecond
+		for i, e := range o.Extensions {
+			if e.Name == agents.Name {
+				o.Extensions[i] = skills.New(skills.Options{Trust: true})
+			}
+		}
+		skill := filepath.Join(o.UserDir, "skills", "greet", "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(skill, []byte("---\nname: greet\ndescription: How to greet the user.\nallowed-tools: Bash(echo:*)\n---\nSay hello.\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}, nil, false)
+	s := serveA2A(t, rig, false, t.TempDir())
+
+	// A view that declines what it is asked, holding c1's questions
+	// while hold.
+	var (
+		mu    sync.Mutex
+		asked []string
+	)
+	questions := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(asked)
+	}
+	view := func(hold bool) func() {
+		return viewed{s.rig.sess}.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+			if q, ok := ev.(*agentturn.Question); ok {
+				mu.Lock()
+				asked = append(asked, q.Elicitation.Message)
+				mu.Unlock()
+				if !hold || !strings.Contains(q.Elicitation.Message, `conversation "c1"`) {
+					go s.rig.sess.Reply(context.WithoutCancel(ctx), q.ID, agenttool.Answer{Action: agenttool.ActionDecline})
+				}
+			}
+			return nil
+		})
+	}
+	echoAsked := func(conv string) bool {
+		return slices.ContainsFunc(questions(), func(q string) bool {
+			return strings.Contains(q, `conversation "`+conv+`"`) && strings.Contains(q, "echo hello")
+		})
+	}
+	detach := view(true)
+	first := make(chan error, 1)
+	go func() {
+		_, err := send(t, s.client(aliceToken), say("c1", "greet"))
+		first <- err
+	}()
+	// c1's write waits on the view: the skill was read and its echo ran.
+	for deadline := time.Now().Add(15 * time.Second); !slices.ContainsFunc(questions(), func(q string) bool { return strings.Contains(q, `"path":"W"`) || strings.Contains(q, "Allow write") }); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("c1's write was never asked about; asked %q", questions())
+		}
+	}
+	if echoAsked("c1") {
+		t.Errorf("c1's echo was asked about under its skill's grant: %q", questions())
+	}
+	// While c1's grant lasts, c2's echo is asked about.
+	if _, err := send(t, s.client(aliceToken), say("c2", "echo")); err != nil {
+		t.Fatal(err)
+	}
+	if !echoAsked("c2") {
+		t.Errorf("c2's echo ran under c1's grant: asked %q", questions())
+	}
+	detach()
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	// The kit forgets the grant when the task ends, not only when the
+	// conversation's next message comes.
+	rig.f.mu.Lock()
+	notes := strings.Join(rig.f.log, "\n")
+	rig.f.mu.Unlock()
+	if want := "[A2A conversation in session " + s.session("c1").ID() + ": its task's skill grants ended"; !strings.Contains(notes, want) {
+		t.Errorf("dax noted:\n%s\nwant %q", notes, want)
+	}
+	// c1's next task is asked about its echo: the grant ended with the
+	// task that made it.
+	detach = view(false)
+	defer detach()
+	if _, err := send(t, s.client(aliceToken), say("c1", "echo")); err != nil {
+		t.Fatal(err)
+	}
+	if !echoAsked("c1") {
+		t.Errorf("c1's next task ran echo under the last task's grant: asked %q", questions())
+	}
+}
+
 // Two conversations at once run side by side, each recorded in a
 // session of its own.
 func TestTwoA2AConversationsAtOnce(t *testing.T) {
@@ -831,20 +996,24 @@ func TestTheConversationsDirectoryIsOneServes(t *testing.T) {
 	}
 }
 
-// The directory is one per session store and workspace: a store spelled
-// another way is the same, and two workspaces with one root, two
-// containers say, are two.
+// The directory is one per session store, working directory and
+// workspace: a store spelled another way is the same, two workspaces
+// with one root, two containers say, are two, and so are two projects
+// served on one image.
 func TestTheConversationsDirectoryIsKeyedByStoreAndWorkspace(t *testing.T) {
 	local := workspace.Descriptor{Kind: workspace.KindLocal, Root: "/work"}
 	a := workspace.Descriptor{Kind: workspace.KindContainer, Ref: "image-a", Root: "/workspace"}
 	b := workspace.Descriptor{Kind: workspace.KindContainer, Ref: "image-b", Root: "/workspace"}
-	if a2aDir("/store", a) == a2aDir("/store", b) {
+	if a2aDir("/store", "/home/me/p", a) == a2aDir("/store", "/home/me/p", b) {
 		t.Error("two containers with one root share a directory")
 	}
-	if a2aDir("/store", local) == a2aDir("/other", local) {
+	if a2aDir("/store", "/home/me/p", a) == a2aDir("/store", "/home/me/q", a) {
+		t.Error("two projects served on one image share a directory")
+	}
+	if a2aDir("/store", "/work", local) == a2aDir("/other", "/work", local) {
 		t.Error("two stores share a directory")
 	}
-	if again := (workspace.Descriptor{Kind: workspace.KindLocal, Root: "/work"}); a2aDir("/store", local) != a2aDir("/store", again) {
+	if again := (workspace.Descriptor{Kind: workspace.KindLocal, Root: "/work"}); a2aDir("/store", "/work", local) != a2aDir("/store", "/work", again) {
 		t.Error("one place has two directories")
 	}
 
@@ -857,6 +1026,81 @@ func TestTheConversationsDirectoryIsKeyedByStoreAndWorkspace(t *testing.T) {
 	if got, want := storeRoot(rig.sess, link+"/"), storeRoot(rig.sess, real); got != want {
 		t.Errorf("a store named through a link resolves to %q, by its own name %q", got, want)
 	}
+}
+
+// dax serve refuses an A2A token that is serve's own, before it serves
+// anything or takes the conversations' directory.
+func TestServeRefusesAnA2ATokenThatIsServes(t *testing.T) {
+	t.Setenv(serveTokenEnv, "one-token-for-both")
+	t.Setenv(a2aTokenEnv, "one-token-for-both")
+	rig := startRig(t, &steps{}, policy.Rules{}, nil, nil, false)
+	dir := t.TempDir()
+	f := &serveFront{info: frontInfo{Name: "dax", Dir: rig.dir}, addr: "127.0.0.1:0", out: &syncBuf{}, tokenDir: t.TempDir(), a2a: true, a2aDir: dir}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := f.Run(ctx, rig.sess); err == nil || !strings.Contains(err.Error(), "A2A takes a token of its own") {
+		t.Errorf("serve with one token for both: %v, want refused", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "lock")); err == nil {
+		t.Error("the refused serve took the conversations' directory")
+	}
+}
+
+// Only a lock another holds is another dax serve's: any other error,
+// as a file system without locks gives, is said as itself.
+func TestALockErrorIsSaidAsItIs(t *testing.T) {
+	if err := lockError("/d", lockResult(syscall.EWOULDBLOCK)); !strings.Contains(err.Error(), "another dax serve -a2a keeps its conversations in /d") {
+		t.Errorf("a held lock: %v", err)
+	}
+	err := lockError("/d", lockResult(syscall.ENOLCK))
+	if strings.Contains(err.Error(), "another dax serve") || !errors.Is(err, syscall.ENOLCK) {
+		t.Errorf("no locks available: %v, want the system's error", err)
+	}
+}
+
+// Closing stops A2A work first, then ends and waits for the runs going,
+// then lets go of the directory: a request after it is refused, nothing
+// is written to the directory after it, and another serve may take it.
+func TestClosingStopsA2AWorkBeforeLettingGo(t *testing.T) {
+	s := startA2A(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, false)
+	v := &answeringView{}
+	v.attach(t, s.rig.sess, "")
+	done := make(chan error, 1)
+	go func() {
+		_, err := send(t, s.client(aliceToken), say("c1", "make it"))
+		done <- err
+	}()
+	v.waitAsked(t)
+	s.peers.close(5 * time.Second)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run going was not ended by close")
+	}
+	req, _ := http.NewRequest(http.MethodPost, s.url+a2aPath, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{}}`))
+	req.Header.Set("Authorization", "Bearer "+aliceToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("a request after close = %d, want 503", resp.StatusCode)
+	}
+	if code, _, _ := get(t, http.DefaultClient, s.url+a2asrv.WellKnownAgentCardPath, aliceToken, nil); code != http.StatusServiceUnavailable {
+		t.Errorf("the card after close = %d, want 503", code)
+	}
+	if err := s.peers.store.Save(t.Context(), "c1", nil); !errors.Is(err, errStoreClosed) {
+		t.Errorf("a write after close: %v, want refused", err)
+	}
+	if _, err := s.peers.store.Claim(t.Context(), "context:late", "alice"); !errors.Is(err, errStoreClosed) {
+		t.Errorf("a claim after close: %v, want refused", err)
+	}
+	next, err := openA2AStore(s.dir)
+	if err != nil {
+		t.Fatalf("another serve after close: %v", err)
+	}
+	next.close()
 }
 
 // A call the policy asked about with no rewrite is kept as it was, and

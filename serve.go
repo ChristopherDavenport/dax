@@ -84,10 +84,11 @@ type serveFront struct {
 	// the caller; a2aURL, checked, is the base URL its card names. a2aDir
 	// is where its conversations are kept; empty is under ~/.dax/a2a, by
 	// the session store's root (sessions, the -sessions it was opened
-	// from) and the workspace.
-	a2a, a2aEscalate bool
-	a2aURL           string
-	a2aDir, sessions string
+	// from), the working directory dax serve was started in (hostDir)
+	// and the workspace.
+	a2a, a2aEscalate          bool
+	a2aURL                    string
+	a2aDir, sessions, hostDir string
 }
 
 // Prepare leaves the session's notes printed as they come: nothing
@@ -142,7 +143,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 		dir := f.a2aDir
 		if dir == "" {
-			dir = a2aDir(storeRoot(sess, f.sessions), si.Workspace)
+			dir = a2aDir(storeRoot(sess, f.sessions), f.hostDir, si.Workspace)
 		}
 		peers, err = newA2APeers(sess, a2aOptions{
 			base: base, version: f.info.Version, dir: dir,
@@ -221,10 +222,10 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	if drain == 0 {
 		drain = 3 * time.Second
 	}
-	endPeers()
 	if peers != nil {
 		peers.close(drain)
 	}
+	endPeers()
 	if sess.State().Running {
 		sess.Abort()
 		for deadline := time.Now().Add(drain); sess.State().Running && time.Now().Before(deadline); {
@@ -561,15 +562,12 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 }
 
 // viewed is the session as its control serves it: each follower of its
-// events is a view attached (agent.Session.Viewing) while it follows,
-// which an A2A conversation's question needs to be asked.
+// events is a view attached while it follows, shown the A2A
+// conversations' questions still waiting when it attaches
+// (agent.Session.SubscribeView), which a question from one needs to be
+// asked.
 type viewed struct{ *agent.Session }
 
 func (v viewed) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
-	done := v.Viewing()
-	unsubscribe := v.Session.Subscribe(fn)
-	return func() {
-		unsubscribe()
-		done()
-	}
+	return v.SubscribeView(fn)
 }

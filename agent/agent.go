@@ -190,6 +190,11 @@ type Options struct {
 	// Log receives dax's own notes: compactions, denials, skill grants.
 	// nil discards them.
 	Log func(format string, args ...any)
+	// ViewGrace is how long an A2A caller's conversation's question
+	// waits for a view to attach again once the last has gone, as one
+	// reconnecting does, before it is given up; zero is
+	// DefaultViewGrace.
+	ViewGrace time.Duration
 
 	// executor runs the extensions' tools in place of the session's
 	// in-process one, which builds them over the workspace; the session

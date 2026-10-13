@@ -71,9 +71,10 @@ type a2aPeers struct {
 	// is the origin each request reached.
 	base *url.URL
 
-	// stop ends every conversation's run; serve cancels it when it
-	// stops.
-	stop context.Context
+	// stop ends every conversation's run: serve cancels it when it
+	// stops, and so does close (endRuns).
+	stop    context.Context
+	endRuns context.CancelFunc
 
 	mu      sync.Mutex
 	closing bool
@@ -105,7 +106,8 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &a2aPeers{sess: sess, store: store, cfg: sess.PeerConfig(), version: o.version, base: o.base, stop: o.stop}
+	p := &a2aPeers{sess: sess, store: store, cfg: sess.PeerConfig(), version: o.version, base: o.base}
+	p.stop, p.endRuns = context.WithCancel(o.stop)
 	opts := []fronta2a.Option{
 		fronta2a.WithConversationStore(store),
 		fronta2a.WithAuthenticator(fronta2a.BearerTokens(o.tokens)),
@@ -119,10 +121,27 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 }
 
 // mount serves the JSON-RPC endpoint and the card on mux, both behind
-// the A2A token.
+// the A2A token, while serve takes A2A work (accepting).
 func (p *a2aPeers) mount(mux *http.ServeMux) {
-	mux.Handle(a2aPath, p.exec.Handler(a2asrv.NewJSONRPCHandler(p.exec.RequestHandler())))
-	mux.Handle("GET "+a2asrv.WellKnownAgentCardPath, p.exec.Handler(http.HandlerFunc(p.serveCard)))
+	mux.Handle(a2aPath, p.accepting(p.exec.Handler(a2asrv.NewJSONRPCHandler(p.exec.RequestHandler()))))
+	mux.Handle("GET "+a2asrv.WellKnownAgentCardPath, p.accepting(p.exec.Handler(http.HandlerFunc(p.serveCard))))
+}
+
+// accepting serves a request with next until close, and counts it among
+// the work close waits for; from close on, it is refused with 503.
+func (p *a2aPeers) accepting(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		if p.closing {
+			p.mu.Unlock()
+			http.Error(w, "dax serve is stopping", http.StatusServiceUnavailable)
+			return
+		}
+		p.runs.Add(1)
+		p.mu.Unlock()
+		defer p.runs.Done()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // card is the agent card a request is answered with: the agent's tools
@@ -249,13 +268,17 @@ func (p *a2aPeers) record(ctx context.Context, contextID string) (*agent.PeerRec
 	return rec, nil
 }
 
-// close refuses new runs and waits, for at most drain, for those
-// going, which stop has ended, so their ends are on the record before
-// the session closes; then it lets go of the directory.
+// close stops taking A2A work first: a new request is refused, and so
+// is a new run. It then ends the runs going and waits, for at most
+// drain, for them and the requests in flight, so their ends are on the
+// record before the session closes. Last, the store refuses every write
+// and lets go of the directory, so nothing this process does writes
+// there after another serve may take it.
 func (p *a2aPeers) close(drain time.Duration) {
 	p.mu.Lock()
 	p.closing = true
 	p.mu.Unlock()
+	p.endRuns()
 	done := make(chan struct{})
 	go func() {
 		p.runs.Wait()
@@ -270,12 +293,14 @@ func (p *a2aPeers) close(drain time.Duration) {
 
 // a2aDir is where the conversations of a session are kept: under the
 // user's dax directory, one directory per session store (root, as the
-// store resolves it) and workspace (its kind, ref and root, so two
+// store resolves it), working directory on this machine (host, where
+// dax serve was started, so two projects served on one executor image
+// are two places) and workspace (its kind, ref and root, so two
 // containers with one root are two places), so a restart in the same
 // place continues them and one elsewhere does not find sessions its
 // store lacks.
-func a2aDir(root string, ws workspace.Descriptor) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{root, ws.Kind, ws.Ref, ws.Root}, "\x00")))
+func a2aDir(root, host string, ws workspace.Descriptor) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{root, host, ws.Kind, ws.Ref, ws.Root}, "\x00")))
 	return filepath.Join(agent.DefaultUserDir(), "a2a", hex.EncodeToString(sum[:8]))
 }
 
@@ -305,10 +330,16 @@ func storeRoot(sess *agent.Session, flag string) string {
 // Owners.
 type a2aStore struct {
 	dir string
-	mu  sync.Mutex
+	// mu is held by every read-change-write and every claim; closed,
+	// under it, refuses writes once close has begun to let go.
+	mu     sync.Mutex
+	closed bool
 	// lock holds the directory's lock file, locked for the store's life.
 	lock *os.File
 }
+
+// errStoreClosed is a write after close.
+var errStoreClosed = errors.New("a2a: dax serve is stopping; the conversations are no longer written")
 
 var (
 	_ fronta2a.ConversationStore = (*a2aStore)(nil)
@@ -343,7 +374,7 @@ func openA2AStore(dir string) (*a2aStore, error) {
 	}
 	if err := lockFile(lock); err != nil {
 		lock.Close()
-		return nil, fmt.Errorf("a2a: another dax serve -a2a keeps its conversations in %s (%w); stop it, or serve elsewhere", dir, err)
+		return nil, lockError(dir, err)
 	}
 	for _, d := range subs {
 		left, _ := filepath.Glob(filepath.Join(d, ".tmp-*"))
@@ -354,10 +385,27 @@ func openA2AStore(dir string) (*a2aStore, error) {
 	return &a2aStore{dir: dir, lock: lock}, nil
 }
 
-// close lets go of the directory.
+// errLockHeld is a lock another open file holds.
+var errLockHeld = errors.New("the lock is held")
+
+// lockError says why the directory could not be locked: another dax
+// serve holds it, or the system's own error, which a file system
+// without locks gives.
+func lockError(dir string, err error) error {
+	if errors.Is(err, errLockHeld) {
+		return fmt.Errorf("a2a: another dax serve -a2a keeps its conversations in %s; stop it, or serve elsewhere", dir)
+	}
+	return fmt.Errorf("a2a: locking %s: %w", dir, err)
+}
+
+// close refuses every later write, then lets go of the directory.
 func (s *a2aStore) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
 	if s.lock != nil {
 		s.lock.Close()
+		s.lock = nil
 	}
 }
 
@@ -405,6 +453,9 @@ func (s *a2aStore) load(contextID string) (a2aConversation, error) {
 func (s *a2aStore) update(contextID string, change func(*a2aConversation)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return errStoreClosed
+	}
 	c, err := s.load(contextID)
 	if err != nil {
 		return err
@@ -525,6 +576,11 @@ func (s *a2aStore) Owner(_ context.Context, key string) (string, bool, error) {
 // place whole, which fails when the key has one, so two claims, in this
 // process or another, agree on the first.
 func (s *a2aStore) Claim(ctx context.Context, key, principal string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", errStoreClosed
+	}
 	path := s.ownerFile(key)
 	f, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
