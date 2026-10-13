@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.17 - 2026-10-13
 
 - Added: `dax serve -a2a` serves the session's agent over A2A beside its
   control: agentturn's `front/a2a` at `/a2a` and the agent card at
