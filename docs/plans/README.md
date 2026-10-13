@@ -199,7 +199,7 @@ before the dax step that uses them, as the workspace's rules require.
      serves HTTPS on any address; without them it stays on loopback.
      `dax attach` verifies the certificate against the system's roots or
      `-tls-ca`, and refuses `http://` to a host that is not loopback,
-     **done**. Over the wire still: no front/a2a beside it yet (step 6).
+     **done**. front/a2a beside it came with step 6 (`dax serve -a2a`).
    - Step 4 is closed. What it left at dax v0.0.14 is done or decided:
      - RFC 0003 whole in agentsession's `remote` (agentsession#213,
        v0.0.23): writes under leases with fencing and idempotency, a
@@ -315,6 +315,16 @@ before the dax step that uses them, as the workspace's rules require.
    [agentturn-peers.md](proposals/agentturn-peers.md); its two open
    questions are decided (see "Decided": a peer and a subsession, and
    cancelling a peer's task).
+   - dax calls peers with dax-a2a (#81), **done**.
+   - `dax serve -a2a` (#82): front/a2a on serve's listener behind an A2A
+     token of its own, each A2A context a dax session of its own, its
+     questions asked only of an attached view, conversations,
+     owners, escalated calls and the waiting task kept in a private
+     directory, `-a2a-escalate` for a host nobody attaches to; on
+     agentturn v0.0.29, so the callee is the call's link and a caller's
+     cancel settles what its task left pending. Left: dax-a2a cannot
+     answer an escalated call, and a2a-go's tasks do not survive a
+     restart.
 
 ## Decided
 

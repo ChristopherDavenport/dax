@@ -7,6 +7,60 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax serve -a2a` serves the session's agent over A2A beside its
+  control: agentturn's `front/a2a` at `/a2a` and the agent card at
+  `/.well-known/agent-card.json`, on serve's listener and TLS. Both are
+  behind an A2A token of their own (`<id>.a2a.token` beside serve's, or
+  `$DAX_SERVE_A2A_TOKEN`, which must differ from serve's), under the
+  principal `a2a`, which the control and the store do not take, nor does
+  A2A take serve's token: a caller is lent the agent, not the human
+  plane or the store. The card names the bearer scheme, the endpoint at
+  `-a2a-url` or else at the origin the caller reached (`https` when
+  serve serves TLS; forwarded headers are not taken), and the tools as
+  they are when it is asked, and no token, with no cross-origin headers.
+  Each A2A context is a conversation of its own, run under the served
+  agent's model, extensions, policy, MCP servers and workspace, and
+  recorded in a dax session of its own (listed by `-list`, each run
+  naming the caller), never in the served session; a skill's grant lasts
+  for the task that read it. A conversation is its creator's;
+  conversations, owners, escalated calls and waiting tasks are kept
+  under `~/.dax/a2a/` (private, one directory per session store, working
+  directory and workspace, locked: a second `dax serve -a2a` there
+  refuses to start), so a restart continues them. A question from a
+  conversation goes only to a view attached when it is asked, naming the
+  conversation: with none it is refused at once, and when the last view
+  detaches while it waits it waits five seconds for one to come back,
+  which is shown it, and is refused after, never allowed; a reply given
+  first stands. `-a2a-escalate` puts the model's own calls the policy
+  asks about to the caller instead (front/a2a's escalation); a
+  sub-agent's asked call and a tool's own question still go to a view.
+  When serve stops it refuses new A2A requests before it ends the
+  conversations' runs, and writes nothing to the directory once it lets
+  go of it. The conversations and the served session share the workspace
+  at the same time. Off by default.
+- Changed, public API: `agent.Session.PeerConfig`,
+  `agent.Session.OpenPeer`, `agent.PeerRecord`, `agent.Session.Viewing`
+  and `agent.Session.SubscribeView` are new, the configuration, the
+  record and the attached views of an A2A caller's conversation on a
+  host serving the session; `agent.Options.ViewGrace` (default
+  `agent.DefaultViewGrace`, five seconds) is how long such a question
+  waits for a view to come back; and `agent.Info.Workspace` says where
+  the session's tools act.
+- Changed: a question about a call that front/a2a puts to the session
+  (`agentturn.Ask` with no parent) is no longer prefixed "a tool asks:",
+  and a question from an A2A caller's conversation starts with `[A2A
+  caller <principal>, conversation "<id>" (session <id>)]`, the caller's
+  context ID quoted and cut to 64 bytes.
+- Dependencies: agentturn, `agentturn/session` and `agentturn/tools/a2a`
+  v0.0.29, `agentturn/front/a2a` v0.0.29 (new), agentsession v0.0.25 and
+  agentconsole v0.0.13. With them a peer's call is recorded as the
+  call's `subsession` or `peer` link (agentsession's `Callees` reads
+  it), not a custom entry, and the terminal client's tree and a call's
+  detail pane show it, its URL and task, and "cancel sent" when one was;
+  a subsession's call that ends input-required gives its task up with
+  `tasks/cancel`, where it left it waiting; and under `dax serve -a2a` a
+  caller's cancel of a task waiting on it refuses the calls the task
+  left pending, on the conversation's record, so nothing stays held.
 - Added: dax-a2a (`ext/a2a`), a default extension that offers the A2A
   agents named in the user's config (`peers`) as tools, one per peer by
   the configured name, over agentturn's `tools/a2a`. Each peer's card is
@@ -23,7 +77,8 @@ versions may break flags and the config file.
   call with the question (the note reaches the model once, as the
   person's), an abort while it waits gives a subsession's task up, and
   with nobody answering the call ends with the question for the model
-  (the task is left waiting: agentturn#253). The record
+  (a subsession's task given up with `tasks/cancel`, a peer's left
+  asking). The record
   names the URL each call reached. Every call asks unless the user's
   config allows it; dax-a2a ships no rule. A project's config may not
   set `peers`. The terminal client draws a peer's call as its request

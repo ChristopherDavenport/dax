@@ -19,6 +19,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
@@ -201,12 +202,21 @@ func (s *Session) Answering() (done func()) {
 }
 
 // ask puts a question to the fronts answering, as an agentturn.Question
-// event; errNoOne when none is.
+// event, naming the A2A caller's conversation it comes from, if any
+// (forPeer); errNoOne when none is, and for an A2A caller's question
+// when no view is attached, or when the last one goes while it waits
+// (peerAsk).
 func (s *Session) ask(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
 	if s.answering.Load() == 0 {
 		return agenttool.Answer{}, errNoOne
 	}
-	return s.ag.QuestionElicitor()(ctx, q)
+	ctx, done, ok := s.peerAsk(ctx)
+	if !ok {
+		return agenttool.Answer{}, errNoOne
+	}
+	defer done()
+	q.Message = forPeer(ctx, q.Message)
+	return orNoOne(ctx)(s.ag.QuestionElicitor()(ctx, q))
 }
 
 // askRecorded asks as ask does, through the kit's recorded question
@@ -219,7 +229,13 @@ func (s *Session) askRecorded(ctx context.Context, q agenttool.Elicitation) (age
 	if s.answering.Load() == 0 {
 		return agenttool.Answer{}, errNoOne
 	}
-	return s.ctl.Elicitor()(ctx, q)
+	ctx, done, ok := s.peerAsk(ctx)
+	if !ok {
+		return agenttool.Answer{}, errNoOne
+	}
+	defer done()
+	q.Message = forPeer(ctx, q.Message)
+	return orNoOne(ctx)(s.ctl.Elicitor()(ctx, q))
 }
 
 // errNoOne is a question asked with no front answering questions.
@@ -240,7 +256,11 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 		s.opts.log("[a tool asks for a form dax cannot show: %s]", render.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
-	q.Message = "a tool asks: " + q.Message
+	// A call an A2A caller's conversation asks about (front/a2a puts
+	// it with agentturn.Ask) is the policy's question, not a tool's.
+	if call, ok := agentturn.AskedCallFrom(ctx); !ok || call.Parent != "" {
+		q.Message = "a tool asks: " + q.Message
+	}
 	ans, err := s.ask(ctx, q)
 	switch {
 	case err != nil:
@@ -302,13 +322,16 @@ type Info struct {
 	Path    string
 	Tools   []agentkit.ToolOrigin
 	Omitted []agentkit.Omission
+	// Workspace says where its tools act: the kind, the ref and the
+	// root.
+	Workspace workspace.Descriptor
 }
 
 var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

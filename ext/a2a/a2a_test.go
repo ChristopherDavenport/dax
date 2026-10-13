@@ -19,7 +19,6 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
-	a2atool "github.com/ChristopherDavenport/agentturn/tools/a2a"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
@@ -355,26 +354,22 @@ func output(t *testing.T, s *agent.Session) string {
 	return ""
 }
 
-// callees are the Callee records the session holds, which agentturn's
-// recorder writes beside the call.
-func callees(t *testing.T, s *agent.Session) []a2atool.Callee {
+// callees are the callees on the session's path, as agentsession reads
+// the subsession and peer links agentturn's recorder writes for the
+// call: each with its dispatch, whether a cancel was sent to it and
+// whether it answered the call.
+func callees(t *testing.T, s *agent.Session) []agentsession.CalleeLink {
 	t.Helper()
 	rd := s.Recorder().Store().(agentsession.Reader)
 	sess, err := rd.Read(t.Context(), s.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []a2atool.Callee
-	for _, e := range sess.Entries() {
-		if c, ok := e.(*agentsession.CustomEntry); ok && c.NS == a2atool.CalleeNS {
-			var cl a2atool.Callee
-			if err := json.Unmarshal(c.Data, &cl); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, cl)
-		}
+	cs, err := sess.Callees(sess.Leaf())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return out
+	return cs
 }
 
 // Each peer whose card is fetched is one tool, by the configured name;
@@ -479,8 +474,8 @@ func TestACallAsksThenCompletes(t *testing.T) {
 			}
 		}
 		cs := callees(t, s)
-		if len(cs) != 1 || cs[0].URL != up.URL || cs[0].Relation != daxa2a.Subsession || cs[0].Task == "" {
-			t.Errorf("callees %+v, want the task at %s as a subsession", cs, up.URL)
+		if len(cs) != 1 || cs[0].URL != up.URL || cs[0].Rel != agentsession.RelSubsession || cs[0].Task == "" || !cs[0].Answered || cs[0].Cancelled || cs[0].Dispatch == "" {
+			t.Errorf("callees %+v, want the task at %s as a subsession that answered the call", cs, up.URL)
 		}
 		rd := s.Recorder().Store().(agentsession.Reader)
 		sess, err := rd.Read(t.Context(), s.ID())
@@ -614,8 +609,12 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 			agentSide, up := newStalling(t)
 			s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL, Relation: rel}}, []string{"painter"}, "paint slowly")
 			done := make(chan *agentturn.RunEnd, 1)
+			// The run ends with the test, so a failure before the abort does
+			// not leave its stream open on the server, whose Close waits on it.
+			runCtx, endRun := context.WithCancel(context.Background())
+			t.Cleanup(endRun)
 			go func() {
-				end, _ := agent.Drive(context.Background(), s, agent.Rules{}, openresponses.UserText("go"))
+				end, _ := agent.Drive(runCtx, s, agent.Rules{}, openresponses.UserText("go"))
 				done <- end
 			}()
 			var task a2a.TaskID
@@ -630,7 +629,7 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 					t.Fatal("the call never recorded its callee")
 				}
 			}
-			if cs := callees(t, s); cs[0].Relation != rel || string(task) != cs[0].Task {
+			if cs := callees(t, s); cs[0].Rel != rel || string(task) != cs[0].Task {
 				t.Errorf("callee %+v, want task %s as a %s", cs[0], task, rel)
 			}
 			s.Abort()
@@ -648,6 +647,9 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 					t.Errorf("a peer's task %s was cancelled", id)
 				case <-time.After(300 * time.Millisecond):
 				}
+				if cs := callees(t, s); len(cs) != 1 || cs[0].Rel != agentsession.RelPeer || cs[0].Cancelled {
+					t.Errorf("callees %+v, want the peer's link with no cancel sent", cs)
+				}
 				return
 			}
 			select {
@@ -658,6 +660,17 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("the remote agent saw no tasks/cancel")
 			}
+			// The cancel is on the record as sent to the subsession's
+			// link, which did not answer the call.
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				cs := callees(t, s)
+				if len(cs) == 1 && cs[0].Rel == agentsession.RelSubsession && cs[0].Cancelled && !cs[0].Answered {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("callees %+v, want the subsession's link with its cancel sent", cs)
+				}
+			}
 		})
 	}
 }
@@ -665,8 +678,8 @@ func TestAnAbortCancelsASubsessionsTaskOnly(t *testing.T) {
 // A remote agent's question reaches whoever answers the session's
 // questions, as a question for text, and the answer goes on the same
 // task; a refusal ends the call and gives the task up; with nobody
-// answering, the call ends with the question for the model and nothing
-// answers in a person's place. The record holds the question, the
+// answering, the call ends with the question for the model, nothing
+// answers in a person's place, and the subsession's task is given up. The record holds the question, the
 // answer and what was said with a refusal, and never the token.
 func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 	t.Setenv("PEER_TOKEN", "s3cret-token")
@@ -691,7 +704,7 @@ func TestTheRemotesQuestionGoesToTheSession(t *testing.T) {
 		{"declined", func(agentturn.Question) agenttool.Answer {
 			return agenttool.Answer{Action: agenttool.ActionDecline, Note: "pick one yourself"}
 		}, `painter asked "which colour?" and the question was declined`, "decline", "", "pick one yourself", true},
-		{"nobody answering", nil, "the agent needs more input: which colour?", "", "", "", false},
+		{"nobody answering", nil, "the agent needs more input: which colour?", "", "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agentSide := asking{cancelled: make(chan a2a.TaskID, 4)}
@@ -787,8 +800,12 @@ func TestAnAbortWhileTheQuestionWaits(t *testing.T) {
 			release := make(chan struct{})
 			defer close(release)
 			done := make(chan *agentturn.RunEnd, 1)
+			// The run ends with the test, so a failure before the abort does
+			// not leave its stream open on the server, whose Close waits on it.
+			runCtx, endRun := context.WithCancel(context.Background())
+			t.Cleanup(endRun)
 			go func() {
-				end, _ := agent.Drive(context.Background(), s, agent.Rules{Reply: func(agentturn.Question) agenttool.Answer {
+				end, _ := agent.Drive(runCtx, s, agent.Rules{Reply: func(agentturn.Question) agenttool.Answer {
 					asked <- struct{}{}
 					<-release
 					return agenttool.Answer{Action: agenttool.ActionAccept, Note: "late"}

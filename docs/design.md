@@ -67,6 +67,47 @@ why a front uses the control contract and not A2A. A call the callee's policy as
 about is answered by the callee's own human plane; the caller's tools it
 was lent come back to the caller to run.
 
+`dax serve -a2a` is dax as the callee (`serve_a2a.go`): front/a2a on
+serve's listener, its JSON-RPC and its card behind an A2A token of their
+own under the principal `a2a`, which the control and the store do not
+take, so a caller lent the agent is not lent the human plane or the
+store. Each A2A context is a conversation, so it is a session of its own
+(one session, one conversation): an agent per task under the served
+agent's configuration (`agent.Session.PeerConfig`: the same model,
+extensions, policy, MCP servers and workspace), seeded from front/a2a's
+conversation store and recorded through `WithRecorderFor` in a dax
+session in the served session's store (`agent.Session.OpenPeer`,
+`PeerRecord.Attach`, opened for each task and let go after it, with the
+task's skill grants). A grant therefore lasts for its task: under
+`-a2a-escalate` a grant made before the task went input-required is gone
+when the caller's approval resumes it, so a later call the grant would
+have let run is asked again, which fails closed, where the served
+session keeps its grants across an approval. The run's context carries
+that session's recorder, so the kit's hooks write their verdicts there,
+and the conversation it comes from, which every question names. A
+question from a conversation, a call the policy asks about, a
+sub-agent's asked call or a tool's own, is asked only of a view attached
+when it is asked, one following the control's events
+(`agent.Session.Viewing`, `SubscribeView`), not of serve's hold on the
+session's questions: with none it is refused at once. When the last view
+goes while it waits, it waits a grace (`Options.ViewGrace`, five
+seconds) for a view to attach again, as a client reconnecting after a
+broken stream does, which the agent shows the questions still waiting;
+past the grace it is refused, never allowed, and a reply that came first
+stands. `-a2a-escalate` puts the model's own calls the policy asks about
+to the caller (`WithEscalation`) instead, for a host nobody attaches to;
+front/a2a leaves a nested call to the loop, so a sub-agent's asked call
+and a tool's question still go to a view. The transcripts, the owners,
+the escalated calls and the waiting tasks are kept in a private
+directory under `~/.dax/a2a`, one per session store (its resolved root),
+working directory on this machine and workspace (its kind, ref and
+root), locked by the serve that keeps it, so a restart keeps them and
+two serves never share them. Closing stops taking A2A work first, then
+ends and waits for the runs, then refuses every write to the directory
+before it lets go of the lock. a2a-go's tasks are not kept. The
+conversations and the served session act in one workspace at the same
+time, as parallel sub-agents do.
+
 Where dax does not keep to this yet, and what each needs:
 
 - The human plane over a wire: `dax serve` listens on loopback only
@@ -84,12 +125,20 @@ Where dax does not keep to this yet, and what each needs:
   (`workspace.Starter`, which an executor's view is); in a workspace
   that cannot, it starts where the turn runs, and with an executor
   that cannot, it does not start.
-- Peers: dax calls the user's (dax-a2a), and an abort sends
-  `tasks/cancel` for a subsession's task without waiting; but with
-  agentturn/session v0.0.28 the callee is recorded as a custom entry
-  beside the call, not yet as the `subsession` or `peer` link
-  agentsession's format has (agentturn#252), and `dax serve` does not
-  mount `front/a2a`, so nothing calls a dax.
+- Peers: dax calls the user's (dax-a2a), an abort sends `tasks/cancel`
+  for a subsession's task without waiting, the callee is recorded as the
+  call's `subsession` or `peer` link (agentturn/session v0.0.29), and
+  `dax serve -a2a` is called; but dax-a2a cannot answer a callee's
+  escalated call (agentturn's `tools/a2a` has no approval), so
+  `-a2a-escalate` is for other callers; a2a-go's task store is in
+  memory, so a task waiting for input does not survive a restart, though
+  its conversation does, and after one the caller cannot cancel that
+  task; front/a2a writes a conversation's transcript, its escalated
+  calls and the task it waits on in three calls, each replacing the one
+  record whole, so a crash between them leaves the record a step behind,
+  not torn; and a conversation runs under the model and reasoning serve
+  started with, not a later `/model`, though its MCP servers are the
+  session's as they are.
 
 ## Who owns what
 
@@ -100,6 +149,7 @@ Where dax does not keep to this yet, and what each needs:
 | Assembling a loop from parts | `agentkit` | `agent.open` is one `agentkit.New` call over the session's options and every extension's |
 | What the model can do | dax's extensions; a program's | `extension` is the type; `ext/coding` (dax-coding), `ext/agents` (dax-agents), `ext/skills` (dax-skills), `ext/memory` (dax-memory), `ext/a2a` (dax-a2a) |
 | A remote agent as a tool | `agentturn/tools/a2a` over a2a-go's client | dax-a2a: the user's `peers`, the card fetched at start, the client's token guard and `ObserveEndpoint`, the relation, the remote's question put to the session's |
+| The agent served to A2A callers | `agentturn/front/a2a` over a2a-go's server | `serve_a2a.go`: the mount, the A2A token, the card, a session per conversation, the conversations kept on disk under a lock; `agent.Session.PeerConfig`, `OpenPeer` and `Viewing` |
 | Tool contract, MCP client, the facts claim | `agenttool` | `tool`: dax-coding's read, write, edit, glob, grep, ls, bash, each making the facts claim (`agenttool.Factual`), and `Files`, the tools' view of a workspace; `facts/factspolicy`: the policy's subjects and the rewrite hook from those claims |
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
 | Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each model response's facts read together for its decisions, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
@@ -146,7 +196,10 @@ Where dax does not keep to this yet, and what each needs:
 A turn is one assistant message plus its tool calls and their results.
 Calls in a batch run concurrently except a sequential tool, and `bash`
 is sequential, so a command never races a concurrent edit of the same
-file. That is dax's whole concurrency policy.
+file. That is dax's whole concurrency policy. Sub-agents, and under
+`dax serve -a2a` the A2A callers' conversations, run beside the main
+agent in the same workspace, and nothing orders their calls against
+its.
 
 After each tool batch the loop polls for steering messages and, when the
 model returns with no tool calls, for follow-ups. A line typed during a
@@ -329,6 +382,10 @@ through agentsession's `remote`) behind one bearer token, holding
 `Answering` while it serves, so questions wait for whoever attaches.
 `dax attach` is the terminal client over that wire, its slash commands
 through the served commands; leaving it leaves the session's run going.
+With `-a2a` dax serve also serves A2A callers, behind a token of their
+own, each conversation a session of its own (see Planes); their
+questions reach only the views attached when they are asked, each
+naming the conversation it is about.
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal
@@ -468,13 +525,14 @@ call's own exchange, not a note, and a note the person gave is still
 said once, by the loop, in their voice. A no ends the call and
 gives the task up, an abort while it waits gives it up too, and with no
 one answering (or `-p` at the end of its input, a cancel) the call ends
-input-required, the task left waiting (agentturn#253). The card must
+input-required, a subsession's task given up with `tasks/cancel` and a
+peer's left asking. The card must
 name its endpoint at the configured origin, no redirect to another
 origin is followed, and the peers' token variables are the extension's
 `Secrets`, which the session takes out of every child environment.
 dax-a2a is in the root module, not a nested module
 as the peers proposal had it: dax is a product with no dependency
-boundary, and `dax serve` will need `front/a2a` here anyway.
+boundary, and `dax serve -a2a` uses `front/a2a` here as well.
 
 A session builds its extensions in two phases. First every extension's
 `Tools`, over an `extension.ToolEnv`: the session's `Workspace`, the
