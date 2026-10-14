@@ -39,7 +39,9 @@ before changing the shape.
   the package doc. `cli.go`: flags, the admin modes (`-list`, `-verify`,
   `-project`, `-import`, `-gc`, `-repair`), settings, the extensions the
   settings choose, then one front. `execute.go`: `execute`, the
-  extensions' tools served over stdio MCP (`executor.NewServer`), with
+  extensions' tools served over stdio MCP (`executor.NewServer`), or
+  over HTTP with `-listen` (`executor.Handler`; loopback unless
+  `-insecure-no-auth`, since nothing authenticates a client yet), with
   flags of its own and no config read. `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
@@ -137,7 +139,10 @@ before changing the shape.
   `execute`, with what MCP cannot carry in a capability, and its
   workspace's files served read-only as MCP resources and read back as
   an `fs.FS` (`files.go`), and processes started for the session
-  through custom methods, not tools (`process.go`); `Remote`
+  through custom methods, not tools (`process.go`); `Handler`
+  (`http.go`), such a server over streamable HTTP, each client a
+  session of its own, closed when idle with its processes ended first;
+  `Remote`
   (`remote.go`), the client of such a server, which refuses one that
   does not give the claims (`agent/executor.go` wraps it as the public
   `agent.Executor` for `-executor`). Kit tools are control and never

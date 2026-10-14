@@ -75,7 +75,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over stdio MCP; %[1]s execute -h)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -105,7 +105,7 @@ func run(ctx context.Context, args []string, p program) error {
 	syncMode := fs.String("sync", "append", "when an append is durable: every append, on a response or output (response), or at exit (never)")
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>; split as a shell splits words, nothing expanded")
-	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded; the tools run there; \"\" clears the config's")
+	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded, or the http:// or https:// URL where dax execute -listen serves; the tools run there; \"\" clears the config's")
 	executorEnv := fs.String("executor-pass-env", "", "variables, separated by commas, that the -executor command alone is given, credentials included (SSH_AUTH_SOCK); overrides executor.pass_env, \"\" clears it")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
@@ -323,12 +323,19 @@ func run(ctx context.Context, args []string, p program) error {
 		ex     *agent.Executor
 		wsRoot = dir
 	)
-	if len(settings.Executor) > 0 {
-		// The command that starts it gets this machine's environment
-		// without credentials, the model's key's variable among them,
-		// less those pass_env and executor.pass_env name; the latter are
-		// that command's alone.
-		ex, err = agent.DialExecutor(ctx, settings.Executor, agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv})
+	if len(settings.Executor) > 0 || settings.ExecutorURL != "" {
+		xo := agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv}
+		if settings.ExecutorURL != "" {
+			// Already running where it serves; nothing here starts it,
+			// so no environment goes with it.
+			ex, err = agent.DialExecutorURL(ctx, settings.ExecutorURL, xo)
+		} else {
+			// The command that starts it gets this machine's environment
+			// without credentials, the model's key's variable among them,
+			// less those pass_env and executor.pass_env name; the latter
+			// are that command's alone.
+			ex, err = agent.DialExecutor(ctx, settings.Executor, xo)
+		}
 		if err != nil {
 			return fmt.Errorf("-executor: %w", err)
 		}

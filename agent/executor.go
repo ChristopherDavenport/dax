@@ -82,7 +82,19 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 	// the same cleaning as a tool's output, and are held with dax's
 	// warnings while a front has the screen.
 	cmd.Stderr = render.CleanWriter(warnings{})
-	return connectExecutor(ctx, &mcp.CommandTransport{Command: cmd}, o.Name, o.Version)
+	return connectExecutor(ctx, &mcp.CommandTransport{Command: cmd}, executor.ConnectOptions{Name: o.Name, Version: o.Version})
+}
+
+// DialExecutorURL connects to `dax execute -listen` serving at
+// endpoint, an http or https URL, over MCP's streamable HTTP transport,
+// and refuses what is not a dax executor as DialExecutor does. Nothing
+// here starts it, so of o only Name and Version apply. It sends no
+// credential: whoever can reach the endpoint can run its tools, which
+// is why `dax execute` listens on loopback unless told otherwise, and
+// a tunnel (ssh -L) reaches it from elsewhere. The client pings it
+// every executor.KeepAlive so an idle session stays open.
+func DialExecutorURL(ctx context.Context, endpoint string, o ExecutorOptions) (*Executor, error) {
+	return connectExecutor(ctx, executor.HTTPTransport(endpoint), executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
 }
 
 // launcherEnv is base, this machine's environment, as the command that
@@ -107,8 +119,8 @@ func launcherEnv(base []string, o ExecutorOptions) ([]string, error) {
 }
 
 // connectExecutor connects to an executor over t.
-func connectExecutor(ctx context.Context, t mcp.Transport, name, version string) (*Executor, error) {
-	r, err := executor.Connect(ctx, t, executor.ConnectOptions{Name: name, Version: version})
+func connectExecutor(ctx context.Context, t mcp.Transport, o executor.ConnectOptions) (*Executor, error) {
+	r, err := executor.Connect(ctx, t, o)
 	if err != nil {
 		return nil, err
 	}

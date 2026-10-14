@@ -334,6 +334,14 @@ func TestTheProjectConfigIsNotReadHereWithAnExecutor(t *testing.T) {
 	if s, err = settingsOf(local(t, proj), "", config.Flags{Executor: str("")}); err != nil || len(s.Executor) != 0 || len(s.Policy.Project.Deny) != 1 {
 		t.Fatalf("with -executor '': %q %v, %v", s.Executor, s.Policy.Project.Deny, err)
 	}
+	// An executor at a URL is elsewhere too.
+	if s, err = settingsOf(local(t, proj), "", config.Flags{Executor: str("http://127.0.0.1:7777")}); err != nil || s.ExecutorURL != "http://127.0.0.1:7777" || len(s.Executor) != 0 || len(s.Policy.Project.Deny) != 0 {
+		t.Fatalf("with -executor at a URL: %q %q %v, %v", s.ExecutorURL, s.Executor, s.Policy.Project.Deny, err)
+	}
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"executor":{"url":"http://127.0.0.1:7777"}}`)
+	if s, err = settingsOf(local(t, proj), "", config.Flags{}); err != nil || s.ExecutorURL == "" || len(s.Policy.Project.Deny) != 0 {
+		t.Fatalf("with the config's executor url: %q %v, %v", s.ExecutorURL, s.Policy.Project.Deny, err)
+	}
 }
 
 // With an executor the project's .dax/config.json is the executor's,
@@ -419,10 +427,11 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 	}
 }
 
-// -executor refuses what it cannot do yet before it starts anything: an
-// address in place of a command. An MCP server beside it is no longer
-// refused: it starts in the executor, so the start gets as far as
-// dialing the executor.
+// -executor refuses what it cannot do yet before it starts anything: a
+// unix socket, or a URL with credentials. A URL it can reach is dialed,
+// and nothing listening there fails the start. An MCP server beside it
+// is no longer refused: it starts in the executor, so the start gets as
+// far as dialing the executor.
 func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
 	home(t)
 	t.Chdir(t.TempDir())
@@ -431,7 +440,9 @@ func TestExecutorRefusalsOnTheCommandLine(t *testing.T) {
 		args  []string
 		wants string
 	}{
-		{[]string{"-executor", "https://box.example:7000"}, "an executor over https is not supported yet"},
+		{[]string{"-executor", "http://127.0.0.1:1"}, "-executor: executor:"},
+		{[]string{"-executor", "https://me:pw@box.example:7000"}, "a URL with a user or password"},
+		{[]string{"-executor", "http://127.0.0.1:1", "-executor-pass-env", "SSH_AUTH_SOCK"}, "-executor-pass-env: an executor at a URL is started by no command here"},
 		{[]string{"-executor", "unix:/run/dax.sock"}, "an executor over unix is not supported yet"},
 		{[]string{"-executor", "/nonexistent/dax execute", "-mcp", "/nonexistent/server"}, "-executor: executor:"},
 		{[]string{"-executor", "docker exec -i box dax execute -root '/my work"}, "-executor: a single quote is not closed"},

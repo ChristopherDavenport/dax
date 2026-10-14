@@ -113,8 +113,9 @@ type Config struct {
 	// client's session cost. The user sets it; a project cannot.
 	PricingFile string `json:"pricing_file,omitempty"`
 	// Executor runs the tools elsewhere: the command that starts `dax
-	// execute` where they are to act. The user sets it; a project
-	// cannot, since it says where the session's commands run.
+	// execute` where they are to act, or the URL where it serves. The
+	// user sets it; a project cannot, since it says where the session's
+	// commands run.
 	Executor *Executor `json:"executor,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
@@ -137,13 +138,17 @@ type Peer struct {
 	TokenEnv string `json:"token_env,omitempty"`
 }
 
-// Executor is how to start the executor.
+// Executor is how to start or reach the executor.
 type Executor struct {
 	// Command starts `dax execute` and speaks MCP on its standard input
 	// and output: a command line, "docker exec -i box dax execute -root
 	// /work", or the program and its arguments as an array, used
 	// exactly.
 	Command Command `json:"command"`
+	// URL is where `dax execute -listen` already serves, http or https:
+	// "http://127.0.0.1:7777". Nothing here starts it, so it takes no
+	// PassEnv. Give it or Command, not both.
+	URL string `json:"url,omitempty"`
 	// PassEnv names variables of this machine's environment, credentials
 	// included, that the command which starts the executor is given and
 	// nothing else is: ssh's SSH_AUTH_SOCK, the token a kubectl
@@ -378,8 +383,19 @@ func (l *Layer) validate() error {
 		}
 	}
 	if x := c.Executor; x != nil {
-		if !x.Command.Given() && len(x.PassEnv) == 0 {
-			return errors.New("executor.command is required")
+		if !x.Command.Given() && x.URL == "" && len(x.PassEnv) == 0 {
+			return errors.New("executor.command or executor.url is required")
+		}
+		if x.URL != "" {
+			if x.Command.Given() {
+				return errors.New("executor: give command or url, not both")
+			}
+			if len(x.PassEnv) > 0 {
+				return errors.New("executor.pass_env is for executor.command: an executor at a URL is started by no command here")
+			}
+			if err := checkExecutorURL("executor.url", x.URL); err != nil {
+				return err
+			}
 		}
 		if x.Command.Given() {
 			argv, err := x.Command.Argv()
@@ -444,14 +460,10 @@ func (p Peer) remote(name string) a2a.Remote {
 	return a2a.Remote{Name: name, URL: p.URL, Relation: p.Relation, TokenEnv: p.TokenEnv}
 }
 
-// executorSchemes are the forms of an executor's address that are not
-// commands, and are not supported yet: an executor is a command whose
-// standard input and output are the connection.
-var executorSchemes = []string{"http:", "https:", "unix:"}
-
 // checkExecutor refuses an executor command, written as line and split
 // into argv, that names no program, or that is an address rather than
-// a command.
+// a command: a URL, which goes in executor.url, or a unix socket, which
+// is not supported yet.
 func checkExecutor(field, line string, argv []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("%s is required: the command that starts dax execute", field)
@@ -460,10 +472,41 @@ func checkExecutor(field, line string, argv []string) error {
 		return fmt.Errorf("%s %q: an empty program", field, line)
 	}
 	c := strings.ToLower(argv[0])
-	for _, p := range executorSchemes {
-		if strings.HasPrefix(c, p) {
-			return fmt.Errorf("%s %q: an executor over %s is not supported yet; give the command that starts dax execute (docker exec -i box dax execute, ssh host dax execute)", field, line, strings.TrimSuffix(p, ":"))
-		}
+	if isExecutorURL(c) {
+		return fmt.Errorf("%s %q: a URL, not a command; give it as executor.url", field, line)
+	}
+	if strings.HasPrefix(c, "unix:") {
+		return fmt.Errorf("%s %q: an executor over unix is not supported yet; give the command that starts dax execute (docker exec -i box dax execute, ssh host dax execute) or the URL it serves at (http://127.0.0.1:7777)", field, line)
+	}
+	return nil
+}
+
+// isExecutorURL reports whether an executor is given as the URL where
+// `dax execute -listen` serves rather than as a command.
+func isExecutorURL(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// checkExecutorURL refuses an executor URL that is not http or https
+// with a host, or that carries credentials: none are sent yet, and one
+// written into a URL would be in a config file.
+func checkExecutorURL(field, s string) error {
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", field, s, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s %q: want an http:// or https:// URL", field, s)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s %q: no host", field, s)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s %q: a URL with a user or password; an executor takes no credentials yet", field, s)
+	}
+	if u.Fragment != "" || u.RawQuery != "" {
+		return fmt.Errorf("%s %q: a query or fragment; give the executor's address alone", field, s)
 	}
 	return nil
 }
@@ -491,7 +534,7 @@ func HasExecutor(user Layer, f Flags) bool {
 	if f.Executor != nil {
 		return strings.TrimSpace(*f.Executor) != ""
 	}
-	return user.Executor != nil && user.Executor.Command.Given()
+	return user.Executor != nil && (user.Executor.Command.Given() || user.Executor.URL != "")
 }
 
 // checkKeyCommand refuses a key command with no program or an empty
@@ -623,8 +666,9 @@ type Flags struct {
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
 	SessionHeader, ClientHeader      *string
-	// Executor replaces the config's executor command, a command line
-	// split as a shell splits words; "" clears it.
+	// Executor replaces the config's executor: a command line split as
+	// a shell splits words, or an http or https URL where it serves; ""
+	// clears it.
 	Executor *string
 	// ExecutorPassEnv replaces executor.pass_env; nil was not given and
 	// empty clears it.
@@ -658,7 +702,8 @@ type Settings struct {
 	AgentsMDGlobal   []string // the user's own instruction files, absolute
 	MemoryDir        string   // empty: off; Resolve fills the default in
 	PricingFile      string   // empty: no terminal-client cost
-	Executor         []string // the executor's program and arguments; empty: the tools run in this process
+	Executor         []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
+	ExecutorURL      string   // where the executor serves, when it is not started here
 	ExecutorPassEnv  []string // what only the executor's command is given
 	MCP              []MCP
 	Peers            []a2a.Remote // the user's, sorted by name
@@ -756,6 +801,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			if x.Command.Given() {
 				// Validated when the file was read.
 				s.Executor, _ = x.Command.Argv()
+				s.ExecutorURL = ""
+			}
+			if x.URL != "" {
+				s.Executor, s.ExecutorURL = nil, x.URL
 			}
 			if x.PassEnv != nil {
 				s.ExecutorPassEnv = x.PassEnv
@@ -879,8 +928,13 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		s.PricingFile = *f.PricingFile
 	}
 	if f.Executor != nil {
-		s.Executor = nil
-		if strings.TrimSpace(*f.Executor) != "" {
+		s.Executor, s.ExecutorURL = nil, ""
+		if line := strings.TrimSpace(*f.Executor); isExecutorURL(line) {
+			if err := checkExecutorURL("-executor", line); err != nil {
+				return s, err
+			}
+			s.ExecutorURL = line
+		} else if line != "" {
 			argv, err := cmdline.Split(*f.Executor)
 			if err != nil {
 				return s, fmt.Errorf("-executor: %w", err)
@@ -896,6 +950,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			return s, err
 		}
 		s.ExecutorPassEnv = f.ExecutorPassEnv
+		if s.ExecutorURL != "" && len(f.ExecutorPassEnv) > 0 {
+			return s, errors.New("-executor-pass-env: an executor at a URL is started by no command here, so nothing is given them")
+		}
 	}
 	if f.AgentsMDGlobal != nil {
 		if err := checkPaths("-agents-md-global", f.AgentsMDGlobal); err != nil {

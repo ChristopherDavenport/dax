@@ -126,8 +126,12 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 	if err != nil {
 		return nil, nil, err
 	}
+	var made *sdk.Server // srv, which a failed return sets to nil
 	defer func() {
 		if err != nil {
+			if made != nil {
+				processServers.Delete(made)
+			}
 			x.Close()
 		}
 	}()
@@ -169,6 +173,7 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 			Resources:    &sdk.ResourceCapabilities{ListChanged: false},
 		},
 	})
+	made = srv
 	serveFiles(srv, env.Workspace.FS())
 	if c.Start != nil {
 		if err := serveProcesses(srv, env.Workspace, o.Done); err != nil {
@@ -178,5 +183,8 @@ func NewServer(o ServeOptions, exts []extension.Extension, env extension.ToolEnv
 	if err := mcpserver.AddTools(srv, x.inner...); err != nil {
 		return nil, nil, err
 	}
-	return srv, x.Close, nil
+	return srv, func() error {
+		processServers.Delete(srv)
+		return x.Close()
+	}, nil
 }

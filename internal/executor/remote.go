@@ -25,6 +25,10 @@ var factsTimeout = 30 * time.Second
 type ConnectOptions struct {
 	// Name and Version are the client's implementation, the program's.
 	Name, Version string
+	// KeepAlive, when positive, is how often the client pings the
+	// executor: over HTTP (KeepAlive), so the server does not close the
+	// session as idle. A ping that fails closes the connection.
+	KeepAlive time.Duration
 }
 
 // Remote is the executor NewServer serves, reached over MCP: `dax
@@ -64,6 +68,7 @@ func Connect(ctx context.Context, t sdk.Transport, o ConnectOptions) (*Remote, e
 		mcpclient.WithClaims(),
 		mcpclient.WithElicitation(),
 		mcpclient.WithClientInfo(o.Name, o.Version),
+		mcpclient.WithClientOptions(sdk.ClientOptions{KeepAlive: o.KeepAlive}),
 		// The executor says its tool list never changes; a call does
 		// not wait for a notification after it.
 		mcpclient.WithNotificationGrace(0),

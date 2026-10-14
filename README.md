@@ -358,8 +358,9 @@ names the file and the field.
 | `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`; `command` is split as `executor`'s string is |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file) |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
-| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below). `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
+| `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
+| `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `policy` | see below |
 
@@ -385,7 +386,7 @@ keys somewhere; a repository does not get to make them.)
 | `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
-| `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded; `""` clears it |
+| `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |
 | `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
@@ -444,11 +445,12 @@ your own config can say that.
 ## The tools in a sandbox: `dax execute`
 
 `dax execute` serves dax's tools over MCP on its standard input and
-output, from inside the place they should act: a container, a VM,
-another host. It runs no model, no policy and no session. A session
-elsewhere decides each call under its own policy and sends it there to
-run: start that session with `-executor` (or `"executor"` in your
-config) set to the command that starts `dax execute`.
+output, or over HTTP with `-listen`, from inside the place they should
+act: a container, a VM, another host. It runs no model, no policy and
+no session. A session elsewhere decides each call under its own policy
+and sends it there to run: start that session with `-executor` (or
+`"executor"` in your config) set to the command that starts `dax
+execute`, or to the URL where it listens.
 
 ```sh
 dax -executor 'docker exec -i box dax execute -root /work -kind container -ref box'
@@ -470,6 +472,27 @@ runs in it, anyone who can start it can run whatever its tools run,
 which is no more than anyone who can already `docker exec` or `ssh`
 there.
 
+With `-listen` it is a server instead, started once and left running,
+which sessions connect to by URL:
+
+```sh
+dax execute -listen 127.0.0.1:7777 -root ~/src/app -kind remote -ref build-host   # there
+dax -executor http://127.0.0.1:7777                                                # here
+```
+
+It speaks MCP's streamable HTTP transport, and each client is a session
+of its own, with its own processes, over the one workspace. **Nothing
+authenticates a client yet**: whoever reaches the address runs the
+tools. So it listens on a loopback address only (`127.0.0.1`, `::1`,
+`localhost`), and another machine reaches it through a tunnel, `ssh -L
+7777:127.0.0.1:7777 build-host`; `-insecure-no-auth` takes any address,
+and says on standard error that anyone who can reach it can run
+commands. A request from a web page is refused (another origin, or a
+host name other than the loopback address it reached). A session that
+starts no request for five minutes is closed and its processes end; a
+connected client pings every minute, so only one that went away is
+closed. A signal stops it, and every session's processes with it.
+
 | Flag | Default | |
 |---|---|---|
 | `-root` | the current directory | where the tools act |
@@ -477,6 +500,8 @@ there.
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
 | `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod |
+| `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
+| `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |
 
 It reads no config file: the sandbox holds the files it would read,
 and the policy is the session's. Commands get its environment with
@@ -579,9 +604,19 @@ reported, as on this machine. Your own `~/.dax/AGENTS.md`,
 dax v0.0.6, which does not serve its files, is refused: update `dax`
 where it runs.
 
+An executor at a URL is already running, so nothing here starts it:
+no environment goes to it, `executor.pass_env` and
+`-executor-pass-env` do not apply (naming either with a URL is an
+error), and no standard error comes back; it is on the terminal where
+`dax execute -listen` runs. The URL carries no user or password, since
+the executor takes no credential yet.
+
 What `-executor` does not do yet:
 
-- Only a command: an `http:`, `https:` or `unix:` address is refused.
+- A `unix:` address is refused.
+- No reconnect: if the connection breaks, or an HTTP executor restarts
+  or closes the session as idle, the session's calls fail until you
+  restart dax and resume.
 
 Standard output carries MCP and nothing else. While it serves,
 `os.Stdout` is standard error, so a stray print from a tool cannot

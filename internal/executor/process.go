@@ -174,6 +174,7 @@ type processServer struct {
 // waiting for output.
 func serveProcesses(srv *sdk.Server, ws workspace.Workspace, done <-chan struct{}) error {
 	s := &processServer{ws: ws, tables: map[*sdk.ServerSession]*processTable{}}
+	processServers.Store(srv, s)
 	if err := errors.Join(
 		sdk.AddReceivingCustomMethod(srv, MethodStart, s.start),
 		sdk.AddReceivingCustomMethod(srv, MethodWrite, s.write),
@@ -192,6 +193,32 @@ func serveProcesses(srv *sdk.Server, ws workspace.Workspace, done <-chan struct{
 		}()
 	}
 	return nil
+}
+
+// processServers are the process servers by the server they answer
+// for, so that Handler can end a session's processes before it closes
+// the session; NewServer's closeTools removes one.
+var processServers sync.Map // *sdk.Server → *processServer
+
+// endSession ends ss's processes and the requests waiting on them, and
+// refuses another start in ss. A session's close waits for its
+// requests in flight, and a read or a wait on a process that runs on
+// waits for it; over HTTP, where nothing cancels such a request when
+// its client goes, the close would never come. srv's processes are
+// ended by ss's own end otherwise; ss of a server without the process
+// methods has none.
+func endSession(srv *sdk.Server, ss *sdk.ServerSession) {
+	v, ok := processServers.Load(srv)
+	if !ok {
+		return
+	}
+	s := v.(*processServer)
+	s.mu.Lock()
+	t := s.tables[ss]
+	s.mu.Unlock()
+	if t != nil {
+		t.close()
+	}
 }
 
 // processTable is one session's processes.
