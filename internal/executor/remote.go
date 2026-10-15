@@ -16,6 +16,8 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // factsTimeout bounds one reading of a call's facts claim from an
@@ -41,8 +43,15 @@ type ConnectOptions struct {
 	// session as idle. A ping that fails closes the connection.
 	KeepAlive time.Duration
 	// Warn, when set, is told in a line that the connection was lost
-	// and made again, or that the executor that answered was refused.
+	// and made again, or that the executor that answered was refused;
+	// and, at the first connection, that its tools read less of a file
+	// than MaxReadBytes asks (readLimitWarning).
 	Warn func(string)
+	// MaxReadBytes is the session's max_read_bytes, which the client
+	// asks the executor for under CapabilityKey on every connection:
+	// the executor's tools read up to it, capped at the executor's own
+	// -max-read-bytes. Zero asks for tool.DefaultMaxRead.
+	MaxReadBytes int64
 }
 
 // Dialer makes a new transport to the executor, for each connection a
@@ -96,6 +105,9 @@ type shape struct {
 	desc       workspace.Descriptor
 	extensions []string
 	tools      []Tool
+	// maxRead is the read limit the executor gave the session's
+	// tools; zero from an executor older than the field.
+	maxRead int64
 }
 
 // conn is one connection to the executor and what hangs on it: the
@@ -172,6 +184,9 @@ func connectWith(ctx context.Context, dial Dialer, t sdk.Transport, o ConnectOpt
 	if err != nil {
 		return nil, err
 	}
+	if line := readLimitWarning(o.MaxReadBytes, sh.maxRead, cn.server); line != "" && o.Warn != nil {
+		o.Warn(line)
+	}
 	r := &Remote{dial: dial, opts: o, first: sh, cur: cn, server: cn.server}
 	cn.r = r
 	r.ctx, r.cancel = context.WithCancel(context.Background())
@@ -184,7 +199,15 @@ func connect(ctx context.Context, t sdk.Transport, o ConnectOptions) (*conn, sha
 		mcpclient.WithClaims(),
 		mcpclient.WithElicitation(),
 		mcpclient.WithClientInfo(o.Name, o.Version),
-		mcpclient.WithClientOptions(sdk.ClientOptions{KeepAlive: o.KeepAlive}),
+		mcpclient.WithClientOptions(sdk.ClientOptions{
+			KeepAlive: o.KeepAlive,
+			// What the session asks of the executor, the same on every
+			// connection. The executor uses no other capability of a
+			// client's but the elicitation mcpclient adds.
+			Capabilities: &sdk.ClientCapabilities{Experimental: map[string]any{
+				CapabilityKey: clientCapability{MaxReadBytes: o.MaxReadBytes},
+			}},
+		}),
 		// The executor says its tool list never changes; a call does
 		// not wait for a notification after it.
 		mcpclient.WithNotificationGrace(0),
@@ -254,6 +277,9 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	if st := cp.Start; st != nil && (st.MaxProcesses <= 0 || st.MaxWriteBytes <= 0 || st.MaxReadBytes <= 0) {
 		return nil, shape{}, refuse("its start capability has a bound that is not positive: %+v", *st)
 	}
+	if cp.MaxReadBytes < 0 {
+		return nil, shape{}, refuse("its read limit is %d bytes", cp.MaxReadBytes)
+	}
 	if cp.Descriptor.Kind == "" || cp.Descriptor.Root == "" {
 		return nil, shape{}, refuse("its capability names no workspace (kind %q, root %q)", cp.Descriptor.Kind, cp.Descriptor.Root)
 	}
@@ -265,6 +291,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	sh := shape{
 		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Root: cp.Descriptor.Root},
 		extensions: slices.Clone(cp.Extensions),
+		maxRead:    cp.MaxReadBytes,
 	}
 	for _, ct := range cp.Tools {
 		t, ok := listed[ct.Name]
@@ -300,13 +327,20 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 
 // differs says how o, a later connection's executor, is not s, the
 // first's, and "" when it is the same: the workspace, the extensions,
-// and the tools in order, each with the same definition and claims.
+// the read limit when both say one, and the tools in order, each with
+// the same definition and claims. The same client asks every
+// connection for the same read limit, so the same executor gives the
+// same one; an executor older than the read limit gives none, and its
+// tools' definitions, read's description among them, say what changed.
 func (s shape) differs(o shape) string {
 	if s.desc != o.desc {
 		return fmt.Sprintf("it acts in %s, not %s", describe(o.desc), describe(s.desc))
 	}
 	if !slices.Equal(s.extensions, o.extensions) {
 		return fmt.Sprintf("it runs the extensions %v, not %v", o.extensions, s.extensions)
+	}
+	if s.maxRead != 0 && o.maxRead != 0 && s.maxRead != o.maxRead {
+		return fmt.Sprintf("its tools read up to %d bytes of a file, not %d (its -max-read-bytes changed)", o.maxRead, s.maxRead)
 	}
 	names := func(ts []Tool) []string {
 		out := make([]string, len(ts))
@@ -324,6 +358,26 @@ func (s shape) differs(o shape) string {
 		if errA != nil || errB != nil || string(a) != string(b) {
 			return fmt.Sprintf("its tool %q is not the one the session was offered (its definition or claims differ)", s.tools[i].Name())
 		}
+	}
+	return ""
+}
+
+// readLimitWarning is what a session that asked for asked as its read
+// limit (zero: tool.DefaultMaxRead) is told of got, the limit the
+// executor server gave its tools (zero: an executor older than the
+// limit, which says none): that it is lower than asked, or, from an
+// older executor, that the session's setting does not reach it. ""
+// when there is nothing to say.
+func readLimitWarning(asked, got int64, server sdk.Implementation) string {
+	want, setting := asked, fmt.Sprintf("max_read_bytes is %d", asked)
+	if want <= 0 {
+		want, setting = tool.DefaultMaxRead, fmt.Sprintf("max_read_bytes is the default, %d", tool.DefaultMaxRead)
+	}
+	switch {
+	case got == 0 && want != tool.DefaultMaxRead:
+		return fmt.Sprintf("%s, but the executor (%s %s) is older than the setting and does not take it: its tools read what its own -max-read-bytes says; update dax execute where it runs", setting, server.Name, server.Version)
+	case got > 0 && got < want:
+		return fmt.Sprintf("%s, but the executor (%s %s) caps it at %d bytes, so its tools read no more of a file than that; to allow more, pass `dax execute -max-read-bytes %d` where it runs", setting, server.Name, server.Version, got, want)
 	}
 	return ""
 }

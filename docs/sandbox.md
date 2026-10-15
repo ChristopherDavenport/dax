@@ -228,8 +228,15 @@ daxbox() { dax -executor "docker exec -i $(basename "$PWD")-box dax execute -roo
 - `-executor ""` runs one session on this machine despite the config.
 - A project's `.dax/config.json` may not set `executor`; dax refuses the
   file. Only your config and the flags say where the tools run.
-- `max_read_bytes` in your config does not reach the sandbox's tools;
-  give `dax execute` `-max-read-bytes`.
+- `max_read_bytes` in your config applies to the sandbox's tools too,
+  up to the ceiling whoever runs the sandbox sets with `dax execute
+  -max-read-bytes` (dax's default, 2 MiB, when unset). dax sends the
+  setting when it connects, each session gets its own, and a session
+  that asks for more than the ceiling gets the ceiling, with a warning
+  naming the flag that would allow more. A `dax execute` older than
+  this takes no setting and applies its own flag; dax warns when your
+  setting is not the default. A dax older than this sends none, and
+  gets the flag's value.
 - MCP servers are configured as usual (`mcp_servers`, `-mcp`) and start
   in the sandbox, at its root, so their commands must exist there.
   `/mcp add <name> <command>` (in `-front repl`) starts one there
@@ -360,8 +367,11 @@ since the new connection must be the same executor. What does not:
 The new connection must name the same workspace (kind, ref and root),
 run the same extensions and offer the same tools with the same
 definitions and claims, since the model was offered those tools and the
-record names that workspace. One that does not (another container, a
-`dax execute` with other tools) is refused with a warning, and every
+record names that workspace. The new connection asks for the same
+`max_read_bytes` and must give the same: a `dax execute` restarted with
+a lower `-max-read-bytes` is another executor. One that does not
+(another container, a `dax execute` with other tools) is refused with a
+warning, and every
 call after fails, without connecting again, until you restart dax and
 resume the session (`dax -resume <id>`).
 

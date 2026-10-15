@@ -325,7 +325,7 @@ func run(ctx context.Context, args []string, p program) error {
 		wsRoot = dir
 	)
 	if len(settings.Executor) > 0 || settings.ExecutorURL != "" {
-		xo := agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv}
+		xo := agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv, MaxReadBytes: settings.MaxReadBytes}
 		if settings.ExecutorURL != "" {
 			// Already running where it serves; nothing here starts it,
 			// so no environment goes with it.

@@ -60,6 +60,15 @@ type ExecutorOptions struct {
 	// with its environment, and never see them. Naming KeyEnv is an
 	// error.
 	LauncherEnv []string
+	// MaxReadBytes is the session's max_read_bytes, Options.MaxReadBytes
+	// as the executor's tools are to take it: the most bytes of a file
+	// they read, which the executor caps at its own -max-read-bytes.
+	// Zero is tool.DefaultMaxRead. The executor's tools are built when
+	// it is dialed, so it is given here, not in Options. When the
+	// executor caps it lower, or is a dax execute older than the
+	// setting and the setting is not the default, dax warns
+	// (CaptureWarnings).
+	MaxReadBytes int64
 }
 
 // DialExecutor starts the program argv[0] with the arguments argv[1:],
@@ -101,7 +110,7 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 		cmd.Stderr = render.CleanWriter(warnings{})
 		return &mcp.CommandTransport{Command: cmd}, nil
 	}
-	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, MaxReadBytes: o.MaxReadBytes})
 	if err != nil {
 		return nil, err
 	}
@@ -112,17 +121,17 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 // DialExecutorURL connects to `dax execute -listen` serving at
 // endpoint, an http or https URL, over MCP's streamable HTTP transport,
 // and refuses what is not a dax executor as DialExecutor does. Nothing
-// here starts it, so of o only Name and Version apply. It sends no
-// credential: whoever can reach the endpoint can run its tools, which
-// is why `dax execute` listens on loopback unless told otherwise, and
-// a tunnel (ssh -L) reaches it from elsewhere. The client pings it
-// every executor.KeepAlive so an idle session stays open. When the
-// connection is lost (the server restarted or closed the session, the
-// tunnel dropped), the next request connects again, as DialExecutor's
-// does.
+// here starts it, so of o only Name, Version and MaxReadBytes apply. It
+// sends no credential: whoever can reach the endpoint can run its
+// tools, which is why `dax execute` listens on loopback unless told
+// otherwise, and a tunnel (ssh -L) reaches it from elsewhere. The
+// client pings it every executor.KeepAlive so an idle session stays
+// open. When the connection is lost (the server restarted or closed
+// the session, the tunnel dropped), the next request connects again,
+// as DialExecutor's does.
 func DialExecutorURL(ctx context.Context, endpoint string, o ExecutorOptions) (*Executor, error) {
 	dial := func(context.Context) (mcp.Transport, error) { return executor.HTTPTransport(endpoint), nil }
-	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive, MaxReadBytes: o.MaxReadBytes})
 	if err != nil {
 		return nil, err
 	}

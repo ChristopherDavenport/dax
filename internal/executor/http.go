@@ -22,11 +22,12 @@ const KeepAlive = time.Minute
 // sessionIDHeader is the streamable HTTP transport's session header.
 const sessionIDHeader = "Mcp-Session-Id"
 
-// Handler serves srv, NewServer's, over MCP's streamable HTTP
-// transport, for `dax execute -listen`, until done is closed. Each
-// client that initializes is a session of its own, with its own
-// processes (process.go keeps them by session and ends them with it);
-// every session shares srv's tools, and so the workspace and the lock
+// Handler serves s, NewServer's, over MCP's streamable HTTP transport,
+// for `dax execute -listen`, until done is closed. Each client that
+// initializes is a session of its own, on an MCP server of its own
+// (Server), with its own tools, built at the read limit it asked for,
+// and its own processes (process.go keeps them by session and ends
+// them with it); every session shares the workspace, and so the lock
 // its writes take.
 //
 // A session ends when its client deletes it, or when it has started no
@@ -35,17 +36,34 @@ const sessionIDHeader = "Mcp-Session-Id"
 // waits for and which nothing over HTTP cancels when the client goes.
 // The SDK's own idle timeout is not used, since its close would wait
 // on such a request for ever, and it does not count a request that
-// waits as idle.
+// waits as idle. Its tools are closed once it has ended.
 //
 // It authenticates no one: whoever reaches it runs the tools. What it
 // refuses is a browser's way in: a request that came to a loopback
 // address naming another host (the SDK's DNS-rebinding check, left
 // on), and a cross-origin request from a page.
-func Handler(srv *sdk.Server, done <-chan struct{}) http.Handler {
-	h := &httpSessions{
-		srv:  srv,
-		next: sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil),
-		seen: map[string]time.Time{},
+func Handler(s *Server, done <-chan struct{}) http.Handler {
+	h := &httpSessions{s: s, seen: map[string]time.Time{}}
+	// The SDK asks for a server on every request, but serves one only
+	// to a request that starts a session; a session's requests go to
+	// the server it started on. probe answers the others, which read
+	// only the protocol versions it takes.
+	probe, err := s.session()
+	h.next = sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server {
+		if r.Header.Get(sessionIDHeader) != "" {
+			return probe
+		}
+		srv, err := s.session()
+		if err != nil {
+			return nil
+		}
+		return srv
+	}, nil)
+	if err != nil {
+		// Closed already: serve nothing.
+		h.next = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		})
 	}
 	go h.sweep(done)
 	return http.NewCrossOriginProtection().Handler(h)
@@ -54,7 +72,7 @@ func Handler(srv *sdk.Server, done <-chan struct{}) http.Handler {
 // httpSessions is Handler: the SDK's handler, with when each session
 // last started a request.
 type httpSessions struct {
-	srv  *sdk.Server
+	s    *Server
 	next http.Handler
 
 	mu   sync.Mutex
@@ -68,7 +86,7 @@ func (h *httpSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 		if r.Method == http.MethodDelete {
 			if ss := h.session(id); ss != nil {
-				endSession(h.srv, ss)
+				h.s.endSession(ss)
 			}
 		}
 	}
@@ -77,7 +95,7 @@ func (h *httpSessions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // session is the session of id, nil if there is none.
 func (h *httpSessions) session(id string) *sdk.ServerSession {
-	for ss := range h.srv.Sessions() {
+	for _, ss := range h.s.Sessions() {
 		if ss.ID() == id {
 			return ss
 		}
@@ -101,7 +119,7 @@ func (h *httpSessions) sweep(done <-chan struct{}) {
 		live := map[string]bool{}
 		var idle []*sdk.ServerSession
 		h.mu.Lock()
-		for ss := range h.srv.Sessions() {
+		for _, ss := range h.s.Sessions() {
 			id := ss.ID()
 			if id == "" {
 				continue
@@ -122,7 +140,7 @@ func (h *httpSessions) sweep(done <-chan struct{}) {
 		}
 		h.mu.Unlock()
 		for _, ss := range idle {
-			endSession(h.srv, ss)
+			h.s.endSession(ss)
 			go ss.Close()
 		}
 	}

@@ -89,18 +89,18 @@ func (c *counter) ext(desc string, readOnly ...string) extension.Extension {
 }
 
 // serverOver is NewServer of exts over a local workspace at dir, as d.
-func serverOver(t *testing.T, dir string, d func(root string) workspace.Descriptor, exts ...extension.Extension) *sdk.Server {
+func serverOver(t *testing.T, dir string, d func(root string) workspace.Descriptor, exts ...extension.Extension) *Server {
 	t.Helper()
 	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	srv, closeTools, err := NewServer(ServeOptions{Name: "dax", Version: "test", Descriptor: d(ws.Root())}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
+	srv, err := NewServer(ServeOptions{Name: "dax", Version: "test", Descriptor: d(ws.Root())}, fixed(exts...), extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	return srv
 }
 
@@ -112,7 +112,7 @@ type pipeBox struct {
 	t *testing.T
 
 	mu    sync.Mutex
-	srvs  []*sdk.Server
+	srvs  []connector
 	dials int
 	links []*pipeLink
 	gate  chan struct{} // when set, a dial waits for it to close
@@ -231,7 +231,7 @@ func testBox(t *testing.T) (*pipeBox, *counter, string) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("notes\n"), 0o644)
 	c := newCounter()
-	return &pipeBox{srvs: []*sdk.Server{serverOver(t, dir, testDescriptor, coding.New(0), c.ext("Count."))}}, c, dir
+	return &pipeBox{srvs: []connector{serverOver(t, dir, testDescriptor, coding.New(0), c.ext("Count."))}}, c, dir
 }
 
 var (
@@ -341,7 +341,7 @@ func TestARestartedHTTPExecutorIsConnectedAgain(t *testing.T) {
 	restart := func() {
 		next := Handler(s.srv, done)
 		h.Store(&next)
-		for ss := range s.srv.Sessions() {
+		for _, ss := range s.srv.Sessions() {
 			ss.Close()
 		}
 	}
@@ -434,7 +434,7 @@ func TestAFactsReadingCutInFlightIsReadAgainOnce(t *testing.T) {
 					return next(ctx, method, req)
 				}
 			})
-			b.srvs = []*sdk.Server{srv}
+			b.srvs = []connector{srv}
 			r, _ := dialBox(t, b)
 			f, err := r.Facts(context.Background(), readCall)
 			if ok := err == nil && strings.Contains(string(f.Rewrite), "dax_stamp"); ok != tc.ok {
@@ -458,30 +458,30 @@ func TestAFactsReadingCutInFlightIsReadAgainOnce(t *testing.T) {
 func TestAnotherExecutorIsRefusedOnRedial(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		other func(t *testing.T, dir string, c *counter) *sdk.Server
+		other func(t *testing.T, dir string, c *counter) connector
 		wants string
 	}{
-		{"another workspace", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"another workspace", func(t *testing.T, dir string, c *counter) connector {
 			return serverOver(t, dir, func(root string) workspace.Descriptor {
 				return workspace.Descriptor{Kind: workspace.KindContainer, Ref: "other", Root: root}
 			}, coding.New(0), c.ext("Count."))
 		}, "container other"},
-		{"other extensions", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"other extensions", func(t *testing.T, dir string, c *counter) connector {
 			return serverOver(t, dir, testDescriptor, c.ext("Count."))
 		}, "it runs the extensions [acme]"},
-		{"another tool", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"another tool", func(t *testing.T, dir string, c *counter) connector {
 			more := c.ext("Count.")
 			tools := more.Tools
 			more.Tools = func(env extension.ToolEnv) []agenttool.Tool { return append(tools(env), plain("rm")) }
 			return serverOver(t, dir, testDescriptor, coding.New(0), more)
 		}, "it runs the tools"},
-		{"a tool defined otherwise", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"a tool defined otherwise", func(t *testing.T, dir string, c *counter) connector {
 			return serverOver(t, dir, testDescriptor, coding.New(0), c.ext("Count twice."))
 		}, `its tool "count"`},
-		{"a tool claimed otherwise", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"a tool claimed otherwise", func(t *testing.T, dir string, c *counter) connector {
 			return serverOver(t, dir, testDescriptor, coding.New(0), c.ext("Count.", "count"))
 		}, `its tool "count"`},
-		{"no executor", func(t *testing.T, dir string, c *counter) *sdk.Server {
+		{"no executor", func(t *testing.T, dir string, c *counter) connector {
 			return fake(t, nil, true, plain("count"))
 		}, "not a dax executor"},
 	} {

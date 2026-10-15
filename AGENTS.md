@@ -140,14 +140,17 @@ before changing the shape.
   model response's facts for its decisions (two requests: the calls,
   then their rewrites) so one reading decides and stamps a call; and
   `NewServer` (`serve.go`), the in-process tools served over MCP for
-  `execute`, with what MCP cannot carry in a capability, and its
+  `execute`, built for each session on an MCP server of its own at the
+  read limit it asks for in its capabilities, capped at the
+  executor's, with what MCP cannot carry in a capability, and its
   workspace's files served read-only as MCP resources and read back as
   an `fs.FS` (`files.go`), and processes started for the session
   through custom methods, not tools (`process.go`); `Handler`
   (`http.go`), such a server over streamable HTTP, each client a
   session of its own, closed when idle with its processes ended first;
   `Remote`
-  (`remote.go`), the client of such a server, which refuses one that
+  (`remote.go`), the client of such a server, which asks it for the
+  session's read limit and warns when it gives less, refuses one that
   does not give the claims, and dials again (`Dial`) before the next
   request when its connection is lost, refusing an executor that is not
   the first one, and never sending a call twice (`agent/executor.go` wraps it as the public

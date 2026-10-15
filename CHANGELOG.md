@@ -33,6 +33,21 @@ versions may break flags and the config file.
 - Changed: `agent.List` lists the sessions whose tools acted in the
   directory on this machine (its workspace, or for older sessions its
   cwd), and no longer one whose executor's root is the same path.
+- Changed: `max_read_bytes` reaches the executor's tools. dax sends the
+  session's setting when it connects to `dax execute`, and each session
+  there has its tools built at its own value, up to the ceiling
+  `dax execute -max-read-bytes` sets (dax's default, 2 MiB, when
+  unset); before, every session's tools read what that flag said and
+  the setting had no effect. A session that asks for more than the
+  ceiling gets the ceiling, and dax warns, naming the flag that would
+  allow more; one that asks for nothing gets the default, capped
+  likewise. A dax older than this sends nothing and gets the flag's
+  value, as before; against a `dax execute` older than this, dax warns
+  when the setting is not the default, since it does not reach the
+  executor. A reconnection asks for the same value, and one to an
+  executor whose ceiling now gives less is refused. Closes #58.
+- Added: `agent.ExecutorOptions.MaxReadBytes`, the session's read limit
+  as `DialExecutor` and `DialExecutorURL` send it to the executor.
 - Added: `agent.ListExecutor` and `agent.ListExecutorURL`, a project's
   sessions and its workspace by the executor address that reached it,
   as `DialExecutor` and `DialExecutorURL` take it, for a program built

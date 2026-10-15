@@ -573,8 +573,14 @@ made and checked in that process, under its key, and a stamp made
 elsewhere is refused. What MCP cannot carry (the descriptor, the
 extensions, the in-process order, each tool's extension, `ReadOnly`
 and strictness) is in the experimental capability
-`io.github.christopherdavenport.dax/executor`. It reads no config and
-runs no policy; the pipe that started it is its one client. A
+`io.github.christopherdavenport.dax/executor`. Each session's tools
+are built for it when it initializes, on an MCP server of its own, at
+the read limit the session asks for under the same key in its own
+capabilities (its `max_read_bytes`), capped at the executor's
+`-max-read-bytes`, which the capability then reports; every session
+shares the workspace and the `tool.Files` whose lock its writes take,
+and its tools are closed when it ends. It reads no config and runs no
+policy; the pipe that started it is its one client. A
 session reaches it through `executor.Remote` (`agent.DialExecutor`,
 `-executor`), which takes the claims (mcpclient's `WithClaims`) and
 refuses a server that would not give them: one without the facts
