@@ -12,9 +12,9 @@ require (
 	github.com/ChristopherDavenport/agentsession v0.0.25
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
-	github.com/ChristopherDavenport/agenttool v0.0.22
-	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.22
-	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.22
+	github.com/ChristopherDavenport/agenttool v0.0.23
+	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.23
+	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.23
 	github.com/ChristopherDavenport/agentturn v0.0.29
 	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.29
 	github.com/ChristopherDavenport/agentturn/session v0.0.29

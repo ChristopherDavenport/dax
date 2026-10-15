@@ -24,8 +24,7 @@ versions may break flags and the config file.
   next call trying again; the model reads each as the call's error.
   Closes #87.
 - Dependencies: agenttool v0.0.23 (mcpclient reconnect), up from
-  v0.0.22, for `mcpclient.WithReconnect` and `WithReconnected`; pending
-  its release.
+  v0.0.22, for `mcpclient.WithReconnect` and `WithReconnected`.
 
 ## v0.0.19 - 2026-10-15
 
