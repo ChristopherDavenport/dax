@@ -5,6 +5,27 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: an MCP server whose session ended, a process that exited or,
+  with `-executor`, one that ended with the executor's lost connection,
+  is started again by the next call to one of its tools, in the
+  workspace or on this machine as before, the config's servers and
+  `/mcp add`'s alike. Each attempt is a warning (`dax: MCP server <name>
+  ended and was started again (<server> <version>); whatever it held is
+  gone, …`, naming the tools added and removed when they changed, or
+  the reason it could not start) and an entry in the session's record,
+  `dax.mcp.restart`: the server's name, why, whether it started, the
+  error, its implementation and version, and whether its tools changed
+  and which came and went. The restarted server's tools are offered
+  from then on. A call in flight when the server ended is not sent
+  again, a call of a tool the restarted server no longer lists as it
+  was fails unsent, and a restart that fails fails the call, with the
+  next call trying again; the model reads each as the call's error.
+  Closes #87.
+- Dependencies: agenttool v0.0.23 (mcpclient reconnect), up from
+  v0.0.22, for `mcpclient.WithReconnect` and `WithReconnected`.
+
 ## v0.0.19 - 2026-10-15
 
 - Changed: a session's project is its workspace, where its tools act

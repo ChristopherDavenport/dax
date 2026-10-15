@@ -358,9 +358,18 @@ since the new connection must be the same executor. What does not:
   sent again, since it may have run; the model sees the error. A check
   of what a call would touch, or a read of the project's files, has no
   effect, and is read again once on the new connection.
-- Processes started in the sandbox for the session, your MCP servers
-  among them, end with the old connection, and dax does not start them
-  again: their tools fail until you restart dax and resume.
+- Processes started in the sandbox for the session end with the old
+  connection. Your MCP servers among them are started again, on the new
+  connection, by the next call to one of their tools, with a warning
+  (`dax: MCP server <name> ended and was started again …`) and an entry
+  in the session's record (`dax.mcp.restart`). Whatever a server held
+  (open handles, subscriptions) is gone. The restarted server's tools
+  are offered from then on, even when they differ, and the warning says
+  which were added or removed; a call the model made of a tool the
+  restarted server no longer lists as it was is not sent, and fails
+  saying so. A server that cannot be started again warns with the
+  reason and fails the call, and the next call tries again. dax does
+  the same for a server on your machine that exits.
 - A call allowed before the drop and sent after it may be refused by the
   new executor (its stamp no longer matches); ask again.
 
@@ -385,10 +394,9 @@ resume the session (`dax -resume <id>`).
   on your machine; the sandbox limits what an approved call can reach,
   not how often you are asked.
 - A dropped connection is made again (see
-  [When the connection drops](#when-the-connection-drops)), but what was
-  running over it is not: a call in flight fails, and your MCP servers
-  in the sandbox end with the old connection and are not started again;
-  their tools fail until you restart dax and resume.
+  [When the connection drops](#when-the-connection-drops)), but a call
+  in flight fails, and your MCP servers in the sandbox start again
+  without what they held: an open handle or a subscription is gone.
 - Your own skills are read on your machine; a skill that runs a script
   from its directory finds no such file in the sandbox unless you put
   it there.

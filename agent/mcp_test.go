@@ -20,8 +20,15 @@ import (
 // TestMain lets the test binary be the MCP server the tests start: two
 // tools, leak, that says what its environment holds, and where, its
 // directory and process id; or, with
-// executorRoot set, `dax execute` over that directory.
+// executorRoot set, `dax execute` over that directory; or, with
+// restartableServer and a directory as its arguments, the server
+// serveRestartable makes of that directory.
 func TestMain(m *testing.M) {
+	// Asked for by its arguments before the environment, since a server
+	// an executor starts inherits the executor's.
+	if len(os.Args) == 3 && os.Args[1] == restartableServer {
+		os.Exit(serveRestartable(os.Args[2]))
+	}
 	if dir := os.Getenv(executorRoot); dir != "" {
 		if err := serveExecutor(dir); err != nil {
 			os.Exit(1)
@@ -251,20 +258,36 @@ func TestAnMCPServerStartsInTheWorkspace(t *testing.T) {
 // A workspace that cannot start a process leaves the server on this
 // machine, as before, with the scrubbed environment.
 func TestAnMCPServerRunsHereWhenTheWorkspaceCannotStartIt(t *testing.T) {
+	ctx := context.Background()
 	ws := localWorkspace(t, t.TempDir())
 	env := []string{"PATH=/bin"}
-	tr, err := mcpServer(struct{ workspace.Workspace }{ws}, "server arg", env)
+	dial, err := mcpServer(struct{ workspace.Workspace }{ws}, "server arg", env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ct, ok := tr.(*mcp.CommandTransport)
-	if !ok {
-		t.Fatalf("transport: %T", tr)
+	// A command transport connects once, so a restart gets a new one,
+	// the same command in the same environment.
+	var cmds []*mcp.CommandTransport
+	for range 2 {
+		tr, err := dial(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ct, ok := tr.(*mcp.CommandTransport)
+		if !ok {
+			t.Fatalf("transport: %T", tr)
+		}
+		if strings.Join(ct.Command.Args, "|") != "server|arg" || strings.Join(ct.Command.Env, " ") != "PATH=/bin" || ct.Command.Stderr == nil {
+			t.Errorf("command: %v %v", ct.Command.Args, ct.Command.Env)
+		}
+		cmds = append(cmds, ct)
 	}
-	if strings.Join(ct.Command.Args, "|") != "server|arg" || strings.Join(ct.Command.Env, " ") != "PATH=/bin" {
-		t.Errorf("command: %v %v", ct.Command.Args, ct.Command.Env)
+	if cmds[0] == cmds[1] || cmds[0].Command == cmds[1].Command {
+		t.Error("a restart reuses the command transport that connected")
 	}
-	if tr, err := mcpServer(ws, "server arg", env); err != nil {
+	if dial, err := mcpServer(ws, "server arg", env); err != nil {
+		t.Fatal(err)
+	} else if tr, err := dial(ctx); err != nil {
 		t.Fatal(err)
 	} else if _, ok := tr.(*startTransport); !ok {
 		t.Errorf("a workspace.Local's transport: %T", tr)

@@ -77,8 +77,10 @@ before changing the shape.
   answers (anyone else's form is cancelled).
 - `agent`: one `agentkit.New` per session; the two-phase build of the
   extensions and their checks (`agent/extension.go`), the policy built
-  from them, the sub-agents' policy hook, and the session-store
-  helpers. It names no tool. `agent/identity.go`: the project's
+  from them, the sub-agents' policy hook, the MCP servers it starts, in
+  the workspace or here, each started again by the next call after it
+  ends, with a warning and a `dax.mcp.restart` entry (`mcpStart`), and
+  the session-store helpers. It names no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
   session's header, and the listings by it (`List`, `ListExecutor`).
   `agent/plane.go`: the human plane, the
