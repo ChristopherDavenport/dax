@@ -5,6 +5,40 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: a session's project is its workspace, where its tools act
+  (`dax execute`'s `-kind`, `-ref` and `-root`), for `-list` and for
+  memory alike. Every new session's header records the workspace
+  (`dax.workspace`: kind, ref, root) and, when its tools run through an
+  executor, a SHA-256 of the address that reached it (`dax.executor`:
+  the command's words, so a string and an array that split alike are
+  one, or the URL); the address itself is never written. `-list` with
+  an executor configured (`-executor` or `executor` in your config)
+  lists the workspace the latest session at that address recorded,
+  whichever address reached its sessions, without starting or dialing
+  the executor; an address no session used lists nothing. With none it
+  lists this directory's sessions as before, less those whose tools
+  ran in an executor whose root is the same path. Sessions recorded
+  through an executor before this release record neither and are not
+  listed; `-resume <id>` still opens them. `-resume` notes a session
+  continued in another workspace, naming both, even when the roots are
+  one path. dax-memory's project scope follows the workspace: this
+  machine's directory keeps the scope it had, so existing memory stays
+  the project's, and a sandbox's is named for its root's base with a
+  hash of its kind, ref and root, so two sandboxed projects started
+  from one directory no longer share one. Give `dax execute` a `-ref`
+  that outlives the container. See docs/sandbox.md, Sessions and
+  memory. Closes #56, #57.
+- Changed: `agent.List` lists the sessions whose tools acted in the
+  directory on this machine (its workspace, or for older sessions its
+  cwd), and no longer one whose executor's root is the same path.
+- Added: `agent.ListExecutor` and `agent.ListExecutorURL`, a project's
+  sessions and its workspace by the executor address that reached it,
+  as `DialExecutor` and `DialExecutorURL` take it, for a program built
+  on dax to list as `-list` does without dialing; and
+  `memory.WorkspaceScope`, the project scope of a session's workspace.
+
 ## v0.0.18 - 2026-10-15
 
 - Changed: when the executor's connection breaks (`-executor`'s command

@@ -499,7 +499,7 @@ closed. A signal stops it, and every session's processes with it.
 | `-max-read-bytes` | 2 MiB | as `max_read_bytes` |
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
-| `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod |
+| `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod. With `-kind` and `-root` it is the project's identity for `-list` and memory, so give one that outlives a recreated container |
 | `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
 | `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |
 
@@ -1171,7 +1171,7 @@ Every run is recorded in one content-addressed store,
 `~/.dax/sessions`, for every project. Admin commands:
 
 ```sh
-dax -list                          # sessions recorded for this directory
+dax -list                          # sessions of this project: this directory, or the executor's (docs/sandbox.md)
 dax -resume <id>                   # continue one, answering any call an abort cut off
 dax -verify <id>                   # rebuild every request and check its hash
 dax -project <id> -out dir         # write one as a JSONL file (RFC 0001)

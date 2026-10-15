@@ -75,8 +75,12 @@ a single quote needs the array form, under Config).
 
 `-i` and not `-t`: the pipe carries MCP. `-root` must exist in the
 container; it is where every tool acts and nothing above it is read.
-`-kind` and `-ref` are only what the record and the banner call the
-workspace.
+`-kind` and `-ref` are what the record and the banner call the
+workspace, and with `-root` they are the project's identity: the
+sessions `-list` finds and the memory scope are keyed by them (see
+[Sessions and memory](#sessions-and-memory)). Give `-ref` explicitly, a
+name that outlives the container: its default is the host's name, and
+a container's changes when it is recreated.
 
 The tools' commands and MCP servers get `dax execute`'s environment,
 which is the container's (the image's `ENV`, `docker run -e`), less
@@ -286,14 +290,48 @@ exec` this is quick; over ssh each response pays a few round trips.
 
 ## Sessions and memory
 
-The record names the executor's root as the session's directory, and
-`dax -list` lists the sessions of the directory you run it in, matched
-exactly, so mounting at the same path keeps `-list` working from your
-checkout and `-resume` from noting a different directory. With a fixed path like `/work`, sandboxed
-sessions do not show in `-list` there (`-resume <id>` still works). The
-project's memory is keyed by the directory you started dax in on your
-machine, not by the executor's root, so start dax from the project's
-checkout.
+A session's project is its workspace: the kind, ref and root `dax
+execute` names (`-kind`, `-ref`, `-root`). The record keeps it in the
+session's header, and, for a session run through an executor, a hash of
+the address that reached it (the `-executor` command's words, or its
+URL); the address itself is not written, since a command line can carry
+what you would not want in a session file you share.
+
+`dax -list` lists the project you would work on if you started dax
+here. With no executor configured it is this directory on this
+machine, as before; a sandboxed session whose root happens to be the
+same path is not one of them. With one configured, by `-executor` or
+your config's `executor`, it takes the latest session that address
+reached, and lists every session recorded in that session's workspace,
+whichever address reached them (a `docker exec` one day, a URL the
+next). It does not start or connect to the executor: an address no
+session used yet lists nothing. A command given as a string and as an
+array is one address when they split into the same words.
+
+One limit: an address stands for the machine it reached last. If one
+address leads to different machines over time, say the same
+`127.0.0.1:7777` tunnel pointed at another box, `-list` shows only the
+latest box's project; the others are still there, and `dax -resume
+<id>` opens any of them. Sessions recorded through an executor before
+dax kept the workspace (v0.0.18 and earlier) have neither, so `-list`
+does not find them from the executor either; `-resume <id>` still
+works.
+
+`-resume` notes when a session continues in another workspace than the
+one it was recorded in, naming both (`recorded in container
+app-box:/work, continuing in /home/me/src/app`), even when the two
+roots are the same path.
+
+The project's memory scope follows the workspace too. On this machine
+it is the directory's, as before; in a sandbox it is named for the base
+of the root with a hash of the kind, ref and root, so two sandboxed
+projects started from one directory here keep two memories, and one
+sandbox keeps one memory wherever you start dax.
+
+All of this is as stable as `-kind`, `-ref` and `-root`. A container's
+default ref is its hostname, which changes when the container is
+recreated, and with it the project; the recipes here pass `-ref`, and
+yours should too.
 
 ## When the connection drops
 

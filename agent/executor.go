@@ -30,6 +30,10 @@ import (
 type Executor struct {
 	r    *executor.Remote
 	view *executorView
+	// addr is the hash of the address it was reached by, which the
+	// session's header records (headerExecutor); empty when it was not
+	// reached by DialExecutor or DialExecutorURL.
+	addr string
 }
 
 // ExecutorOptions say how to start an executor and what to call the
@@ -97,7 +101,12 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 		cmd.Stderr = render.CleanWriter(warnings{})
 		return &mcp.CommandTransport{Command: cmd}, nil
 	}
-	return connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version})
+	if err != nil {
+		return nil, err
+	}
+	ex.addr = executorCommandID(argv)
+	return ex, nil
 }
 
 // DialExecutorURL connects to `dax execute -listen` serving at
@@ -113,7 +122,12 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 // does.
 func DialExecutorURL(ctx context.Context, endpoint string, o ExecutorOptions) (*Executor, error) {
 	dial := func(context.Context) (mcp.Transport, error) { return executor.HTTPTransport(endpoint), nil }
-	return connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
+	if err != nil {
+		return nil, err
+	}
+	ex.addr = executorURLID(endpoint)
+	return ex, nil
 }
 
 // launcherEnv is base, this machine's environment, as the command that

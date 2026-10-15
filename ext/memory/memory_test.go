@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentmemory/filestore"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -199,5 +201,115 @@ func TestTheProjectScopeIsKebabAndPerDirectory(t *testing.T) {
 		if !strings.HasPrefix(got, tc.prefix) || len(got) != len(tc.prefix)+8 {
 			t.Errorf("ProjectScope(%q) = %q, want %q and 8 hex digits", tc.dir, got, tc.prefix)
 		}
+	}
+}
+
+// A project's scope on this machine is the one it had before the
+// workspace decided, pinned here, so a store kept then is not orphaned.
+func TestTheLocalScopeIsUnchanged(t *testing.T) {
+	for _, tc := range []struct{ dir, want string }{
+		{"/home/chris/coding/golang/transparent-ai/dax", "project-dax-29ba74b4"},
+		{"/home/u/My Project!", "project-my-project-d5111454"},
+		{"/", "project-8a5edab2"},
+	} {
+		if got := string(memory.ProjectScope(tc.dir)); got != tc.want {
+			t.Errorf("ProjectScope(%q) = %q, want %q", tc.dir, got, tc.want)
+		}
+		local := workspace.Descriptor{Kind: workspace.KindLocal, Root: tc.dir}
+		if got := string(memory.WorkspaceScope(local, tc.dir)); got != tc.want {
+			t.Errorf("WorkspaceScope(local %s) = %q, want %q", tc.dir, got, tc.want)
+		}
+	}
+}
+
+// Any other workspace's scope is its own: named for its root's base,
+// and different for a different kind, ref or root, whatever directory
+// here the session started in.
+func TestAWorkspaceScopeFollowsKindRefAndRoot(t *testing.T) {
+	box := workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: "/work/My App"}
+	others := []workspace.Descriptor{
+		{Kind: workspace.KindRemote, Ref: "box", Root: "/work/My App"},
+		{Kind: workspace.KindContainer, Ref: "box2", Root: "/work/My App"},
+		{Kind: workspace.KindContainer, Ref: "box", Root: "/srv/My App"},
+		// A ref and root that join to the same text are not the same.
+		{Kind: workspace.KindContainer, Ref: "box/work", Root: "/My App"},
+		// An executor on this machine says its host: not this
+		// machine's workspace, whose scope is the directory's.
+		{Kind: workspace.KindLocal, Ref: "host", Root: "/work/My App"},
+	}
+	got := memory.WorkspaceScope(box, "/home/u")
+	if !strings.HasPrefix(string(got), "project-my-app-") || len(got) != len("project-my-app-")+8 {
+		t.Errorf("scope %q, want project-my-app- and 8 hex digits", got)
+	}
+	if again := memory.WorkspaceScope(box, "/elsewhere"); again != got {
+		t.Errorf("the scope moved with the directory here: %q, %q", got, again)
+	}
+	seen := map[string]bool{string(got): true, string(memory.ProjectScope("/home/u")): true, string(memory.ProjectScope("/work/My App")): true}
+	if len(seen) != 3 {
+		t.Fatalf("scopes collide: %v", seen)
+	}
+	for _, d := range others {
+		s := string(memory.WorkspaceScope(d, "/home/u"))
+		if seen[s] {
+			t.Errorf("%+v shares the scope %q", d, s)
+		}
+		seen[s] = true
+	}
+}
+
+// boxed is a directory here that says it is another workspace, as an
+// executor's does.
+type boxed struct {
+	*workspace.Local
+	d workspace.Descriptor
+}
+
+func (b boxed) Descriptor() workspace.Descriptor { return b.d }
+
+// Two sandboxed projects started from one directory here keep their
+// memory in two scopes, and a session on this machine keeps it where
+// it did: the model's save lands in the scope the session's workspace
+// names.
+func TestTheProjectScopeIsTheSessionsWorkspace(t *testing.T) {
+	ctx := context.Background()
+	scopes := map[string]bool{}
+	for _, d := range []workspace.Descriptor{
+		{},
+		{Kind: workspace.KindContainer, Ref: "a", Root: "/work"},
+		{Kind: workspace.KindContainer, Ref: "b", Root: "/work"},
+	} {
+		t.Run(d.Kind+d.Ref, func(t *testing.T) {
+			o, dir := session(t, nil)
+			want := memory.ProjectScope(o.Dir)
+			if d.Kind != "" {
+				local, err := workspace.NewLocal(t.TempDir(), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer local.Close()
+				o.Workspace = boxed{local, d}
+				want = memory.WorkspaceScope(d, o.Dir)
+			}
+			scopes[string(want)] = true
+			o.Streamer = &scripted{calls: [][2]string{{"memory_save", `{"scope":"` + string(want) + `","name":"style","content":"Use tabs."}`}}}
+			s, err := agent.New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prompt(ctx, s, "remember", func(*openresponses.FunctionCall, string) bool { return true }); err != nil {
+				t.Fatal(err)
+			}
+			s.Close()
+			st, err := filestore.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.Get(ctx, want, "style"); err != nil {
+				t.Errorf("the save is not in %s: %v", want, err)
+			}
+		})
+	}
+	if len(scopes) != 3 {
+		t.Errorf("scopes %v, want three", scopes)
 	}
 }

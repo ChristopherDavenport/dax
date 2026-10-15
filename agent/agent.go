@@ -594,11 +594,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 }
 
 // header names the harness and the cwd: the workspace's root, the
-// path the tools act in, on whichever machine that is.
+// path the tools act in, on whichever machine that is; and in dax's
+// own members, the workspace whole and the executor's address, hashed
+// (extras), which say which machine.
 func (s *Session) header() agentsession.Header {
 	return agentsession.Header{
 		CWD:     s.ws.Root(),
 		Harness: &agentsession.Harness{Name: s.opts.Name, Version: s.opts.Version},
+		Extra:   s.extras(),
 	}
 }
 
@@ -692,8 +695,16 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 		// which no reader older than agentsession v0.0.18 opens it.
 		fmt.Fprintf(warnings{}, "dax: session %s was written as %s; this dax writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
 	}
-	if cwd, now := sess.Header().CWD, s.ws.Root(); cwd != "" && cwd != now {
-		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, now)
+	// The workspace the header records against the one the session
+	// continues in: a session that ran in a container and continues
+	// here, or the other way, is said to, even when the two roots are
+	// the same path. One recorded before dax wrote its workspace says
+	// only its cwd, which is compared with the root as before.
+	now := s.x.Descriptor()
+	if was, ok := recordedIn(sess.Header()); ok && was != now {
+		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", where(was), where(now))
+	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
+		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
 	}
 	return s, nil
 }
@@ -850,27 +861,6 @@ func (s *Session) closeTools() {
 // readOnly opens the store for reading, without the session locks, so
 // a session a running dax holds can be listed, verified and projected.
 func readOnly(root string) (*cas.Store, error) { return cas.Open(root, cas.WithReadOnly()) }
-
-// List returns the recorded sessions under root, newest first, for cwd
-// when it is not empty.
-func List(ctx context.Context, root, cwd string) ([]agentsession.Summary, error) {
-	if !cas.IsStore(root) {
-		return nil, nil
-	}
-	store, err := readOnly(root)
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	var out []agentsession.Summary
-	for sum, err := range store.List(ctx, agentsession.ListFilter{CWD: cwd}) {
-		if err != nil {
-			return out, err
-		}
-		out = append(out, sum)
-	}
-	return out, nil
-}
 
 // Verify rebuilds every model call recorded in a session and checks it
 // against the stored request hash, then holds the path to the leaf to

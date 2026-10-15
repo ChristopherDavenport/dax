@@ -537,6 +537,57 @@ func HasExecutor(user Layer, f Flags) bool {
 	return user.Executor != nil && (user.Executor.Command.Given() || user.Executor.URL != "")
 }
 
+// ExecutorOf is the executor the user's layer and the flags name, as
+// Resolve takes it: the program and its arguments of the command that
+// starts it, or the URL where it serves; neither when the tools run in
+// this process. It reads only what names the executor, so a mode that
+// must know where the tools would act without starting anything (-list)
+// is not failed by the rest of the settings.
+func ExecutorOf(user Layer, f Flags) (argv []string, url string, err error) {
+	return executorOf([]Layer{user}, f)
+}
+
+// executorOf folds the executor across the layers, a later one's
+// replacing an earlier one's, then the flag, which replaces them all
+// and clears them when it is "".
+func executorOf(layers []Layer, f Flags) (argv []string, url string, err error) {
+	for _, l := range layers {
+		x := l.Executor
+		if x == nil {
+			continue
+		}
+		if x.Command.Given() {
+			// Validated when the file was read.
+			argv, _ = x.Command.Argv()
+			url = ""
+		}
+		if x.URL != "" {
+			argv, url = nil, x.URL
+		}
+	}
+	if f.Executor == nil {
+		return argv, url, nil
+	}
+	line := strings.TrimSpace(*f.Executor)
+	switch {
+	case isExecutorURL(line):
+		if err := checkExecutorURL("-executor", line); err != nil {
+			return nil, "", err
+		}
+		return nil, line, nil
+	case line != "":
+		argv, err := cmdline.Split(*f.Executor)
+		if err != nil {
+			return nil, "", fmt.Errorf("-executor: %w", err)
+		}
+		if err := checkExecutor("-executor", *f.Executor, argv); err != nil {
+			return nil, "", err
+		}
+		return argv, "", nil
+	}
+	return nil, "", nil
+}
+
 // checkKeyCommand refuses a key command with no program or an empty
 // word; the command is run without a shell, so there is nothing to
 // quote.
@@ -797,18 +848,8 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if l.PricingFile != "" {
 			s.PricingFile = l.PricingFile
 		}
-		if x := l.Executor; x != nil {
-			if x.Command.Given() {
-				// Validated when the file was read.
-				s.Executor, _ = x.Command.Argv()
-				s.ExecutorURL = ""
-			}
-			if x.URL != "" {
-				s.Executor, s.ExecutorURL = nil, x.URL
-			}
-			if x.PassEnv != nil {
-				s.ExecutorPassEnv = x.PassEnv
-			}
+		if x := l.Executor; x != nil && x.PassEnv != nil {
+			s.ExecutorPassEnv = x.PassEnv
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
@@ -927,23 +968,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
 	}
-	if f.Executor != nil {
-		s.Executor, s.ExecutorURL = nil, ""
-		if line := strings.TrimSpace(*f.Executor); isExecutorURL(line) {
-			if err := checkExecutorURL("-executor", line); err != nil {
-				return s, err
-			}
-			s.ExecutorURL = line
-		} else if line != "" {
-			argv, err := cmdline.Split(*f.Executor)
-			if err != nil {
-				return s, fmt.Errorf("-executor: %w", err)
-			}
-			if err := checkExecutor("-executor", *f.Executor, argv); err != nil {
-				return s, err
-			}
-			s.Executor = argv
-		}
+	var err error
+	if s.Executor, s.ExecutorURL, err = executorOf(layers, f); err != nil {
+		return s, err
 	}
 	if f.ExecutorPassEnv != nil {
 		if err := checkExecutorEnv("-executor-pass-env", f.ExecutorPassEnv, ""); err != nil {
