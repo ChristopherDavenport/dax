@@ -20,7 +20,6 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -237,11 +236,11 @@ func TestTheExecutorsDoneEndsItsProcesses(t *testing.T) {
 	}
 	t.Cleanup(func() { ws.Close() })
 	done := make(chan struct{})
-	srv, closeTools, err := NewServer(ServeOptions{Name: "dax", Version: "test", Done: done}, []extension.Extension{coding.New(0)}, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
+	srv, err := NewServer(ServeOptions{Name: "dax", Version: "test", Done: done}, withCoding(), extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	r, ss, err := connectTo(srv)
 	if err != nil {
 		t.Fatal(err)
@@ -395,11 +394,11 @@ func TestAnExecutorWithoutStartIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	srv, closeTools, err := NewServer(ServeOptions{Name: "dax", Version: "old"}, []extension.Extension{coding.New(0)}, extension.ToolEnv{Workspace: notStarter{ws}, Files: tool.NewFiles(ws)})
+	srv, err := NewServer(ServeOptions{Name: "dax", Version: "old"}, withCoding(), extension.ToolEnv{Workspace: notStarter{ws}, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	r, ss, err := connectTo(srv)
 	if err != nil {
 		t.Fatal(err)

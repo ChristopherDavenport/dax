@@ -44,13 +44,21 @@ func serveExecutor(dir string) error {
 		return err
 	}
 	defer ws.Close()
-	srv, closeTools, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "child", Descriptor: workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: ws.Root()}},
-		[]extension.Extension{coding.New(0)}, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
+	srv, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "child", Descriptor: workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: ws.Root()}},
+		codingWith(), extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		return err
 	}
-	defer closeTools()
+	defer srv.Close()
 	return srv.Run(context.Background(), &mcp.StdioTransport{})
+}
+
+// codingWith is the extensions an executor serves: dax-coding at the
+// session's read limit, then exts.
+func codingWith(exts ...extension.Extension) executor.Extensions {
+	return func(maxRead int64) ([]extension.Extension, error) {
+		return append([]extension.Extension{coding.New(maxRead)}, exts...), nil
+	}
 }
 
 // acme is a third party's extension as both sides have it: a tool
@@ -91,7 +99,7 @@ func acme() extension.Extension {
 // directory, with what it was sent counted.
 type remoteBox struct {
 	dir string
-	srv *mcp.Server
+	srv *executor.Server
 
 	mu       sync.Mutex
 	requests int      // the facts requests
@@ -117,12 +125,12 @@ func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	srv, closeTools, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "box", Descriptor: d},
-		[]extension.Extension{coding.New(0), acme()}, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
+	srv, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "box", Descriptor: d},
+		codingWith(acme()), extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	b := &remoteBox{dir: dir, srv: srv}
 	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {

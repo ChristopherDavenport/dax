@@ -157,7 +157,8 @@ var signals = map[string]syscall.Signal{"INT": syscall.SIGINT, "TERM": syscall.S
 // errNoProcess is a process id this session did not start, or closed.
 var errNoProcess = errors.New("no such process in this session")
 
-// processServer answers the process methods for one executor.
+// processServer answers the process methods for one executor, on every
+// session's server, keeping each session's processes apart.
 type processServer struct {
 	ws   workspace.Workspace // a workspace.Starter
 	next atomic.Uint64
@@ -167,15 +168,25 @@ type processServer struct {
 	tables  map[*sdk.ServerSession]*processTable
 }
 
-// serveProcesses registers the process methods on srv, starting
-// processes in ws, a workspace.Starter. A closed done ends every
-// process and every request waiting on one, so that a session's close,
-// which waits for the requests in flight, is not held by a read
-// waiting for output.
-func serveProcesses(srv *sdk.Server, ws workspace.Workspace, done <-chan struct{}) error {
+// newProcessServer answers the process methods, starting processes in
+// ws, a workspace.Starter, on each server register is given. A closed
+// done ends every process and every request waiting on one, so that a
+// session's close, which waits for the requests in flight, is not held
+// by a read waiting for output.
+func newProcessServer(ws workspace.Workspace, done <-chan struct{}) *processServer {
 	s := &processServer{ws: ws, tables: map[*sdk.ServerSession]*processTable{}}
-	processServers.Store(srv, s)
-	if err := errors.Join(
+	if done != nil {
+		go func() {
+			<-done
+			s.stop()
+		}()
+	}
+	return s
+}
+
+// register has srv answer the process methods.
+func (s *processServer) register(srv *sdk.Server) error {
+	return errors.Join(
 		sdk.AddReceivingCustomMethod(srv, MethodStart, s.start),
 		sdk.AddReceivingCustomMethod(srv, MethodWrite, s.write),
 		sdk.AddReceivingCustomMethod(srv, MethodRead, s.read),
@@ -183,36 +194,16 @@ func serveProcesses(srv *sdk.Server, ws workspace.Workspace, done <-chan struct{
 		sdk.AddReceivingCustomMethod(srv, MethodSignal, s.signal),
 		sdk.AddReceivingCustomMethod(srv, MethodWait, s.wait),
 		sdk.AddReceivingCustomMethod(srv, MethodClose, s.close),
-	); err != nil {
-		return err
-	}
-	if done != nil {
-		go func() {
-			<-done
-			s.stop()
-		}()
-	}
-	return nil
+	)
 }
 
-// processServers are the process servers by the server they answer
-// for, so that Handler can end a session's processes before it closes
-// the session; NewServer's closeTools removes one.
-var processServers sync.Map // *sdk.Server → *processServer
-
-// endSession ends ss's processes and the requests waiting on them, and
+// end ends ss's processes and the requests waiting on them, and
 // refuses another start in ss. A session's close waits for its
 // requests in flight, and a read or a wait on a process that runs on
 // waits for it; over HTTP, where nothing cancels such a request when
-// its client goes, the close would never come. srv's processes are
-// ended by ss's own end otherwise; ss of a server without the process
-// methods has none.
-func endSession(srv *sdk.Server, ss *sdk.ServerSession) {
-	v, ok := processServers.Load(srv)
-	if !ok {
-		return
-	}
-	s := v.(*processServer)
+// its client goes, the close would never come. ss's processes are
+// ended by its own end otherwise.
+func (s *processServer) end(ss *sdk.ServerSession) {
 	s.mu.Lock()
 	t := s.tables[ss]
 	s.mu.Unlock()

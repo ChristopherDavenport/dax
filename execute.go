@@ -61,7 +61,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 		fs.PrintDefaults()
 	}
 	root := fs.String("root", "", "directory the tools act in; default the current directory")
-	maxRead := fs.Int64("max-read-bytes", 0, "most bytes of a file the read tool scans, edit rewrites and the bash analyzer reads; 0 is the default")
+	maxRead := fs.Int64("max-read-bytes", 0, fmt.Sprintf("the most a session's max_read_bytes may be (the most bytes of a file the read tool scans, edit rewrites and the bash analyzer reads): a session gets its own setting up to this, and a dax older than the setting gets this; 0 is dax's default, %d", tool.DefaultMaxRead))
 	passEnv := fs.String("pass-env", "", "comma-separated variables that look like credentials to pass to the tools' processes anyway")
 	kind := fs.String("kind", workspace.KindRemote, "the workspace's kind as the session records it: "+strings.Join(executeKinds, ", "))
 	ref := fs.String("ref", "", "the workspace's ref as the session records it: an image, a host, an instance; default this host's name")
@@ -119,11 +119,15 @@ func runExecute(ctx context.Context, args []string, p program) error {
 		defer ln.Close()
 	}
 
-	exts, err := p.selected(choice{MaxReadBytes: *maxRead})
-	if err != nil {
-		return err
+	// Each session's tools are built for it, at the read limit it asks
+	// for up to -max-read-bytes: dax-coding's, and the ToolEnv's.
+	exts := func(maxRead int64) ([]extension.Extension, error) {
+		exts, err := p.selected(choice{MaxReadBytes: maxRead})
+		if err != nil {
+			return nil, err
+		}
+		return slices.DeleteFunc(exts, func(e extension.Extension) bool { return e.Tools == nil }), nil
 	}
-	exts = slices.DeleteFunc(exts, func(e extension.Extension) bool { return e.Tools == nil })
 	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(pass))
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
@@ -133,15 +137,16 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	defer stop()
 	// The processes started for the session end at a signal before
 	// the session's close waits for the requests reading them.
-	srv, closeTools, err := executor.NewServer(executor.ServeOptions{
+	srv, err := executor.NewServer(executor.ServeOptions{
 		Name: p.name, Version: p.version,
-		Descriptor: workspace.Descriptor{Kind: *kind, Ref: descRef, Root: ws.Root()},
-		Done:       ctx.Done(),
-	}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws), MaxReadBytes: *maxRead})
+		Descriptor:   workspace.Descriptor{Kind: *kind, Ref: descRef, Root: ws.Root()},
+		Done:         ctx.Done(),
+		MaxReadBytes: *maxRead,
+	}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {
 		return err
 	}
-	defer closeTools()
+	defer srv.Close()
 	if ln != nil {
 		return serveExecute(ctx, ln, srv, ws.Root(), *insecure)
 	}
@@ -187,7 +192,7 @@ func executeListen(addr string, insecure bool) (net.Listener, error) {
 // standard error where, which the user connects -executor to. srv's
 // processes end with ctx (ServeOptions.Done) before the server shuts
 // down.
-func serveExecute(ctx context.Context, ln net.Listener, srv *sdk.Server, root string, insecure bool) error {
+func serveExecute(ctx context.Context, ln net.Listener, srv *executor.Server, root string, insecure bool) error {
 	hs := &http.Server{Handler: executor.Handler(srv, ctx.Done()), ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()

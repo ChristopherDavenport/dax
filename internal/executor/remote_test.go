@@ -17,6 +17,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/extension"
 )
 
 // remote is Connect over s, in memory; the server's session is
@@ -31,7 +32,26 @@ func (s executorServer) remote(t *testing.T) (*Remote, *sdk.ServerSession) {
 	return r, ss
 }
 
-func connectTo(srv *sdk.Server) (*Remote, *sdk.ServerSession, error) {
+// connector is an MCP server a test connects a session to: the
+// executor's Server, or a plain sdk.Server standing in for another.
+type connector interface {
+	Connect(ctx context.Context, t sdk.Transport, opts *sdk.ServerSessionOptions) (*sdk.ServerSession, error)
+}
+
+// fixed is Extensions that builds exts whatever the read limit.
+func fixed(exts ...extension.Extension) Extensions {
+	return func(int64) ([]extension.Extension, error) { return exts, nil }
+}
+
+// withCoding is Extensions that builds dax-coding at the read limit,
+// then exts.
+func withCoding(exts ...extension.Extension) Extensions {
+	return func(maxRead int64) ([]extension.Extension, error) {
+		return append([]extension.Extension{coding.New(maxRead)}, exts...), nil
+	}
+}
+
+func connectTo(srv connector) (*Remote, *sdk.ServerSession, error) {
 	ctx := context.Background()
 	st, ct := sdk.NewInMemoryTransports()
 	ss, err := srv.Connect(ctx, st, nil)
@@ -141,62 +161,62 @@ func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name  string
-		srv   func(t *testing.T) *sdk.Server
+		srv   func(t *testing.T) connector
 		wants string
 	}{
-		{"a plain MCP server", func(t *testing.T) *sdk.Server {
+		{"a plain MCP server", func(t *testing.T) connector {
 			return fake(t, nil, true, plain("read"))
 		}, "does not answer execution/facts"},
-		{"the dax capability without the facts method", func(t *testing.T) *sdk.Server {
+		{"the dax capability without the facts method", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"})), true, plain("read"))
 		}, "does not answer execution/facts"},
-		{"the facts method without the dax capability", func(t *testing.T) *sdk.Server {
+		{"the facts method without the dax capability", func(t *testing.T) connector {
 			return fake(t, nil, false, plain("read"))
 		}, "no " + CapabilityKey},
-		{"another version", func(t *testing.T) *sdk.Server {
+		{"another version", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
 			c.Version = 2
 			return fake(t, capOf(c), false, plain("read"))
 		}, "version 2"},
-		{"a capability that does not decode", func(t *testing.T) *sdk.Server {
+		{"a capability that does not decode", func(t *testing.T) connector {
 			return fake(t, map[string]any{CapabilityKey: map[string]any{"version": "one"}}, false, plain("read"))
 		}, CapabilityKey},
-		{"no workspace", func(t *testing.T) *sdk.Server {
+		{"no workspace", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
 			c.Descriptor = capabilityDescriptor{}
 			return fake(t, capOf(c), false, plain("read"))
 		}, "names no workspace"},
-		{"an executor that does not serve its files (dax v0.0.6)", func(t *testing.T) *sdk.Server {
+		{"an executor that does not serve its files (dax v0.0.6)", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
 			c.Files = nil
 			return fake(t, capOf(c), false, plain("read"))
 		}, "does not serve its workspace's files"},
-		{"its files under another template", func(t *testing.T) *sdk.Server {
+		{"its files under another template", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
 			c.Files.URITemplate = "file:///{path}"
 			return fake(t, capOf(c), false, plain("read"))
 		}, `serves its workspace's files under "file:///{path}"`},
-		{"a start bound that is not positive", func(t *testing.T) *sdk.Server {
+		{"a start bound that is not positive", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
 			c.Start = &capabilityStart{MaxProcesses: 32, MaxWriteBytes: 0, MaxReadBytes: 1}
 			return fake(t, capOf(c), false, plain("read"))
 		}, "not positive"},
-		{"a listed tool the capability does not name", func(t *testing.T) *sdk.Server {
+		{"a listed tool the capability does not name", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"})), false, plain("read"), plain("rm"))
 		}, `lists "rm"`},
-		{"a named tool it does not list", func(t *testing.T) *sdk.Server {
+		{"a named tool it does not list", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"}, capabilityTool{Name: "rm", Extension: "acme"})), false, plain("read"))
 		}, `names "rm", which it does not list`},
-		{"a tool named twice", func(t *testing.T) *sdk.Server {
+		{"a tool named twice", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"}, capabilityTool{Name: "read", Extension: "acme"})), false, plain("read"))
 		}, `names "read" twice`},
-		{"a tool of an extension it does not name", func(t *testing.T) *sdk.Server {
+		{"a tool of an extension it does not name", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "other"})), false, plain("read"))
 		}, `extension "other"`},
-		{"facts claimed but not listed with the claim", func(t *testing.T) *sdk.Server {
+		{"facts claimed but not listed with the claim", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme", Facts: true})), false, plain("read"))
 		}, "listed without the claim"},
-		{"listed with a claim the capability does not name", func(t *testing.T) *sdk.Server {
+		{"listed with a claim the capability does not name", func(t *testing.T) connector {
 			return fake(t, capOf(good(capabilityTool{Name: "read", Extension: "acme"})), false, claiming("read"))
 		}, "does not name"},
 	} {

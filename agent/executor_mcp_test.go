@@ -18,7 +18,6 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -176,12 +175,12 @@ func oldBox(t *testing.T) *Executor {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
-	srv, closeTools, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "old", Descriptor: workspace.Descriptor{Kind: workspace.KindContainer, Ref: "old", Root: "/work"}},
-		[]extension.Extension{coding.New(0), acme()}, extension.ToolEnv{Workspace: struct{ workspace.Workspace }{ws}, Files: tool.NewFiles(ws)})
+	srv, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "old", Descriptor: workspace.Descriptor{Kind: workspace.KindContainer, Ref: "old", Root: "/work"}},
+		codingWith(acme()), extension.ToolEnv{Workspace: struct{ workspace.Workspace }{ws}, Files: tool.NewFiles(ws)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	ctx := context.Background()
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := srv.Connect(ctx, st, nil)

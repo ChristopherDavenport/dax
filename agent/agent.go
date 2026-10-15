@@ -173,6 +173,8 @@ type Options struct {
 	MCP []MCPServer
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
+	// With an Executor, its tools take ExecutorOptions.MaxReadBytes,
+	// given when it was dialed, and not this.
 	MaxReadBytes int64
 	// PassEnv names credential-looking variables the processes of the
 	// workspace.Local the session opens when Workspace is nil, MCP

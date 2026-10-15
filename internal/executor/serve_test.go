@@ -61,7 +61,7 @@ var quiet = extension.Extension{Name: "quiet"}
 type executorServer struct {
 	dir   string
 	ws    workspace.Workspace
-	srv   *sdk.Server
+	srv   *Server
 	facts *atomic.Int32
 }
 
@@ -78,11 +78,11 @@ func newServer(t *testing.T) executorServer {
 	}
 	t.Cleanup(func() { ws.Close() })
 	env := extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)}
-	srv, closeTools, err := NewServer(ServeOptions{Name: "dax", Version: "test", Descriptor: testDescriptor(ws.Root())}, []extension.Extension{coding.New(0), quiet, served()}, env)
+	srv, err := NewServer(ServeOptions{Name: "dax", Version: "test", Descriptor: testDescriptor(ws.Root())}, withCoding(quiet, served()), env)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeTools() })
+	t.Cleanup(func() { srv.Close() })
 	var facts atomic.Int32
 	srv.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
 		return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
@@ -379,7 +379,7 @@ func TestWithoutClaimsNothingIsAsked(t *testing.T) {
 func TestTwoToolsOfOneNameAreRefused(t *testing.T) {
 	env := toolEnv(t)
 	twice := extension.Extension{Name: "twice", Tools: func(extension.ToolEnv) []agenttool.Tool { return []agenttool.Tool{plain("read")} }}
-	if _, _, err := NewServer(ServeOptions{Name: "dax"}, []extension.Extension{coding.New(0), twice}, env); err == nil || !strings.Contains(err.Error(), `"read"`) {
+	if _, err := NewServer(ServeOptions{Name: "dax"}, withCoding(twice), env); err == nil || !strings.Contains(err.Error(), `"read"`) {
 		t.Errorf("err = %v", err)
 	}
 }
