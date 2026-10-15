@@ -109,7 +109,11 @@ func must(t *testing.T, err error) {
 
 func TestMCPServersGetAScrubbedEnvironment(t *testing.T) {
 	env := tool.ChildEnv([]string{"PATH=/bin", "OPENAI_API_KEY=sk-1", "X_TOKEN=t"}, []string{"X_TOKEN"})
-	tr, err := mcpTransport("server --flag  arg", env)
+	dial, err := mcpTransport("server --flag  arg", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, err := dial(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

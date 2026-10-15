@@ -508,15 +508,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
 	for _, m := range o.MCP {
-		prefix, err := mcpPrefix(m.Name)
-		if err != nil {
-			return nil, err
-		}
-		t, err := mcpServer(ws, m.Command, env)
+		t, mopts, err := s.mcpStart(ctx, m.Name, m.Command)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
-		kopts = append(kopts, agentkit.WithMCPTransport(t, mcpclient.WithPrefix(prefix)))
+		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
@@ -800,15 +796,11 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
-	prefix, err := mcpPrefix(name)
+	t, mopts, err := s.mcpStart(ctx, name, command)
 	if err != nil {
 		return "", err
 	}
-	t, err := mcpServer(s.ws, command, s.env)
-	if err != nil {
-		return "", err
-	}
-	return s.Kit.AddMCPTransport(ctx, t, mcpclient.WithPrefix(prefix))
+	return s.Kit.AddMCPTransport(ctx, t, mopts...)
 }
 
 // RemoveMCP closes a server AddMCP started; its tools are not offered
@@ -999,16 +991,21 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 	return store.Repair(ctx, id, cas.RepairOptions{})
 }
 
-// mcpServer is the transport of an MCP server started from a command
-// line, split as a shell splits words with nothing expanded
-// (cmdline.Split), with its diagnostics on dax's stderr. In a
-// workspace that can start a process (workspace.Starter) the server
-// runs there, at its root, with the workspace's environment, over the
-// process's pipes; in one that cannot, it runs on this machine
-// (mcpTransport), with env as its whole environment. An executor's
-// view is a Starter, so with -executor every server runs in the
-// executor or not at all.
-func mcpServer(ws workspace.Workspace, command string, env []string) (mcp.Transport, error) {
+// mcpDial makes the transport an MCP server is started over, each time
+// it is started: its first start, and each restart after its session
+// ended (mcpclient.WithReconnect).
+type mcpDial func(context.Context) (mcp.Transport, error)
+
+// mcpServer is the dial of an MCP server started from a command line,
+// split as a shell splits words with nothing expanded (cmdline.Split),
+// with its diagnostics on dax's stderr. In a workspace that can start a
+// process (workspace.Starter) the server runs there, at its root, with
+// the workspace's environment, over the process's pipes; in one that
+// cannot, it runs on this machine (mcpTransport), with env as its whole
+// environment. An executor's view is a Starter, so with -executor every
+// server runs in the executor or not at all, and a restart starts it in
+// the executor again, over the executor's connection of the moment.
+func mcpServer(ws workspace.Workspace, command string, env []string) (mcpDial, error) {
 	if _, ok := ws.(workspace.Starter); !ok {
 		return mcpTransport(command, env)
 	}
@@ -1018,12 +1015,16 @@ func mcpServer(ws workspace.Workspace, command string, env []string) (mcp.Transp
 	}
 	// A server's diagnostics are text from a program the model may have
 	// chosen; they get the same cleaning as its output.
-	return &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})}}, nil
+	t := &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})}}
+	// Each Connect starts the server anew, so one transport serves
+	// every start.
+	return func(context.Context) (mcp.Transport, error) { return t, nil }, nil
 }
 
 // startTransport starts an MCP server in a workspace when the client
 // connects, and speaks to it over the process's standard input and
-// output.
+// output. It may be connected again, and each Connect starts a new
+// process.
 type startTransport struct {
 	ws  workspace.Workspace
 	cmd workspace.Command
@@ -1052,21 +1053,159 @@ func (r processPipes) Read(b []byte) (int, error)  { return r.p.Stdout().Read(b)
 func (r processPipes) Write(b []byte) (int, error) { return r.p.Stdin().Write(b) }
 func (r processPipes) Close() error                { return r.p.Close() }
 
-// mcpTransport starts an MCP server on this machine from a command
-// line, split as mcpServer splits it, with env as its whole environment
-// and its diagnostics on dax's stderr. The kit's own command transport
-// would hand the server dax's environment, keys included.
-func mcpTransport(command string, env []string) (mcp.Transport, error) {
+// mcpTransport is the dial of an MCP server started on this machine
+// from a command line, split as mcpServer splits it, with env as its
+// whole environment and its diagnostics on dax's stderr. The kit's own
+// command transport would hand the server dax's environment, keys
+// included. A command transport connects once, so each dial builds a
+// new one.
+func mcpTransport(command string, env []string) (mcpDial, error) {
 	fields, err := splitCommand(command)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(fields[0], fields[1:]...)
-	cmd.Env = env
-	// A server's diagnostics are text from a program the model may have
-	// chosen; they get the same cleaning as its output.
-	cmd.Stderr = render.CleanWriter(warnings{})
-	return &mcp.CommandTransport{Command: cmd}, nil
+	return func(context.Context) (mcp.Transport, error) {
+		cmd := exec.Command(fields[0], fields[1:]...)
+		cmd.Env = slices.Clone(env)
+		// A server's diagnostics are text from a program the model may
+		// have chosen; they get the same cleaning as its output.
+		cmd.Stderr = render.CleanWriter(warnings{})
+		return &mcp.CommandTransport{Command: cmd}, nil
+	}, nil
+}
+
+// mcpStart is what the session connects the MCP server called name to,
+// whether the config or /mcp add named it: the transport of its first
+// start, and the client's options, which name its tools
+// mcp__<name>__<tool> and start it again when its session ends (a
+// process that exited, or, with -executor, the connection it was
+// started over lost), each restart reported (mcpRestarted).
+func (s *Session) mcpStart(ctx context.Context, name, command string) (mcp.Transport, []mcpclient.Option, error) {
+	prefix, err := mcpPrefix(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	dial, err := mcpServer(s.ws, command, s.env)
+	if err != nil {
+		return nil, nil, err
+	}
+	t, err := dial(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return t, []mcpclient.Option{
+		mcpclient.WithPrefix(prefix),
+		mcpclient.WithReconnect(dial),
+		mcpclient.WithReconnected(s.mcpRestarted(name)),
+	}, nil
+}
+
+// mcpRestartNS is the namespace of the entry the session's record gets
+// for each attempt to start one of its MCP servers again, an
+// mcpRestart: a restart says the server lost whatever it held (open
+// handles, subscriptions), which no tool call shows when its tools are
+// the same.
+const mcpRestartNS = "dax.mcp.restart"
+
+// mcpRestart is one attempt to start an MCP server again after its
+// session ended, as the session's record has it under mcpRestartNS.
+type mcpRestart struct {
+	// Server is the server's name, the config's or /mcp add's.
+	Server string `json:"server"`
+	// Why is what ended the session the restart replaces.
+	Why string `json:"why"`
+	// OK says the server started again. Error is why it did not; the
+	// next call to one of its tools tries again.
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// Implementation and Version are what the restarted server calls
+	// itself.
+	Implementation string `json:"implementation,omitempty"`
+	Version        string `json:"version,omitempty"`
+	// Changed says its tools differ from the ones before the restart;
+	// Added and Removed name the tools that came and went. Changed
+	// with neither is a tool whose definition or claims changed.
+	Changed bool     `json:"changed,omitempty"`
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+}
+
+// mcpSessionEnded is an mcpRestart's Why: the client does not say what
+// ended the session, a process that exited or a connection lost.
+const mcpSessionEnded = "the server's session ended"
+
+// mcpRestarted is the hook of the server called name for each attempt
+// to start it again (mcpclient.WithReconnected): one of dax's warnings,
+// and an mcpRestart in the session's record. The attempt runs on the
+// client's own, outside any run, so the entry is written at the
+// session's leaf, beside the calls, never as one.
+func (s *Session) mcpRestarted(name string) func(mcpclient.ReconnectInfo) {
+	return func(info mcpclient.ReconnectInfo) {
+		r := mcpRestartOf(name, info)
+		fmt.Fprintf(warnings{}, "dax: %s\n", r.warning())
+		if s.Kit == nil {
+			return
+		}
+		if rec := s.Kit.Recorder(); rec != nil {
+			// A write that fails is lost, as a verdict's is.
+			_, _ = rec.Annotate(context.Background(), mcpRestartNS, r)
+		}
+	}
+}
+
+// mcpRestartOf is an attempt to start the server called name again as
+// the record has it.
+func mcpRestartOf(name string, info mcpclient.ReconnectInfo) mcpRestart {
+	r := mcpRestart{Server: name, Why: mcpSessionEnded}
+	if info.Err != nil {
+		r.Error = info.Err.Error()
+		return r
+	}
+	r.OK = true
+	r.Implementation, r.Version = info.Server.Name, info.Server.Version
+	r.Changed = info.Changed
+	for _, n := range info.After {
+		if !slices.Contains(info.Before, n) {
+			r.Added = append(r.Added, n)
+		}
+	}
+	for _, n := range info.Before {
+		if !slices.Contains(info.After, n) {
+			r.Removed = append(r.Removed, n)
+		}
+	}
+	return r
+}
+
+// warning is the line dax warns with about r.
+func (r mcpRestart) warning() string {
+	if !r.OK {
+		return fmt.Sprintf("MCP server %s: %s", r.Server, r.Error)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "MCP server %s ended and was started again", r.Server)
+	if r.Implementation != "" {
+		fmt.Fprintf(&b, " (%s %s)", r.Implementation, r.Version)
+	}
+	b.WriteString("; whatever it held is gone")
+	switch {
+	case !r.Changed:
+		b.WriteString(", and its tools are the same")
+	case len(r.Added) == 0 && len(r.Removed) == 0:
+		b.WriteString(", and a tool's definition changed")
+	default:
+		b.WriteString(", and its tools changed:")
+		if len(r.Added) > 0 {
+			b.WriteString(" added " + strings.Join(r.Added, ", "))
+			if len(r.Removed) > 0 {
+				b.WriteString(";")
+			}
+		}
+		if len(r.Removed) > 0 {
+			b.WriteString(" removed " + strings.Join(r.Removed, ", "))
+		}
+	}
+	return b.String()
 }
 
 // splitCommand is an MCP server's command line as its program and

@@ -643,7 +643,14 @@ may not name one, and the executor keeps no list. Their tools are
 the kit's MCP client's, which takes no facts claims, so they are
 decided by name under the user's rules (they ask by default), make no
 facts request of the executor, and are recorded here as on this
-machine.
+machine. A server ends with the connection it was started over; the
+next call to one of its tools starts it again (agenttool's
+`mcpclient.WithReconnect`), over the executor's connection of the
+moment, which redials first, and the same holds for a server on this
+machine that exits. The restart is a refresh of the server's tools, a
+call is never sent twice or against a tool that changed, and each
+attempt is a warning and a `dax.mcp.restart` entry in the record, so a
+restart whose tools are the same still says the server lost its state.
 
 The facts of a model response's calls are read together
 for the decisions about them (`Set.PinBatch`): on the first reading,
