@@ -33,12 +33,20 @@ import (
 // `dax execute`.
 const executeRoot = "DAX_TEST_EXECUTE_ROOT"
 
+// executeListen, set with executeRoot, has the test binary serve over
+// HTTP at that address.
+const executeListenEnv = "DAX_TEST_EXECUTE_LISTEN"
+
 // TestMain lets the test binary be `dax execute` over the directory in
 // DAX_TEST_EXECUTE_ROOT, with an extension whose tool prints to
 // standard output as a careless tool might.
 func TestMain(m *testing.M) {
 	if dir := os.Getenv(executeRoot); dir != "" {
-		os.Exit(Main(context.Background(), []string{"execute", "-root", dir, "-kind", "container", "-ref", "box"}, WithExtension(stray)))
+		args := []string{"execute", "-root", dir, "-kind", "container", "-ref", "box"}
+		if addr := os.Getenv(executeListenEnv); addr != "" {
+			args = append(args, "-listen", addr)
+		}
+		os.Exit(Main(context.Background(), args, WithExtension(stray)))
 	}
 	os.Exit(m.Run())
 }
@@ -213,6 +221,120 @@ func TestExecuteRefusesBadFlags(t *testing.T) {
 		if err := run(context.Background(), args, program{name: "dax"}); err == nil {
 			t.Errorf("%v: no error", args)
 		}
+	}
+}
+
+// `dax execute -listen` serves over HTTP at the address it says on
+// standard error, to more than one session; a signal ends it and the
+// processes it started.
+func TestExecuteServesOverHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("notes\n"), 0o644)
+	cmd := exec.CommandContext(ctx, os.Args[0])
+	cmd.Env = append(os.Environ(), executeRoot+"="+dir, executeListenEnv+"=127.0.0.1:0")
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	}()
+	lines := bufio.NewReader(stderr)
+	line, err := lines.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, url, ok := strings.Cut(strings.TrimSpace(line), " at ")
+	if !ok || !strings.HasPrefix(url, "http://127.0.0.1:") {
+		t.Fatalf("where it serves: %q", line)
+	}
+	go io.Copy(io.Discard, lines)
+	dial := func() *executor.Remote {
+		t.Helper()
+		r, err := executor.Connect(ctx, executor.HTTPTransport(url), executor.ConnectOptions{Name: "dax", Version: "test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	a, b := dial(), dial()
+	defer a.Close()
+	defer b.Close()
+	if d := a.Descriptor(); d.Kind != workspace.KindContainer || d.Ref != "box" {
+		t.Errorf("descriptor %+v", d)
+	}
+	res, err := b.Call(ctx, executor.Call{Tool: "read", Call: agenttool.Call{ID: "r", Args: json.RawMessage(`{"path":"notes.txt"}`)}})
+	if err != nil || !strings.Contains(res.Output.String(), "notes") {
+		t.Errorf("read through the second session: %q, %v", res.Output.String(), err)
+	}
+	p, err := a.Start(ctx, workspace.Command{Args: []string{"sh", "-c", "echo $$; exec sleep 1000"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := bufio.NewReader(p.Stdout())
+	pidLine, err := out.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := strings.TrimSpace(pidLine)
+	go io.Copy(io.Discard, out)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Errorf("execute exited: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("execute did not exit at the signal")
+	}
+	if exec.Command("kill", "-0", pid).Run() == nil {
+		exec.Command("kill", pid).Run()
+		t.Errorf("process %s outlived the executor", pid)
+	}
+}
+
+// -listen takes a loopback address, or any with -insecure-no-auth.
+func TestExecuteListensOnLoopbackUnlessTold(t *testing.T) {
+	for _, tc := range []struct {
+		addr     string
+		insecure bool
+		want     string // "" listens
+	}{
+		{"127.0.0.1:0", false, ""},
+		{"[::1]:0", false, ""},
+		{"localhost:0", false, ""},
+		{":0", false, "listens on loopback only"},
+		{"0.0.0.0:0", false, "listens on loopback only"},
+		{"box.example:7777", false, "ssh -L 7777:127.0.0.1:7777"},
+		{":0", true, ""},
+		{"0.0.0.0:0", true, ""},
+		{"7777", false, "missing port"},
+	} {
+		ln, err := executeListen(tc.addr, tc.insecure)
+		if ln != nil {
+			ln.Close()
+		}
+		switch {
+		case tc.want == "" && err != nil && strings.Contains(err.Error(), "address not available"):
+			// No IPv6 loopback here.
+		case tc.want == "" && err != nil:
+			t.Errorf("%s (insecure %v): %v", tc.addr, tc.insecure, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s (insecure %v): err = %v, want %q", tc.addr, tc.insecure, err, tc.want)
+		}
+	}
+	if err := run(context.Background(), []string{"execute", "-insecure-no-auth"}, program{name: "dax"}); err == nil || !strings.Contains(err.Error(), "-insecure-no-auth is for -listen") {
+		t.Errorf("-insecure-no-auth alone: %v", err)
 	}
 }
 

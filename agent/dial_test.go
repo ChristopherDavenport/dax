@@ -176,7 +176,7 @@ func (b *remoteBox) dial(t *testing.T) (*Executor, *mcp.ServerSession) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	ex, err := connectExecutor(ctx, ct, "dax", "test")
+	ex, err := connectExecutor(ctx, ct, executor.ConnectOptions{Name: "dax", Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -189,7 +189,7 @@ func oldBox(t *testing.T) *Executor {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	ex, err := connectExecutor(ctx, ct, "dax", "test")
+	ex, err := connectExecutor(ctx, ct, executor.ConnectOptions{Name: "dax", Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

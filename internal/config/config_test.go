@@ -246,10 +246,10 @@ func TestValidation(t *testing.T) {
 		{"project empty memory_dir", `{"memory_dir":""}`, true, "memory_dir: a project file may only tighten"},
 		{"project pricing_file", `{"pricing_file":"/tmp/prices.json"}`, true, "pricing_file: a project file may only tighten"},
 		{"project executor", `{"executor":{"command":"ssh evil.example dax execute"}}`, true, "executor: a project file may only tighten"},
-		{"executor without command", `{"executor":{}}`, false, "executor.command is required"},
-		{"executor over http", `{"executor":{"command":"https://box.example:7000"}}`, false, "executor.command \"https://box.example:7000\": an executor over https is not supported yet"},
+		{"executor without command", `{"executor":{}}`, false, "executor.command or executor.url is required"},
+		{"executor URL as a command", `{"executor":{"command":"https://box.example:7000"}}`, false, "executor.command \"https://box.example:7000\": a URL, not a command; give it as executor.url"},
 		{"executor over a unix socket", `{"executor":{"command":"unix:/run/dax.sock"}}`, false, "an executor over unix is not supported yet"},
-		{"executor over http as an array", `{"executor":{"command":["https://box.example:7000"]}}`, false, "an executor over https is not supported yet"},
+		{"executor over http as an array", `{"executor":{"command":["https://box.example:7000"]}}`, false, "a URL, not a command"},
 		{"executor with an open quote", `{"executor":{"command":"docker exec -i box dax execute -root '/my work"}}`, false, "executor.command: a single quote is not closed"},
 		{"executor as an empty array", `{"executor":{"command":[]}}`, false, "executor.command is required"},
 		{"executor with an empty program", `{"executor":{"command":["", "exec"]}}`, false, "executor.command \" exec\": an empty program"},
@@ -586,7 +586,11 @@ func TestExecutorPrecedence(t *testing.T) {
 		flags Flags
 		want  string
 	}{
-		{"a URL", Flags{Executor: ptr("http://box:7000")}, "-executor \"http://box:7000\": an executor over http is not supported yet"},
+		{"a unix socket", Flags{Executor: ptr("unix:/run/dax.sock")}, "-executor \"unix:/run/dax.sock\": an executor over unix is not supported yet"},
+		{"a URL with a user", Flags{Executor: ptr("http://me:pw@box:7000")}, "-executor \"http://me:pw@box:7000\": a URL with a user or password"},
+		{"a URL with no host", Flags{Executor: ptr("http:///x")}, "-executor \"http:///x\": no host"},
+		{"a URL with a query", Flags{Executor: ptr("http://box:7000/?a=1")}, "a query or fragment"},
+		{"a URL and the launcher's variables", Flags{Executor: ptr("http://box:7000"), ExecutorPassEnv: []string{"SSH_AUTH_SOCK"}}, "-executor-pass-env: an executor at a URL is started by no command here"},
 		{"an open quote", Flags{Executor: ptr(`ssh host "dax execute`)}, "-executor: a double quote is not closed"},
 		{"an empty program", Flags{Executor: ptr(`'' dax`)}, "-executor \"'' dax\": an empty program"},
 		{"a pass_env that is not a name", Flags{ExecutorPassEnv: []string{"A", "$(id)"}}, `-executor-pass-env: "$(id)" is not a variable name`},
@@ -602,6 +606,55 @@ func TestExecutorPrecedence(t *testing.T) {
 	keyed := parse(t, `{"provider":"openresponses","base_url":"https://x","api_key_env":"MY_KEY"}`, false)
 	if _, err := Resolve([]Layer{keyed, envOnly}, Flags{ExecutorPassEnv: []string{"MY_KEY"}}, ""); err == nil || !strings.Contains(err.Error(), "MY_KEY holds the model's key") {
 		t.Errorf("the key's variable named by the flag, api_key_env by the file: %v", err)
+	}
+}
+
+func TestExecutorURLPrecedence(t *testing.T) {
+	user := parse(t, `{"executor":{"url":"http://127.0.0.1:7777"}}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	if err != nil || s.ExecutorURL != "http://127.0.0.1:7777" || s.Executor != nil {
+		t.Fatalf("file: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	if !HasExecutor(user, Flags{}) {
+		t.Error("HasExecutor of the file's url: false")
+	}
+	// A later layer's command replaces an earlier one's URL, and the
+	// other way about; the flag replaces either.
+	command := parse(t, `{"executor":{"command":"ssh host dax execute"}}`, false)
+	if s, err = Resolve([]Layer{user, command}, Flags{}, ""); err != nil || s.ExecutorURL != "" || strings.Join(s.Executor, "|") != "ssh|host|dax|execute" {
+		t.Fatalf("a command over a url: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	if s, err = Resolve([]Layer{command, user}, Flags{}, ""); err != nil || s.ExecutorURL != "http://127.0.0.1:7777" || s.Executor != nil {
+		t.Fatalf("a url over a command: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	if s, err = Resolve([]Layer{command}, Flags{Executor: ptr(" https://box:7777/dax ")}, ""); err != nil || s.ExecutorURL != "https://box:7777/dax" || s.Executor != nil {
+		t.Fatalf("the flag's url over a command: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Executor: ptr("ssh host dax execute")}, ""); err != nil || s.ExecutorURL != "" || len(s.Executor) != 4 {
+		t.Fatalf("the flag's command over a url: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Executor: ptr("")}, ""); err != nil || s.ExecutorURL != "" || s.Executor != nil {
+		t.Fatalf("the empty flag clears a url: %q %q, %v", s.ExecutorURL, s.Executor, err)
+	}
+	// A file's pass_env alone stays for a command a flag gives, and is
+	// unused by a URL.
+	envOnly := parse(t, `{"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`, false)
+	if s, err = Resolve([]Layer{envOnly}, Flags{Executor: ptr("http://127.0.0.1:7777")}, ""); err != nil || s.ExecutorURL != "http://127.0.0.1:7777" {
+		t.Fatalf("a file's pass_env and the flag's url: %q, %v", s.ExecutorURL, err)
+	}
+	for _, tc := range []struct{ name, file, want string }{
+		{"command and url", `{"executor":{"command":"ssh host dax execute","url":"http://127.0.0.1:7777"}}`, "give command or url, not both"},
+		{"url and pass_env", `{"executor":{"url":"http://127.0.0.1:7777","pass_env":["SSH_AUTH_SOCK"]}}`, "executor.pass_env is for executor.command"},
+		{"not http", `{"executor":{"url":"ftp://box"}}`, "want an http:// or https:// URL"},
+		{"a URL as the command", `{"executor":{"command":"http://box:7777"}}`, "a URL, not a command; give it as executor.url"},
+	} {
+		if _, err := Parse([]byte(tc.file), "user.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	// A project cannot say where the tools run.
+	if _, err := Parse([]byte(`{"executor":{"url":"http://127.0.0.1:7777"}}`), "project.json", true); err == nil || !strings.Contains(err.Error(), "a project file may only tighten") {
+		t.Errorf("a project's url: %v", err)
 	}
 }
 

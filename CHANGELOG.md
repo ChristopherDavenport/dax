@@ -5,6 +5,28 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `dax execute -listen ADDR` serves the executor over MCP's
+  streamable HTTP transport, left running for sessions to connect to;
+  `dax -executor http://127.0.0.1:7777` (or `executor.url` in your
+  config, which a project's file may not set) connects to it. Each
+  client is a session of its own, with its own processes, over the one
+  workspace. Nothing authenticates a client yet, so it listens on a
+  loopback address only, reached from elsewhere through a tunnel (`ssh
+  -L`); `-insecure-no-auth` takes any address and warns. A request from
+  a web page (another origin, or a rebound host name) is refused. A
+  session that starts no request for five minutes is closed and its
+  processes end; dax pings every minute while connected.
+  `executor.pass_env` and `-executor-pass-env` are refused with a URL,
+  since nothing here starts the executor. See docs/sandbox.md, Network.
+- Added: `agent.DialExecutorURL`, for a program built on dax to start
+  its session against `dax execute -listen` as `-executor` does with a
+  URL.
+- Changed: an executor command that is an `http:` or `https:` URL is
+  now refused with "give it as executor.url" in a config file, and
+  taken as the URL from `-executor`; `unix:` is still refused.
+
 ## v0.0.17 - 2026-10-13
 
 - Added: `dax serve -a2a` serves the session's agent over A2A beside its

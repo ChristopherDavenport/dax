@@ -2,7 +2,8 @@
 
 dax can run its tools in a container, a pod or another host while the
 session stays on your machine: start `dax execute` there, and start dax
-here with `-executor` set to the command that starts it. These are
+here with `-executor` set to the command that starts it, or to the URL
+where `dax execute -listen` serves. These are
 recipes for daily use; what `dax execute` serves and how is in the
 README's [The tools in a sandbox](../README.md#the-tools-in-a-sandbox-dax-execute).
 
@@ -20,6 +21,8 @@ environment less its credentials, but those you name for it, and never
 the key's variable. The
 connection is that command's standard input and output (a `docker
 exec -i`, an `ssh`, a `kubectl exec -i`); there is no port, listener or
+token. With `-listen` (see [Network](#network)) the connection is HTTP
+to a server left running there, and there is a port, still with no
 token.
 
 ## Getting dax into the sandbox
@@ -136,6 +139,51 @@ dax -executor "kubectl exec -i app-box -c app-box -- dax execute -root /home/dax
 a token from your environment (`AWS_SESSION_TOKEN`, say) does not get
 it unless `executor.pass_env` (or `-executor-pass-env`) names it.
 
+## Network
+
+Rather than starting `dax execute` for each session, leave it running
+where the project is and connect to it by URL. On the host:
+
+```sh
+dax execute -listen 127.0.0.1:7777 -root ~/src/app -kind remote -ref build-host
+```
+
+It prints where it serves (`dax execute: serving /home/me/src/app at
+http://127.0.0.1:7777`) and runs until a signal. Here, tunnel to it and
+connect:
+
+```sh
+ssh -N -L 7777:127.0.0.1:7777 build-host &
+dax -executor http://127.0.0.1:7777
+```
+
+or in your config:
+
+```json
+{
+  "executor": { "url": "http://127.0.0.1:7777" }
+}
+```
+
+**Nothing authenticates a session to it yet.** Anyone who reaches the
+address can run commands as the user it runs as, so it listens on a
+loopback address only, and ssh's tunnel is what decides who reaches
+it. `-insecure-no-auth` takes any address (`-listen :7777`) and prints
+a warning; use it only on a network where everyone who can reach the
+port may already run commands there. A web page cannot reach it: a
+request from another origin, or one that came to the loopback address
+under another host name, is refused.
+
+Each session is a session of its own on the server, with its own MCP
+servers and processes, over the one workspace: two sessions write the
+same files. A session that starts no request for five minutes is
+closed and its processes end; dax pings every minute while it runs, so
+that is only a session whose dax went away without closing it. The
+launcher's environment does not apply: `executor.pass_env` and
+`-executor-pass-env` are refused with a URL, and the tools get the
+environment `dax execute` was started with. Its standard error stays on
+the host's terminal.
+
 ## Config
 
 Put the executor in your own config (`~/.config/dax/config.json`):
@@ -249,14 +297,16 @@ checkout.
 
 ## Limits today
 
-- Only a command: an `http:`, `https:` or `unix:` executor is refused
-  ("not supported yet").
+- A `unix:` executor is refused ("not supported yet").
+- An executor at a URL authenticates no one, and is served over plain
+  HTTP; keep it on loopback behind a tunnel.
 - The sandbox does not loosen the policy. dax does not claim
   confinement for the executor's tools, so every rule and question is as
   on your machine; the sandbox limits what an approved call can reach,
   not how often you are asked.
-- No reconnect: if the pipe breaks, the session's calls are blocked
-  until you restart it.
+- No reconnect: if the pipe breaks, or an executor at a URL restarts or
+  closes the session as idle, the session's calls are blocked until you
+  restart it.
 - Your own skills are read on your machine; a skill that runs a script
   from its directory finds no such file in the sandbox unless you put
   it there.
