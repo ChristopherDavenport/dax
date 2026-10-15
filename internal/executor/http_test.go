@@ -92,7 +92,7 @@ func TestEachHTTPClientIsASessionOfItsOwn(t *testing.T) {
 	id := pa.(*remoteProcess).id
 	pidA := pidOf(t, pa)
 	pidB := pidOf(t, start(t, b, sleeper))
-	_, err := sdk.CallCustomMethod[*idParams, *waitResult](context.Background(), b.c.Session(), MethodClose, &idParams{ID: id})
+	_, err := sdk.CallCustomMethod[*idParams, *waitResult](context.Background(), sessionOf(b), MethodClose, &idParams{ID: id})
 	if err == nil || !strings.Contains(err.Error(), errNoProcess.Error()) {
 		t.Errorf("b closing a's process: %v", err)
 	}

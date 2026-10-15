@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -165,6 +166,18 @@ func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox
 	return b
 }
 
+// dialOnce is a Dialer of t, once: a redial after t is lost fails,
+// as one to an executor that is gone does.
+func dialOnce(t mcp.Transport) executor.Dialer {
+	var used atomic.Bool
+	return func(context.Context) (mcp.Transport, error) {
+		if used.Swap(true) {
+			return nil, errors.New("the box is gone")
+		}
+		return t, nil
+	}
+}
+
 // dial connects a session's Executor to the box in memory; the box's
 // end is returned, so a test can hang up.
 func (b *remoteBox) dial(t *testing.T) (*Executor, *mcp.ServerSession) {
@@ -176,7 +189,7 @@ func (b *remoteBox) dial(t *testing.T) (*Executor, *mcp.ServerSession) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	ex, err := connectExecutor(ctx, ct, executor.ConnectOptions{Name: "dax", Version: "test"})
+	ex, err := connectExecutor(ctx, dialOnce(ct), executor.ConnectOptions{Name: "dax", Version: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,23 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: when the executor's connection breaks (`-executor`'s command
+  exits, its container restarts, `dax execute -listen` restarts or
+  closes the session, the tunnel drops), dax connects again on the next
+  request, running the command again or reaching the URL again, and
+  warns "executor connection lost; reconnected to …"; before, every
+  later call failed until you restarted dax. A call in flight when it
+  broke fails and is not sent again, since it may have run; a check of
+  a call's facts, its replay or a file read is read again once on the
+  new connection. The new connection must be the same executor (the
+  same workspace, extensions and tools, each with the same definition
+  and claims); another is refused with a warning, and every call after
+  fails until you restart dax and resume. Processes started in the
+  executor (your MCP servers there) end with the old connection and are
+  not started again. A failed reconnect fails that request only; the
+  next tries again. See docs/sandbox.md, When the connection drops.
+  Closes #59.
+
 - Added: `dax execute -listen ADDR` serves the executor over MCP's
   streamable HTTP transport, left running for sessions to connect to;
   `dax -executor http://127.0.0.1:7777` (or `executor.url` in your

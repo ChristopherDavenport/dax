@@ -317,7 +317,7 @@ func TestTheClientRefusesABadListing(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer cs.Close()
-			if es, err := fs.ReadDir(remoteFS{cs}, "."); err == nil {
+			if es, err := fs.ReadDir(remoteFS{oneSession{cs}}, "."); err == nil {
 				t.Errorf("listing %v accepted", es)
 			}
 		})
