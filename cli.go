@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -95,7 +96,7 @@ func run(ctx context.Context, args []string, p program) error {
 	once := fs.String("p", "", "run one prompt and exit")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
-	list := fs.Bool("list", false, "list recorded sessions for this directory and exit")
+	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's workspace, and exit")
 	verify := fs.String("verify", "", "verify the request hashes of the session with this ID and exit")
 	project := fs.String("project", "", "write the session with this ID as a JSONL file into -out and exit")
 	out := fs.String("out", ".", "directory -project writes into")
@@ -167,11 +168,11 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	switch {
 	case *list:
-		sums, err := agent.List(ctx, *root, dir)
-		for _, s := range sums {
-			fmt.Printf("%s  %s  %7d B  %s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path)
+		var f config.Flags
+		if given["executor"] {
+			f.Executor = executorCmd
 		}
-		return err
+		return runList(ctx, os.Stdout, *root, dir, *cfgPath, f)
 	case *project != "":
 		path, err := agent.Project(ctx, *root, *project, *out)
 		if err == nil {
@@ -444,6 +445,50 @@ func run(ctx context.Context, args []string, p program) error {
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
 	return f.Run(ctx, sess)
+}
+
+// runList prints the sessions of the project here: this directory's,
+// or with an executor configured (the -executor flag or the user's
+// file; a project's cannot name one), the project of the workspace the
+// latest session reached at that address recorded. Nothing is started
+// or dialed. A session whose tools ran elsewhere than this machine says
+// where at the end of its line.
+func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f config.Flags) error {
+	var user config.Layer
+	if f.Executor == nil {
+		var err error
+		if user, err = loadUser(cfgPath); err != nil {
+			return err
+		}
+	}
+	argv, url, err := config.ExecutorOf(user, f)
+	if err != nil {
+		return err
+	}
+	var (
+		sums []agentsession.Summary
+		ws   = workspace.Descriptor{Kind: workspace.KindLocal, Root: dir}
+	)
+	switch {
+	case url != "":
+		ws, sums, err = agent.ListExecutorURL(ctx, root, url)
+	case len(argv) > 0:
+		ws, sums, err = agent.ListExecutor(ctx, root, argv)
+	default:
+		sums, err = agent.List(ctx, root, dir)
+	}
+	at := ""
+	if ws.Kind != workspace.KindLocal || ws.Ref != "" {
+		at = "  " + ws.Kind
+		if ws.Ref != "" {
+			at += " " + ws.Ref
+		}
+		at += ":" + ws.Root
+	}
+	for _, s := range sums {
+		fmt.Fprintf(w, "%s  %s  %7d B  %s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path, at)
+	}
+	return err
 }
 
 // loadUser reads the user's file: the one named, which must exist, or

@@ -691,3 +691,37 @@ func TestPeersPrecedence(t *testing.T) {
 		t.Errorf("a project's peer was taken: %+v", s.Peers)
 	}
 }
+
+// ExecutorOf is the executor as Resolve takes it, from the user's file
+// and the flag alone: a command given as a string and as an array is
+// one argv, a URL replaces it, and the flag replaces the file's or
+// clears it.
+func TestExecutorOfIsResolves(t *testing.T) {
+	argv := []string{"docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"}
+	for _, tc := range []struct {
+		name, file string
+		flag       *string
+		argv       []string
+		url        string
+	}{
+		{"none", `{}`, nil, nil, ""},
+		{"a string", `{"executor":{"command":"docker exec -i box dax execute -root '/my work'"}}`, nil, argv, ""},
+		{"an array", `{"executor":{"command":["docker","exec","-i","box","dax","execute","-root","/my work"]}}`, nil, argv, ""},
+		{"a URL", `{"executor":{"url":"http://127.0.0.1:7777"}}`, nil, nil, "http://127.0.0.1:7777"},
+		{"the flag's command", `{"executor":{"url":"http://127.0.0.1:7777"}}`, ptr("docker exec -i box dax execute -root '/my work'"), argv, ""},
+		{"the flag's URL", `{"executor":{"command":"ssh box dax execute"}}`, ptr(" http://box:7777 "), nil, "http://box:7777"},
+		{"the flag clears", `{"executor":{"command":"ssh box dax execute"}}`, ptr(""), nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := parse(t, tc.file, false)
+			gotArgv, gotURL, err := ExecutorOf(user, Flags{Executor: tc.flag})
+			if err != nil || !slices.Equal(gotArgv, tc.argv) || gotURL != tc.url {
+				t.Errorf("ExecutorOf = %q %q %v, want %q %q", gotArgv, gotURL, err, tc.argv, tc.url)
+			}
+			s, err := Resolve([]Layer{user}, Flags{Executor: tc.flag}, "")
+			if err != nil || !slices.Equal(s.Executor, gotArgv) || s.ExecutorURL != gotURL {
+				t.Errorf("Resolve = %q %q %v, ExecutorOf %q %q", s.Executor, s.ExecutorURL, err, gotArgv, gotURL)
+			}
+		})
+	}
+}

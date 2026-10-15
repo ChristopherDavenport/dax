@@ -453,6 +453,13 @@ is:
   entry's `cwd` and its `workspace` kind and ref come from the
   descriptor, so a resume into another workspace is recorded as a
   substitution. The model is told the root as the working directory.
+- The workspace is the project's identity. The header keeps the whole
+  descriptor (`dax.workspace`) and, under an executor, a hash of the
+  address that reached it (`dax.executor`), never the address. `-list`
+  lists this directory's workspace, or the one the latest session at
+  the configured executor's address recorded, without connecting to
+  it; dax-memory's project scope is the workspace's (this machine's
+  stays the directory's, so older memory is kept).
 
 `agent.Options.Workspace` is the caller's workspace, which the caller
 closes; without one the session opens a `workspace.Local` over `Dir`,

@@ -78,7 +78,10 @@ before changing the shape.
 - `agent`: one `agentkit.New` per session; the two-phase build of the
   extensions and their checks (`agent/extension.go`), the policy built
   from them, the sub-agents' policy hook, and the session-store
-  helpers. It names no tool. `agent/plane.go`: the human plane, the
+  helpers. It names no tool. `agent/identity.go`: the project's
+  identity, the workspace and the executor's hashed address in the
+  session's header, and the listings by it (`List`, `ListExecutor`).
+  `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left
   answered on the next prompt, the questions no front here can answer
@@ -101,7 +104,8 @@ before changing the shape.
   extension's tools; the delegation guide.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`.
-- `ext/memory` (dax-memory): the store, the scopes, the memory tools.
+- `ext/memory` (dax-memory): the store, the scopes (the project's is
+  its workspace's), the memory tools.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's
