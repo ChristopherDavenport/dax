@@ -614,9 +614,12 @@ the executor takes no credential yet.
 What `-executor` does not do yet:
 
 - A `unix:` address is refused.
-- No reconnect: if the connection breaks, or an HTTP executor restarts
-  or closes the session as idle, the session's calls fail until you
-  restart dax and resume.
+- No restart of what ran over a broken connection: dax connects again
+  on the next request (the command run again, the URL reached again)
+  if it is the same executor, but a call in flight then fails, and the
+  MCP servers started there end and are not started again until you
+  restart dax and resume. See docs/sandbox.md, When the connection
+  drops.
 
 Standard output carries MCP and nothing else. While it serves,
 `os.Stdout` is standard error, so a stray print from a tool cannot

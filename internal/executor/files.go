@@ -309,7 +309,21 @@ var filesTimeout = 30 * time.Second
 // ReadDir. It refuses an invalid name before asking, and checks what
 // the executor sends back: a read over MaxFileBytes and a listing with a
 // name that is not one element are errors.
-type remoteFS struct{ s *sdk.ClientSession }
+type remoteFS struct{ src filesSource }
+
+// filesSource sends one request for the files: a Remote, over its
+// current connection, read again once on a new one when the connection
+// was lost under it; or one session alone.
+type filesSource interface {
+	readFiles(ctx context.Context, f func(*sdk.ClientSession) error) error
+}
+
+// oneSession is the files of one session, with no reconnection.
+type oneSession struct{ cs *sdk.ClientSession }
+
+func (o oneSession) readFiles(_ context.Context, f func(*sdk.ClientSession) error) error {
+	return f(o.cs)
+}
 
 var (
 	_ fs.StatFS     = remoteFS{}
@@ -328,8 +342,17 @@ func (f remoteFS) do(op, name string) (fileReply, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), filesTimeout)
 	defer cancel()
-	res, err := f.s.ReadResource(ctx, &sdk.ReadResourceParams{URI: fileURI(op, name)})
-	if err != nil {
+	var res *sdk.ReadResourceResult
+	err := f.src.readFiles(ctx, func(cs *sdk.ClientSession) error {
+		var err error
+		res, err = cs.ReadResource(ctx, &sdk.ReadResourceParams{URI: fileURI(op, name)})
+		return err
+	})
+	switch {
+	case err == nil:
+	case connErr(err):
+		return fileReply{}, &fs.PathError{Op: op, Path: name, Err: err}
+	default:
 		return fileReply{}, &fs.PathError{Op: op, Path: name, Err: fmt.Errorf("%w: %w", errFiles, err)}
 	}
 	if len(res.Contents) != 1 || res.Contents[0] == nil {

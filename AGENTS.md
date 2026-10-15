@@ -144,7 +144,9 @@ before changing the shape.
   session of its own, closed when idle with its processes ended first;
   `Remote`
   (`remote.go`), the client of such a server, which refuses one that
-  does not give the claims (`agent/executor.go` wraps it as the public
+  does not give the claims, and dials again (`Dial`) before the next
+  request when its connection is lost, refusing an executor that is not
+  the first one, and never sending a call twice (`agent/executor.go` wraps it as the public
   `agent.Executor` for `-executor`). Kit tools are control and never
   go through it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.

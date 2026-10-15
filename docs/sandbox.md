@@ -295,6 +295,38 @@ project's memory is keyed by the directory you started dax in on your
 machine, not by the executor's root, so start dax from the project's
 checkout.
 
+## When the connection drops
+
+If the executor's connection breaks (the `docker exec` or `ssh` dies,
+the container restarts, `dax execute -listen` restarts or closes the
+session as idle, the tunnel drops), dax connects again on the next
+request: it runs the `-executor` command again, as it ran it first, or
+connects to the URL again, and prints `executor connection lost;
+reconnected to …`. There is no reconnect loop in the background; if the
+executor cannot be reached, that request fails saying so, and the next
+one tries again.
+
+What survives: the session, its record and its policy, and the tools,
+since the new connection must be the same executor. What does not:
+
+- A call that was running when the connection broke fails and is not
+  sent again, since it may have run; the model sees the error. A check
+  of what a call would touch, or a read of the project's files, has no
+  effect, and is read again once on the new connection.
+- Processes started in the sandbox for the session, your MCP servers
+  among them, end with the old connection, and dax does not start them
+  again: their tools fail until you restart dax and resume.
+- A call allowed before the drop and sent after it may be refused by the
+  new executor (its stamp no longer matches); ask again.
+
+The new connection must name the same workspace (kind, ref and root),
+run the same extensions and offer the same tools with the same
+definitions and claims, since the model was offered those tools and the
+record names that workspace. One that does not (another container, a
+`dax execute` with other tools) is refused with a warning, and every
+call after fails, without connecting again, until you restart dax and
+resume the session (`dax -resume <id>`).
+
 ## Limits today
 
 - A `unix:` executor is refused ("not supported yet").
@@ -304,9 +336,11 @@ checkout.
   confinement for the executor's tools, so every rule and question is as
   on your machine; the sandbox limits what an approved call can reach,
   not how often you are asked.
-- No reconnect: if the pipe breaks, or an executor at a URL restarts or
-  closes the session as idle, the session's calls are blocked until you
-  restart it.
+- A dropped connection is made again (see
+  [When the connection drops](#when-the-connection-drops)), but what was
+  running over it is not: a call in flight fails, and your MCP servers
+  in the sandbox end with the old connection and are not started again;
+  their tools fail until you restart dax and resume.
 - Your own skills are read on your machine; a skill that runs a script
   from its directory finds no such file in the sandbox unless you put
   it there.

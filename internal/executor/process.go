@@ -645,17 +645,17 @@ func registerProcessMethods(c *sdk.Client) error {
 // time and a read at a time; its standard error, when cmd.Stream is
 // set, is read in the background and written to cmd.Stream as it
 // arrives. It ends with Close, the end of ctx, cmd.Timeout, the
-// connection's close or the executor's.
+// connection's close or the executor's. It is started over the current
+// connection, a new one if that was lost, and lives on that one alone:
+// when it is lost, the executor ends the process with its session, and
+// the process's reads, writes and wait fail with errProcessLost. It is
+// not started again.
 //
 // An executor that does not answer the process methods (no start in
 // its capability: an older dax execute, or a workspace there that
 // cannot start a process) is refused with an error that is
 // errors.ErrUnsupported; nothing is started anywhere else.
 func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Process, error) {
-	if r.start == nil {
-		name, version := r.Server()
-		return nil, fmt.Errorf("executor (%s %s) cannot start a process (no start in %s); update dax execute where it runs: %w", name, version, CapabilityKey, errors.ErrUnsupported)
-	}
 	switch {
 	case len(cmd.Args) == 0:
 		return nil, errors.New("executor: no command")
@@ -665,20 +665,27 @@ func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Pr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	cn, err := r.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cn.start == nil {
+		return nil, fmt.Errorf("executor (%s %s) cannot start a process (no start in %s); update dax execute where it runs: %w", cn.server.Name, cn.server.Version, CapabilityKey, errors.ErrUnsupported)
+	}
 	sctx, cancel := context.WithTimeout(ctx, processTimeout)
 	defer cancel()
-	res, err := sdk.CallCustomMethod[*startParams, *startResult](sctx, r.c.Session(), MethodStart, &startParams{
+	res, err := sdk.CallCustomMethod[*startParams, *startResult](sctx, cn.c.Session(), MethodStart, &startParams{
 		Args: cmd.Args, Dir: cmd.Dir, Env: cmd.Env, TimeoutMs: cmd.Timeout.Milliseconds(), Stderr: cmd.Stream != nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("executor: start %s: %w", cmd.Args[0], err)
 	}
 	p := &remoteProcess{
-		cs: r.c.Session(), id: res.ID,
-		maxWrite: min(MaxWriteBytes, r.start.MaxWriteBytes), maxRead: min(MaxReadBytes, r.start.MaxReadBytes),
+		cn: cn, cs: cn.c.Session(), id: res.ID,
+		maxWrite: min(MaxWriteBytes, cn.start.MaxWriteBytes), maxRead: min(MaxReadBytes, cn.start.MaxReadBytes),
 		waited: make(chan struct{}), pumped: make(chan struct{}),
 	}
-	p.ctx, p.cancel = context.WithCancel(r.procs)
+	p.ctx, p.cancel = context.WithCancel(cn.procs)
 	p.in.p, p.out.p = p, p
 	go p.waitFor()
 	if p.stream = cmd.Stream; p.stream != nil {
@@ -702,13 +709,16 @@ func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Pr
 	return p, nil
 }
 
-// remoteProcess is a process the executor started for this session.
+// remoteProcess is a process the executor started for this session,
+// over one connection: it ends with that connection's session, and its
+// requests fail once the connection is lost, never sent on another.
 type remoteProcess struct {
+	cn                *conn
 	cs                *sdk.ClientSession
 	id                string
 	maxWrite, maxRead int
 
-	ctx    context.Context // the polls'; ended by Close and the Remote's
+	ctx    context.Context // the polls'; ended by Close and the connection's
 	cancel context.CancelFunc
 
 	in  remoteStdin
@@ -760,9 +770,13 @@ func (p *remoteProcess) finish(r *waitResult, err error) {
 // waitFor waits in the executor for the process to exit.
 func (p *remoteProcess) waitFor() {
 	r, err := sdk.CallCustomMethod[*idParams, *waitResult](p.ctx, p.cs, MethodWait, &idParams{ID: p.id})
-	if err != nil && p.ctx.Err() != nil {
+	if err != nil && p.ctx.Err() != nil && !errors.Is(context.Cause(p.ctx), errProcessLost) {
 		// Close ended the wait; its reply says how the process ended.
 		return
+	}
+	if err != nil {
+		// The connection is lost, and the process with it.
+		err = p.cn.lostErr(err)
 	}
 	p.finish(r, err)
 }
@@ -808,7 +822,7 @@ func (p *remoteProcess) Signal(sig os.Signal) error {
 	defer cancel()
 	r, err := sdk.CallCustomMethod[*signalParams, *signalResult](ctx, p.cs, MethodSignal, &signalParams{ID: p.id, Signal: name})
 	if err != nil {
-		return fmt.Errorf("executor: %w", err)
+		return p.cn.lostErr(err)
 	}
 	if r.Done {
 		return os.ErrProcessDone
@@ -831,7 +845,7 @@ func (p *remoteProcess) Close() error {
 		r, err := sdk.CallCustomMethod[*idParams, *waitResult](ctx, p.cs, MethodClose, &idParams{ID: p.id})
 		cancel()
 		if err != nil {
-			p.closeErr = fmt.Errorf("executor: %w", err)
+			p.closeErr = p.cn.lostErr(err)
 			p.cancel()
 		}
 		p.finish(r, err)
@@ -864,7 +878,7 @@ func (w *remoteStdin) Write(b []byte) (int, error) {
 	for len(b) > 0 {
 		k := min(len(b), w.p.maxWrite)
 		if _, err := sdk.CallCustomMethod[*writeParams, *emptyResult](w.p.ctx, w.p.cs, MethodWrite, &writeParams{ID: w.p.id, Data: b[:k]}); err != nil {
-			return n, fmt.Errorf("executor: %w", err)
+			return n, w.p.cn.lostErr(err)
 		}
 		n += k
 		b = b[k:]
@@ -883,7 +897,7 @@ func (w *remoteStdin) Close() error {
 	ctx, cancel := context.WithTimeout(w.p.ctx, processTimeout)
 	defer cancel()
 	if _, err := sdk.CallCustomMethod[*idParams, *emptyResult](ctx, w.p.cs, MethodCloseStdin, &idParams{ID: w.p.id}); err != nil {
-		return fmt.Errorf("executor: %w", err)
+		return w.p.cn.lostErr(err)
 	}
 	return nil
 }
@@ -911,10 +925,10 @@ func (r *remoteStdout) Read(b []byte) (int, error) {
 		}
 		res, err := sdk.CallCustomMethod[*readParams, *readResult](r.p.ctx, r.p.cs, MethodRead, &readParams{ID: r.p.id, FD: 1, Max: min(len(b), r.p.maxRead)})
 		if err != nil {
-			if r.p.ctx.Err() != nil {
+			if r.p.ctx.Err() != nil && !errors.Is(context.Cause(r.p.ctx), errProcessLost) {
 				return 0, os.ErrClosed
 			}
-			return 0, fmt.Errorf("executor: %w", err)
+			return 0, r.p.cn.lostErr(err)
 		}
 		if len(res.Data) > len(b) {
 			return 0, fmt.Errorf("executor: a read of %d bytes gave %d", len(b), len(res.Data))

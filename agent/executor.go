@@ -68,6 +68,15 @@ type ExecutorOptions struct {
 // executor (one whose MCP server lacks the facts method or dax's
 // capability, or lists tools the capability does not name) is refused
 // and stopped.
+//
+// When the pipe breaks (the program exits, its container restarts),
+// the next request starts the program again, as the first was started,
+// and goes on over the new pipe if it is the same executor: the same
+// workspace, extensions and tools. A call in flight when it broke fails
+// and is not sent again; the processes started there (the session's MCP
+// servers) end with the old pipe and are not started again. Another
+// executor is refused, and every call after fails until dax restarts.
+// Either is a warning (CaptureWarnings).
 func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Executor, error) {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, errors.New("executor: empty command")
@@ -76,13 +85,19 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = env
-	// Its diagnostics are text from a program in the sandbox; they get
-	// the same cleaning as a tool's output, and are held with dax's
-	// warnings while a front has the screen.
-	cmd.Stderr = render.CleanWriter(warnings{})
-	return connectExecutor(ctx, &mcp.CommandTransport{Command: cmd}, executor.ConnectOptions{Name: o.Name, Version: o.Version})
+	// Each connection, the first and each one after the last was
+	// lost, is the command started anew, with the environment the
+	// first was given.
+	dial := func(context.Context) (mcp.Transport, error) {
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Env = env
+		// Its diagnostics are text from a program in the sandbox; they
+		// get the same cleaning as a tool's output, and are held with
+		// dax's warnings while a front has the screen.
+		cmd.Stderr = render.CleanWriter(warnings{})
+		return &mcp.CommandTransport{Command: cmd}, nil
+	}
+	return connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version})
 }
 
 // DialExecutorURL connects to `dax execute -listen` serving at
@@ -92,9 +107,13 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 // credential: whoever can reach the endpoint can run its tools, which
 // is why `dax execute` listens on loopback unless told otherwise, and
 // a tunnel (ssh -L) reaches it from elsewhere. The client pings it
-// every executor.KeepAlive so an idle session stays open.
+// every executor.KeepAlive so an idle session stays open. When the
+// connection is lost (the server restarted or closed the session, the
+// tunnel dropped), the next request connects again, as DialExecutor's
+// does.
 func DialExecutorURL(ctx context.Context, endpoint string, o ExecutorOptions) (*Executor, error) {
-	return connectExecutor(ctx, executor.HTTPTransport(endpoint), executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
+	dial := func(context.Context) (mcp.Transport, error) { return executor.HTTPTransport(endpoint), nil }
+	return connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive})
 }
 
 // launcherEnv is base, this machine's environment, as the command that
@@ -118,9 +137,12 @@ func launcherEnv(base []string, o ExecutorOptions) ([]string, error) {
 	}), nil
 }
 
-// connectExecutor connects to an executor over t.
-func connectExecutor(ctx context.Context, t mcp.Transport, o executor.ConnectOptions) (*Executor, error) {
-	r, err := executor.Connect(ctx, t, o)
+// connectExecutor connects to an executor over what dial makes, and
+// again when the connection is lost: a reconnection, and an executor
+// refused on one, are dax's warnings.
+func connectExecutor(ctx context.Context, dial executor.Dialer, o executor.ConnectOptions) (*Executor, error) {
+	o.Warn = func(line string) { fmt.Fprintf(warnings{}, "dax: %s\n", line) }
+	r, err := executor.Dial(ctx, dial, o)
 	if err != nil {
 		return nil, err
 	}

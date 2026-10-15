@@ -161,7 +161,7 @@ func TestAProcessStandardErrorReachesTheStream(t *testing.T) {
 
 	q := start(t, r, workspace.Command{Args: []string{"sh", "-c", "echo oops >&2"}})
 	q.Wait()
-	cs := r.c.Session()
+	cs := sessionOf(r)
 	if _, err := sdk.CallCustomMethod[*readParams, *readResult](context.Background(), cs, MethodRead, &readParams{ID: q.(*remoteProcess).id, FD: 2}); err == nil {
 		t.Error("read fd 2 of a process started without a stream")
 	}
@@ -277,7 +277,7 @@ func TestAnotherSessionsProcessIsRefused(t *testing.T) {
 	p := start(t, a, workspace.Command{Args: []string{"cat"}})
 	id := p.(*remoteProcess).id
 	ctx := context.Background()
-	cs := b.c.Session()
+	cs := sessionOf(b)
 	for name, call := range map[string]func() error{
 		MethodWrite: func() error {
 			_, err := sdk.CallCustomMethod[*writeParams, *emptyResult](ctx, cs, MethodWrite, &writeParams{ID: id, Data: []byte("x")})
@@ -339,7 +339,7 @@ func TestTheProcessMethodsAreBounded(t *testing.T) {
 		q.Close()
 	}
 
-	cs := r.c.Session()
+	cs := sessionOf(r)
 	id := p.(*remoteProcess).id
 	if _, err := sdk.CallCustomMethod[*writeParams, *emptyResult](ctx, cs, MethodWrite, &writeParams{ID: id, Data: make([]byte, MaxWriteBytes+1)}); err == nil {
 		t.Error("a write over MaxWriteBytes")
@@ -405,15 +405,15 @@ func TestAnExecutorWithoutStartIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { r.Close(); ss.Close() })
-	if r.start != nil {
-		t.Errorf("start capability %+v", r.start)
+	if st := currentOf(t, r).start; st != nil {
+		t.Errorf("start capability %+v", st)
 	}
 	sentinel := filepath.Join(dir, "started")
 	_, err = r.Start(context.Background(), workspace.Command{Args: []string{"touch", sentinel}})
 	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "update dax execute where it runs") {
 		t.Errorf("start: %v", err)
 	}
-	if _, err := sdk.CallCustomMethod[*startParams, *startResult](context.Background(), r.c.Session(), MethodStart, &startParams{Args: []string{"touch", sentinel}}); err == nil {
+	if _, err := sdk.CallCustomMethod[*startParams, *startResult](context.Background(), sessionOf(r), MethodStart, &startParams{Args: []string{"touch", sentinel}}); err == nil {
 		t.Error("the executor took a start")
 	}
 	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
