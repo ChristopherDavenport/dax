@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.20 - 2026-10-15
 
 - Changed: an MCP server whose session ended, a process that exited or,
   with `-executor`, one that ended with the executor's lost connection,
