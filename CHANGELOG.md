@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.19 - 2026-10-15
 
 - Changed: a session's project is its workspace, where its tools act
   (`dax execute`'s `-kind`, `-ref` and `-root`), for `-list` and for
