@@ -688,10 +688,18 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	if t := sess.Truncated(); t != nil {
 		fmt.Fprintf(warnings{}, "dax: session %s: %v (dropped)\n", id, t)
 	}
+	// A session whose header or entries hold a redaction's members from
+	// before 0.13 is never raised (agentsession.ErrNoRaise), so nothing
+	// can be appended to it: it is refused here, rather than by the
+	// first prompt's append.
+	if err := sess.RaiseRefused(agentsession.Format); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("session %s cannot be continued: %w", id, err)
+	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
-		// which no reader older than agentsession v0.0.18 opens it.
-		fmt.Fprintf(warnings{}, "dax: session %s was written as %s; this dax writes %s, and readers before agentsession v0.0.18 refuse it from the next entry\n", id, f, agentsession.Format)
+		// which a reader that knows only earlier formats refuses it.
+		fmt.Fprintf(warnings{}, "dax: session %s was written as %s; this dax writes %s, and readers that know only earlier formats refuse it from the next entry\n", id, f, agentsession.Format)
 	}
 	// The workspace the header records against the one the session
 	// continues in: a session that ran in a container and continues

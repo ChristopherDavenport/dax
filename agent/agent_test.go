@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -504,6 +506,70 @@ func TestACallCutOffInFlightIsResumedAsAborted(t *testing.T) {
 	n, failed, err := Verify(ctx, o.Root, id)
 	if err != nil || len(failed) > 0 || n == 0 {
 		t.Fatalf("verify: %d responses, failed %v, err %v", n, failed, err)
+	}
+}
+
+// TestAnOldRedactionIsNotResumed resumes a session written as 0.12,
+// once plain and once with a redaction's redacted_from in its header,
+// a member 0.13 gives a meaning: the plain one continues and is raised,
+// and the other is refused by Resume, since agentsession never raises
+// it and so refuses every append, and is left as it was.
+func TestAnOldRedactionIsNotResumed(t *testing.T) {
+	const earlier = "agentsession/0.12"
+	for _, tc := range []struct {
+		name  string
+		extra map[string]json.RawMessage
+		want  error
+	}{
+		{name: "plain"},
+		{name: "redacted_from", extra: map[string]json.RawMessage{
+			"redacted_from": json.RawMessage(`{"session":"original"}`),
+		}, want: agentsession.ErrNoRaise},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := options(t, &echo.Adapter{})
+			st, err := openStore(o.Root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := st.Create(ctx, agentsession.Header{Format: earlier, CWD: o.Dir, Extra: tc.extra})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := created.ID()
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			r, err := Resume(ctx, o, id)
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("Resume = %v, want %v", err, tc.want)
+				}
+				st, err := readOnly(o.Root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer st.Close()
+				sess, err := st.Open(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sess.Len() != 0 || sess.Header().Format != earlier {
+					t.Errorf("after the refusal the session holds %d entries under %s", sess.Len(), sess.Header().Format)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := promptOn(ctx, r, "hi", nil); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(projected(t, o, r)), `"format":"`+agentsession.Format+`"`) {
+				t.Errorf("the resumed session was not raised to %s", agentsession.Format)
+			}
+		})
 	}
 }
 
