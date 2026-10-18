@@ -17,12 +17,17 @@ versions may break flags and the config file.
   longer says readers before agentsession v0.0.18 refuse it once
   raised, which stopped being true at format 0.11; it says readers that
   know only earlier formats do.
-- Dependencies: agentsession v0.0.27, up from v0.0.25. agentsession's
-  format is now 0.13: dax raises every session it appends to, a resumed
-  one included, to 0.13, so readers on agentsession v0.0.26 or older,
-  and a dax before this one, refuse those files. With it `-import`
-  takes a redacted session's projection, as the store now holds
-  redacted sessions like any other.
+- Dependencies: agentsession v0.0.27, up from v0.0.25, and agentturn,
+  agentturn/session, agentturn/front/a2a and agentturn/tools/a2a
+  v0.0.30, up from v0.0.29. agentsession's format is now 0.13: dax
+  raises every session it appends to, a resumed one included, to 0.13,
+  so readers on agentsession v0.0.26 or older, and a dax before this
+  one, refuse those files. With it `-import` takes a redacted session's
+  projection, as the store now holds redacted sessions like any other.
+  agentturn v0.0.30 clears an entry's `redacted` member when the
+  recorder copies an entry it read (a callee link copied onto another
+  branch, the env a child is written with), so a redacted session dax
+  resumes takes its run as native entries.
 
 ## v0.0.20 - 2026-10-15
 
