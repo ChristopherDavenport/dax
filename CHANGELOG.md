@@ -5,6 +5,25 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: `-resume` refuses a session written before format 0.13 whose
+  header or entries hold a redaction's `redacted_from` or `redacted`
+  member, saying it cannot be continued (agentsession's `ErrNoRaise`)
+  and leaving it as it was. agentsession never raises such a session,
+  since 0.13 gives those members a meaning they were not written with,
+  so it took no entry: the resume opened, and the first prompt failed
+  on its append. The warning for a session of an earlier format no
+  longer says readers before agentsession v0.0.18 refuse it once
+  raised, which stopped being true at format 0.11; it says readers that
+  know only earlier formats do.
+- Dependencies: agentsession v0.0.27, up from v0.0.25. agentsession's
+  format is now 0.13: dax raises every session it appends to, a resumed
+  one included, to 0.13, so readers on agentsession v0.0.26 or older,
+  and a dax before this one, refuse those files. With it `-import`
+  takes a redacted session's projection, as the store now holds
+  redacted sessions like any other.
+
 ## v0.0.20 - 2026-10-15
 
 - Changed: an MCP server whose session ended, a process that exited or,
