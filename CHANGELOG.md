@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.21 - 2026-10-18
 
 - Fixed: `-resume` refuses a session written before format 0.13 whose
   header or entries hold a redaction's `redacted_from` or `redacted`
