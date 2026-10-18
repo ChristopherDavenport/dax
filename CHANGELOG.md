@@ -5,6 +5,20 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentsession v0.0.28, up from v0.0.27, and
+  agentconsole v0.0.14, agenteval v0.0.11 and agentkit v0.0.14, up from
+  v0.0.13, v0.0.10 and v0.0.13, which take agentsession v0.0.27 and
+  agentturn v0.0.30 themselves. A redacted session now hashes
+  independently: a redactor gives each redacted response the
+  `request_hash` of the request the redacted session rebuilds for it,
+  so readers verify and replay it with no exception for redacted
+  entries. `-verify`, which has none, verifies a redacted session made
+  under that rule whole, and fails a mismatch on a redacted response as
+  on any other. This answers #93, and agentconsole#38 for the inspect
+  pane dax embeds.
+
 ## v0.0.21 - 2026-10-18
 
 - Fixed: `-resume` refuses a session written before format 0.13 whose
