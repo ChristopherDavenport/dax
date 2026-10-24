@@ -453,7 +453,9 @@ func RunArgs(spec Spec, bin, proxyIP string) []string {
 // SidecarArgs are docker's arguments that make box spec's sidecar: the
 // box's image and dax under runc, as hardened as the box and smaller,
 // on the egress network and on the box's network at ip, with the box's
-// rules directory read-only, running dax's proxy.
+// rules directory read-only, running dax's proxy, which listens on its
+// address on the box's network alone: the egress network, which every
+// box's sidecar shares, never reaches it.
 func SidecarArgs(spec Spec, bin, ip, rulesDir string) []string {
 	return []string{
 		"run", "-d", "--init",
@@ -472,7 +474,7 @@ func SidecarArgs(spec Spec, bin, ip, rulesDir string) []string {
 		"-v", spec.Binary + ":" + Binary + ":ro",
 		"-v", rulesDir + ":" + RulesMount + ":ro",
 		spec.Image,
-		Binary, "box", "proxy", "-listen", ":" + ProxyPort, "-rules", RulesMount + "/" + RulesFile,
+		Binary, "box", "proxy", "-listen", ip + ":" + ProxyPort, "-rules", RulesMount + "/" + RulesFile,
 	}
 }
 

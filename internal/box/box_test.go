@@ -153,7 +153,7 @@ func TestSidecarArgs(t *testing.T) {
 		"--network name=dax-app-12345678-net,ip=172.30.0.2",
 		"-v " + spec.Binary + ":/usr/local/bin/dax:ro",
 		"-v /state/dax-app-12345678:/etc/dax-box:ro",
-		"golang:1.26-bookworm /usr/local/bin/dax box proxy -listen :3128 -rules /etc/dax-box/egress.json",
+		"golang:1.26-bookworm /usr/local/bin/dax box proxy -listen 172.30.0.2:3128 -rules /etc/dax-box/egress.json",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("sidecar args lack %q:\n%s", want, joined)
