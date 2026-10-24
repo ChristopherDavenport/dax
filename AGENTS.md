@@ -68,9 +68,11 @@ before changing the shape.
   `-tls-ca`), a record over the store client, an `agent.Controls` over
   the served commands, and a controller that sends the head move
   through its command.
-  `box.go`: `-box` and `dax box up|ls|down`, the project's box
-  (`internal/box`) made or started before the session, whose `docker
-  exec` is then the executor like any other.
+  `box.go`: `-box`, whose executor command is the box host's
+  launcher (this dax as `box serve`, or ssh to the dax on another
+  machine); `dax box serve`, the box host, which makes the box from its
+  own config and relays the session to the box's `dax execute`; and
+  `dax box up|ls|down|proxy` on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it), `Renderers`,
@@ -167,9 +169,14 @@ before changing the shape.
   `List`, `Remove`, the exec command; the box's internal network and
   its sidecar, and `proxy.go`, the egress proxy the sidecar runs
   (`dax box proxy`) under the box's rules file, which refuses this
-  machine and private networks on the address it dials. Standard
-  library only, so it can move to agentworkspace once a second product
-  wants it.
+  machine and private networks on the address it dials; `host.go`, the
+  box host config (profiles, limits, images, the MCP catalog) and
+  `Resolve`, a session's request narrowed, never widened; `relay.go`,
+  the box host's relay, which reads the session's initialize and then
+  copies bytes both ways. Runtime-agnostic: any runtime docker has
+  registered. Standard library only, so it can move to agentworkspace
+  once a second product wants it. The design is
+  `docs/plans/proposals/box-host.md`.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every
