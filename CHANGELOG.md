@@ -61,9 +61,15 @@ versions may break flags and the config file.
 - Docs: docs/sandbox.md has the box, the box host config, a box over
   ssh, the box's internet and how it holds, and runtimes: gVisor
   (installing runsc, registering it on the KVM platform where the
-  default, systrap, cannot start, as on WSL2) and Kata (registering it,
-  and what is not yet verified). docs/plans/proposals/box-host.md is
-  the design and its steps.
+  default, systrap, cannot start, as on WSL2) and Kata 4.2.0 (installing
+  the static bundle, registering the shim, and what was checked: the
+  box's hardening, its internet, shared files between containers, the
+  VM's memory). docs/plans/proposals/box-host.md is the design and its
+  steps.
+- Added: under a sandboxing runtime (anything but `runc`) a box's
+  process limit is also `--ulimit nproc`, which the sandbox's kernel
+  enforces for the box's user: `--pids-limit`, a cgroup on this
+  machine, does not count gVisor's or Kata's processes.
 
 - Dependencies: agentsession v0.0.28, up from v0.0.27, and
   agentconsole v0.0.14, agenteval v0.0.11 and agentkit v0.0.14, up from

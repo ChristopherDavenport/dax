@@ -85,6 +85,35 @@ func testSpec(t *testing.T) Spec {
 	return Spec{Name: "dax-app-12345678", Dir: "/home/me/src/app", Image: "golang:1.26-bookworm", Runtime: "runsc", Memory: "4g", CPUs: 2, Pids: 512, Binary: bin, UID: 1000, GID: 1000, Rules: Rules{Internet: InternetOff}}
 }
 
+// --pids-limit is a cgroup on this machine, which a sandbox's processes
+// are not counted in (gVisor's and Kata's both started 1000 processes
+// under --pids-limit 100 here); their own kernel enforces a process
+// limit for the box's user. Under runc that limit would count the
+// user's every process on this machine, so it is left out there.
+func TestRunArgsProcessLimit(t *testing.T) {
+	for _, tc := range []struct {
+		runtime string
+		ulimit  bool
+	}{
+		{"runsc", true}, {"kata", true}, {"io.containerd.kata.v2", true},
+		{"runc", false}, {"io.containerd.runc.v2", false},
+	} {
+		spec := testSpec(t)
+		spec.Runtime = tc.runtime
+		args := RunArgs(spec, "bin-label", "172.30.0.2")
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "--pids-limit 512") {
+			t.Errorf("%s: no --pids-limit: %s", tc.runtime, joined)
+		}
+		if got := strings.Contains(joined, "--ulimit nproc=512:512"); got != tc.ulimit {
+			t.Errorf("%s: --ulimit nproc present = %v, want %v", tc.runtime, got, tc.ulimit)
+		}
+		if i := slices.Index(args, spec.Image); i < 0 || args[i+1] != "sleep" || slices.Index(args, "--ulimit") > i {
+			t.Errorf("%s: an option after the image: %q", tc.runtime, args)
+		}
+	}
+}
+
 func TestRunArgs(t *testing.T) {
 	spec := testSpec(t)
 	args := RunArgs(spec, "bin-label", "172.30.0.2")
@@ -111,6 +140,7 @@ func TestRunArgs(t *testing.T) {
 		"--memory 4g --memory-swap 4g",
 		"--cpus 2",
 		"--pids-limit 512",
+		"--ulimit nproc=512:512",
 		"--network dax-app-12345678-net",
 		"-v /home/me/src/app:/home/me/src/app",
 		"-w /home/me/src/app",

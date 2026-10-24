@@ -114,7 +114,7 @@ processes, no internet.
   "profiles": {
     "go": { "image": "golang:1.26-bookworm", "internet": "allow",
             "allow": ["proxy.golang.org", "sum.golang.org"] },
-    "vm": { "image": "golang:1.26-bookworm", "runtime": "io.containerd.kata.v2" }
+    "vm": { "image": "golang:1.26-bookworm", "runtime": "kata" }
   },
   "mcp": {
     "github": {
@@ -130,7 +130,7 @@ processes, no internet.
 
 - `runtime` is the default runtime; a profile may name its own. It is
   checked only as the name of a runtime docker has registered, so
-  gVisor's `runsc` and Kata's `io.containerd.kata.v2` are both taken,
+  gVisor's `runsc` and Kata's `kata` (or `io.containerd.kata.v2`) are both taken,
   and nothing in the box host behaves differently by runtime.
 - `limits` are ceilings: no profile, and no tightening, goes past them.
 - `images` are glob patterns an image (a profile's, an MCP server's
@@ -216,20 +216,28 @@ supported, not code.
   embedded DNS (`127.0.0.11`) does not answer on user-defined networks,
   which is why the egress sidecar runs under `runc`; hot `docker network
   connect` does not reach a running sandbox. Verified on this machine.
-- **Kata Containers (`io.containerd.kata.v2`).** A VM per container;
-  needs `/dev/kvm`, and is registered in `daemon.json` as a runtime
-  with `"runtimeType": "io.containerd.kata.v2"`. Unverified, each an
-  open item before Kata is called supported:
-  - Docker's embedded DNS likely works, since the VM's traffic leaves
-    through the container's network namespace; if so the sidecar could
-    run under Kata too.
-  - Bind mounts go through virtio-fs, whose cache mode decides whether
-    one container sees another's writes at once, which MCP boxes that
-    share the project depend on.
-  - Single-file bind mounts (the dax binary, mounted read-only) under
-    virtio-fs.
-  - The VM's memory overhead against `--memory`: whether a 4g box gets
-    4g for its processes.
+- **Kata Containers (`io.containerd.kata.v2`, registered as `kata`).**
+  A VM per container; needs `/dev/kvm`. Verified here with Kata 4.2.0's
+  static bundle (runtime-rs, QEMU, virtio-fs), nested under WSL2:
+  - Docker's embedded DNS does not answer in a Kata box either (it is
+    on `127.0.0.11` in the container's namespace; the guest's loopback
+    is its own), so the sidecar stays under `runc` for every runtime.
+    The internal network, the sidecar at a fixed address and the three
+    internet modes behave as under gVisor.
+  - Writes to a shared bind mount are seen by another Kata container
+    and by the host at once (new files and directories, appends, a
+    rewrite under an open descriptor) with virtio-fs's default
+    `cache = "auto"`: MCP boxes can share the project.
+  - The dax binary's single-file mount works, read-only.
+  - `--memory 4g` gives the guest about 3.9 GiB, and QEMU takes about
+    360 MiB more on the host while idle; `--cpus 2` is three vCPUs.
+- **Process limits, both sandboxes.** `--pids-limit` is a cgroup on the
+  host, which neither gVisor's nor Kata's processes are counted in:
+  under each, 1000 processes started with `--pids-limit 100`. The box
+  adds `--ulimit nproc=<pids>` under any runtime but `runc`, which the
+  sandbox's kernel enforces for the box's user (95 and 97 started).
+  Under `runc` the ulimit would count the user's every process on the
+  host, so `--pids-limit`, which holds there, is the limit.
 
 ## What moves from #98
 

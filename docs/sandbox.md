@@ -125,6 +125,7 @@ What the box is made with:
 | `--cap-drop ALL`, `--security-opt no-new-privileges` | no capabilities, and no setuid program can gain any |
 | `--read-only`, `--tmpfs /tmp`, `--tmpfs /home/dax` | nothing outside the project survives the container; the home (`HOME=/home/dax`, and `GOPATH=/home/dax/go`, so go's module and build caches are in it) and `/tmp` are memory, counted against the limit |
 | `--memory`, `--memory-swap`, `--cpus`, `--pids-limit` | the profile's, narrowed by the session's `tighten` |
+| `--ulimit nproc=<pids>` | under a sandbox (anything but `runc`), the profile's process limit, enforced by the sandbox's own kernel for the box's user: `--pids-limit` is a cgroup on this machine, which gVisor's and Kata's processes are not counted in |
 | `--network <box>-net` | the box's own internal network, with no route out; its sidecar is the only other thing on it (see [The box's internet](#the-boxs-internet)) |
 | `-e HTTP_PROXY=…`, `HTTPS_PROXY`, lower case too | the sidecar's proxy, at a fixed address on that network; `NO_PROXY` is localhost |
 | `-v DIR:DIR`, `-w DIR` | the project at its own path, the one mount you can write |
@@ -302,19 +303,46 @@ A profile with `"runtime": "runsc-ptrace"` then names the second.
 
 ### Kata Containers (`io.containerd.kata.v2`)
 
-A VM per container. It needs `/dev/kvm`, and is registered in
-`/etc/docker/daemon.json` as a runtime with
-`"runtimeType": "io.containerd.kata.v2"`; a profile names it by the
-name it is registered under. Not yet verified with a box; before it is
-called supported:
+A VM per container, with a kernel of its own. Verified with Kata 4.2.0
+(the static bundle: runtime-rs, QEMU, virtiofsd) under WSL2, kernel
+6.6, where it runs nested on `/dev/kvm`. Install the bundle and
+register the shim with docker:
 
-- whether docker's own name server answers inside a Kata box, which
-  would let the sidecar run under Kata too;
-- whether one container sees another's writes to the shared project at
-  once under virtio-fs's cache mode, which MCP boxes will depend on;
-- whether a single-file bind mount (the dax binary) works under
-  virtio-fs;
-- how much of `--memory` the VM itself takes.
+```sh
+sudo tar --zstd -xf kata-static-4.2.0-amd64.tar.zst -C /
+sudo ln -sf /opt/kata/runtime-rs/bin/containerd-shim-kata-v2 /usr/local/bin/
+# /etc/docker/daemon.json, beside runsc's entries:
+#   "runtimes": { "kata": { "runtimeType": "io.containerd.kata.v2" } }
+sudo systemctl restart docker
+docker run --rm --runtime kata busybox uname -r   # the guest's kernel, not this machine's
+```
+
+The 4.x static bundle carries only the Rust runtime; its shim finds
+`/opt/kata/share/defaults/kata-containers/runtime-rs/configuration.toml`
+(QEMU, virtio-fs) without more setup. A profile names it `kata`, as
+registered, or `io.containerd.kata.v2`, which docker also takes.
+
+What a box under Kata does, as checked here:
+
+- The hardening holds as under gVisor: the box's user, no
+  capabilities, a read-only root, the project writable, and the dax
+  binary's single-file mount, read-only. A box starts in about two
+  seconds.
+- Docker's name server does not answer inside a Kata box on a
+  user-defined network, as under gVisor (it answers on `127.0.0.11` in
+  the container's namespace, and the guest has a loopback of its own),
+  so the sidecar stays under `runc` for Kata too. The box's internal
+  network holds: no route out, the sidecar reached at its address, and
+  the three internet modes as under gVisor.
+- Two containers sharing the project see each other's writes at once,
+  and the host's: a new file, a new directory, an append, a file
+  rewritten under an open descriptor. A read-only mount refuses writes.
+  virtio-fs's `cache = "auto"` (the default) is enough.
+- `--memory 4g` gives the guest about 3.9 GiB; QEMU itself takes about
+  360 MiB of this machine's memory on top while idle. `--cpus 2` shows
+  as three processors, Kata's own vCPU and two.
+- The process limit is the box's user's (`--ulimit nproc`), as under
+  gVisor; see [What a box does not do](#what-a-box-does-not-do).
 
 ### What a box does not do
 
@@ -322,7 +350,11 @@ It limits what an approved call can reach, not how often you are
 asked. dax claims no confinement for an executor's tools, so every rule
 and question is as on your machine. Its internet is what [The box's
 internet](#the-boxs-internet) gives it, and `on` is any host on the
-internet. And anything mounted is reachable: the project, read-write.
+internet. Its process limit is per user: under gVisor and Kata,
+`--pids-limit` does not hold (both started 1000 processes under a limit
+of 100 here), and `--ulimit nproc` does (95 and 97); the processes of
+every session in a box, all the box's user's, count against it
+together. And anything mounted is reachable: the project, read-write.
 
 ## What runs where
 

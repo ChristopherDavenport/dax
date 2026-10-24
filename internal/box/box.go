@@ -427,7 +427,7 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 // exec starts.
 func RunArgs(spec Spec, bin, proxyIP string) []string {
 	proxy := "http://" + proxyIP + ":" + ProxyPort
-	return []string{
+	args := []string{
 		"run", "-d", "--init",
 		"--name", spec.Name,
 		"--label", Label + "=1",
@@ -456,9 +456,23 @@ func RunArgs(spec Spec, bin, proxyIP string) []string {
 		"-v", spec.Dir + ":" + spec.Dir,
 		"-w", spec.Dir,
 		"-v", spec.Binary + ":" + Binary + ":ro",
-		spec.Image,
-		"sleep", "infinity",
 	}
+	if !hostKernel(spec.Runtime) {
+		// A sandbox's processes are not this machine's: gVisor's and
+		// Kata's are counted by their own kernel, so --pids-limit, a
+		// cgroup on this machine, does not reach them. A process limit
+		// for the box's user does, enforced by that kernel.
+		pids := strconv.FormatInt(spec.Pids, 10)
+		args = append(args, "--ulimit", "nproc="+pids+":"+pids)
+	}
+	return append(args, spec.Image, "sleep", "infinity")
+}
+
+// hostKernel reports whether runtime runs a container's processes on
+// this machine's kernel, as runc does, where --pids-limit holds and a
+// user's process limit would count the user's every process here.
+func hostKernel(runtime string) bool {
+	return runtime == "runc" || runtime == "io.containerd.runc.v2"
 }
 
 // SidecarArgs are docker's arguments that make box spec's sidecar: the
