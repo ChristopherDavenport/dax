@@ -39,22 +39,28 @@ func ensureBox(ctx context.Context, c *box.Client, dir string, s config.BoxSetti
 	if err != nil {
 		return b, fmt.Errorf("box: this dax: %w", err)
 	}
-	c.Warn, c.Starting = say, say
+	c.Warn, c.Starting, c.Notice = say, say, say
+	rules := box.Rules{Internet: s.Internet}
+	if s.Internet == box.InternetAllow {
+		rules.Allow = s.Allow
+	}
 	return c.Ensure(ctx, box.Spec{
 		Name: b.Name, Dir: b.Dir,
-		Image: s.Image, Runtime: s.Runtime, Memory: s.Memory, CPUs: s.CPUs, Pids: s.Pids, Network: s.Network,
+		Image: s.Image, Runtime: s.Runtime, Memory: s.Memory, CPUs: s.CPUs, Pids: s.Pids,
 		Binary: bin, UID: os.Getuid(), GID: os.Getgid(),
+		Rules: rules,
 	})
 }
 
-// runBox is `dax box`: up, ls and down, for the boxes -box keeps.
+// runBox is `dax box`: up, ls and down, for the boxes -box keeps, and
+// proxy, the egress proxy a box's sidecar runs.
 func runBox(ctx context.Context, args []string, p program, stdout io.Writer) error {
 	return runBoxWith(ctx, args, p, stdout, &box.Client{Runner: box.CLI{}})
 }
 
 // runBoxWith is runBox over c, which the tests give a fake docker.
 func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer, c *box.Client) error {
-	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box; print the -executor line)\n       %[1]s box ls\n       %[1]s box down [name]   (remove a box; default this directory's)", p.name)
+	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box; print the -executor line)\n       %[1]s box ls\n       %[1]s box down [name]   (remove a box; default this directory's)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -64,11 +70,17 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintln(fs.Output(), usage)
 		fs.PrintDefaults()
 	}
-	var cfgPath, image, runtime *string
-	if args[0] == "up" {
+	var cfgPath, image, runtime, internet, listen, rules, check *string
+	switch args[0] {
+	case "up":
 		cfgPath = fs.String("config", "", "user config file, whose box settings up takes; default ~/.config/dax/config.json")
 		image = fs.String("image", "", "the box's image, in place of box.image")
 		runtime = fs.String("runtime", "", "the box's OCI runtime, in place of box.runtime")
+		internet = fs.String("internet", "", "the box's internet, in place of box.internet: off, on, or allow (box.allow's hosts)")
+	case "proxy":
+		listen = fs.String("listen", ":"+box.ProxyPort, "address to serve on")
+		rules = fs.String("rules", box.RulesMount+"/"+box.RulesFile, "the rules file, read again when it changes")
+		check = fs.String("check", "", "ask the proxy at this address whether it is up, and exit")
 	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -99,6 +111,9 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if given["runtime"] {
 			f.BoxRuntime = runtime
 		}
+		if given["internet"] {
+			f.BoxInternet = internet
+		}
 		// A config's executor is for sessions; up makes a box whatever
 		// it says.
 		user.Executor = nil
@@ -121,11 +136,21 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 			return err
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tSTATE\tRUNTIME\tDIR")
+		fmt.Fprintln(tw, "NAME\tSTATE\tRUNTIME\tINTERNET\tDIR")
 		for _, b := range boxes {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, b.State, b.Runtime, b.Dir)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", b.Name, b.State, b.Runtime, b.Internet, b.Dir)
 		}
 		return tw.Flush()
+	case "proxy":
+		if fs.NArg() > 0 {
+			return fmt.Errorf("box proxy: unexpected argument %q", fs.Arg(0))
+		}
+		if *check != "" {
+			return box.CheckProxy(ctx, *check)
+		}
+		logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
+		fmt.Fprintf(os.Stderr, "%s box proxy: serving %s under %s\n", p.name, *listen, *rules)
+		return box.ServeProxy(ctx, *listen, box.NewProxy(*rules, logf))
 	case "down":
 		name := ""
 		switch fs.NArg() {
@@ -146,5 +171,5 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintf(stdout, "removed %s\n", name)
 		return nil
 	}
-	return fmt.Errorf("box %q: want up, ls or down\n%s", args[0], usage)
+	return fmt.Errorf("box %q: want up, ls, down or proxy\n%s", args[0], usage)
 }

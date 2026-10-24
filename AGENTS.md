@@ -164,8 +164,12 @@ before changing the shape.
 - `internal/box`: a project's box over the docker command line
   (`Runner`, a fake in the tests): the hardened `docker run`, `Ensure`
   (reuse, start, refuse other settings, make again for another dax),
-  `List`, `Remove`, the exec command. Standard library only, so it can
-  move to agentworkspace once a second product wants it.
+  `List`, `Remove`, the exec command; the box's internal network and
+  its sidecar, and `proxy.go`, the egress proxy the sidecar runs
+  (`dax box proxy`) under the box's rules file, which refuses this
+  machine and private networks on the address it dials. Standard
+  library only, so it can move to agentworkspace once a second product
+  wants it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every

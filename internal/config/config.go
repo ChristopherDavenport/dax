@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -155,8 +156,13 @@ type Box struct {
 	// CPUs and Pids bound its processors and processes.
 	CPUs float64 `json:"cpus,omitempty"`
 	Pids int64   `json:"pids,omitempty"`
-	// Network is bridge, none or a docker network of yours; never host.
-	Network string `json:"network,omitempty"`
+	// Internet is the box's: off (none, the default), allow (the hosts
+	// Allow names) or on (any host), always HTTP and HTTPS through the
+	// box's proxy, never this machine or a private network.
+	Internet string `json:"internet,omitempty"`
+	// Allow names the hosts the box may reach: a name, or *.domain for
+	// every name below domain. Given without internet, it is allow.
+	Allow []string `json:"allow,omitempty"`
 }
 
 // BoxSettings is the box a session runs its tools in, every field set.
@@ -164,12 +170,15 @@ type BoxSettings struct {
 	Image, Runtime, Memory string
 	CPUs                   float64
 	Pids                   int64
-	Network                string
+	// Internet is off, allow or on; Allow the hosts allow takes, lower
+	// case.
+	Internet string
+	Allow    []string
 }
 
 // DefaultBox is the box a box setting or -box leaves to dax.
 func DefaultBox() BoxSettings {
-	return BoxSettings{Image: "golang:1.26-bookworm", Runtime: "runsc", Memory: "4g", CPUs: 2, Pids: 512, Network: "bridge"}
+	return BoxSettings{Image: "golang:1.26-bookworm", Runtime: "runsc", Memory: "4g", CPUs: 2, Pids: 512, Internet: "off"}
 }
 
 // Executor is how to start or reach the executor.
@@ -594,10 +603,10 @@ func BoxOn(user Layer, f Flags) bool {
 // BoxOf is the box the user's layer and the flags say the tools run
 // in, its defaults filled in; nil when they run elsewhere. A box with
 // an executor is refused, whichever layer or flag names each, and so
-// are -box-image and -box-runtime without a box.
+// are -box-image, -box-runtime and -box-internet without a box.
 func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 	if !BoxOn(user, f) {
-		for name, v := range map[string]*string{"-box-image": f.BoxImage, "-box-runtime": f.BoxRuntime} {
+		for name, v := range map[string]*string{"-box-image": f.BoxImage, "-box-runtime": f.BoxRuntime, "-box-internet": f.BoxInternet} {
 			if v != nil {
 				return nil, fmt.Errorf("%s goes with -box or a box in your config", name)
 			}
@@ -631,8 +640,14 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		if b.Pids != 0 {
 			s.Pids = b.Pids
 		}
-		if b.Network != "" {
-			s.Network = b.Network
+		for _, h := range b.Allow {
+			s.Allow = append(s.Allow, strings.ToLower(h))
+		}
+		switch {
+		case b.Internet != "":
+			s.Internet = b.Internet
+		case len(b.Allow) > 0:
+			s.Internet = "allow"
 		}
 	}
 	if f.BoxImage != nil {
@@ -647,6 +662,18 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		}
 		s.Runtime = *f.BoxRuntime
 	}
+	if f.BoxInternet != nil {
+		switch *f.BoxInternet {
+		case "off", "on":
+		case "allow":
+			if len(s.Allow) == 0 {
+				return nil, errors.New(`-box-internet allow: box.allow in your config names no hosts`)
+			}
+		default:
+			return nil, fmt.Errorf("-box-internet %q: want off, on or allow", *f.BoxInternet)
+		}
+		s.Internet = *f.BoxInternet
+	}
 	return &s, nil
 }
 
@@ -656,8 +683,12 @@ var (
 	boxMemory = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
 )
 
+// boxHost is a host name box.allow takes, or *. before one; a name, not
+// an address, a port or a URL.
+var boxHost = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
 // check refuses a box setting docker would misread as another
-// argument, and the host network, which would share this machine's.
+// argument, and an internet that says two things.
 func (b Box) check() error {
 	switch {
 	case b.Image != "" && !boxImage.MatchString(b.Image):
@@ -670,12 +701,27 @@ func (b Box) check() error {
 		return errors.New("box.cpus: want a positive number")
 	case b.Pids < 0:
 		return errors.New("box.pids: want a positive number")
-	case b.Network == "host":
-		return errors.New(`box.network "host": the box would share this machine's network; use bridge, none or a network of yours`)
-	case b.Network != "" && !boxName.MatchString(b.Network):
-		return fmt.Errorf("box.network %q: want bridge, none or a network's name", b.Network)
+	case b.Internet != "" && b.Internet != "off" && b.Internet != "on" && b.Internet != "allow":
+		return fmt.Errorf("box.internet %q: want off, on or allow", b.Internet)
+	case b.Internet == "allow" && len(b.Allow) == 0:
+		return errors.New(`box.internet "allow": box.allow names no hosts`)
+	case (b.Internet == "off" || b.Internet == "on") && len(b.Allow) > 0:
+		return fmt.Errorf("box.internet %q with box.allow: give allow, or leave the hosts out", b.Internet)
+	}
+	for _, h := range b.Allow {
+		l := strings.ToLower(h)
+		if !boxHost.MatchString(l) || net.ParseIP(strings.TrimPrefix(l, "*.")) != nil || isAllDigitsAndDots(l) {
+			return fmt.Errorf("box.allow %q: want a host name (proxy.golang.org) or *. and a domain (*.githubusercontent.com); no address, port or scheme", h)
+		}
 	}
 	return nil
+}
+
+// isAllDigitsAndDots reports whether s, past any *., is an IPv4
+// address's digits and dots, which boxHost would take as a name.
+func isAllDigitsAndDots(s string) bool {
+	s = strings.TrimPrefix(s, "*.")
+	return strings.Trim(s, "0123456789.") == ""
 }
 
 // ExecutorOf is the executor the user's layer and the flags name, as
@@ -866,10 +912,11 @@ type Flags struct {
 	// empty clears it.
 	ExecutorPassEnv []string
 	// Box replaces whether the config's box is used: -box, -box=false.
-	// BoxImage and BoxRuntime replace its image and runtime.
-	Box                  *bool
-	BoxImage, BoxRuntime *string
-	Think, Agents        *bool
+	// BoxImage, BoxRuntime and BoxInternet replace its image, runtime
+	// and internet.
+	Box                               *bool
+	BoxImage, BoxRuntime, BoxInternet *string
+	Think, Agents                     *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.

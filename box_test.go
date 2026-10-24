@@ -3,6 +3,7 @@ package dax
 import (
 	"bytes"
 	"context"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,7 +16,8 @@ import (
 )
 
 // boxDocker answers docker by its first argument, each answer once and
-// the last for ever, and records the calls.
+// the last for ever, and records the calls. A network has a subnet
+// unless the test says otherwise.
 type boxDocker struct {
 	answers map[string][]string
 	calls   [][]string
@@ -23,7 +25,10 @@ type boxDocker struct {
 
 func (d *boxDocker) Docker(_ context.Context, args ...string) ([]byte, error) {
 	d.calls = append(d.calls, args)
-	q := d.answers[args[0]]
+	q, ok := d.answers[args[0]]
+	if !ok && args[0] == "network" {
+		q = []string{"172.30.0.0/16 \n"}
+	}
 	if len(q) == 0 {
 		return nil, nil
 	}
@@ -47,42 +52,54 @@ func TestBoxCommand(t *testing.T) {
 		name    string
 		args    []string
 		answers map[string][]string
-		out     string // in what it prints
+		out     string // in what it prints, its spaces made one
 		err     string
-		last    []string // the last docker call
+		calls   [][]string // docker calls it makes, among others
+		rules   string     // the box's internet after it
 	}{
 		{
 			name:    "ls",
 			args:    []string{"ls"},
 			answers: map[string][]string{"ps": {"dax-a-1\trunning\t/src/a\trunsc\n"}},
-			out:     "dax-a-1  running  runsc    /src/a",
+			out:     "NAME STATE RUNTIME INTERNET DIR dax-a-1 running runsc ? /src/a",
 		},
 		{
-			name:    "down takes this directory's box",
+			name:    "down takes this directory's box, its sidecar and its network",
 			args:    []string{"down"},
-			answers: map[string][]string{"ps": {"running\tx\ty\n"}},
+			answers: map[string][]string{"ps": {"running\tx\ty\n"}, "network": {here.Name + "-net\n"}},
 			out:     "removed " + here.Name,
-			last:    []string{"rm", "-f", here.Name},
+			calls:   [][]string{{"rm", "-f", here.Name}, {"rm", "-f", here.Name + "-proxy"}, {"network", "rm", here.Name + "-net"}},
 		},
 		{
 			name:    "down by name",
 			args:    []string{"down", "dax-other-1"},
-			answers: map[string][]string{"ps": {"exited\tx\ty\n"}},
-			last:    []string{"rm", "-f", "dax-other-1"},
+			answers: map[string][]string{"ps": {"exited\tx\ty\n", ""}, "network": {""}},
+			calls:   [][]string{{"rm", "-f", "dax-other-1"}},
 		},
 		{
-			name: "down of no box",
-			args: []string{"down", "nginx"},
-			err:  "no box nginx",
+			name:    "down of no box",
+			args:    []string{"down", "nginx"},
+			answers: map[string][]string{"network": {""}},
+			err:     "no box nginx",
 		},
 		{
 			name:    "up prints the executor line",
 			args:    []string{"up", "-runtime", "runsc-ptrace"},
-			answers: map[string][]string{"ps": {"", "running\t\t\n"}},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
 			out:     "dax -executor ",
+			rules:   "off",
 		},
+		{
+			name:    "up -internet on",
+			args:    []string{"up", "-internet", "on"},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
+			rules:   "on",
+		},
+		{name: "up -internet allow with no hosts", args: []string{"up", "-internet", "allow"}, err: "names no hosts"},
+		{name: "up -internet sideways", args: []string{"up", "-internet", "sideways"}, err: "-box-internet"},
+		{name: "proxy takes no name", args: []string{"proxy", "x"}, err: "unexpected argument"},
 		{name: "no verb", args: nil, err: "usage: dax box up"},
-		{name: "another verb", args: []string{"rm"}, err: `box "rm": want up, ls or down`},
+		{name: "another verb", args: []string{"rm"}, err: `box "rm": want up, ls, down or proxy`},
 		{name: "ls takes no name", args: []string{"ls", "x"}, err: "unexpected argument"},
 		{name: "down takes one name", args: []string{"down", "a", "b"}, err: `unexpected argument "b"`},
 		{name: "a bad runtime", args: []string{"up", "-runtime", "run sc"}, err: "-box-runtime"},
@@ -90,7 +107,8 @@ func TestBoxCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &boxDocker{answers: tc.answers}
 			var out bytes.Buffer
-			err := runBoxWith(context.Background(), tc.args, p, &out, &box.Client{Runner: d})
+			state := t.TempDir()
+			err := runBoxWith(context.Background(), tc.args, p, &out, &box.Client{Runner: d, StateDir: state})
 			if tc.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.err) {
 					t.Fatalf("err = %v, want %q", err, tc.err)
@@ -100,11 +118,19 @@ func TestBoxCommand(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out.String(), tc.out) {
-				t.Errorf("printed %q, want %q in it", out.String(), tc.out)
+			if got := strings.Join(strings.Fields(out.String()), " "); !strings.Contains(got, tc.out) {
+				t.Errorf("printed %q, want %q in it", got, tc.out)
 			}
-			if tc.last != nil && !slices.Equal(d.calls[len(d.calls)-1], tc.last) {
-				t.Errorf("last docker call %q, want %q", d.calls[len(d.calls)-1], tc.last)
+			for _, want := range tc.calls {
+				if !slices.ContainsFunc(d.calls, func(c []string) bool { return slices.Equal(c, want) }) {
+					t.Errorf("no docker call %q in %q", want, d.calls)
+				}
+			}
+			if tc.rules != "" {
+				r, err := box.ReadRules(filepath.Join(state, here.Name, box.RulesFile))
+				if err != nil || r.String() != tc.rules {
+					t.Errorf("the box's internet = %v (%v), want %s", r, err, tc.rules)
+				}
 			}
 		})
 	}
@@ -119,9 +145,9 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	d := &boxDocker{answers: map[string][]string{"ps": {"", "running\t\t\n"}}}
+	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
 	var out bytes.Buffer
-	if err := runBoxWith(context.Background(), []string{"up"}, program{name: "dax"}, &out, &box.Client{Runner: d}); err != nil {
+	if err := runBoxWith(context.Background(), []string{"up"}, program{name: "dax"}, &out, &box.Client{Runner: d, StateDir: t.TempDir()}); err != nil {
 		t.Fatal(err)
 	}
 	words, err := cmdline.Split(strings.TrimSpace(out.String()))
@@ -139,9 +165,24 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 	if !slices.Equal(argv, b.Command()) {
 		t.Errorf("the -executor line runs %q, the box's command is %q", argv, b.Command())
 	}
-	run := d.calls[1]
-	if run[0] != "run" || !slices.Contains(run, "runsc") || !slices.Contains(run, config.DefaultBox().Image) {
+	i := slices.IndexFunc(d.calls, func(c []string) bool { return c[0] == "run" && slices.Contains(c, box.Label+"=1") })
+	if i < 0 {
+		t.Fatalf("up made no box: %q", d.calls)
+	}
+	if run := d.calls[i]; !slices.Contains(run, "runsc") || !slices.Contains(run, config.DefaultBox().Image) {
 		t.Errorf("up made the box with %q, want the defaults", run)
+	}
+}
+
+// The sidecar's dax runs `dax box proxy`; its -check is what the box's
+// check runs against it.
+func TestBoxProxyCheck(t *testing.T) {
+	rules := filepath.Join(t.TempDir(), box.RulesFile)
+	srv := httptest.NewServer(box.NewProxy(rules, t.Logf))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	if err := runBoxWith(context.Background(), []string{"proxy", "-check", addr}, program{name: "dax"}, &bytes.Buffer{}, &box.Client{}); err != nil {
+		t.Errorf("box proxy -check %s: %v", addr, err)
 	}
 }
 
@@ -219,6 +260,9 @@ func TestBoxRefusalsOnTheCommandLine(t *testing.T) {
 		{[]string{"-box", "-config", cfg}, `give -executor "" to run them in a box`},
 		{[]string{"-box-image", "debian"}, "-box-image goes with -box"},
 		{[]string{"-box", "-box-image", "--privileged"}, "-box-image"},
+		{[]string{"-box-internet", "on"}, "-box-internet goes with -box"},
+		{[]string{"-box", "-box-internet", "sideways"}, "want off, on or allow"},
+		{[]string{"-box", "-box-internet", "allow"}, "names no hosts"},
 		{[]string{"-box", "-list", "-executor", "ssh host dax execute"}, "give -box=false"},
 	} {
 		err := run(context.Background(), append(tc.args, "-sessions", "", "-p", "hi"), p)

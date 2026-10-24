@@ -115,6 +115,7 @@ func run(ctx context.Context, args []string, p program) error {
 	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container dax makes or reuses, under gVisor's runsc by default, with this directory at its own path, reached as the executor; -box=false runs here despite the config's box")
 	boxImage := fs.String("box-image", "", "with -box, the box's image, in place of box.image (default "+config.DefaultBox().Image+")")
 	boxRuntime := fs.String("box-runtime", "", "with -box, the box's OCI runtime, in place of box.runtime (default "+config.DefaultBox().Runtime+")")
+	boxInternet := fs.String("box-internet", "", "with -box, the box's internet for this run, in place of box.internet: off (the default), on (any host), or allow (box.allow's hosts); HTTP and HTTPS through the box's proxy, for every session in the box")
 	executorEnv := fs.String("executor-pass-env", "", "variables, separated by commas, that the -executor command alone is given, credentials included (SSH_AUTH_SOCK); overrides executor.pass_env, \"\" clears it")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
@@ -260,7 +261,7 @@ func run(ctx context.Context, args []string, p program) error {
 	if given["box"] {
 		flags.Box = boxFlag
 	}
-	flags.BoxImage, flags.BoxRuntime = str("box-image", boxImage), str("box-runtime", boxRuntime)
+	flags.BoxImage, flags.BoxRuntime, flags.BoxInternet = str("box-image", boxImage), str("box-runtime", boxRuntime), str("box-internet", boxInternet)
 	if given["executor-pass-env"] {
 		flags.ExecutorPassEnv = []string{}
 		if strings.TrimSpace(*executorEnv) != "" {
