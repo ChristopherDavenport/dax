@@ -201,7 +201,7 @@ A box has no internet unless its profile gives it some. Each run says
 so:
 
 ```
-dax: box dax-app-1a2b3c4d has no internet; -box-internet=on or box.allow to open it
+dax: box dax-app-1a2b3c4d has no internet; a box host profile with internet (-box-profile) opens it
 ```
 
 | a profile's `internet` | |

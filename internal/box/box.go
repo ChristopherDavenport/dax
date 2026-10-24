@@ -260,7 +260,7 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 		return b, err
 	}
 	if spec.Rules.Internet == InternetOff {
-		c.notice(fmt.Sprintf("box %s has no internet; -box-internet=on or box.allow to open it", spec.Name))
+		c.notice(fmt.Sprintf("box %s has no internet; a box host profile with internet (-box-profile) opens it", spec.Name))
 	}
 	return b, nil
 }

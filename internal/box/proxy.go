@@ -266,10 +266,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rules := p.current()
 	switch {
 	case rules.Internet == InternetOff:
-		p.refuse(w, hostport, fmt.Sprintf("dax box: %s is not allowed: the box has no internet (box.internet; -box-internet)", host))
+		p.refuse(w, hostport, fmt.Sprintf("dax box: %s is not allowed: the box has no internet (the box host profile's internet; -box-internet)", host))
 		return
 	case !rules.allows(host):
-		p.refuse(w, hostport, fmt.Sprintf("dax box: %s is not allowed (box.allow; -box-internet)", host))
+		p.refuse(w, hostport, fmt.Sprintf("dax box: %s is not allowed (the box host profile's allow; box.tighten; -box-internet)", host))
 		return
 	case !p.ports[port]:
 		p.refuse(w, hostport, fmt.Sprintf("dax box: port %s is not allowed: only 80 and 443", port))
