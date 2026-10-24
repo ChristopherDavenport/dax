@@ -71,8 +71,11 @@ before changing the shape.
   `box.go`: `-box`, whose executor command is the box host's
   launcher (this dax as `box serve`, or ssh to the dax on another
   machine); `dax box serve`, the box host, which makes the box from its
-  own config and relays the session to the box's `dax execute`; and
-  `dax box up|ls|down|proxy` on this machine's docker.
+  own config (a `-project` path, or a `-checkout` it clones and keeps)
+  and relays the session to the box's `dax execute`, or answers one of
+  its own requests about that project (status, down, pull); `dax box
+  status|down|pull`, which ask it; and `dax box up|ls|down NAME|proxy`
+  on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it), `Renderers`,
@@ -181,7 +184,11 @@ before changing the shape.
   box host passes any of it on; `relay.go`, the box host's relay, which reads
   the session's handshake, passes the rest through a message at a
   time, adds what it resolved to the handshake's answer, and answers a
-  unit's process methods itself. Runtime-agnostic: any runtime docker has
+  unit's process methods itself, or, for a first message of the box
+  host's own (`dax/box.status|down|pull`), answers that and returns;
+  `checkout.go`, a repository's URL as checkouts match it, the box
+  host's checkout of it, cloned and moved on only when nothing would be
+  lost, and the git bundle a pull takes back. Runtime-agnostic: any runtime docker has
   registered. Standard library only, so it can move to agentworkspace
   once a second product wants it. The design is
   `docs/plans/proposals/box-host.md`.

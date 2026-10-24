@@ -71,12 +71,32 @@ versions may break flags and the config file.
   reads again, so a run changes the box's internet without making it
   again; the change applies to every session in the box, and the run
   says so.
-- Added: `dax box up`, `dax box ls` and `dax box down`: make this
-  directory's box from this machine's box host config and print its
-  executor's command, list the boxes and their units with their files
-  and internet, and remove one with its units and each one's sidecar,
-  network and rules (`-state` removes the units' state directories
-  too). They act on this machine's docker.
+- Added: `dax box status`, `dax box down` and `dax box pull`, through
+  the box host the config's `box` names, here or over ssh, each acting
+  on that box host's one project: the box, its units (with their files,
+  internet and image) and its checkout's branch, head and uncommitted
+  changes; removing the box, its units and each one's sidecar, network
+  and rules there (`-state` the units' state directories too); and a
+  git bundle of the project's head (256 MiB at most), verified and
+  fetched into a local branch (`-branch`, default
+  `dax-box/<repository>`; one that is not behind it only with
+  `-force`). `dax box serve` answers these as its first message in
+  place of a session. `dax box up`, `dax box ls` and `dax box down
+  NAME` act on this machine's docker: make this directory's box and
+  print its executor's command, list the boxes and units, remove one.
+- Added: `box.checkout` (`{"url", "ref"}`, with an ssh `box.host`, in
+  place of `box.project`): a repository the box host clones into a
+  directory it keeps, within its config's `checkouts.allow` (glob
+  patterns on the URL; `checkouts.dir`), which is then the project. At
+  each session's start it is fetched and moved to the ref only when
+  its worktree is clean, on that ref and holds no commit of its own;
+  otherwise it is left as it is, and the box host says why. Git runs on
+  the box host with its own credentials, never prompting; a URL with a
+  password, or a user on https, is refused. The launcher passes
+  `-checkout URL [-ref REF]`, so `-list` and an sshd forced command
+  key on the repository. The repository, ref and starting head are in
+  the handshake's `box`, the record's `dax.box` header and the
+  executor line.
 - Added: `agent.ExecutorOptions.Box`, what a session asks of a box host
   when it dials it, sent beside `max_read_bytes` in the executor's
   capability; an executor that is not a box host ignores it.

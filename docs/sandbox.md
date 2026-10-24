@@ -129,6 +129,7 @@ unit alone. A file says more:
 | `default_profile` | the profile a session that names none gets; needed when there are several and none is `default` |
 | `units` | the tool groups, each an envelope (see [Units](#units)) |
 | `profiles` | what a session asks for: `workspace`, the one unit dax's own tools run in, and `mcp`, the MCP units beside it |
+| `checkouts` | `{"allow": [...], "dir": "/abs/path"}`: the repositories a session may name for this box host to clone and keep (see [A checkout the box host keeps](#a-checkout-the-box-host-keeps)); none is no checkouts |
 
 A field it does not know, a value docker would misread, a unit past
 the limits or outside the images, an internet that says two things,
@@ -338,8 +339,9 @@ ssh -T -o BatchMode=yes -p 2222 -- me@build-host '/home/me/go/bin/dax' box serve
 ```
 
 and the session is otherwise as here. `project` is the project's path
-on that machine, a checkout there (default: the same path as here);
-cloning it there for you is the design's step 3. `remote_dax` is the
+on that machine, a checkout there (default: the same path as here); or,
+in its place, `checkout` names a repository the box host clones and
+keeps for you (below). `remote_dax` is the
 dax there (default `dax` on the login's PATH, which a non-interactive
 ssh often lacks). `ssh` adds arguments before the host, such as
 `["-F", "/home/me/.ssh/build.conf"]`, for a port forward, a jump host
@@ -371,7 +373,76 @@ key that asks for a shell, or for `id; cat ~/.ssh/id_ed25519`, gets the
 box host, which refuses anything but a session's first message
 (`dax: box host: the session's first message: EOF`); a dax session with
 the key works as with any other. The administrator's `box-host.json`
-still decides the box; the key only decides who may ask for it.
+still decides the box; the key only decides who may ask for it. For a
+checkout the line names the repository instead,
+`command="/home/me/go/bin/dax box serve -checkout https://github.com/me/app",restrict`,
+and the key reaches that checkout and nothing else, for sessions and
+for `dax box status`, `down` and `pull` alike.
+
+#### A checkout the box host keeps
+
+Rather than a path you cloned there yourself, a session can name a
+repository, and the box host clones it into a directory it keeps:
+
+```json
+{ "box": { "host": "ssh://me@build-host", "checkout": { "url": "https://github.com/me/app", "ref": "main" } } }
+```
+
+`url` is `https://`, `ssh://`, `git@host:path` or `file://` (a path on
+the box host), with no credentials in it: a URL with a password, or
+any user on https (a token), is refused. `ref` is a branch or a tag,
+by default the remote's default branch. dax runs `dax box serve
+-checkout <url> [-ref <ref>]` there in place of `-project`, so `-list`
+knows the project by its URL.
+
+The box host clones only what its config's `checkouts.allow` takes:
+glob patterns on the URL as it writes it (`git@github.com:me/app.git`
+is `ssh://git@github.com/me/app`, and a trailing `/` or `.git` is
+dropped), so `"https://github.com/me/*"` takes every repository of
+`me` there and nothing below them. A box host with no `allow` takes no
+checkout, and says so. Each lives in `checkouts.dir` (default
+`~/.cache/dax/box-checkouts` on that machine), as
+`<repository>-<12 hex digits of the URL's hash>`, and is then the
+project as a `project` path is: the box is named for it and mounts it
+at its own path.
+
+At each session's start the box host clones it if it is not there,
+else fetches, and moves the worktree to the ref only when that loses
+nothing: the worktree is clean, on that ref, and holds no commit the
+remote lacks. Otherwise it leaves it as it is and says why on the
+terminal (`checkout https://github.com/me/app at …: fetched; it has
+commits origin/main does not; left as it is`): a session's work is
+never discarded. Git runs on the box host, not in the box, with that
+user's own credentials (its git config, ssh agent or credential
+helper), and never prompts; the box's internet does not come into it.
+The record's `dax.box` header and the executor line name the
+repository, the ref and the head the session started on.
+
+#### Status, removing and taking work back
+
+These go through the box host your config's `box` names, here or over
+ssh, and act on its one project:
+
+```sh
+dax box status            # the box, its units, and the checkout: branch, head, uncommitted changes
+dax box down [-state]     # remove the box and its units there, and the box host's state for them
+dax box pull              # in a local clone: fetch the checkout's head into dax-box/<repository>
+dax box pull -branch work # into another branch; -force to replace one with commits the head lacks
+```
+
+`pull` asks the box host for a git bundle of the project's HEAD (256
+MiB at most), checks it with `git bundle verify`, and fetches it into
+the branch: a new branch, or one the head is ahead of, unless
+`-force`. It will not move the branch checked out where you run it.
+Changes the checkout there has not committed are not in a bundle;
+pull says when there were, so commit them in a session first. With a
+local box host the project is already here, so pull is refused.
+
+`dax box down NAME` and `dax box ls` still act on this machine's
+docker directly, for whoever administers it; `dax box down` with no
+name asks the box host, which is the only way to remove what a box
+host on another machine keeps (its rules files, the units' state). The
+checkout itself is left: it holds the session's work.
 
 ### The box's internet
 
