@@ -7,6 +7,38 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `-box` runs the tools in this project's box, a container dax
+  makes or reuses and starts the session's executor in with `docker
+  exec`: under gVisor's `runsc` by default, with no capabilities, a
+  read-only root file system, limits on memory, processors and
+  processes, the project mounted at its own path and this dax mounted
+  read-only as the box's, so the executor is always the session's
+  version. A project at `/`, at your home or above it is refused, since
+  the box would mount every key and config there. A box made from other settings is refused (`dax box down`
+  removes it); one whose dax changed since it was made is made again,
+  with a warning. `-list` finds a box's sessions without running
+  docker. Config `box` (user layer only; not with `executor`) sets its
+  image, runtime, memory, processors, processes and internet, and its
+  presence makes `-box` the default; `-box-image`, `-box-runtime` and
+  `-box-internet` override three of them.
+- Added: a box has no internet unless its config or the run gives it
+  some. `box.internet` is `off` (the default), `allow` (the hosts
+  `box.allow` names, `*.domain` for those below one) or `on`, and
+  `-box-internet` sets it for a run. The box sits alone on an internal
+  network of its own; its only way out is a sidecar container running
+  this dax's egress proxy (`dax box proxy`, under runc), HTTP and HTTPS
+  on ports 80 and 443, never to this machine, a private network or a
+  link-local address in any mode. Its rules are a file the proxy reads
+  again, so a run changes the box's internet without making it again;
+  the change applies to every session in the box, and the run says so.
+- Added: `dax box up`, `dax box ls` and `dax box down`: make this
+  directory's box and print the `-executor` line, list the boxes with
+  their internet, and remove one with its sidecar, network and rules.
+- Docs: docs/sandbox.md has the box and gVisor: installing runsc,
+  registering it with docker on the KVM platform where the default
+  (systrap) cannot start, as on WSL2, the box's internet and how it
+  holds, and what a box confines and what it does not.
+
 - Dependencies: agentsession v0.0.28, up from v0.0.27, and
   agentconsole v0.0.14, agenteval v0.0.11 and agentkit v0.0.14, up from
   v0.0.13, v0.0.10 and v0.0.13, which take agentsession v0.0.27 and

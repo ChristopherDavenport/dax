@@ -34,6 +34,7 @@ func home(t *testing.T) string {
 	h := t.TempDir()
 	t.Setenv("HOME", h)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
 	return h
 }
 
