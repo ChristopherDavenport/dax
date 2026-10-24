@@ -62,6 +62,18 @@ func (c *echoChild) sent() string {
 	return c.got.String()
 }
 
+// discover is a stateless client's first message, its capabilities in
+// _meta.
+func discover(id string, box any) string {
+	exp := map[string]any{testKey: map[string]any{"maxReadBytes": 1024}}
+	if box != nil {
+		exp[testKey].(map[string]any)["box"] = box
+	}
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(id), "method": "server/discover",
+		"params": map[string]any{"_meta": map[string]any{clientCapabilitiesMeta: map[string]any{"experimental": exp}}}})
+	return string(b) + "\n"
+}
+
 func initialize(id string, box any) string {
 	exp := map[string]any{testKey: map[string]any{"maxReadBytes": 1024}}
 	if box != nil {
@@ -94,6 +106,8 @@ func TestRelay(t *testing.T) {
 		{name: "a profile and tightenings", first: initialize(`"init"`, map[string]any{"profile": "go", "tighten": map[string]any{"memory": "1g", "internet": "off"}}), want: Request{Profile: "go", Tighten: Tighten{Memory: "1g", Internet: "off"}}},
 		{name: "a refused box", first: initialize("1", map[string]any{"profile": "big"}), start: errors.New(`profile "big": this box host has go`), err: `profile "big"`, refused: `profile \"big\": this box host has go`},
 		{name: "the executor's exit", first: initialize("1", nil), exit: errors.New("exit status 3"), err: "exit status 3"},
+		{name: "server/discover first", first: discover("1", map[string]any{"profile": "go"}), want: Request{Profile: "go"}},
+		{name: "a refused discover, and the initialize after it", first: discover("1", map[string]any{"profile": "big"}), start: errors.New(`profile "big"`), err: `profile "big"`, refused: `"id":"a-7","error"`},
 		{name: "not initialize first", first: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` + "\n", err: "not initialize", refused: "not initialize"},
 		{name: "not JSON", first: "hello\n", err: "not JSON-RPC"},
 		{name: "a bad box request", first: initialize("1", "go"), err: "box request", refused: "box request"},
@@ -128,6 +142,10 @@ func TestRelay(t *testing.T) {
 					}
 					if child.sent() != "" {
 						t.Errorf("the executor was sent %q after a refusal", child.sent())
+					}
+					// The session's response (id 0) is never answered.
+					if strings.Contains(out.String(), `"id":0,`) {
+						t.Errorf("a response was answered: %q", out.String())
 					}
 				}
 				return

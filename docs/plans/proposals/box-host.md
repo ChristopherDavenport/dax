@@ -65,21 +65,25 @@ Where each secret sits:
 ## The relay
 
 `dax box serve` speaks stdio MCP on its standard input and output. It
-reads the session's first message, which is `initialize`, and reads
-from it what the session asks of the box: under the executor's
+reads the session's first message, its handshake: `initialize`, or the
+stateless `server/discover` that go-sdk v1.8's client tries first
+(SEP-2575), whose client capabilities are in its `_meta`. From it the
+box host reads what the session asks of the box: under the executor's
 capability key, beside `maxReadBytes`, a `box` object with the
 profile, the MCP servers wanted, and tightenings. It resolves that
 against its config (below), makes or starts the box with
 `internal/box.Ensure`, starts `docker exec -i <box> dax execute`
-there, forwards the `initialize` line unchanged, and from then on
-copies bytes both ways. It never rewrites, reorders or answers a
-message but the first: requests, responses, notifications and the
-server's own requests (pings, elicitation) pass through as they came.
+there, forwards the first line unchanged, and from then on copies
+bytes both ways. It never rewrites, reorders or answers a message but
+the first: requests, responses, notifications and the server's own
+requests (pings, elicitation) pass through as they came.
 
 A request the box host refuses (a profile it does not have, a
 tightening that widens, an MCP server in step 1) is answered as the
-`initialize` request's JSON-RPC error with the reason, and the box
-host exits. When the in-box executor exits, the box host exits with
+first request's JSON-RPC error with the reason, and so is every
+request after it until the session hangs up: a client whose
+`server/discover` fails falls back to `initialize`, and must read the
+reason there too. When the in-box executor exits, the box host exits with
 it, so the session's redial (agent/executor.go) runs the launcher
 again: the box host, again.
 

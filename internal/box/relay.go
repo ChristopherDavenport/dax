@@ -27,15 +27,22 @@ type Start func(ctx context.Context, r Request) (Child, error)
 // maxFirstLine bounds the session's first message, its initialize.
 const maxFirstLine = 1 << 20
 
-// Relay reads the session's initialize from in, takes from it, under
-// key in the client's experimental capabilities, the box the session
-// asks for, has start make it and start its executor, and from then on
-// copies in to the executor and the executor to out, byte for byte: no
-// message is rewritten, reordered or answered here but the first. A
-// box start refuses is the initialize's JSON-RPC error, with the
-// reason, and Relay's error. Relay returns when the executor exits,
-// with its error; when in ends, the executor's input is closed and
-// Relay waits for it.
+// clientCapabilitiesMeta is where server/discover carries the client's
+// capabilities: in its parameters' _meta, under MCP's key.
+const clientCapabilitiesMeta = "io.modelcontextprotocol/clientCapabilities"
+
+// Relay reads the session's first message from in, its handshake:
+// initialize, or the stateless server/discover a newer client tries
+// first. It takes from it, under key in the client's experimental
+// capabilities, the box the session asks for, has start make it and
+// start its executor, and from then on copies in to the executor and
+// the executor to out, byte for byte: no message is rewritten,
+// reordered or answered here but the first. A box start refuses is the
+// first message's JSON-RPC error, with the reason, and so is every
+// request after it until in ends (a client whose discover is refused
+// tries initialize next, and must read why too); then it is Relay's
+// error. Relay returns when the executor exits, with its error; when
+// in ends, the executor's input is closed and Relay waits for it.
 func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start Start) error {
 	br := bufio.NewReaderSize(in, 64<<10)
 	line, err := readLine(br)
@@ -46,27 +53,36 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
 		Params struct {
-			Capabilities struct {
-				Experimental map[string]json.RawMessage `json:"experimental"`
-			} `json:"capabilities"`
+			Capabilities *capabilities              `json:"capabilities"`
+			Meta         map[string]json.RawMessage `json:"_meta"`
 		} `json:"params"`
 	}
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return fmt.Errorf("box host: the session's first message is not JSON-RPC: %w", err)
 	}
-	if msg.Method != "initialize" || len(msg.ID) == 0 {
-		err := fmt.Errorf("box host: the session's first message is %q, not initialize", msg.Method)
-		refuse(out, msg.ID, err)
-		return err
+	var caps *capabilities
+	switch msg.Method {
+	case "initialize":
+		caps = msg.Params.Capabilities
+	case "server/discover":
+		if raw := msg.Params.Meta[clientCapabilitiesMeta]; len(raw) > 0 {
+			caps = new(capabilities)
+			if err := json.Unmarshal(raw, caps); err != nil {
+				return refuseAll(br, out, msg.ID, fmt.Errorf("box host: the session's capabilities: %w", err))
+			}
+		}
+	}
+	if (msg.Method != "initialize" && msg.Method != "server/discover") || len(msg.ID) == 0 {
+		return refuseAll(br, out, msg.ID, fmt.Errorf("box host: the session's first message is %q, not initialize or server/discover", msg.Method))
 	}
 	var asked struct {
 		Box *Request `json:"box"`
 	}
-	if raw := msg.Params.Capabilities.Experimental[key]; len(raw) > 0 {
-		if err := json.Unmarshal(raw, &asked); err != nil {
-			err = fmt.Errorf("box host: the session's box request: %w", err)
-			refuse(out, msg.ID, err)
-			return err
+	if caps != nil {
+		if raw := caps.Experimental[key]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &asked); err != nil {
+				return refuseAll(br, out, msg.ID, fmt.Errorf("box host: the session's box request: %w", err))
+			}
 		}
 	}
 	var r Request
@@ -75,9 +91,7 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 	}
 	child, err := start(ctx, r)
 	if err != nil {
-		err = fmt.Errorf("box host: %w", err)
-		refuse(out, msg.ID, err)
-		return err
+		return refuseAll(br, out, msg.ID, fmt.Errorf("box host: %w", err))
 	}
 	stdin := child.Stdin()
 	if _, err := stdin.Write(line); err != nil {
@@ -98,6 +112,32 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 		return fmt.Errorf("box host: to the session: %w", copyErr)
 	}
 	return nil
+}
+
+// capabilities is the part of a client's capabilities the relay reads.
+type capabilities struct {
+	Experimental map[string]json.RawMessage `json:"experimental"`
+}
+
+// refuseAll answers id, and every request that follows on br until it
+// ends, with err, and returns err. It answers no response and no
+// notification.
+func refuseAll(br *bufio.Reader, out io.Writer, id json.RawMessage, err error) error {
+	refuse(out, id, err)
+	for {
+		line, rerr := readLine(br)
+		if rerr != nil {
+			return err
+		}
+		var next struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		// A request, not a response or a notification.
+		if json.Unmarshal(line, &next) == nil && next.Method != "" {
+			refuse(out, next.ID, err)
+		}
+	}
 }
 
 // readLine is one newline-ended line of br, with its newline, at most

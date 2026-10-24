@@ -3,13 +3,18 @@ package dax
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
@@ -502,6 +507,86 @@ func TestBoxServe(t *testing.T) {
 			r, err := box.ReadRules(filepath.Join(state, b.Name, box.RulesFile))
 			if err != nil || r.String() != tc.rules {
 				t.Errorf("the box's internet = %v (%v), want %s", r, err, tc.rules)
+			}
+		})
+	}
+}
+
+// A real session's handshake goes through the box host: the executor
+// client dials runBoxServe over pipes, the box host makes the box
+// (a fake docker) and starts the test binary as the dax execute in it,
+// and the client gets that executor's workspace and tools, whichever
+// handshake (server/discover or initialize) its SDK opens with.
+func TestBoxServeRelaysARealSession(t *testing.T) {
+	home(t)
+	dir := t.TempDir()
+	root := t.TempDir()
+	start := func(ctx context.Context, argv []string) (box.Child, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0])
+		cmd.Env = append(os.Environ(), executeRoot+"="+root)
+		cmd.Stderr = os.Stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, err
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return cmdChild{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		box  json.RawMessage
+		err  string
+	}{
+		{name: "the default profile", box: json.RawMessage(`{}`)},
+		{name: "a refused profile", box: json.RawMessage(`{"profile":"big"}`), err: `profile \"big\"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+			toHost, fromSession := io.Pipe()
+			toSession, fromHost := io.Pipe()
+			served := make(chan error, 1)
+			go func() {
+				err := runBoxServe(ctx, []string{"-project", dir}, program{name: "dax", version: "test"}, toHost, fromHost, &box.Client{Runner: d, StateDir: t.TempDir()}, start)
+				fromHost.Close()
+				served <- err
+			}()
+			dial := func(context.Context) (sdk.Transport, error) {
+				return &sdk.IOTransport{Reader: toSession, Writer: fromSession}, nil
+			}
+			r, err := executor.Dial(ctx, dial, executor.ConnectOptions{Name: "dax", Version: "test", Box: tc.box})
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), strings.ReplaceAll(tc.err, `\"`, `"`)) {
+					t.Fatalf("Dial error = %v, want the box host's reason %q", err, tc.err)
+				}
+				fromSession.Close()
+				<-served
+				return
+			}
+			if err != nil {
+				fromSession.Close()
+				t.Fatalf("Dial: %v (the box host: %v)", err, <-served)
+			}
+			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != "box" || desc.Root != root {
+				t.Errorf("descriptor = %+v, want the in-box executor's", desc)
+			}
+			tools, err := r.Tools(ctx)
+			if err != nil || len(tools) == 0 {
+				t.Errorf("tools = %v, %v", tools, err)
+			}
+			r.Close()
+			fromSession.Close()
+			select {
+			case <-served:
+			case <-ctx.Done():
+				t.Fatal("the box host did not end with the session")
 			}
 		})
 	}
