@@ -32,13 +32,28 @@ versions may break flags and the config file.
   agent.
 - Added: the box host config, `~/.config/dax/box-host.json` on the box
   host's machine (`dax box serve -config`, or `box.host_config` for a
-  local one): the default runtime, `limits` no profile or tightening
-  goes past, `images` patterns, `profiles` (image, runtime, memory,
-  cpus, pids, internet, allow) and `default_profile`. With no file, one
-  profile: `golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512
-  processes, no internet. Its `mcp` catalog is read and checked; a
-  session that asks for one of its servers is refused until MCP boxes
-  are built (docs/plans/proposals/box-host.md).
+  local one): the default runtime, `limits` no unit or tightening goes
+  past, `images` patterns, `units`, `profiles` and `default_profile`.
+  Every tool group is a unit, an envelope of files, connectivity and
+  secrets: the workspace, where dax's own tools act, and MCP units, each
+  an MCP server the box host runs in a container of its own (`image`, or
+  `build` from a base and lines, built once and tagged by the
+  declaration's hash; `files` none, or the project `ro`/`rw` and a
+  `state` directory that outlives the container; its own `internet`
+  and `allow` behind its own sidecar and network; `secrets` as `env:`,
+  `command:` or `file:` references resolved on the box host and given
+  to that container alone, through docker's environment). A profile is
+  a workspace unit and its MCP units; a session takes all of them, or
+  those `box.mcp` names. The box host refuses a unit that holds
+  secrets with internet `on`, one with the project and any internet
+  without `"exfiltration": "accepted"` (the workspace too), and a
+  secret that is not a reference. The session starts each MCP unit as
+  an MCP server through the executor (`dax-unit NAME`, which the box
+  host answers), its tools `mcp__<unit>__<tool>`, and records each
+  unit's envelope, with its secrets' names and never their values, in
+  its header (`dax.box`). With no file, one unit, `workspace`
+  (`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512 processes, the
+  project read-write, no internet), in one profile, `default`.
 - Added: a box has no internet unless its profile gives it some:
   `internet` is `off` (the default), `allow` (the hosts `allow` names,
   `*.domain` for those below one) or `on`, which a session narrows with
@@ -52,13 +67,15 @@ versions may break flags and the config file.
   says so.
 - Added: `dax box up`, `dax box ls` and `dax box down`: make this
   directory's box from this machine's box host config and print its
-  executor's command, list the boxes with their internet, and remove
-  one with its sidecar, network and rules. They act on this machine's
-  docker.
+  executor's command, list the boxes and their units with their files
+  and internet, and remove one with its units and each one's sidecar,
+  network and rules (`-state` removes the units' state directories
+  too). They act on this machine's docker.
 - Added: `agent.ExecutorOptions.Box`, what a session asks of a box host
   when it dials it, sent beside `max_read_bytes` in the executor's
   capability; an executor that is not a box host ignores it.
-- Docs: docs/sandbox.md has the box, the box host config, a box over
+- Docs: docs/sandbox.md has the box, the box host config and its
+  units (the three rules, secrets, what the session sees), a box over
   ssh, the box's internet and how it holds, and runtimes: gVisor
   (installing runsc, registering it on the KVM platform where the
   default, systrap, cannot start, as on WSL2) and Kata 4.2.0 (installing

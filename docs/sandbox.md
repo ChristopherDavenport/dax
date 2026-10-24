@@ -47,10 +47,11 @@ by the box's name and the directory. `-list` with `-box` (or with a
 
 ### What the session says, and what the box host decides
 
-What a box is made of, its image, runtime, limits and internet, is the
-box host's: its config, `~/.config/dax/box-host.json` on the machine
-it runs on. The session names one of its profiles and may only narrow
-it. Your config's `box`:
+What a box is made of, its image, runtime, limits, files, internet
+and secrets, is the box host's: its config,
+`~/.config/dax/box-host.json` on the machine it runs on. The session
+names one of its profiles, which of the profile's MCP units it wants,
+and may only narrow the rest. Your config's `box`:
 
 ```json
 {
@@ -67,7 +68,7 @@ it. Your config's `box`:
 | `host` | `local` (the default) or `ssh://[user@]host[:port]` |
 | `profile` | one of the box host's profiles; empty is its default |
 | `tighten` | `memory`, `cpus`, `pids`, `internet` (`off` < `allow` < `on`), `allow` (hosts within the profile's): each only narrows; the box host refuses a widening and says why |
-| `mcp` | catalog MCP servers, each in a box of its own: not yet; the box host refuses them |
+| `mcp` | which of the profile's MCP units this session gets; empty is all of them, and one the profile does not have is refused (see [Units](#units)) |
 | `host_config` | with `local`: the box host config the local box host reads in place of `~/.config/dax/box-host.json` (an absolute path) |
 | `project`, `remote_dax`, `ssh` | with an ssh host: see below |
 
@@ -85,36 +86,137 @@ host's launcher (`SSH_AUTH_SOCK` for ssh's agent, `DOCKER_HOST`).
 
 ### The box host config
 
-With no file, the box host makes one profile, `default`:
-`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512 processes, no
-internet. A file says more:
+With no file, the box host makes one unit, `workspace`
+(`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512 processes, the
+project read-write, no internet), and one profile, `default`, of that
+unit alone. A file says more:
 
 ```json
 {
   "runtime": "runsc",
   "limits": { "memory": "8g", "cpus": 4, "pids": 1024 },
-  "images": ["golang:*", "node:*"],
+  "images": ["golang:*", "node:*", "python:*"],
   "default_profile": "go",
+  "units": {
+    "workspace": { "image": "golang:1.26-bookworm" },
+    "go-net":    { "image": "golang:1.26-bookworm", "allow": ["proxy.golang.org", "sum.golang.org"],
+                   "exfiltration": "accepted" },
+    "files":     { "build": { "base": "node:24-bookworm-slim",
+                              "run": ["npm i -g @modelcontextprotocol/server-filesystem@2025.8.21"] },
+                   "command": ["mcp-server-filesystem", "/srv/src/app"],
+                   "files": { "project": "ro" } },
+    "github":    { "build": { "base": "node:24-bookworm-slim",
+                              "run": ["npm i -g @modelcontextprotocol/server-github@2025.4.8"] },
+                   "command": ["mcp-server-github"], "files": "none",
+                   "allow": ["api.github.com"],
+                   "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" } }
+  },
   "profiles": {
-    "go":  { "image": "golang:1.26-bookworm", "allow": ["proxy.golang.org", "sum.golang.org"] },
-    "big": { "image": "golang:1.26-bookworm", "memory": "8g", "cpus": 4, "internet": "on" },
-    "vm":  { "runtime": "io.containerd.kata.v2" }
+    "go":      { "workspace": "go-net", "mcp": ["files", "github"] },
+    "offline": { "workspace": "workspace" }
   }
 }
 ```
 
 | | |
 |---|---|
-| `runtime` | the runtime a profile that names none runs under: any runtime docker has registered (see [Runtimes](#runtimes)) |
-| `limits` | ceilings no profile and no tightening goes past |
-| `images` | glob patterns every image must match; none means any |
+| `runtime` | the runtime a unit that names none runs under: any runtime docker has registered (see [Runtimes](#runtimes)) |
+| `limits` | ceilings no unit and no tightening goes past |
+| `images` | glob patterns every image, and every build's base, must match; none means any |
 | `default_profile` | the profile a session that names none gets; needed when there are several and none is `default` |
-| `profiles` | the boxes: `image`, `runtime`, `memory`, `cpus`, `pids`, `internet`, `allow`, each defaulting as above |
-| `mcp` | the MCP catalog: read and checked, not yet run (the design's step 2) |
+| `units` | the tool groups, each an envelope (see [Units](#units)) |
+| `profiles` | what a session asks for: `workspace`, the one unit dax's own tools run in, and `mcp`, the MCP units beside it |
 
-A field it does not know, a value docker would misread, a profile past
-the limits or outside the images, and an internet that says two things
-are refused when the box host starts, before any box is made.
+A field it does not know, a value docker would misread, a unit past
+the limits or outside the images, an internet that says two things,
+and a unit that breaks one of the [three rules](#the-three-rules) are
+refused when the box host starts, before anything is made.
+
+### Units
+
+Every tool group is a unit: the workspace, where dax's own tools act
+on the project, and each MCP server the box host runs for a session.
+A unit is an envelope on three axes, what files it has, what it can
+reach, and what secrets it holds, and the box host makes each unit's
+container from it and holds it there. The policy is the session's, as
+for any tool: a unit's tools ask, as `mcp__<unit>__<tool>`, until a
+rule says otherwise.
+
+| `units.NAME.` | |
+|---|---|
+| `kind` | `workspace` or `mcp`; `mcp` when `command` is set, `workspace` otherwise |
+| `image`, `build` | the image, or `{"base": IMAGE, "run": [LINE, …]}`: built once (`FROM base` and a `RUN` per line) as `dax-unit/<unit>:<12 hex digits of the declaration's hash>`, and built again only when the declaration changes |
+| `runtime`, `memory`, `cpus`, `pids` | as the workspace's, within `limits`; an MCP unit's default is 1g, 1 CPU, 256 processes |
+| `files` | `"none"` (an MCP unit's default), or `{"project": "ro"\|"rw", "state": "rw"}`. The project is mounted at its own path; `state` is a directory the box host keeps for the unit, mounted at `/state` (`DAX_UNIT_STATE`), which outlives the container. The workspace has the project `rw` |
+| `internet`, `allow` | the unit's own, through a sidecar of its own on an internal network of its own |
+| `secrets` | MCP units only: `{"NAME": "env:VAR" \| "command:LINE" \| "file:/abs/path"}`, resolved on the box host when the unit's container is made |
+| `command` | MCP units only: the server's argv in its container |
+| `exfiltration` | `"accepted"`: see rule 2 |
+
+Each MCP unit is a container of its own beside the box,
+`<box>-<unit>`, made when the session first starts its server: the
+same hardening as the box (no capabilities, a read-only root, the box
+host's user, the limits, `--ulimit nproc` under a sandbox), its own
+image and none of dax, its own internal network `<box>-<unit>-net`
+and its own sidecar. No unit can reach another unit, or the box, or
+their files but through what both mount. Its image needs `sh` and
+`sleep`; its sidecar runs dax in the workspace's image. The session
+starts each unit's server as an MCP server named after the unit, as
+it starts any MCP server with an executor (`dax-unit NAME`, which the
+box host answers itself), so its tools are `mcp__<unit>__<tool>`, and a
+server that ends is started again on the next call.
+
+#### The three rules
+
+1. **A secret needs an allowlist.** A unit with `secrets` has
+   `internet` `allow` or `off`, never `on`: a token reaches only the
+   hosts it is for, and a server that misbehaves cannot send it
+   anywhere else.
+2. **Files and connectivity together are declared.** A unit with the
+   project (`ro` or `rw`) and any internet is the one way the
+   project's contents can leave without the session seeing them, so it
+   needs `"exfiltration": "accepted"`. The workspace is held to it too:
+   a workspace unit with an allowlist needs it, and its default
+   internet, `off`, keeps it on the safe side.
+3. **A secret is a reference.** Its name is a variable's name, its
+   value `env:VAR`, `command:LINE` or an absolute `file:` path; a value
+   written in the config is refused.
+
+Data moves between units only through files both mount, or through
+the session: a unit with `files: none` cannot read the project, so for
+the model to send it code the code is in a call's arguments, where the
+policy and the record see it.
+
+#### Secrets
+
+A unit's secrets are resolved on the box host when its container is
+made, and given to that container alone, through docker's own
+environment: its command line names them (`-e NAME`) and never holds a
+value, and no label, log, error or message to the session does. `env:`
+reads the box host's own environment; `command:` runs the line with
+`sh` there and takes its output, trimmed; `file:` reads the file. A
+secret that cannot be resolved fails the unit's start, naming the
+secret and its reference, before anything is made. The workspace's
+bash never sees a unit's secret: they are in different containers.
+
+A local box host is started from your session's environment less its
+credentials, so a variable an `env:` secret reads must be named for
+the launcher: `"executor": {"pass_env": ["GITHUB_TOKEN"]}` beside your
+`box`. It reaches the box host alone; the session's tools never get
+it. On another machine the box host's own environment is its login's.
+
+#### What the session sees
+
+The box host tells the session what it resolved, in its answer to the
+handshake: the profile and each unit's envelope (its image, runtime,
+files, internet and hosts, and its secrets' names). The session's
+header records the same (`dax.box`), so a session file says what each
+unit could reach; a secret's value is never in it. The executor's line
+at the start names the profile and the units:
+
+```
+executor: dax 0.1.0 · container dax-app-1a2b3c4d · /home/me/src/app · profile go, units files, github
+```
 
 What the box is made with:
 
@@ -132,7 +234,8 @@ What the box is made with:
 | `-v <the box host's dax>:/usr/local/bin/dax:ro` | the box host's dax, so the executor is its version |
 
 The container's own process is `sleep infinity`; the tools run in the
-`dax execute` each session's `docker exec` starts.
+`dax execute` each session's `docker exec` starts. A workspace unit
+with `state` also mounts its state directory at `/state`.
 
 The image needs bash, sh, git, `sleep`, and a glibc at least as new as
 the one the box host's dax was built against: a dax built by `go
@@ -143,13 +246,17 @@ and says so when it fails.
 A box is made from its settings once. When a session asks for other
 settings (another profile, other limits), the box host refuses the box
 it finds, since making it again would end any other session's tools in
-it: `dax box down` and start again. A dax that changed since the box
+it: `dax box down` and start again. A unit's container likewise: a
+changed declaration (its image, command, files, secrets' references or
+limits) is refused, while its internet, which only its sidecar's rules
+hold, changes without making it again. A dax that changed since the box
 was made (an upgrade writes a new file, which the box's mount does not
 see) makes the box again, with a warning.
 
 ```sh
-dax box ls        # this machine's boxes: name, state, runtime, internet, directory
-dax box down      # remove this directory's box, its sidecar, network and rules; or dax box down NAME
+dax box ls        # this machine's boxes and units: name, unit, state, runtime, files, internet, directory
+dax box down      # remove this directory's box and its units, each one's sidecar, network and rules; or dax box down NAME
+dax box down -state  # the units' state directories too, kept by default
 dax box up        # make or start it from this machine's box host config, and print its executor's command
 ```
 
