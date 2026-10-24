@@ -97,6 +97,9 @@ type HostConfig struct {
 	// Profiles are what a session asks for: a workspace unit and the MCP
 	// units beside it.
 	Profiles map[string]Profile `json:"profiles,omitempty"`
+	// Checkouts are the repositories a session may name for the box host
+	// to clone and keep (box.checkout); none refuses every checkout.
+	Checkouts Checkouts `json:"checkouts,omitzero"`
 }
 
 // Limits bound a unit. A zero field is no bound.
@@ -283,10 +286,22 @@ type Envelope struct {
 }
 
 // BoxInfo is what the box host tells the session it resolved, in its
-// answer to the handshake, under the executor's capability as "box".
+// answer to the handshake, under the executor's capability as "box":
+// the profile, each unit's envelope, and the checkout the project is,
+// when it is one.
 type BoxInfo struct {
-	Profile string     `json:"profile"`
-	Units   []Envelope `json:"units"`
+	Profile  string        `json:"profile"`
+	Units    []Envelope    `json:"units"`
+	Checkout *CheckoutInfo `json:"checkout,omitempty"`
+}
+
+// CheckoutInfo is a checkout as the session and its record see it: the
+// repository with no user in its URL, the ref asked for, and the head
+// the session started on.
+type CheckoutInfo struct {
+	URL  string `json:"url"`
+	Ref  string `json:"ref,omitempty"`
+	Head string `json:"head"`
 }
 
 // BoxInfo is r as the session is told it.
@@ -488,6 +503,9 @@ func (h HostConfig) Check() error {
 		if err := h.checkProfile(name, ps[name]); err != nil {
 			return err
 		}
+	}
+	if err := h.Checkouts.check(); err != nil {
+		return err
 	}
 	if h.DefaultProfile != "" {
 		if _, ok := ps[h.DefaultProfile]; !ok {

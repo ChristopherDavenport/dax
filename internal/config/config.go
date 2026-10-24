@@ -168,12 +168,24 @@ type Box struct {
 	// Project, with an ssh host, is the project's path on that host;
 	// default the same path as here.
 	Project string `json:"project,omitempty"`
+	// Checkout, with an ssh host and in place of Project, is a
+	// repository the box host clones and keeps current, which is then
+	// the project; the box host's checkouts.allow decides which.
+	Checkout *BoxCheckout `json:"checkout,omitempty"`
 	// RemoteDax, with an ssh host, is dax there; default dax on the
 	// login's PATH.
 	RemoteDax string `json:"remote_dax,omitempty"`
 	// SSH, with an ssh host, are more arguments for ssh, before the
 	// host: ["-F", "/home/me/.ssh/build.conf"].
 	SSH []string `json:"ssh,omitempty"`
+}
+
+// BoxCheckout is a repository for the box host to clone and keep: its
+// URL (https://, ssh://, git@host:path or file://, with no credentials
+// in it) and a branch or tag, the remote's default branch when empty.
+type BoxCheckout struct {
+	URL string `json:"url"`
+	Ref string `json:"ref,omitempty"`
 }
 
 // BoxLocal is a box host on this machine.
@@ -191,6 +203,9 @@ type BoxSettings struct {
 	// HostConfig, Project, RemoteDax and SSHArgs are Box's.
 	HostConfig, Project, RemoteDax string
 	SSHArgs                        []string
+	// Checkout is Box's, its URL as box.NormalizeURL writes it; nil for
+	// none.
+	Checkout *BoxCheckout
 }
 
 // SSHTarget is an ssh box host.
@@ -718,6 +733,10 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		return nil, err
 	}
 	s := &BoxSettings{Host: BoxLocal, HostConfig: b.HostConfig, Project: b.Project, RemoteDax: b.RemoteDax, SSHArgs: b.SSH}
+	if c := b.Checkout; c != nil {
+		norm, _ := box.NormalizeURL(c.URL) // checked above
+		s.Checkout = &BoxCheckout{URL: norm, Ref: c.Ref}
+	}
 	if s.SSH, err = ParseBoxHost("box.host", b.Host); err != nil {
 		return nil, err
 	}
@@ -769,6 +788,20 @@ func (b Box) check(field string) error {
 		return fmt.Errorf("%s.project %q: want an absolute path on the box host", field, b.Project)
 	case b.RemoteDax != "" && (strings.TrimSpace(b.RemoteDax) == "" || strings.ContainsAny(b.RemoteDax, "\x00\n\r")):
 		return fmt.Errorf("%s.remote_dax %q: want a program's name or path", field, b.RemoteDax)
+	case local && b.Checkout != nil:
+		return fmt.Errorf("%s.checkout goes with an ssh box.host: a local box host's project is the directory dax starts in", field)
+	case b.Checkout != nil && b.Project != "":
+		return fmt.Errorf("%s.checkout and %s.project both name the project; give one", field, field)
+	}
+	if c := b.Checkout; c != nil {
+		if _, err := box.NormalizeURL(c.URL); err != nil {
+			return fmt.Errorf("%s.checkout.url: %w", field, err)
+		}
+		if c.Ref != "" {
+			if err := box.CheckRef(field+".checkout.ref", c.Ref); err != nil {
+				return err
+			}
+		}
 	}
 	for _, a := range b.SSH {
 		if a == "" || strings.ContainsAny(a, "\x00\n\r") {

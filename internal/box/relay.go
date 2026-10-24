@@ -44,6 +44,36 @@ type Hosted struct {
 // Start makes the box r asks for and starts its executor.
 type Start func(ctx context.Context, r Request) (Hosted, error)
 
+// AdminPrefix begins the methods of the box host's own requests: a
+// first message of one of these is answered by the box host, which
+// then exits, in place of a session.
+const AdminPrefix = "dax/box."
+
+// The box host's own requests.
+const (
+	// MethodStatus asks for the project's box, its units and its
+	// checkout.
+	MethodStatus = AdminPrefix + "status"
+	// MethodDown removes the project's box and its units; {"state": true}
+	// their state directories too.
+	MethodDown = AdminPrefix + "down"
+	// MethodPull asks for a bundle of the project's head.
+	MethodPull = AdminPrefix + "pull"
+)
+
+// Admin answers one of the box host's own requests, method with its
+// params; it acts on the box host's one project and no other.
+type Admin func(ctx context.Context, method string, params json.RawMessage) (any, error)
+
+// RelayOption is an option of Relay's.
+type RelayOption func(*relayOptions)
+
+type relayOptions struct{ admin Admin }
+
+// WithAdmin has Relay answer a first message whose method begins with
+// AdminPrefix through a, and return: the session is that one request.
+func WithAdmin(a Admin) RelayOption { return func(o *relayOptions) { o.admin = a } }
+
 // maxFirstLine bounds the session's first message, its initialize.
 const maxFirstLine = 1 << 20
 
@@ -72,7 +102,11 @@ const clientCapabilitiesMeta = "io.modelcontextprotocol/clientCapabilities"
 // too); then it is Relay's error. Relay returns when the executor
 // exits, with its error; when in ends, the executor's input is closed
 // and Relay waits for it. Either way the units' servers end.
-func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start Start) error {
+func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start Start, opts ...RelayOption) error {
+	var o relayOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	br := bufio.NewReaderSize(in, 64<<10)
 	line, err := readLine(br, maxFirstLine)
 	if err != nil {
@@ -88,6 +122,9 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 	}
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return fmt.Errorf("box host: the session's first message is not JSON-RPC: %w", err)
+	}
+	if strings.HasPrefix(msg.Method, AdminPrefix) {
+		return admin(ctx, out, o.admin, line, msg.ID, msg.Method)
 	}
 	var caps *capabilities
 	switch msg.Method {
@@ -155,6 +192,40 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 		return fmt.Errorf("box host: to the session: %w", copyErr)
 	}
 	return nil
+}
+
+// admin answers the box host's own request, line, through a, and
+// returns: a request answers, or is refused, and nothing follows it. A
+// refusal is the request's answer, which the asker prints; it is not
+// the box host's error too, which would print it twice.
+func admin(ctx context.Context, out io.Writer, a Admin, line []byte, id json.RawMessage, method string) error {
+	w := plainWriter{out}
+	if len(id) == 0 {
+		return fmt.Errorf("box host: %s without an id", method)
+	}
+	if a == nil {
+		refuse(w, id, fmt.Errorf("box host: %s: this box host takes no requests of its own", method))
+		return nil
+	}
+	var m struct {
+		Params json.RawMessage `json:"params"`
+	}
+	json.Unmarshal(line, &m)
+	res, err := a(ctx, method, m.Params)
+	if err != nil {
+		refuse(w, id, fmt.Errorf("box host: %w", err))
+		return nil
+	}
+	b, err := json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Result  any             `json:"result"`
+	}{"2.0", id, res})
+	if err != nil {
+		refuse(w, id, err)
+		return err
+	}
+	return w.write(append(b, '\n'))
 }
 
 // relay is one session's relay once its box is made.

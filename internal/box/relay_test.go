@@ -656,3 +656,98 @@ func TestHostProcsTimeout(t *testing.T) {
 		t.Errorf("wait after the timeout = %v", r)
 	}
 }
+
+// A first message of the box host's own is answered by Admin, with no
+// box made and no executor started, and the relay returns; a box host
+// without one, or an Admin that refuses, answers with the reason.
+func TestRelayAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		first  string
+		admin  Admin
+		result string // in the answer's result
+		err    string // in the answer's error
+	}{
+		{
+			name:  "status",
+			first: `{"jsonrpc":"2.0","id":7,"method":"dax/box.status"}`,
+			admin: func(_ context.Context, method string, params json.RawMessage) (any, error) {
+				return map[string]string{"method": method, "params": string(params)}, nil
+			},
+			result: `{"method":"dax/box.status","params":""}`,
+		},
+		{
+			name:  "down with params",
+			first: `{"jsonrpc":"2.0","id":"a","method":"dax/box.down","params":{"state":true}}`,
+			admin: func(_ context.Context, method string, params json.RawMessage) (any, error) {
+				return map[string]string{"method": method, "params": string(params)}, nil
+			},
+			result: `{"method":"dax/box.down","params":"{\"state\":true}"}`,
+		},
+		{
+			name:  "refused",
+			first: `{"jsonrpc":"2.0","id":1,"method":"dax/box.pull"}`,
+			admin: func(context.Context, string, json.RawMessage) (any, error) {
+				return nil, errors.New("pull: no repository")
+			},
+			err: "box host: pull: no repository",
+		},
+		{
+			name:  "no admin",
+			first: `{"jsonrpc":"2.0","id":1,"method":"dax/box.status"}`,
+			err:   "takes no requests of its own",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			started := false
+			start := func(context.Context, Request) (Hosted, error) {
+				started = true
+				return Hosted{}, errors.New("no box")
+			}
+			var opts []RelayOption
+			if tc.admin != nil {
+				opts = append(opts, WithAdmin(tc.admin))
+			}
+			var out bytes.Buffer
+			// More after the request is not read: the request is the whole
+			// conversation.
+			in := strings.NewReader(tc.first + "\n" + initialize("2", nil) + "\n")
+			if err := Relay(context.Background(), in, &out, testKey, start, opts...); err != nil {
+				t.Fatalf("Relay: %v", err)
+			}
+			if started {
+				t.Error("a box was made for a request of the box host's")
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			if len(lines) != 1 {
+				t.Fatalf("answers %q, want one", out.String())
+			}
+			var a struct {
+				ID     json.RawMessage `json:"id"`
+				Result json.RawMessage `json:"result"`
+				Error  *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(lines[0]), &a); err != nil {
+				t.Fatal(err)
+			}
+			var first struct {
+				ID json.RawMessage `json:"id"`
+			}
+			json.Unmarshal([]byte(tc.first), &first)
+			if string(a.ID) != string(first.ID) {
+				t.Errorf("answered id %s, want %s", a.ID, first.ID)
+			}
+			if tc.err != "" {
+				if a.Error == nil || !strings.Contains(a.Error.Message, tc.err) {
+					t.Errorf("answer %s, want an error naming %q", lines[0], tc.err)
+				}
+				return
+			}
+			if a.Error != nil || string(a.Result) != tc.result {
+				t.Errorf("result %s (%v), want %s", a.Result, a.Error, tc.result)
+			}
+		})
+	}
+}

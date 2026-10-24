@@ -327,6 +327,11 @@ func TestLoadHostConfig(t *testing.T) {
 		{`{"profiles":{"go":{"image":"golang:1.26"}}}`, "unknown field"},
 		{`{"mcp":{}}`, "unknown field"},
 		{`{"runtime":"run sc"}`, "runtime"},
+		{`{"checkouts":{"allow":["https://github.com/me/*","git@gitlab.com:team/*"],"dir":"/srv/checkouts"}}`, ""},
+		{`{"checkouts":{"allow":["https://github.com/["]}}`, "checkouts.allow"},
+		{`{"checkouts":{"allow":[""]}}`, "checkouts.allow: an empty pattern"},
+		{`{"checkouts":{"dir":"checkouts"}}`, "checkouts.dir"},
+		{`{"checkouts":{"allow":[],"clone":"deep"}}`, "unknown field"},
 		{`not json`, "box host config"},
 	} {
 		path := filepath.Join(dir, "box-host.json")
