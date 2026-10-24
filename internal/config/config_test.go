@@ -725,3 +725,95 @@ func TestExecutorOfIsResolves(t *testing.T) {
 		})
 	}
 }
+
+func TestBoxPrecedence(t *testing.T) {
+	def := DefaultBox()
+	user := parse(t, `{"box":{"image":"debian:bookworm","memory":"8g","cpus":1.5,"network":"none"}}`, false)
+	empty := parse(t, `{"box":{}}`, false)
+	executor := parse(t, `{"executor":{"command":"ssh host dax execute"}}`, false)
+	envOnly := parse(t, `{"box":{},"executor":{"pass_env":["DOCKER_HOST"]}}`, false)
+	withRuntime := def
+	withRuntime.Runtime = "runsc-ptrace"
+	fromFile := BoxSettings{Image: "debian:bookworm", Runtime: "runsc", Memory: "8g", CPUs: 1.5, Pids: 512, Network: "none"}
+	flagImage := fromFile
+	flagImage.Image = "ubuntu:24.04"
+	for _, tc := range []struct {
+		name  string
+		user  Layer
+		flags Flags
+		want  *BoxSettings
+		err   string
+	}{
+		{"none", Layer{}, Flags{}, nil, ""},
+		{"the flag alone takes the defaults", Layer{}, Flags{Box: ptr(true)}, &def, ""},
+		{"an empty box in the file takes the defaults", empty, Flags{}, &def, ""},
+		{"the file's settings", user, Flags{}, &fromFile, ""},
+		{"-box=false runs here despite the file", user, Flags{Box: ptr(false)}, nil, ""},
+		{"-box-image replaces the file's", user, Flags{BoxImage: ptr("ubuntu:24.04")}, &flagImage, ""},
+		{"-box-runtime", Layer{}, Flags{Box: ptr(true), BoxRuntime: ptr("runsc-ptrace")}, &withRuntime, ""},
+		{"executor.pass_env alone stays beside a box", envOnly, Flags{}, &def, ""},
+		{"-box-image without a box", Layer{}, Flags{BoxImage: ptr("x")}, nil, "-box-image goes with -box"},
+		{"-box-runtime without a box", user, Flags{Box: ptr(false), BoxRuntime: ptr("runc")}, nil, "-box-runtime goes with -box"},
+		{"-box with the file's executor", executor, Flags{Box: ptr(true)}, nil, `give -executor "" to run them in a box`},
+		{"-box with the file's executor cleared", executor, Flags{Box: ptr(true), Executor: ptr("")}, &def, ""},
+		{"-executor with the file's box", user, Flags{Executor: ptr("ssh host dax execute")}, nil, "give -box=false to use this executor"},
+		{"-executor with the file's box turned off", user, Flags{Executor: ptr("ssh host dax execute"), Box: ptr(false)}, nil, ""},
+		{"a bad -box-image", Layer{}, Flags{Box: ptr(true), BoxImage: ptr("--privileged")}, nil, "-box-image"},
+		{"a bad -box-runtime", Layer{}, Flags{Box: ptr(true), BoxRuntime: ptr("run sc")}, nil, "-box-runtime"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BoxOf(tc.user, tc.flags)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("BoxOf error = %v, want %q", err, tc.err)
+				}
+				if _, err := Resolve([]Layer{tc.user}, tc.flags, ""); err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("Resolve error = %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Fatalf("BoxOf = %+v, want %+v", got, tc.want)
+			}
+			s, err := Resolve([]Layer{tc.user}, tc.flags, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (s.Box == nil) != (tc.want == nil) || s.Box != nil && *s.Box != *tc.want {
+				t.Fatalf("Resolve's box = %+v, want %+v", s.Box, tc.want)
+			}
+			if HasExecutor(tc.user, tc.flags) != (tc.want != nil || len(s.Executor) > 0 || s.ExecutorURL != "") {
+				t.Errorf("HasExecutor = %v with box %+v and executor %q", HasExecutor(tc.user, tc.flags), s.Box, s.Executor)
+			}
+		})
+	}
+}
+
+func TestBoxValidation(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{`{"box":{"image":"-v /:/host"}}`, "box.image"},
+		{`{"box":{"runtime":"runsc --debug"}}`, "box.runtime"},
+		{`{"box":{"memory":"lots"}}`, "box.memory"},
+		{`{"box":{"cpus":-1}}`, "box.cpus"},
+		{`{"box":{"pids":-1}}`, "box.pids"},
+		{`{"box":{"network":"host"}}`, "share this machine's network"},
+		{`{"box":{"network":"container:other"}}`, "box.network"},
+		{`{"box":{"imag":"x"}}`, "unknown field"},
+		{`{"box":{},"executor":{"command":"ssh host dax execute"}}`, "box and executor both"},
+		{`{"box":{},"executor":{"url":"http://127.0.0.1:7777"}}`, "box and executor both"},
+	} {
+		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(`{"box":{"image":"ghcr.io/me/img@sha256:abc","runtime":"runsc","memory":"512m","cpus":0.5,"pids":64,"network":"my-net"}}`), "/u/config.json", false); err != nil {
+		t.Errorf("a full box: %v", err)
+	}
+	// A repository may not say where the session's commands run.
+	if _, err := Parse([]byte(`{"box":{}}`), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "box: a project file may only tighten") {
+		t.Errorf("a project's box: %v", err)
+	}
+}

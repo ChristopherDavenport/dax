@@ -117,6 +117,11 @@ type Config struct {
 	// user sets it; a project cannot, since it says where the session's
 	// commands run.
 	Executor *Executor `json:"executor,omitempty"`
+	// Box runs the tools in a box: a container dax keeps for the
+	// project, under gVisor by default, reached as an executor. Its
+	// presence is -box's default. The user sets it; a project cannot,
+	// for the reason it cannot set executor.
+	Box *Box `json:"box,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
@@ -136,6 +141,35 @@ type Peer struct {
 	// token sent to the agent; the token itself never goes in a config
 	// file.
 	TokenEnv string `json:"token_env,omitempty"`
+}
+
+// Box is the box's settings; one left out takes its default
+// (DefaultBox).
+type Box struct {
+	// Image the box runs: it must have bash, sh, git and glibc.
+	Image string `json:"image,omitempty"`
+	// Runtime is the OCI runtime docker runs it with, runsc for gVisor.
+	Runtime string `json:"runtime,omitempty"`
+	// Memory is its memory limit as docker takes it: "4g", "512m".
+	Memory string `json:"memory,omitempty"`
+	// CPUs and Pids bound its processors and processes.
+	CPUs float64 `json:"cpus,omitempty"`
+	Pids int64   `json:"pids,omitempty"`
+	// Network is bridge, none or a docker network of yours; never host.
+	Network string `json:"network,omitempty"`
+}
+
+// BoxSettings is the box a session runs its tools in, every field set.
+type BoxSettings struct {
+	Image, Runtime, Memory string
+	CPUs                   float64
+	Pids                   int64
+	Network                string
+}
+
+// DefaultBox is the box a box setting or -box leaves to dax.
+func DefaultBox() BoxSettings {
+	return BoxSettings{Image: "golang:1.26-bookworm", Runtime: "runsc", Memory: "4g", CPUs: 2, Pids: 512, Network: "bridge"}
 }
 
 // Executor is how to start or reach the executor.
@@ -375,7 +409,7 @@ func (l *Layer) validate() error {
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"peers", len(c.Peers) > 0},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"peers", len(c.Peers) > 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -407,6 +441,14 @@ func (l *Layer) validate() error {
 			}
 		}
 		if err := checkExecutorEnv("executor.pass_env", x.PassEnv, c.APIKeyEnv); err != nil {
+			return err
+		}
+	}
+	if b := c.Box; b != nil {
+		if x := c.Executor; x != nil && (x.Command.Given() || x.URL != "") {
+			return errors.New("box and executor both say where the tools run; give one (executor.pass_env alone may stay: it is the box's docker command's)")
+		}
+		if err := b.check(); err != nil {
 			return err
 		}
 	}
@@ -527,14 +569,113 @@ func checkExecutorEnv(field string, names []string, keyEnv string) error {
 }
 
 // HasExecutor reports whether the user's layer and the flags set an
-// executor: what decides, before the project's layer is read, whether
-// the project is this machine's directory at all. A project's layer
-// cannot set one.
+// executor, a box's among them: what decides, before the project's
+// layer is read, whether the project is this machine's directory at
+// all. A project's layer cannot set one.
 func HasExecutor(user Layer, f Flags) bool {
+	if BoxOn(user, f) {
+		return true
+	}
 	if f.Executor != nil {
 		return strings.TrimSpace(*f.Executor) != ""
 	}
 	return user.Executor != nil && (user.Executor.Command.Given() || user.Executor.URL != "")
+}
+
+// BoxOn reports whether the tools run in a box: -box when given, else
+// whether the user's layer has a box.
+func BoxOn(user Layer, f Flags) bool {
+	if f.Box != nil {
+		return *f.Box
+	}
+	return user.Box != nil
+}
+
+// BoxOf is the box the user's layer and the flags say the tools run
+// in, its defaults filled in; nil when they run elsewhere. A box with
+// an executor is refused, whichever layer or flag names each, and so
+// are -box-image and -box-runtime without a box.
+func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
+	if !BoxOn(user, f) {
+		for name, v := range map[string]*string{"-box-image": f.BoxImage, "-box-runtime": f.BoxRuntime} {
+			if v != nil {
+				return nil, fmt.Errorf("%s goes with -box or a box in your config", name)
+			}
+		}
+		return nil, nil
+	}
+	argv, url, err := ExecutorOf(user, f)
+	if err != nil {
+		return nil, err
+	}
+	if len(argv) > 0 || url != "" {
+		if f.Executor != nil {
+			return nil, errors.New(`-executor: the tools run in a box (-box or your config's box); give -box=false to use this executor instead`)
+		}
+		return nil, errors.New(`-box: your config's executor says where the tools run; give -executor "" to run them in a box instead`)
+	}
+	s := DefaultBox()
+	if b := user.Box; b != nil {
+		if b.Image != "" {
+			s.Image = b.Image
+		}
+		if b.Runtime != "" {
+			s.Runtime = b.Runtime
+		}
+		if b.Memory != "" {
+			s.Memory = b.Memory
+		}
+		if b.CPUs != 0 {
+			s.CPUs = b.CPUs
+		}
+		if b.Pids != 0 {
+			s.Pids = b.Pids
+		}
+		if b.Network != "" {
+			s.Network = b.Network
+		}
+	}
+	if f.BoxImage != nil {
+		if !boxImage.MatchString(*f.BoxImage) {
+			return nil, fmt.Errorf("-box-image %q: want an image reference (golang:1.26-bookworm)", *f.BoxImage)
+		}
+		s.Image = *f.BoxImage
+	}
+	if f.BoxRuntime != nil {
+		if !boxName.MatchString(*f.BoxRuntime) {
+			return nil, fmt.Errorf("-box-runtime %q: want a runtime's name (runsc)", *f.BoxRuntime)
+		}
+		s.Runtime = *f.BoxRuntime
+	}
+	return &s, nil
+}
+
+var (
+	boxImage  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+	boxName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	boxMemory = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+)
+
+// check refuses a box setting docker would misread as another
+// argument, and the host network, which would share this machine's.
+func (b Box) check() error {
+	switch {
+	case b.Image != "" && !boxImage.MatchString(b.Image):
+		return fmt.Errorf("box.image %q: want an image reference (golang:1.26-bookworm)", b.Image)
+	case b.Runtime != "" && !boxName.MatchString(b.Runtime):
+		return fmt.Errorf("box.runtime %q: want a runtime's name (runsc)", b.Runtime)
+	case b.Memory != "" && !boxMemory.MatchString(b.Memory):
+		return fmt.Errorf("box.memory %q: want a size as docker takes it (4g, 512m)", b.Memory)
+	case b.CPUs < 0:
+		return errors.New("box.cpus: want a positive number")
+	case b.Pids < 0:
+		return errors.New("box.pids: want a positive number")
+	case b.Network == "host":
+		return errors.New(`box.network "host": the box would share this machine's network; use bridge, none or a network of yours`)
+	case b.Network != "" && !boxName.MatchString(b.Network):
+		return fmt.Errorf("box.network %q: want bridge, none or a network's name", b.Network)
+	}
+	return nil
 }
 
 // ExecutorOf is the executor the user's layer and the flags name, as
@@ -724,7 +865,11 @@ type Flags struct {
 	// ExecutorPassEnv replaces executor.pass_env; nil was not given and
 	// empty clears it.
 	ExecutorPassEnv []string
-	Think, Agents   *bool
+	// Box replaces whether the config's box is used: -box, -box=false.
+	// BoxImage and BoxRuntime replace its image and runtime.
+	Box                  *bool
+	BoxImage, BoxRuntime *string
+	Think, Agents        *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -756,11 +901,14 @@ type Settings struct {
 	Executor         []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
 	ExecutorURL      string   // where the executor serves, when it is not started here
 	ExecutorPassEnv  []string // what only the executor's command is given
-	MCP              []MCP
-	Peers            []a2a.Remote // the user's, sorted by name
-	PassEnv          []string
-	MaxReadBytes     int64
-	Policy           PolicySettings
+	// Box is the box the tools run in, nil for none; the caller makes it
+	// and sets Executor to its command, since nothing here runs docker.
+	Box          *BoxSettings
+	MCP          []MCP
+	Peers        []a2a.Remote // the user's, sorted by name
+	PassEnv      []string
+	MaxReadBytes int64
+	Policy       PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header and
 	// client_header: "default", the file's path, or "flag".
@@ -970,6 +1118,20 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	var err error
 	if s.Executor, s.ExecutorURL, err = executorOf(layers, f); err != nil {
+		return s, err
+	}
+	// A project's layer can name neither a box nor an executor, so the
+	// others', the last of each, decide.
+	var user Layer
+	for _, l := range layers {
+		if !l.Project && l.Box != nil {
+			user.Box = l.Box
+		}
+		if !l.Project && l.Executor != nil {
+			user.Executor = l.Executor
+		}
+	}
+	if s.Box, err = BoxOf(user, f); err != nil {
 		return s, err
 	}
 	if f.ExecutorPassEnv != nil {
