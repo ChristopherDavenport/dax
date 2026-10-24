@@ -95,24 +95,27 @@ unit alone. A file says more:
 {
   "runtime": "runsc",
   "limits": { "memory": "8g", "cpus": 4, "pids": 1024 },
-  "images": ["golang:*", "node:*", "python:*"],
+  "images": ["golang:*", "node:*", "python:*", "registry.example.com/mcp/*"],
   "default_profile": "go",
   "units": {
     "workspace": { "image": "golang:1.26-bookworm" },
     "go-net":    { "image": "golang:1.26-bookworm", "allow": ["proxy.golang.org", "sum.golang.org"],
                    "exfiltration": "accepted" },
     "files":     { "build": { "base": "node:24-bookworm-slim",
-                              "run": ["npm i -g @modelcontextprotocol/server-filesystem@2025.8.21"] },
+                              "run": ["npm install -g @modelcontextprotocol/server-filesystem@2026.8.31"] },
                    "command": ["mcp-server-filesystem", "/srv/src/app"],
                    "files": { "project": "ro" } },
-    "github":    { "build": { "base": "node:24-bookworm-slim",
-                              "run": ["npm i -g @modelcontextprotocol/server-github@2025.4.8"] },
-                   "command": ["mcp-server-github"], "files": "none",
+    "fetch":     { "build": { "base": "python:3.12-slim-bookworm",
+                              "run": ["pip install --no-cache-dir mcp-server-fetch==2026.8.18"] },
+                   "command": ["mcp-server-fetch", "--ignore-robots-txt"], "files": "none",
+                   "allow": ["docs.example.com"] },
+    "github":    { "image": "registry.example.com/mcp/github:1.0",
+                   "command": ["github-mcp", "stdio"], "files": "none",
                    "allow": ["api.github.com"],
                    "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" } }
   },
   "profiles": {
-    "go":      { "workspace": "go-net", "mcp": ["files", "github"] },
+    "go":      { "workspace": "go-net", "mcp": ["files", "fetch", "github"] },
     "offline": { "workspace": "workspace" }
   }
 }
@@ -154,13 +157,16 @@ rule says otherwise.
 | `exfiltration` | `"accepted"`: see rule 2 |
 
 Each MCP unit is a container of its own beside the box,
-`<box>-<unit>`, made when the session first starts its server: the
+`<box>-<unit>`, made with the box when a session connects (its image
+built first, once), so a unit that cannot be made, a secret that is
+not set, refuses the session with the reason: the
 same hardening as the box (no capabilities, a read-only root, the box
 host's user, the limits, `--ulimit nproc` under a sandbox), its own
 image and none of dax, its own internal network `<box>-<unit>-net`
 and its own sidecar. No unit can reach another unit, or the box, or
 their files but through what both mount. Its image needs `sh` and
-`sleep`; its sidecar runs dax in the workspace's image. The session
+`sleep` (a distroless image has neither: build one from a base that
+does); its sidecar runs dax in the workspace's image. The session
 starts each unit's server as an MCP server named after the unit, as
 it starts any MCP server with an executor (`dax-unit NAME`, which the
 box host answers itself), so its tools are `mcp__<unit>__<tool>`, and a
@@ -192,7 +198,11 @@ policy and the record see it.
 A unit's secrets are resolved on the box host when its container is
 made, and given to that container alone, through docker's own
 environment: its command line names them (`-e NAME`) and never holds a
-value, and no label, log, error or message to the session does. `env:`
+value, and no label, log, error or message to the session does. Docker
+itself keeps it in the container's configuration, which `docker
+inspect` shows on the box host's machine to whoever can run docker
+there, as it does any container's environment; whoever can is root
+there already. `env:`
 reads the box host's own environment; `command:` runs the line with
 `sh` there and takes its output, trimmed; `file:` reads the file. A
 secret that cannot be resolved fails the unit's start, naming the

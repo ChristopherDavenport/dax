@@ -116,16 +116,16 @@ processes, the project read-write, no internet), and one profile,
 {
   "runtime": "runsc",
   "limits": { "memory": "8g", "cpus": 4, "pids": 1024 },
-  "images": ["golang:*", "node:*", "python:*"],
+  "images": ["golang:*", "node:*", "python:*", "registry.example.com/mcp/*"],
   "default_profile": "go",
   "units": {
     "workspace": { "image": "golang:1.26-bookworm", "files": { "project": "rw" },
                    "internet": "allow", "allow": ["proxy.golang.org", "sum.golang.org"],
                    "exfiltration": "accepted" },
-    "rag":       { "build": { "base": "python:3.12-slim-bookworm", "run": ["pip install rag-mcp==1.2.0"] },
+    "rag":       { "image": "registry.example.com/mcp/rag:1.0",
                    "command": ["rag-mcp"], "files": { "project": "ro", "state": "rw" } },
-    "github":    { "build": { "base": "node:24-bookworm-slim", "run": ["npm i -g @modelcontextprotocol/server-github@2025.4.8"] },
-                   "command": ["mcp-server-github"], "files": "none",
+    "github":    { "image": "registry.example.com/mcp/github:1.0",
+                   "command": ["github-mcp", "stdio"], "files": "none",
                    "internet": "allow", "allow": ["api.github.com"],
                    "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" } }
   },
@@ -226,7 +226,9 @@ One schema serves every unit:
   units only. Each is resolved on the box host when the unit's
   container is made and given to that container alone, through
   docker's environment, never on a command line, in a label, a log, an
-  error or the session.
+  error or the session. (Docker keeps it in the container's
+  configuration, as any container's environment, where `docker
+  inspect` on the box host shows it to whoever can run docker there.)
 - `command`: the server's argv in its container, MCP units only.
 - `exfiltration`: `"accepted"`, rule 2.
 
@@ -255,7 +257,10 @@ where the policy and the record see it.
 The box host tells the session what it resolved, in its answer to the
 handshake, under the executor's capability key:
 `box: {profile, units: [{name, kind, image, runtime, files, internet,
-allow, secrets: [names]}]}`. The session starts each MCP unit as an MCP
+allow, secrets: [names]}]}`. The units are made with the box, before
+that answer, so an image build is not held to a process start's
+timeout and a unit that cannot be made refuses the session with the
+reason. The session starts each MCP unit as an MCP
 server named after it (`dax-unit NAME`, through the executor, so it
 restarts as any MCP server does, its tools `mcp__<unit>__<tool>`), and
 records the envelopes in the session's header (`dax.box`): what each
