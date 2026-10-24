@@ -15,6 +15,10 @@ import (
 type fake struct {
 	answers map[string][]answer
 	calls   [][]string
+	// envs and stdins are each DockerCall's environment and input, by
+	// its verb.
+	envs   map[string][]string
+	stdins map[string][]byte
 }
 
 type answer struct {
@@ -30,7 +34,16 @@ func verb(args []string) string {
 	sidecar := slices.ContainsFunc(args, func(a string) bool {
 		return strings.HasSuffix(a, "-proxy") || strings.HasPrefix(a, labelProxy+"=") || strings.HasPrefix(a, "label="+labelProxy+"=")
 	})
+	unit := slices.ContainsFunc(args, func(a string) bool {
+		return strings.HasPrefix(a, labelOf+"=") || a == "label="+labelOf
+	})
 	switch {
+	case args[0] == "ps" && unit:
+		return "ps unit"
+	case args[0] == "run" && unit:
+		return "run unit"
+	case args[0] == "image":
+		return "image " + args[1]
 	case args[0] == "network" && has(EgressNetwork):
 		return "network " + args[1] + " egress"
 	case args[0] == "network":
@@ -55,6 +68,16 @@ func (f *fake) Docker(_ context.Context, args ...string) ([]byte, error) {
 		f.answers[v] = q[1:]
 	}
 	return []byte(a.out), a.err
+}
+
+// DockerCall is Docker, with the call's environment and input kept.
+func (f *fake) DockerCall(ctx context.Context, c Call) ([]byte, error) {
+	v := verb(c.Args)
+	if f.envs == nil {
+		f.envs, f.stdins = map[string][]string{}, map[string][]byte{}
+	}
+	f.envs[v], f.stdins[v] = c.Env, c.Stdin
+	return f.Docker(ctx, c.Args...)
 }
 
 // verbs is each call's verb.
@@ -100,7 +123,7 @@ func TestRunArgsProcessLimit(t *testing.T) {
 	} {
 		spec := testSpec(t)
 		spec.Runtime = tc.runtime
-		args := RunArgs(spec, "bin-label", "172.30.0.2")
+		args := RunArgs(spec, "bin-label", "172.30.0.2", "/state/dax-app")
 		joined := strings.Join(args, " ")
 		if !strings.Contains(joined, "--pids-limit 512") {
 			t.Errorf("%s: no --pids-limit: %s", tc.runtime, joined)
@@ -116,7 +139,7 @@ func TestRunArgsProcessLimit(t *testing.T) {
 
 func TestRunArgs(t *testing.T) {
 	spec := testSpec(t)
-	args := RunArgs(spec, "bin-label", "172.30.0.2")
+	args := RunArgs(spec, "bin-label", "172.30.0.2", "/state/dax-app")
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		"run -d --init",
@@ -158,7 +181,7 @@ func TestRunArgs(t *testing.T) {
 		t.Errorf("image is not before the command: %q", args)
 	}
 	spec.CPUs = 1.5
-	if j := strings.Join(RunArgs(spec, "b", "172.30.0.2"), " "); !strings.Contains(j, "--cpus 1.5") {
+	if j := strings.Join(RunArgs(spec, "b", "172.30.0.2", "/state/dax-app"), " "); !strings.Contains(j, "--cpus 1.5") {
 		t.Errorf("fractional cpus: %s", j)
 	}
 }
@@ -576,7 +599,10 @@ func TestListAndRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Info{{"dax-a-1", "running", "/src/a", "runsc", "allow proxy.golang.org,*.github.com"}, {"dax-b-2", "exited", "/src/b", "runsc-ptrace", "?"}}
+	want := []Info{
+		{Name: "dax-a-1", State: "running", Dir: "/src/a", Runtime: "runsc", Internet: "allow proxy.golang.org,*.github.com", Unit: DefaultUnit, Files: "project rw"},
+		{Name: "dax-b-2", State: "exited", Dir: "/src/b", Runtime: "runsc-ptrace", Internet: "?", Unit: DefaultUnit, Files: "project rw"},
+	}
 	if !slices.Equal(boxes, want) {
 		t.Errorf("List = %+v, want %+v", boxes, want)
 	}
@@ -585,7 +611,7 @@ func TestListAndRemove(t *testing.T) {
 	}
 	// The second ps finds nothing, nor is a sidecar or network left:
 	// not a box, so nothing is removed.
-	if err := c.Remove(context.Background(), "someone-elses"); err == nil || !strings.Contains(err.Error(), "no box") {
+	if err := c.Remove(context.Background(), "someone-elses", false); err == nil || !strings.Contains(err.Error(), "no box") {
 		t.Errorf("Remove of a container that is not a box: %v", err)
 	}
 	if slices.ContainsFunc(f.verbs(), func(v string) bool { return strings.HasPrefix(v, "rm") || v == "network rm" }) {
@@ -604,10 +630,10 @@ func TestRemove(t *testing.T) {
 		"network ls": {{out: "dax-a-1-net\n"}},
 	}}
 	c := &Client{Runner: f, StateDir: dir}
-	if err := c.Remove(context.Background(), "dax-a-1"); err != nil {
+	if err := c.Remove(context.Background(), "dax-a-1", false); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"ps", "rm", "ps proxy", "rm proxy", "network ls", "network rm"}; !slices.Equal(f.verbs(), want) {
+	if want := []string{"ps", "ps unit", "rm", "ps proxy", "rm proxy", "network ls", "network rm"}; !slices.Equal(f.verbs(), want) {
 		t.Errorf("docker calls = %q, want %q", f.verbs(), want)
 	}
 	if got := f.call("network rm"); got[len(got)-1] != "dax-a-1-net" {
@@ -625,10 +651,10 @@ func TestRemove(t *testing.T) {
 	// removes them.
 	f = &fake{answers: map[string][]answer{"ps proxy": {{out: "exited\tbin\n"}}, "network ls": {{out: "dax-a-1-net\n"}}}}
 	c.Runner = f
-	if err := c.Remove(context.Background(), "dax-a-1"); err != nil {
+	if err := c.Remove(context.Background(), "dax-a-1", false); err != nil {
 		t.Fatalf("Remove of what a box left: %v", err)
 	}
-	if want := []string{"ps", "ps proxy", "rm proxy", "network ls", "network rm"}; !slices.Equal(f.verbs(), want) {
+	if want := []string{"ps", "ps unit", "ps proxy", "rm proxy", "network ls", "network rm"}; !slices.Equal(f.verbs(), want) {
 		t.Errorf("docker calls = %q, want %q", f.verbs(), want)
 	}
 }

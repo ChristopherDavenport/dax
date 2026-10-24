@@ -170,10 +170,18 @@ before changing the shape.
   its sidecar, and `proxy.go`, the egress proxy the sidecar runs
   (`dax box proxy`) under the box's rules file, which refuses this
   machine and private networks on the address it dials; `host.go`, the
-  box host config (profiles, limits, images, the MCP catalog) and
-  `Resolve`, a session's request narrowed, never widened; `relay.go`,
-  the box host's relay, which reads the session's initialize and then
-  copies bytes both ways. Runtime-agnostic: any runtime docker has
+  box host config (units, each an envelope of files, connectivity and
+  secrets held to three rules; profiles; limits; images) and `Resolve`,
+  a session's request narrowed, never widened; `units.go`, an MCP
+  unit's container beside the box (`EnsureUnit`, its secrets resolved
+  into docker's environment alone); `unitproc.go` and `hostproc.go`, a
+  unit's server under `docker exec` and the process methods the box
+  host answers for it; `redact.go`, the redaction of a unit's secret
+  values from its server's output, in every JSON spelling, before the
+  box host passes any of it on; `relay.go`, the box host's relay, which reads
+  the session's handshake, passes the rest through a message at a
+  time, adds what it resolved to the handshake's answer, and answers a
+  unit's process methods itself. Runtime-agnostic: any runtime docker has
   registered. Standard library only, so it can move to agentworkspace
   once a second product wants it. The design is
   `docs/plans/proposals/box-host.md`.

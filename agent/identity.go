@@ -33,6 +33,11 @@ const (
 	// and shared, and a command line can carry what its user would not
 	// want in one.
 	headerExecutor = "dax.executor"
+	// headerBox is the header member holding, for a session whose box a
+	// box host made, what it resolved: the profile and each unit's
+	// envelope (its files, internet, and its secrets' names, never their
+	// values), as the box host told the session.
+	headerBox = "dax.box"
 )
 
 // recordedWorkspace is a workspace as the header holds it.
@@ -101,6 +106,11 @@ func (s *Session) extras() map[string]json.RawMessage {
 	if ex := s.opts.Executor; ex != nil && ex.addr != "" {
 		if mark, err := json.Marshal(executorMark{SHA256: ex.addr}); err == nil {
 			out[headerExecutor] = mark
+		}
+	}
+	if ex := s.opts.Executor; ex != nil {
+		if raw := ex.r.Box(); len(raw) > 0 && json.Valid(raw) {
+			out[headerBox] = raw
 		}
 	}
 	return out

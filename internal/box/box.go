@@ -15,6 +15,13 @@
 // writes and the proxy reads again, so the box's internet changes
 // without making either container again.
 //
+// Beside the box, which is the workspace unit, a box host makes a
+// container for each of a session's MCP units (EnsureUnit): the unit's
+// own image, files, internet and secrets, on a network and behind a
+// sidecar of its own, so no unit reaches another, or the box. The relay
+// runs a unit's server in its container (StartProc) and answers that
+// process's methods itself.
+//
 // Docker is driven through its command line (Runner), so the package
 // needs nothing beyond the standard library, and it is meant to move to
 // agentworkspace once a second product wants it.
@@ -31,6 +38,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -46,6 +54,12 @@ const (
 	labelBinary  = "dax.box.bin"
 	labelProxy   = "dax.box.proxy"
 	labelOwner   = "dax.box.owner"
+	// labelOf marks an MCP unit's container with its box's name;
+	// labelUnit names the unit a container is (the box's too), and
+	// labelFiles says what it mounts.
+	labelOf    = "dax.box.of"
+	labelUnit  = "dax.box.unit"
+	labelFiles = "dax.box.files"
 )
 
 // Binary is where the box's dax is mounted.
@@ -93,6 +107,28 @@ type Spec struct {
 	// Rules are the box's internet. They are not what the box is made
 	// from: each session writes them, for every session in the box.
 	Rules Rules
+	// Unit is the unit the container is, by its name in the box host's
+	// config: the box's own, the workspace unit, or an MCP unit's.
+	Unit string
+	// Of is, for an MCP unit's container, the box it belongs to; empty
+	// for the box itself.
+	Of string
+	// Files is what the container mounts: Dir at its own path, ro or rw
+	// (the box: rw), and its state directory at StatePath.
+	Files Files
+	// Secrets are an MCP unit's variables, by name, as references
+	// (env:, command:, file:), resolved when the container is made and
+	// given to it through docker's own environment, never its arguments.
+	Secrets map[string]string
+	// SidecarImage is the image the sidecar runs dax's proxy in; empty is
+	// Image. An MCP unit's own image may have no glibc for dax, so its
+	// sidecar runs the box's.
+	SidecarImage string
+	// Build, when set, makes Image first, unless docker has it.
+	Build *Build
+	// Decl is a hash of the unit's declaration (Settings.Decl), in an MCP
+	// unit's spec label.
+	Decl string
 }
 
 // Box is a running box.
@@ -133,6 +169,10 @@ func NameFor(dir string) string {
 	return "dax-" + base + "-" + hex.EncodeToString(sum[:4])
 }
 
+// UnitName is the container of box's MCP unit unit; its network and its
+// sidecar are named from it, as a box's are.
+func UnitName(box, unit string) string { return box + "-" + unit }
+
 // ProxyName is box name's sidecar.
 func ProxyName(name string) string { return name + "-proxy" }
 
@@ -165,22 +205,60 @@ type Runner interface {
 	Docker(ctx context.Context, args ...string) ([]byte, error)
 }
 
+// Call is a docker command with more than arguments: variables for
+// docker's own environment, beside this process's, which its arguments
+// name without their values (a unit's secrets, `-e NAME`), and its
+// standard input (a Dockerfile).
+type Call struct {
+	Args  []string
+	Env   []string
+	Stdin []byte
+}
+
+// CallRunner is a Runner that also runs a Call. CLI is one; a unit with
+// secrets or a build needs one.
+type CallRunner interface {
+	Runner
+	DockerCall(ctx context.Context, c Call) ([]byte, error)
+}
+
 // CLI is the docker command on PATH.
 type CLI struct{}
 
 // Docker runs docker.
-func (CLI) Docker(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+func (c CLI) Docker(ctx context.Context, args ...string) ([]byte, error) {
+	return c.DockerCall(ctx, Call{Args: args})
+}
+
+// DockerCall runs docker with c's environment and input. What docker
+// says on standard error is the error's, and never a value from Env:
+// docker does not print a variable `-e NAME` takes from its own.
+func (CLI) DockerCall(ctx context.Context, c Call) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "docker", c.Args...)
+	if len(c.Env) > 0 {
+		cmd.Env = append(os.Environ(), c.Env...)
+	}
+	if c.Stdin != nil {
+		cmd.Stdin = bytes.NewReader(c.Stdin)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return out, fmt.Errorf("docker %s: %s", args[0], msg)
+			return out, fmt.Errorf("docker %s: %s", c.Args[0], tail(msg, 2000))
 		}
-		return out, fmt.Errorf("docker %s: %w", args[0], err)
+		return out, fmt.Errorf("docker %s: %w", c.Args[0], err)
 	}
 	return out, nil
+}
+
+// tail is the last n bytes of s, a build's last lines.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 // Client keeps boxes through a Runner. Warn, when set, is told what
@@ -199,11 +277,24 @@ type Client struct {
 	// named for the box; empty is dax/box under the user's cache
 	// directory.
 	StateDir string
+	// DataDir is where each unit's state directory is kept, named for
+	// its container, apart from the rules a sidecar reads; empty is
+	// dax/box-state under the user's cache directory. It outlives the
+	// container: `dax box down -state` removes it.
+	DataDir string
+	// LookupEnv resolves an env: secret; nil is os.LookupEnv, the box
+	// host's own environment.
+	LookupEnv func(string) (string, bool)
+	// DockerPath is the docker program StartProc runs a unit's server
+	// with; empty is docker on PATH.
+	DockerPath string
 }
 
-// Info is a box as List finds it.
+// Info is a box or a unit's container as List finds it: Unit is its
+// unit, Of the box an MCP unit's belongs to.
 type Info struct {
 	Name, State, Dir, Runtime, Internet string
+	Unit, Of, Files                     string
 }
 
 // ErrRuntime is a runtime docker does not know.
@@ -219,6 +310,19 @@ func isUnknownRuntime(err error) bool {
 
 // errInUse is a box's name taken between looking for it and making it.
 var errInUse = errors.New("name already in use")
+
+// dataDir is the state directory of the unit whose container is name.
+func (c *Client) dataDir(name string) (string, error) {
+	root := c.DataDir
+	if root == "" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("box: %w", err)
+		}
+		root = filepath.Join(cache, "dax", "box-state")
+	}
+	return filepath.Join(root, name), nil
+}
 
 // stateDir is the directory that holds box name's rules file.
 func (c *Client) stateDir(name string) (string, error) {
@@ -256,6 +360,9 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	if err != nil {
 		return b, err
 	}
+	if err := c.prepare(ctx, &spec); err != nil {
+		return b, err
+	}
 	if err := c.ensure(ctx, spec, bin, true); err != nil {
 		return b, err
 	}
@@ -263,6 +370,54 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 		c.notice(fmt.Sprintf("box %s has no internet; a box host profile with internet (-box-profile) opens it", spec.Name))
 	}
 	return b, nil
+}
+
+// prepare makes what a container of spec's needs before it is made:
+// its image, when it is built, and its state directory.
+func (c *Client) prepare(ctx context.Context, spec *Spec) error {
+	if spec.Build != nil {
+		if err := c.ensureImage(ctx, spec.Unit, *spec.Build, spec.Image); err != nil {
+			return err
+		}
+	}
+	if spec.Files.State != "" {
+		dir, err := c.dataDir(spec.Name)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(dir, ":") {
+			return fmt.Errorf("box: %s: a path with a colon cannot be mounted", dir)
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("unit %s: state: %w", spec.Unit, err)
+		}
+	}
+	return nil
+}
+
+// ensureImage builds tag from b for unit unless docker has it: the
+// tag is a hash of the declaration, so an image docker has is this
+// declaration's.
+func (c *Client) ensureImage(ctx context.Context, unit string, b Build, tag string) error {
+	if _, err := c.Runner.Docker(ctx, "image", "inspect", "--format", "{{.Id}}", tag); err == nil {
+		return nil
+	}
+	if c.Starting != nil {
+		c.Starting(fmt.Sprintf("building %s for unit %s from %s; it is built once", tag, unit, b.Base))
+	}
+	if _, err := c.call(ctx, Call{Args: []string{"build", "--label", labelUnit + "=" + unit, "-t", tag, "-"}, Stdin: []byte(b.Dockerfile())}); err != nil {
+		return fmt.Errorf("unit %s: build: %w", unit, err)
+	}
+	return nil
+}
+
+// call runs a Call through the Runner, which must be a CallRunner.
+func (c *Client) call(ctx context.Context, call Call) ([]byte, error) {
+	cr, ok := c.Runner.(CallRunner)
+	if !ok {
+		return nil, fmt.Errorf("docker %s: this runner gives docker no environment or input", call.Args[0])
+	}
+	return cr.DockerCall(ctx, call)
 }
 
 // ensure is Ensure once the spec is checked. Another session may make
@@ -359,73 +514,131 @@ func CheckMounts(spec Spec, home string) error {
 	return nil
 }
 
-// List is every box, running or not.
+// List is every box and every MCP unit's container, running or not: a
+// box, then its units.
 func (c *Client) List(ctx context.Context) ([]Info, error) {
 	out, err := c.Runner.Docker(ctx, "ps", "-a", "--filter", "label="+Label+"=1", "--format",
-		`{{.Names}}\t{{.State}}\t{{.Label "`+labelDir+`"}}\t{{.Label "`+labelRuntime+`"}}`)
+		`{{.Names}}\t{{.State}}\t{{.Label "`+labelDir+`"}}\t{{.Label "`+labelRuntime+`"}}\t{{.Label "`+labelUnit+`"}}\t{{.Label "`+labelFiles+`"}}`)
 	if err != nil {
 		return nil, err
 	}
-	var boxes []Info
+	units, err := c.listUnits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var all []Info
 	for _, line := range lines(out) {
 		f := strings.Split(line, "\t")
-		for len(f) < 4 {
+		for len(f) < 6 {
 			f = append(f, "")
 		}
-		info := Info{Name: f[0], State: f[1], Dir: f[2], Runtime: f[3], Internet: "?"}
+		info := Info{Name: f[0], State: f[1], Dir: f[2], Runtime: f[3], Unit: f[4], Files: f[5], Internet: "?"}
+		if info.Unit == "" {
+			// A box made before units were.
+			info.Unit, info.Files = DefaultUnit, Files{Project: FilesRW}.String()
+		}
 		if dir, err := c.stateDir(info.Name); err == nil {
 			if r, err := ReadRules(filepath.Join(dir, RulesFile)); err == nil {
 				info.Internet = r.String()
 			}
 		}
-		boxes = append(boxes, info)
+		all = append(all, info)
+		for _, u := range units {
+			if u.Of == info.Name {
+				all = append(all, u)
+			}
+		}
 	}
-	return boxes, nil
+	// Units whose box is gone, which down removes too.
+	for _, u := range units {
+		if !slices.ContainsFunc(all, func(i Info) bool { return i.Name == u.Name }) {
+			all = append(all, u)
+		}
+	}
+	return all, nil
 }
 
-// Remove stops and removes the box name, its sidecar, its network and
-// its rules; a container that is not a box is refused. What a box left
-// behind without itself (a sidecar, a network) is removed too.
-func (c *Client) Remove(ctx context.Context, name string) error {
+// Remove stops and removes the box name, its MCP units, and each one's
+// sidecar, network and rules; a container that is not a box is refused.
+// What a box left behind without itself (a sidecar, a network, a unit)
+// is removed too. The units' state directories (and the box's) are kept
+// unless state, since a unit's state, an index, outlives its container.
+func (c *Client) Remove(ctx context.Context, name string, state bool) error {
 	_, found, err := c.find(ctx, name)
 	if err != nil {
 		return err
 	}
-	if found {
-		if _, err := c.Runner.Docker(ctx, "rm", "-f", name); err != nil {
-			return err
-		}
+	units, err := c.listUnits(ctx)
+	if err != nil {
+		return err
 	}
 	left := false
-	if state, _, err := c.sidecar(ctx, name); err == nil && state != "" {
+	for _, u := range units {
+		if u.Of != name {
+			continue
+		}
 		left = true
-		if _, err := c.Runner.Docker(ctx, "rm", "-f", ProxyName(name)); err != nil {
+		if _, err := c.removeContainer(ctx, u.Name, true); err != nil {
 			return err
 		}
 	}
-	if out, err := c.Runner.Docker(ctx, "network", "ls", "--filter", "label="+labelOwner+"="+name, "--format", "{{.Name}}"); err == nil && len(lines(out)) > 0 {
-		left = true
-		if _, err := c.Runner.Docker(ctx, "network", "rm", NetworkName(name)); err != nil {
+	there, err := c.removeContainer(ctx, name, found)
+	if err != nil {
+		return err
+	}
+	if state {
+		// The box's and its units' state directories, those of units
+		// removed before too: each is named for its container, the box's
+		// name or that and a unit's.
+		dirs, err := c.dataDirs(name)
+		if err != nil {
 			return err
 		}
+		for _, d := range dirs {
+			left = true
+			if err := os.RemoveAll(d); err != nil {
+				return fmt.Errorf("box: state of %s: %w", filepath.Base(d), err)
+			}
+		}
 	}
-	if dir, err := c.stateDir(name); err == nil {
-		os.RemoveAll(dir)
-	}
-	if !found && !left {
+	if !there && !left {
 		return fmt.Errorf("no box %s", name)
 	}
 	return nil
 }
 
+// dataDirs are the state directories there are of box name: its own,
+// and its units', named for their containers (UnitName).
+func (c *Client) dataDirs(name string) ([]string, error) {
+	own, err := c.dataDir(name)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Dir(own))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("box: state: %w", err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if n := e.Name(); e.IsDir() && (n == name || strings.HasPrefix(n, name+"-")) {
+			dirs = append(dirs, filepath.Join(filepath.Dir(own), n))
+		}
+	}
+	return dirs, nil
+}
+
 // RunArgs are docker's arguments that make the box: no capabilities
 // and no way to gain any, a read-only root file system with memory for
 // /tmp and the home, the limits, two mounts, the project at its own
-// path and dax read-only, and its internal network alone, with its
-// sidecar at proxyIP as the proxy every command is told of. Its process
-// does nothing but keep it up; the tools run in the executors docker
-// exec starts.
-func RunArgs(spec Spec, bin, proxyIP string) []string {
+// path and dax read-only, its state directory (stateDir) when its unit
+// keeps one, and its internal network alone, with its sidecar at
+// proxyIP as the proxy every command is told of. Its process does
+// nothing but keep it up; the tools run in the executors docker exec
+// starts.
+func RunArgs(spec Spec, bin, proxyIP, stateDir string) []string {
 	proxy := "http://" + proxyIP + ":" + ProxyPort
 	args := []string{
 		"run", "-d", "--init",
@@ -435,6 +648,8 @@ func RunArgs(spec Spec, bin, proxyIP string) []string {
 		"--label", labelRuntime + "=" + spec.Runtime,
 		"--label", labelSpec + "=" + specLabel(spec),
 		"--label", labelBinary + "=" + bin,
+		"--label", labelUnit + "=" + spec.unit(),
+		"--label", labelFiles + "=" + Files{Project: FilesRW, State: spec.Files.State}.String(),
 		"--runtime", spec.Runtime,
 		"--user", strconv.Itoa(spec.UID) + ":" + strconv.Itoa(spec.GID),
 		"--cap-drop", "ALL",
@@ -457,11 +672,83 @@ func RunArgs(spec Spec, bin, proxyIP string) []string {
 		"-w", spec.Dir,
 		"-v", spec.Binary + ":" + Binary + ":ro",
 	}
+	args = append(args, stateArgs(spec, stateDir)...)
 	if !hostKernel(spec.Runtime) {
 		// A sandbox's processes are not this machine's: gVisor's and
 		// Kata's are counted by their own kernel, so --pids-limit, a
 		// cgroup on this machine, does not reach them. A process limit
 		// for the box's user does, enforced by that kernel.
+		pids := strconv.FormatInt(spec.Pids, 10)
+		args = append(args, "--ulimit", "nproc="+pids+":"+pids)
+	}
+	return append(args, spec.Image, "sleep", "infinity")
+}
+
+// unit is the spec's unit's name: DefaultUnit for a box made with none.
+func (s Spec) unit() string {
+	if s.Unit == "" {
+		return DefaultUnit
+	}
+	return s.Unit
+}
+
+// stateArgs mount a unit's state directory, when it keeps one.
+func stateArgs(spec Spec, stateDir string) []string {
+	if spec.Files.State == "" {
+		return nil
+	}
+	return []string{"-v", stateDir + ":" + StatePath, "-e", "DAX_UNIT_STATE=" + StatePath}
+}
+
+// UnitRunArgs are docker's arguments that make an MCP unit's
+// container: hardened as the box is, its own image, the project at its
+// own path only when the unit has it (ro or rw), its state directory,
+// its secrets named and valued in docker's own environment alone, its
+// own internal network with its sidecar at proxyIP, and no dax. Its
+// process does nothing but keep it up; the unit's server runs in it by
+// docker exec (StartProc).
+func UnitRunArgs(spec Spec, proxyIP, stateDir string) []string {
+	proxy := "http://" + proxyIP + ":" + ProxyPort
+	args := []string{
+		"run", "-d", "--init",
+		"--name", spec.Name,
+		"--label", labelOf + "=" + spec.Of,
+		"--label", labelUnit + "=" + spec.Unit,
+		"--label", labelFiles + "=" + spec.Files.String(),
+		"--label", labelDir + "=" + spec.Dir,
+		"--label", labelRuntime + "=" + spec.Runtime,
+		"--label", labelSpec + "=" + unitSpecLabel(spec),
+		"--runtime", spec.Runtime,
+		"--user", strconv.Itoa(spec.UID) + ":" + strconv.Itoa(spec.GID),
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--read-only",
+		"--tmpfs", "/tmp:exec",
+		"--tmpfs", Home + ":exec,mode=1777",
+		"-e", "HOME=" + Home,
+		"-e", "HTTP_PROXY=" + proxy, "-e", "HTTPS_PROXY=" + proxy,
+		"-e", "http_proxy=" + proxy, "-e", "https_proxy=" + proxy,
+		"-e", "NO_PROXY=localhost,127.0.0.1", "-e", "no_proxy=localhost,127.0.0.1",
+		// Node's own fetch reads the proxy variables only when told to.
+		"-e", "NODE_USE_ENV_PROXY=1",
+		"--memory", spec.Memory, "--memory-swap", spec.Memory,
+		"--cpus", strconv.FormatFloat(spec.CPUs, 'f', -1, 64),
+		"--pids-limit", strconv.FormatInt(spec.Pids, 10),
+		"--network", NetworkName(spec.Name),
+	}
+	switch spec.Files.Project {
+	case FilesRO:
+		args = append(args, "-v", spec.Dir+":"+spec.Dir+":ro", "-w", spec.Dir)
+	case FilesRW:
+		args = append(args, "-v", spec.Dir+":"+spec.Dir, "-w", spec.Dir)
+	}
+	args = append(args, stateArgs(spec, stateDir)...)
+	for _, name := range sortedNames(spec.Secrets) {
+		// The name alone: docker takes the value from its own
+		// environment (Call.Env), so it is in no argument and no label.
+		args = append(args, "-e", name)
+	}
+	if !hostKernel(spec.Runtime) {
 		pids := strconv.FormatInt(spec.Pids, 10)
 		args = append(args, "--ulimit", "nproc="+pids+":"+pids)
 	}
@@ -482,6 +769,10 @@ func hostKernel(runtime string) bool {
 // address on the box's network alone: the egress network, which every
 // box's sidecar shares, never reaches it.
 func SidecarArgs(spec Spec, bin, ip, rulesDir string) []string {
+	image := spec.SidecarImage
+	if image == "" {
+		image = spec.Image
+	}
 	return []string{
 		"run", "-d", "--init",
 		"--name", ProxyName(spec.Name),
@@ -498,7 +789,7 @@ func SidecarArgs(spec Spec, bin, ip, rulesDir string) []string {
 		"--network", "name=" + NetworkName(spec.Name) + ",ip=" + ip,
 		"-v", spec.Binary + ":" + Binary + ":ro",
 		"-v", rulesDir + ":" + RulesMount + ":ro",
-		spec.Image,
+		image,
 		Binary, "box", "proxy", "-listen", ip + ":" + ProxyPort, "-rules", RulesMount + "/" + RulesFile,
 	}
 }
@@ -514,7 +805,11 @@ func (c *Client) create(ctx context.Context, spec Spec, bin string) error {
 	if err := c.upSidecar(ctx, spec, bin, ip); err != nil {
 		return err
 	}
-	if _, err := c.Runner.Docker(ctx, RunArgs(spec, bin, ip)...); err != nil {
+	data, err := c.dataDir(spec.Name)
+	if err != nil {
+		return err
+	}
+	if _, err := c.Runner.Docker(ctx, RunArgs(spec, bin, ip, data)...); err != nil {
 		if isUnknownRuntime(err) {
 			return fmt.Errorf("box %s: %w: %s; register it with docker (docs/sandbox.md, \"Runtimes\") or name another in the box host's config", spec.Name, ErrRuntime, spec.Runtime)
 		}
@@ -713,7 +1008,25 @@ func (c *Client) notice(msg string) {
 // marks a box made behind a sidecar, so one made before is refused.
 func specLabel(s Spec) string {
 	h := sha256.New()
-	for _, v := range []string{s.Dir, s.Image, s.Runtime, s.Memory, strconv.FormatFloat(s.CPUs, 'f', -1, 64), strconv.FormatInt(s.Pids, 10), strconv.Itoa(s.UID), strconv.Itoa(s.GID), "egress"} {
+	words := []string{s.Dir, s.Image, s.Runtime, s.Memory, strconv.FormatFloat(s.CPUs, 'f', -1, 64), strconv.FormatInt(s.Pids, 10), strconv.Itoa(s.UID), strconv.Itoa(s.GID), "egress"}
+	if s.Files.State != "" {
+		// Only when it keeps one, so a box made before state was is the
+		// same box.
+		words = append(words, "state")
+	}
+	for _, v := range words {
+		h.Write([]byte(v))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// unitSpecLabel is a hash of what an MCP unit's container was made
+// from: its declaration (its secrets by reference, never by value), the
+// project it mounts and its user.
+func unitSpecLabel(s Spec) string {
+	h := sha256.New()
+	for _, v := range []string{s.Of, s.Unit, s.Decl, s.Dir, s.Image, strconv.Itoa(s.UID), strconv.Itoa(s.GID)} {
 		h.Write([]byte(v))
 		h.Write([]byte{0})
 	}

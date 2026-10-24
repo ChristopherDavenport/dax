@@ -85,6 +85,10 @@ type capability struct {
 	// read; zero from an executor older than the field, whose tools
 	// read what its own -max-read-bytes says.
 	MaxReadBytes int64 `json:"maxReadBytes,omitempty"`
+	// Box is what a box host in front of the executor resolved for the
+	// session (`dax box serve` adds it to the handshake's answer): the
+	// profile and each unit's envelope. dax execute itself never sets it.
+	Box json.RawMessage `json:"box,omitempty"`
 }
 
 // clientCapability is CapabilityKey's value in a client's capabilities:

@@ -112,6 +112,8 @@ type shape struct {
 	// maxRead is the read limit the executor gave the session's
 	// tools; zero from an executor older than the field.
 	maxRead int64
+	// box is what a box host in front of it resolved; nil without one.
+	box json.RawMessage
 }
 
 // conn is one connection to the executor and what hangs on it: the
@@ -296,6 +298,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Root: cp.Descriptor.Root},
 		extensions: slices.Clone(cp.Extensions),
 		maxRead:    cp.MaxReadBytes,
+		box:        cp.Box,
 	}
 	for _, ct := range cp.Tools {
 		t, ok := listed[ct.Name]
@@ -761,6 +764,11 @@ func (r *Remote) readFiles(ctx context.Context, f func(*sdk.ClientSession) error
 
 // Descriptor is the workspace the executor's capability names.
 func (r *Remote) Descriptor() workspace.Descriptor { return r.first.desc }
+
+// Box is what the box host in front of the executor resolved for the
+// session at the first connection, as JSON: {"profile", "units": [an
+// envelope per unit]}; nil when no box host is.
+func (r *Remote) Box() json.RawMessage { return r.first.box }
 
 // Close ends the calls in flight and the connection, once, and stops
 // a redial; nothing is dialed after it. The executor ends the

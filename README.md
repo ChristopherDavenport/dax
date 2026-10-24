@@ -359,7 +359,7 @@ names the file and the field.
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
-| `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows it. With `local`, `host_config` names another box host config; with ssh, `project` (the path there), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
+| `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -479,9 +479,14 @@ the box has no capabilities, a read-only root file system, memory for
 `/tmp` and its home, and limits on memory, processors and processes.
 The image needs bash, sh, git and glibc. What the box is (image,
 runtime, limits, internet) is the box host's config's; the session
-picks a profile and may only narrow it. `dax box ls` lists this
-machine's boxes, `dax box down` removes this directory's, and `dax box
-up` makes it and prints its executor's command. The box limits what an
+picks a profile and may only narrow it. A profile is units: the
+workspace, where dax's tools act, and MCP units, each an MCP server in
+a container of its own with its own image, files (none, or the project
+read-only or read-write), internet and secrets, which the box host
+resolves and gives to that container alone; the workspace's bash never
+sees them. `dax box ls` lists this machine's boxes and units, `dax box
+down` removes this directory's, and `dax box up` makes it and prints
+its executor's command. The box limits what an
 approved call can reach, not how often you are asked: the policy is
 the same as here. It has no internet unless its profile gives it some,
 and then only HTTP and HTTPS through its sidecar's proxy, never the
@@ -497,7 +502,7 @@ dax box down
 ```
 
 [docs/sandbox.md](docs/sandbox.md) has recipes for daily use: the box,
-the box host config, a box over ssh, runtimes (gVisor, Kata), an image
+the box host config and its units, a box over ssh, runtimes (gVisor, Kata), an image
 with dax in it, each launcher, the config, what to
 check and what does not work yet.
 

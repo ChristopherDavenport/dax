@@ -9,7 +9,7 @@ mode, `dax box serve`, over the executor protocol dax already speaks
 Local is remote with more direct connectivity. A session that runs its
 tools in a box on this machine and one that runs them in a box on a
 build host must be configured the same way, decide the same way, and
-see the same box: the same image, limits, internet, MCP servers and
+see the same box: the same image, limits, internet, units and
 secrets handling. Only how the session reaches the box differs: a
 child process here, ssh there, HTTPS once an executor connection can
 be authenticated.
@@ -29,9 +29,9 @@ control (the session: model, key, policy, record)
    │  (a child here, ssh there; HTTPS once authenticated)
    ▼
 box host: `dax box serve`, on the docker machine; its own config
-   ├─ the project box: dax execute (read, write, edit, bash, …)
-   ├─ the MCP boxes (step 2): one per server
-   └─ the egress sidecars: the proxy #98 built, one per box
+   ├─ the workspace unit: the project box, dax execute (read, write, edit, bash, …)
+   ├─ the MCP units (step 2): one container per server
+   └─ the egress sidecars: the proxy #98 built, one per unit
 ```
 
 - **Control** is the session, as execution-boundary.md has it: the
@@ -39,8 +39,8 @@ box host: `dax box serve`, on the docker machine; its own config
   never runs docker and never holds a box's secrets.
 - **The box host** is on the execution side of the boundary, outside
   every box. It owns docker on its machine, the box host config (what
-  boxes it makes, at most how large, with which internet), and the
-  sources of the MCP servers' secrets. It decides nothing about a
+  units it makes, at most how large, with which files, internet and
+  secrets), and the sources of those secrets. It decides nothing about a
   call: it makes boxes, and passes the executor protocol through.
 - **The executors** are what they are today: `dax execute` in the
   project box serves the tools, makes each call's facts and checks its
@@ -59,7 +59,7 @@ Where each secret sits:
 | Secret | Where it is | Never in |
 |---|---|---|
 | the model's key | control | the box host, every box |
-| an MCP server's token (step 2) | the box host's sources (env, command, file), then that server's MCP box | control, the session's link, the project box, the record |
+| an MCP unit's token (step 2) | the box host's sources (env, command, file), then that unit's container | control, the session's link, the workspace unit, every other unit, the record |
 | ssh's agent (`SSH_AUTH_SOCK`) | control, given to the ssh launcher alone (`executor.pass_env`) | the box host's boxes |
 
 ## The relay
@@ -70,13 +70,15 @@ stateless `server/discover` that go-sdk v1.8's client tries first
 (SEP-2575), whose client capabilities are in its `_meta`. From it the
 box host reads what the session asks of the box: under the executor's
 capability key, beside `maxReadBytes`, a `box` object with the
-profile, the MCP servers wanted, and tightenings. It resolves that
+profile, the MCP units wanted, and tightenings. It resolves that
 against its config (below), makes or starts the box with
 `internal/box.Ensure`, starts `docker exec -i <box> dax execute`
-there, forwards the first line unchanged, and from then on copies
-bytes both ways. It never rewrites, reorders or answers a message but
-the first: requests, responses, notifications and the server's own
-requests (pings, elicitation) pass through as they came.
+there, forwards the first line unchanged, and from then on passes
+every message through, a line at a time, as it came: requests,
+responses, notifications and the server's own requests (pings,
+elicitation). It rewrites one kind of message, the executor's answer
+to the handshake, to which it adds what it resolved (Units, below), and
+answers one kind itself, the process methods of a unit's server.
 
 A request the box host refuses (a profile it does not have, a
 tightening that widens, an MCP server in step 1) is answered as the
@@ -92,58 +94,59 @@ are the in-box executor's, and a relay cannot change them. A server
 that re-served the tools would sit between the facts and the call.
 
 In step 2 the relay answers one more thing itself: a `dax/process.start`
-that names a catalog MCP server (below) starts that server in its MCP
-box, and the relay answers that process's methods. Every other process
-start, and every other method, still passes through.
+whose arguments are `["dax-unit", NAME]`, for one of the session's MCP
+units, starts that unit's server in the unit's container (`docker exec
+-i`), and the relay answers that process's methods, with ids of its own
+that cannot be the executor's. `dax-unit` is a reserved word, not a
+program: a `dax execute` with no box host in front fails it as a
+program not found. Every other process start, and every other method,
+still passes through.
 
 ## The box host config
 
 Read only by the box host: `~/.config/dax/box-host.json` on the
 machine it runs on, `-config` to name another. On this machine it is
 the user's file; on a build host it is the administrator's. Absent, the
-box host runs with built-in defaults that equal #98's: one profile,
-`default`, `golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512
-processes, no internet.
+box host runs with built-in defaults that equal #98's: one unit,
+`workspace` (`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512
+processes, the project read-write, no internet), and one profile,
+`default`, of that unit alone.
 
 ```json
 {
   "runtime": "runsc",
   "limits": { "memory": "8g", "cpus": 4, "pids": 1024 },
-  "images": ["golang:*", "node:*"],
+  "images": ["golang:*", "node:*", "python:*", "registry.example.com/mcp/*"],
   "default_profile": "go",
-  "profiles": {
-    "go": { "image": "golang:1.26-bookworm", "internet": "allow",
-            "allow": ["proxy.golang.org", "sum.golang.org"] },
-    "vm": { "image": "golang:1.26-bookworm", "runtime": "kata" }
+  "units": {
+    "workspace": { "image": "golang:1.26-bookworm", "files": { "project": "rw" },
+                   "internet": "allow", "allow": ["proxy.golang.org", "sum.golang.org"],
+                   "exfiltration": "accepted" },
+    "rag":       { "image": "registry.example.com/mcp/rag:1.0",
+                   "command": ["rag-mcp"], "files": { "project": "ro", "state": "rw" } },
+    "github":    { "image": "registry.example.com/mcp/github:1.0",
+                   "command": ["github-mcp", "stdio"], "files": "none",
+                   "internet": "allow", "allow": ["api.github.com"],
+                   "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" } }
   },
-  "mcp": {
-    "github": {
-      "build": { "base": "node:24-bookworm", "run": "npm i -g @modelcontextprotocol/server-github" },
-      "command": "mcp-server-github",
-      "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" },
-      "internet": "allow", "allow": ["api.github.com"],
-      "files": "none"
-    }
+  "profiles": {
+    "go":  { "workspace": "workspace", "mcp": ["rag", "github"] }
   }
 }
 ```
 
-- `runtime` is the default runtime; a profile may name its own. It is
+- `runtime` is the default runtime; a unit may name its own. It is
   checked only as the name of a runtime docker has registered, so
   gVisor's `runsc` and Kata's `kata` (or `io.containerd.kata.v2`) are both taken,
   and nothing in the box host behaves differently by runtime.
-- `limits` are ceilings: no profile, and no tightening, goes past them.
-- `images` are glob patterns an image (a profile's, an MCP server's
-  base) must match.
-- `profiles` are the boxes the box host makes. A field a profile leaves
-  out takes the built-in default.
-- `mcp` is the catalog (step 2): each server's image (`image`, or
-  `build`: a base and a command whose result is cached by a hash of the
-  two), its `command`, its `secrets` as references resolved on the box
-  host (`env:NAME`, `command:LINE`, `file:PATH`), its own internet
-  (`internet`, `allow`, through its own sidecar), and its access to the
-  project (`files`: `none`, the default, `ro` or `rw`). Step 1 reads and
-  validates it, and refuses a session that asks for a server.
+- `limits` are ceilings: no unit, and no tightening, goes past them.
+- `images` are glob patterns an image (a unit's, or a build's base)
+  must match.
+- `units` are the tool groups the box host makes, each one schema
+  (Units, below).
+- `profiles` are what a session asks for by name: exactly one
+  `workspace` unit, the project box dax's own tools run in, and the
+  `mcp` units beside it.
 
 ## The session's `box`
 
@@ -157,9 +160,10 @@ In the user's config, user layer only, as #98's:
 
 - `host`: `local` (the default) or `ssh://[user@]host[:port]`.
 - `profile`: one of the box host's; empty is its default.
-- `mcp`: catalog server names (step 2).
+- `mcp`: which of the profile's MCP units this session gets; empty is
+  all of them, and one the profile does not have is refused.
 - `tighten`: `memory`, `cpus`, `pids`, `internet`, `allow`, each only
-  ever narrowing what the profile gives. `internet` orders
+  ever narrowing what the profile's workspace unit gives. `internet` orders
   off < allow < on; `allow` must be within the profile's.
 - Local only: `host_config`, the box host config file the local box
   host reads in place of the default.
@@ -169,19 +173,118 @@ In the user's config, user layer only, as #98's:
 - Flags: `-box`, `-box=false`, `-box-host`, `-box-profile`, and
   `-box-internet`, a tightening for one run.
 
-The session cannot name an image, a runtime or a secret: those are the
-box host's. What it can say only narrows.
+The session cannot name an image, a runtime, a unit's files or a
+secret: those are the box host's. What it can say only narrows.
 
 ## Project files
 
-The box mounts the box host's own copy of the project, at its own
-path, read-write; an MCP box with `files` other than `none` mounts the
-same directory at the same path (step 2). Two runsc containers sharing
+The workspace unit mounts the box host's own copy of the project, at
+its own path, read-write; an MCP unit whose `files.project` is `ro` or
+`rw` mounts the same directory at the same path (step 2), so a path one
+names is a path the other reads. Two runsc containers sharing
 a bind mount see each other's writes at once (`file-access-mounts`
 defaults to shared); whether a file watcher in one sees another's
 changes is not known. Here the project is the session's directory. On
 a build host it is a path there: `box.project`, default the same path;
 cloning a repository into a directory the box host keeps is step 3.
+
+## Units
+
+Every tool group is a unit, and a unit is an envelope on three axes:
+what files it has, what it can reach, and what secrets it holds. The
+box host makes each unit's container from the envelope and enforces
+it; the session's policy decides each call, as for any tool. The
+workspace is a unit like the others, the one whose tools are dax's
+own, clustered around the project's files.
+
+| Unit | Files | Connectivity | Secrets |
+|---|---|---|---|
+| workspace: read, write, edit, bash | project `rw` | the profile's (`off` by default) | none |
+| a local RAG | project `ro`, its own state `rw` | `off` | none |
+| GitHub's MCP server | `none` | `allow api.github.com` | `GITHUB_TOKEN` |
+| a docs search | `none` | `allow docs.example.com` | none |
+
+One schema serves every unit:
+
+- `kind`: `workspace`, or `mcp` (the default when `command` is set).
+- `image`, or `build`: `{"base": IMAGE, "run": [LINE, …]}`, made once
+  as `docker build` of `FROM base` and a `RUN` per line, and tagged
+  `dax-unit/<unit>:<a hash of the declaration>`, so a changed
+  declaration is a new image and an unchanged one is not built again.
+- `runtime`, `memory`, `cpus`, `pids`: as the workspace's, within the
+  config's `limits`. An MCP unit that names none gets 1g, 1 CPU and 256
+  processes.
+- `files`: `"none"`, or `{"project": "ro"|"rw", "state": "rw"}`. The
+  project is mounted at its own path; `state` is a directory the box
+  host keeps for the unit, at `/state` (`DAX_UNIT_STATE`), which
+  outlives the container: a RAG's index. Nothing else is mounted. A
+  workspace unit has the project `rw`.
+- `internet`, `allow`: the unit's own, through a sidecar of its own on
+  an internal network of its own, so no unit reaches another unit or
+  the workspace.
+- `secrets`: `{"NAME": "env:VAR" | "command:LINE" | "file:/path"}`, MCP
+  units only. Each is resolved on the box host when the unit's
+  container is made and given to that container alone, through
+  docker's environment, never on a command line, in a label, a log, an
+  error or the session. (Docker keeps it in the container's
+  configuration, as any container's environment, where `docker
+  inspect` on the box host shows it to whoever can run docker there.)
+- `command`: the server's argv in its container, MCP units only.
+- `exfiltration`: `"accepted"`, rule 2.
+
+The box host refuses, when it reads its config, a unit that breaks one
+of three rules, naming the unit and the rule:
+
+1. **A secret needs an allowlist.** A unit with `secrets` has
+   `internet` `allow` or `off`, never `on`: the token reaches only the
+   hosts it is for, and a server that misbehaves cannot send it
+   anywhere else.
+2. **Files and connectivity together are declared.** A unit with the
+   project (`ro` or `rw`) and any internet is the one way the
+   project's contents can leave without the session seeing them, so it
+   needs `"exfiltration": "accepted"` from the administrator. The
+   workspace unit is held to it too; its default internet, `off`,
+   keeps it on the safe side.
+3. **A secret is a reference.** Its name is a variable's name; its
+   value is `env:`, `command:` or an absolute `file:` path; a value
+   written in the config is refused.
+
+Data moves between units only through files both are given, or through
+the session. A GitHub unit with `files: none` cannot read the project:
+for the model to send it code, the code is in a call's arguments,
+where the policy and the record see it.
+
+The box host tells the session what it resolved, in its answer to the
+handshake, under the executor's capability key:
+`box: {profile, units: [{name, kind, image, runtime, files, internet,
+allow, secrets: [names]}]}`. The units are made with the box, before
+that answer, so an image build is not held to a process start's
+timeout and a unit that cannot be made refuses the session with the
+reason. The session starts each MCP unit as an MCP
+server named after it (`dax-unit NAME`, through the executor, so it
+restarts as any MCP server does, its tools `mcp__<unit>__<tool>`), and
+records the envelopes in the session's header (`dax.box`): what each
+unit could reach, with its secrets' names and never their values.
+
+A server can still hand its own secret back as output (an env tool, an
+error quoting its token), which would put the value in the
+conversation, the provider's request and the record. So the box host
+redacts each value the unit's container holds (read with `docker
+inspect` when its server starts) from the server's standard output and
+error before any of it is passed on, in every spelling a JSON encoder
+writes it in, as `[REDACTED NAME]`, and says so once per unit and
+secret. It is a backstop: an encoded or split value passes, and the
+envelope (a secret reaches only its `allow` hosts) is what holds then.
+agentredact's pass over a recorded store is the complement: it finds
+undeclared secrets in a session being published, and cannot know a
+unit's values, which never leave the box host.
+
+Later, the envelope can inform the policy. execution-boundary.md lets
+dax claim confinement for an executor's tools only when the user
+configured the sandbox; a unit with `files: none` and `internet: off`
+is such a configured, enforced envelope, so a rule could ask less of
+its tools (agentpolicy's `ConfinedBy`). Not in this step: step 2
+records envelopes and decides nothing by them.
 
 ## Identity
 
@@ -227,7 +330,7 @@ supported, not code.
   - Writes to a shared bind mount are seen by another Kata container
     and by the host at once (new files and directories, appends, a
     rewrite under an open descriptor) with virtio-fs's default
-    `cache = "auto"`: MCP boxes can share the project.
+    `cache = "auto"`: units can share the project.
   - The dax binary's single-file mount works, read-only.
   - `--memory 4g` gives the guest about 3.9 GiB, and QEMU takes about
     360 MiB more on the host while idle; `--cpus 2` is three vCPUs.
@@ -255,12 +358,13 @@ supported, not code.
 1. **The relay, profiles, here and over ssh** (this change): the box
    host config, `dax box serve` over stdio, the session's `box` with
    `host`, `profile`, `tighten`, the local child and the ssh launcher.
-   The catalog is validated and refused.
-2. **MCP boxes:** the catalog; image builds cached by a hash of base
-   and command; secrets resolved on the box host into the server's box
-   alone; each server's internet through its own sidecar; `files`
-   mounts; `dax/process.start` for a catalog server answered by the
-   relay.
+   MCP servers in a box are refused.
+2. **Units:** the config's `units` and `profiles`, the three rules,
+   image builds cached by a hash of their declaration, secrets resolved
+   on the box host into one unit's container, each unit's internet
+   through its own sidecar and network, `files` and `state` mounts,
+   `dax/process.start` of `dax-unit NAME` answered by the relay, the
+   envelopes in the handshake and the record.
 3. **Remote projects and administration:** a box host that clones a
    repository into a directory it keeps; `dax box ls` and `down`
    against a box host elsewhere.
@@ -268,14 +372,15 @@ supported, not code.
 
 ## Open questions
 
-- Should a session be able to ask for a profile's image to be built
-  from a declaration, as the catalog's servers are, or is the image
-  always the administrator's choice?
+- Should a session be able to bring a unit of its own (a declaration
+  the box host builds), within the administrator's images and rules,
+  or are units always the administrator's?
 - One box host per session (each a process, as now) or one long-lived
   box host per machine that sessions attach to? Over ssh the former is
   free; over HTTPS the latter is the shape.
 - A box host serving more than one user: each user's boxes are named
   by their project's path today; a multi-user host needs the user in
   the name and in the box host config's limits.
-- Should the box host's resolved settings (profile, limits, internet)
-  reach the session's record, beside the workspace's descriptor?
+- The record holds each unit's envelope (step 2). Should a resumed
+  session whose box host now gives another envelope warn, as a changed
+  workspace does?

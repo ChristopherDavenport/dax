@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
@@ -85,9 +86,10 @@ func boxLauncher(s config.BoxSettings, dir string) (argv []string, request json.
 }
 
 // ensureBox makes or starts, through c, the box of the project in dir
-// as s says, mounting this dax, and gives it running. What it does
-// beyond that, a first start or making it again, is said through say.
-func ensureBox(ctx context.Context, c *box.Client, dir string, s box.Settings, say func(string)) (box.Box, error) {
+// as r's workspace unit says, mounting this dax, and gives it running.
+// What it does beyond that, a first start or making it again, is said
+// through say.
+func ensureBox(ctx context.Context, c *box.Client, dir string, r box.Resolved, say func(string)) (box.Box, error) {
 	b, err := projectBox(dir)
 	if err != nil {
 		return b, err
@@ -97,12 +99,40 @@ func ensureBox(ctx context.Context, c *box.Client, dir string, s box.Settings, s
 		return b, fmt.Errorf("box: this dax: %w", err)
 	}
 	c.Warn, c.Starting, c.Notice = say, say, say
+	w := r.Workspace
 	return c.Ensure(ctx, box.Spec{
-		Name: b.Name, Dir: b.Dir,
-		Image: s.Image, Runtime: s.Runtime, Memory: s.Memory, CPUs: s.CPUs, Pids: s.Pids,
+		Name: b.Name, Dir: b.Dir, Unit: w.Unit,
+		Image: w.Image, Build: w.Build, Runtime: w.Runtime, Memory: w.Memory, CPUs: w.CPUs, Pids: w.Pids,
+		Files:  w.Files,
 		Binary: bin, UID: os.Getuid(), GID: os.Getgid(),
-		Rules: s.Rules,
+		Rules: w.Rules,
 	})
+}
+
+// commandOf is r's MCP unit name's command.
+func commandOf(r box.Resolved, name string) []string {
+	for _, u := range r.Units {
+		if u.Unit == name {
+			return u.Command
+		}
+	}
+	return nil
+}
+
+// unitSpec is the container of r's MCP unit u, of box b: its sidecar
+// runs this dax in the workspace's image, which has the glibc it needs.
+func unitSpec(b box.Box, r box.Resolved, u box.Settings) (box.Spec, error) {
+	bin, err := box.Self()
+	if err != nil {
+		return box.Spec{}, fmt.Errorf("box: this dax: %w", err)
+	}
+	return box.Spec{
+		Name: box.UnitName(b.Name, u.Unit), Of: b.Name, Unit: u.Unit, Dir: b.Dir,
+		Image: u.Image, Build: u.Build, Runtime: u.Runtime, Memory: u.Memory, CPUs: u.CPUs, Pids: u.Pids,
+		Files: u.Files, Secrets: u.Secrets, Decl: u.Decl,
+		Binary: bin, UID: os.Getuid(), GID: os.Getgid(),
+		Rules: u.Rules, SidecarImage: r.Workspace.Image,
+	}, nil
 }
 
 // loadHostConfig is the box host config at path, or at its default
@@ -190,23 +220,69 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		}
 	}
 	say := func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) }
-	return box.Relay(ctx, in, out, executor.CapabilityKey, func(ctx context.Context, r box.Request) (box.Child, error) {
-		s, err := h.Resolve(r)
+	return box.Relay(ctx, in, out, executor.CapabilityKey, func(ctx context.Context, req box.Request) (box.Hosted, error) {
+		r, err := h.Resolve(req)
 		if err != nil {
-			return nil, err
+			return box.Hosted{}, err
 		}
-		b, err := ensureBox(ctx, c, dir, s, say)
+		b, err := ensureBox(ctx, c, dir, r, say)
 		if err != nil {
-			return nil, err
+			return box.Hosted{}, err
 		}
-		return start(ctx, b.Command())
+		// The units are made with the box, before the session is answered:
+		// a build is not held to a process start's timeout, and a unit that
+		// cannot be made (a secret that is not set) refuses the session
+		// with the reason.
+		units := map[string]box.Spec{}
+		var names []string
+		for _, u := range r.Units {
+			spec, err := unitSpec(b, r, u)
+			if err != nil {
+				return box.Hosted{}, err
+			}
+			if _, err := c.EnsureUnit(ctx, spec); err != nil {
+				return box.Hosted{}, err
+			}
+			units[u.Unit] = spec
+			names = append(names, u.Unit)
+		}
+		child, err := start(ctx, b.Command())
+		if err != nil {
+			return box.Hosted{}, err
+		}
+		hosted := box.Hosted{Child: child, Info: r.BoxInfo(), Units: names}
+		if len(units) > 0 {
+			// A unit's server runs in its container, over this connection;
+			// the container is started again first if it stopped since.
+			// What it writes is redacted of the secrets its container
+			// holds, and the session is told once per unit and secret.
+			var mu sync.Mutex
+			told := map[[2]string]bool{}
+			hosted.StartUnit = func(ctx context.Context, name string, stderr bool) (box.Proc, error) {
+				spec := units[name]
+				ctr, err := c.EnsureUnit(ctx, spec)
+				if err != nil {
+					return nil, err
+				}
+				return c.StartUnitProc(ctx, spec, ctr, commandOf(r, name), stderr, func(secret string, _ int) {
+					mu.Lock()
+					first := !told[[2]string{name, secret}]
+					told[[2]string{name, secret}] = true
+					mu.Unlock()
+					if first {
+						say(fmt.Sprintf("unit %s: redacted %s in its output; a server that returns its secret is redacted by the box host, see docs/sandbox.md", name, secret))
+					}
+				})
+			}
+		}
+		return hosted, nil
 	})
 }
 
 // runBoxWith is `dax box up|ls|down|proxy` over c, which the tests give
 // a fake docker.
 func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer, c *box.Client) error {
-	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box from this machine's box host config; print its executor's command)\n       %[1]s box ls\n       %[1]s box down [name]   (remove a box; default this directory's)\n       %[1]s box serve [flags]   (the box host, which -box starts)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
+	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box from this machine's box host config; print its executor's command)\n       %[1]s box ls\n       %[1]s box down [-state] [name]   (remove a box and its units; default this directory's)\n       %[1]s box serve [flags]   (the box host, which -box starts)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -217,11 +293,14 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fs.PrintDefaults()
 	}
 	var cfgPath, profile, internet, listen, rules, check *string
+	var dropState *bool
 	switch args[0] {
 	case "up":
 		cfgPath = fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json")
 		profile = fs.String("profile", "", "the box host config's profile; default its default")
 		internet = fs.String("internet", "", "narrow the profile's internet: off, allow (its hosts) or on")
+	case "down":
+		dropState = fs.Bool("state", false, "remove the units' state directories too (a RAG's index); kept by default")
 	case "proxy":
 		listen = fs.String("listen", ":"+box.ProxyPort, "address to serve on")
 		rules = fs.String("rules", box.RulesMount+"/"+box.RulesFile, "the rules file, read again when it changes")
@@ -246,12 +325,12 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if err != nil {
 			return err
 		}
-		r := box.Request{Profile: *profile, Tighten: box.Tighten{Internet: *internet}}
-		s, err := h.Resolve(r)
+		req := box.Request{Profile: *profile, Tighten: box.Tighten{Internet: *internet}}
+		r, err := h.Resolve(req)
 		if err != nil {
 			return err
 		}
-		b, err := ensureBox(ctx, c, dir, s, func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) })
+		b, err := ensureBox(ctx, c, dir, r, func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) })
 		if err != nil {
 			return err
 		}
@@ -266,9 +345,9 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 			return err
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "NAME\tSTATE\tRUNTIME\tINTERNET\tDIR")
+		fmt.Fprintln(tw, "NAME\tUNIT\tSTATE\tRUNTIME\tFILES\tINTERNET\tDIR")
 		for _, b := range boxes {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", b.Name, b.State, b.Runtime, b.Internet, b.Dir)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", b.Name, b.Unit, b.State, b.Runtime, b.Files, b.Internet, b.Dir)
 		}
 		return tw.Flush()
 	case "proxy":
@@ -295,7 +374,7 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		default:
 			return fmt.Errorf("box down: unexpected argument %q", fs.Arg(1))
 		}
-		if err := c.Remove(ctx, name); err != nil {
+		if err := c.Remove(ctx, name, *dropState); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "removed %s\n", name)
