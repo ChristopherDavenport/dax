@@ -288,6 +288,11 @@ func (c *Client) removeContainer(ctx context.Context, name string, there bool) (
 		}
 	}
 	if dir, err := c.stateDir(name); err == nil {
+		// Rules a box left behind, as a box host's state outlives its box
+		// when only the box was removed, are something of it too.
+		if _, err := os.Stat(dir); err == nil {
+			left = true
+		}
 		os.RemoveAll(dir)
 	}
 	return left, nil

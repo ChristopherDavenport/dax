@@ -321,19 +321,26 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 	}
 	say := func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) }
 	proj := boxProject{dir: *project}
+	// A checkout the config does not take is the answer to whatever the
+	// session asks, as a refused box is, so it reads why.
+	var refused error
 	if *checkout != "" {
-		if proj, err = checkoutProject(h, *checkout, *ref); err != nil {
-			return err
-		}
+		proj, refused = checkoutProject(h, *checkout, *ref)
 	} else if proj.dir == "" {
 		if proj.dir, err = os.Getwd(); err != nil {
 			return err
 		}
 	}
 	admin := func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		if refused != nil {
+			return nil, refused
+		}
 		return boxAdmin(ctx, c, proj, method, params)
 	}
 	return box.Relay(ctx, in, out, executor.CapabilityKey, func(ctx context.Context, req box.Request) (box.Hosted, error) {
+		if refused != nil {
+			return box.Hosted{}, refused
+		}
 		r, err := h.Resolve(req)
 		if err != nil {
 			return box.Hosted{}, err
@@ -417,13 +424,13 @@ type boxProject struct {
 func checkoutProject(h box.HostConfig, raw, ref string) (boxProject, error) {
 	norm, err := box.NormalizeURL(raw)
 	if err != nil {
-		return boxProject{}, fmt.Errorf("box serve: -checkout %w", err)
+		return boxProject{}, fmt.Errorf("-checkout %w", err)
 	}
 	switch {
 	case len(h.Checkouts.Allow) == 0:
-		return boxProject{}, fmt.Errorf("box serve: this box host keeps no checkouts: its config has no checkouts.allow, so %s is refused", box.Redact(norm))
+		return boxProject{}, fmt.Errorf("this box host keeps no checkouts: its config has no checkouts.allow, so %s is refused", box.Redact(norm))
 	case !h.Checkouts.Allows(norm):
-		return boxProject{}, fmt.Errorf("box serve: %s is not among this box host's checkouts.allow", box.Redact(norm))
+		return boxProject{}, fmt.Errorf("%s is not among this box host's checkouts.allow", box.Redact(norm))
 	}
 	dir, err := h.Checkouts.Path(norm)
 	if err != nil {

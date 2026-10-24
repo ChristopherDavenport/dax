@@ -839,6 +839,12 @@ func TestBoxServeCheckout(t *testing.T) {
 	if _, err := ask(c, box.MethodStatus, nil, "-checkout", url); err == nil || !strings.Contains(err.Error(), "keeps no checkouts") {
 		t.Errorf("no allow: %v", err)
 	}
+	// A session is told too, as the answer to its handshake.
+	var told bytes.Buffer
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}` + "\n"
+	if err := runBoxServe(ctx, []string{"-checkout", url}, p, strings.NewReader(init), &told, c, nil); err == nil || !strings.Contains(told.String(), "keeps no checkouts") {
+		t.Errorf("a session asking for a refused checkout: %v, told %q", err, told.String())
+	}
 	write(`"https://github.com/me/*"`)
 	if _, err := ask(c, box.MethodStatus, nil, "-checkout", url); err == nil || !strings.Contains(err.Error(), "not among") {
 		t.Errorf("not allowed: %v", err)

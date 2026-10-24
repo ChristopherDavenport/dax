@@ -617,6 +617,14 @@ func TestListAndRemove(t *testing.T) {
 	if slices.ContainsFunc(f.verbs(), func(v string) bool { return strings.HasPrefix(v, "rm") || v == "network rm" }) {
 		t.Errorf("something was removed: %q", f.calls)
 	}
+	// Rules left behind by a box removed without them are its, and go:
+	// a box host's state outlives a box removed elsewhere.
+	if err := c.Remove(context.Background(), "dax-a-1", false); err != nil {
+		t.Errorf("Remove of a box's rules alone: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dax-a-1")); !os.IsNotExist(err) {
+		t.Errorf("the rules are still there: %v", err)
+	}
 }
 
 func TestRemove(t *testing.T) {
