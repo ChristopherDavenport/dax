@@ -507,7 +507,20 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
-	for _, m := range o.MCP {
+	servers := o.MCP
+	if o.Executor != nil {
+		// The box host's MCP units, each an MCP server started through
+		// the executor as any other, which the box host runs in the
+		// unit's own container.
+		units, err := o.Executor.unitServers()
+		if err != nil {
+			return nil, err
+		}
+		if servers, err = withUnits(servers, units); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range servers {
 		t, mopts, err := s.mcpStart(ctx, m.Name, m.Command)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)

@@ -1,6 +1,7 @@
 package dax
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,6 +33,21 @@ type boxDocker struct {
 
 func (d *boxDocker) Docker(_ context.Context, args ...string) ([]byte, error) {
 	d.calls = append(d.calls, args)
+	if args[0] == "ps" && slices.Contains(args, "label=dax.box.of") {
+		// A unit's container: none until the box host made one, then
+		// running with the label it was made with.
+		for _, c := range slices.Backward(d.calls) {
+			if c[0] != "run" || !slices.ContainsFunc(c, func(a string) bool { return strings.HasPrefix(a, "dax.box.of=") }) {
+				continue
+			}
+			for _, a := range c {
+				if label, ok := strings.CutPrefix(a, "dax.box.spec="); ok {
+					return []byte("running\t" + label + "\n"), nil
+				}
+			}
+		}
+		return nil, nil
+	}
 	q, ok := d.answers[args[0]]
 	if !ok && args[0] == "network" {
 		q = []string{"172.30.0.0/16 \n"}
@@ -56,7 +72,7 @@ func TestBoxCommand(t *testing.T) {
 	}
 	p := program{name: "dax", version: "test"}
 	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
-	if err := os.WriteFile(hostCfg, []byte(`{"profiles":{"default":{},"open":{"internet":"on","runtime":"io.containerd.kata.v2"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(hostCfg, []byte(`{"units":{"workspace":{},"open":{"internet":"on","runtime":"io.containerd.kata.v2","exfiltration":"accepted"}},"profiles":{"default":{"workspace":"workspace"},"open":{"workspace":"open"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -72,7 +88,7 @@ func TestBoxCommand(t *testing.T) {
 			name:    "ls",
 			args:    []string{"ls"},
 			answers: map[string][]string{"ps": {"dax-a-1\trunning\t/src/a\trunsc\n"}},
-			out:     "NAME STATE RUNTIME INTERNET DIR dax-a-1 running runsc ? /src/a",
+			out:     "NAME UNIT STATE RUNTIME FILES INTERNET DIR dax-a-1 workspace running runsc project rw ? /src/a",
 		},
 		{
 			name:    "down takes this directory's box, its sidecar and its network",
@@ -439,7 +455,7 @@ func TestBoxServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
-	if err := os.WriteFile(hostCfg, []byte(`{"default_profile":"go","profiles":{"go":{"image":"golang:1.26-bookworm","allow":["proxy.golang.org"]},"vm":{"runtime":"io.containerd.kata.v2"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(hostCfg, []byte(`{"default_profile":"go","units":{"go":{"image":"golang:1.26-bookworm","allow":["proxy.golang.org"],"exfiltration":"accepted"},"vm":{"runtime":"io.containerd.kata.v2"}},"profiles":{"go":{"workspace":"go"},"vm":{"workspace":"vm"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	init := func(box string) string {
@@ -458,7 +474,7 @@ func TestBoxServe(t *testing.T) {
 		{name: "a profile by name", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"profile":"vm"}`), rules: "off", runWith: []string{"--runtime", "io.containerd.kata.v2"}},
 		{name: "a tightening", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"tighten":{"internet":"off","memory":"1g"}}`), rules: "off", runWith: []string{"--memory", "1g"}},
 		{name: "a widening", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"tighten":{"internet":"on"}}`), err: "more than profile go's allow"},
-		{name: "an MCP server", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"mcp":["github"]}`), err: "not run yet"},
+		{name: "an MCP server", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"mcp":["github"]}`), err: "not one of profile go's MCP units (none)"},
 		{name: "no box host config: the built-in", args: []string{"-project", dir}, first: init(""), rules: "off", runWith: []string{"golang:1.26-bookworm", "sleep", "infinity"}},
 		{name: "a box host config that is not there", args: []string{"-config", "/nonexistent.json", "-project", dir}, first: init(""), err: "box host config"},
 		{name: "a project that is not there", args: []string{"-project", "/nonexistent/project"}, first: init(""), err: "nonexistent"},
@@ -577,6 +593,12 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != "box" || desc.Root != root {
 				t.Errorf("descriptor = %+v, want the in-box executor's", desc)
 			}
+			// What the box host resolved reaches the session, in the
+			// handshake's answer: the built-in profile, its workspace unit.
+			var info box.BoxInfo
+			if err := json.Unmarshal(r.Box(), &info); err != nil || info.Profile != box.DefaultProfile || len(info.Units) != 1 || info.Units[0].Name != box.DefaultUnit || info.Units[0].Files != "project rw" || info.Units[0].Internet != box.InternetOff {
+				t.Errorf("the session was told the box %s (%v)", r.Box(), err)
+			}
 			tools, err := r.Tools(ctx)
 			if err != nil || len(tools) == 0 {
 				t.Errorf("tools = %v, %v", tools, err)
@@ -589,5 +611,97 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 				t.Fatal("the box host did not end with the session")
 			}
 		})
+	}
+}
+
+// A unit's server, through the box host: the handshake's answer names
+// the session's units, and a dax/process.start of ["dax-unit", NAME]
+// makes the unit's container (a fake docker) and runs the server in it
+// (a stand-in docker that runs it here), answered by the box host, the
+// executor never asked.
+func TestBoxServeUnit(t *testing.T) {
+	home(t)
+	dir := t.TempDir()
+	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
+	if err := os.WriteFile(hostCfg, []byte(`{"units":{"workspace":{},"echo":{"image":"node:24","command":["cat"],"files":{"project":"ro"}}},"profiles":{"default":{"workspace":"workspace","mcp":["echo"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stand := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(stand, []byte("#!/bin/sh\n[ \"$1\" = exec ] || exit 2\nshift\n[ \"$1\" = -i ] && shift\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := projectBox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+	c := &box.Client{Runner: d, StateDir: t.TempDir(), DataDir: t.TempDir(), DockerPath: stand}
+	child := newFakeChild()
+	start := func(context.Context, []string) (box.Child, error) { return child, nil }
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	served := make(chan error, 1)
+	go func() {
+		served <- runBoxServe(context.Background(), []string{"-config", hostCfg, "-project", dir}, program{name: "dax", version: "test"}, inR, outW, c, start)
+		outW.Close()
+	}()
+	lines := make(chan string, 16)
+	go func() {
+		br := bufio.NewReader(outR)
+		for {
+			line, err := br.ReadString('\n')
+			if line != "" {
+				lines <- line
+			}
+			if err != nil {
+				close(lines)
+				return
+			}
+		}
+	}()
+	next := func() string {
+		select {
+		case l, ok := <-lines:
+			if !ok {
+				t.Fatal("the box host ended")
+			}
+			return l
+		case <-time.After(10 * time.Second):
+			t.Fatal("no answer from the box host")
+		}
+		return ""
+	}
+	// The unit's container is made on its first start (boxDocker answers
+	// its ps from the run the box host gave).
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"`+executor.CapabilityKey+`":{"box":{}}}}}}`+"\n")
+	// The fake executor answers the initialize when its input ends; the
+	// box host's own answers come first.
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"dax/process.start","params":{"args":["dax-unit","echo"]}}`+"\n")
+	got := next()
+	if !strings.Contains(got, `"id":"unit-1"`) {
+		t.Fatalf("start answered %s", got)
+	}
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":3,"method":"dax/process.write","params":{"id":"unit-1","data":"aGkK"}}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":4,"method":"dax/process.read","params":{"id":"unit-1","fd":1}}`+"\n")
+	for range 2 {
+		if l := next(); strings.Contains(l, `"id":4`) && !strings.Contains(l, `"data":"aGkK"`) {
+			t.Fatalf("read answered %s", l)
+		}
+	}
+	inW.Close()
+	init := next()
+	if !strings.Contains(init, `"result"`) {
+		t.Fatalf("the executor's answer: %s", init)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(child.got.String(), "dax-unit") {
+		t.Errorf("the executor was sent the unit's start: %s", child.got.String())
+	}
+	if !slices.ContainsFunc(d.calls, func(c []string) bool {
+		return c[0] == "run" && slices.Contains(c, "dax.box.of="+b.Name) && containsRun(c, []string{"-v", dir + ":" + dir + ":ro"})
+	}) {
+		t.Errorf("no unit run with the project read-only in %q", d.calls)
 	}
 }

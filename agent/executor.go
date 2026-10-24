@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -207,7 +208,23 @@ func (e *Executor) String() string {
 	if d.Ref != "" {
 		where += " " + d.Ref
 	}
-	return fmt.Sprintf("%s %s · %s · %s", name, version, where, d.Root)
+	line := fmt.Sprintf("%s %s · %s · %s", name, version, where, d.Root)
+	// Behind a box host: the profile it made, and the session's MCP
+	// units beside the workspace.
+	var info struct {
+		Profile string `json:"profile"`
+	}
+	if raw := e.r.Box(); len(raw) > 0 && json.Unmarshal(raw, &info) == nil && info.Profile != "" {
+		line += " · profile " + info.Profile
+		if units, err := unitServersOf(raw); err == nil && len(units) > 0 {
+			names := make([]string, len(units))
+			for i, u := range units {
+				names[i] = u.Name
+			}
+			line += ", units " + strings.Join(names, ", ")
+		}
+	}
+	return line
 }
 
 // errViewOnly is what the executor's view says to anything that would
@@ -270,3 +287,54 @@ func (e *Executor) runs(exts []extension.Extension) error {
 	}
 	return nil
 }
+
+// unitServers are the session's MCP units, as the box host in front of
+// the executor resolved them (unitServersOf). None without a box host.
+func (e *Executor) unitServers() ([]MCPServer, error) {
+	return unitServersOf(e.r.Box())
+}
+
+// unitServersOf is each MCP unit in raw, what a box host resolved, as
+// an MCP server named after its unit, whose command, `dax-unit NAME`,
+// the box host answers by starting the unit's server in the unit's
+// container.
+func unitServersOf(raw json.RawMessage) ([]MCPServer, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var info struct {
+		Units []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"units"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, fmt.Errorf("executor: the box host's units: %w", err)
+	}
+	var out []MCPServer
+	for _, u := range info.Units {
+		if u.Kind != "mcp" {
+			continue
+		}
+		if !unitName.MatchString(u.Name) {
+			return nil, fmt.Errorf("executor: the box host's unit %q: not a unit's name", u.Name)
+		}
+		out = append(out, MCPServer{Name: u.Name, Command: "dax-unit " + u.Name})
+	}
+	return out, nil
+}
+
+// withUnits is servers, the session's own MCP servers, and the box
+// host's units after them; a unit whose name a server of the session's
+// has is refused, since the tools' names would be one.
+func withUnits(servers, units []MCPServer) ([]MCPServer, error) {
+	for _, u := range units {
+		if slices.ContainsFunc(servers, func(m MCPServer) bool { return m.Name == u.Name }) {
+			return nil, fmt.Errorf("mcp %s: a server your config names and a unit of the box host's have the name; rename the server", u.Name)
+		}
+	}
+	return append(slices.Clone(servers), units...), nil
+}
+
+// unitName is what a box host's unit may be called (internal/box).
+var unitName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)

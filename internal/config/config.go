@@ -155,8 +155,9 @@ type Box struct {
 	Host string `json:"host,omitempty"`
 	// Profile is one of the box host's profiles; empty is its default.
 	Profile string `json:"profile,omitempty"`
-	// MCP names servers of the box host's catalog, each run in a box of
-	// its own (not yet: the box host refuses them).
+	// MCP narrows which of the profile's MCP units the session gets,
+	// each run by the box host in a container of its own; empty is all
+	// of them. A unit the profile has not is refused by the box host.
 	MCP []string `json:"mcp,omitempty"`
 	// Tighten narrows the profile: less memory, CPUs or processes, less
 	// internet, fewer hosts. The box host refuses a widening.
