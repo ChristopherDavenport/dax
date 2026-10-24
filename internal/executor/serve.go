@@ -93,6 +93,10 @@ type clientCapability struct {
 	// MaxReadBytes is the session's max_read_bytes; zero asks for
 	// tool.DefaultMaxRead. The executor caps it (readLimit).
 	MaxReadBytes int64 `json:"maxReadBytes,omitempty"`
+	// Box is the box the session asks a box host for (`dax box serve`
+	// reads it from the first message and passes it on unchanged); the
+	// executor in the box reads nothing of it.
+	Box json.RawMessage `json:"box,omitempty"`
 }
 
 // capabilityFiles says the workspace's files are served, read-only, as

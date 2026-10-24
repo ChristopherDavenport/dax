@@ -1,5 +1,6 @@
 // Package box keeps a project's box: a long-lived container, run under
-// a sandboxing runtime (gVisor's runsc by default), that a session's
+// a sandboxing runtime (runsc by default; any runtime docker has
+// registered, Kata's among them), that a session's
 // tools run in through `docker exec -i ... dax execute`. The project's
 // directory is mounted at its own path, this machine's dax binary is
 // mounted read-only as the box's dax, so the executor is always the
@@ -57,10 +58,11 @@ const Home = "/home/dax"
 // reaches the internet through; the boxes are never on it.
 const EgressNetwork = "dax-box-egress"
 
-// ProxyRuntime is the sidecar's runtime. Under gVisor, docker's own
-// name server on a user-defined network does not answer, so the
-// sidecar, which must resolve the hosts it is asked for, runs under
-// runc; it runs only dax's proxy, never a command the model wrote.
+// ProxyRuntime is the sidecar's runtime. Under some sandboxing
+// runtimes (gVisor's, verified) docker's own name server on a
+// user-defined network does not answer, so the sidecar, which must
+// resolve the hosts it is asked for, runs under runc; it runs only
+// dax's proxy, never a command the model wrote.
 const ProxyRuntime = "runc"
 
 // Spec is what a box is made from.
@@ -73,8 +75,9 @@ type Spec struct {
 	// Image must have bash, sh and git, and a C library the host's dax
 	// runs on (glibc) unless dax was built with CGO_ENABLED=0.
 	Image string
-	// Runtime is the OCI runtime docker runs the box with: runsc for
-	// gVisor. It is never replaced by another.
+	// Runtime is the OCI runtime docker runs the box with: runsc,
+	// io.containerd.kata.v2, any docker has registered. It is never
+	// replaced by another.
 	Runtime string
 	// Memory is the box's memory limit as docker takes it ("4g"), swap
 	// included, so it has none beyond it.
@@ -206,6 +209,14 @@ type Info struct {
 // ErrRuntime is a runtime docker does not know.
 var ErrRuntime = errors.New("runtime not registered with docker")
 
+// isUnknownRuntime reports whether docker refused a run for its
+// runtime: docker says "unknown or invalid runtime name: X" whichever
+// runtime was asked for, and some versions "unknown runtime".
+func isUnknownRuntime(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown or invalid runtime") || strings.Contains(msg, "unknown runtime")
+}
+
 // errInUse is a box's name taken between looking for it and making it.
 var errInUse = errors.New("name already in use")
 
@@ -249,7 +260,7 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 		return b, err
 	}
 	if spec.Rules.Internet == InternetOff {
-		c.notice(fmt.Sprintf("box %s has no internet; -box-internet=on or box.allow to open it", spec.Name))
+		c.notice(fmt.Sprintf("box %s has no internet; a box host profile with internet (-box-profile) opens it", spec.Name))
 	}
 	return b, nil
 }
@@ -416,7 +427,7 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 // exec starts.
 func RunArgs(spec Spec, bin, proxyIP string) []string {
 	proxy := "http://" + proxyIP + ":" + ProxyPort
-	return []string{
+	args := []string{
 		"run", "-d", "--init",
 		"--name", spec.Name,
 		"--label", Label + "=1",
@@ -445,9 +456,23 @@ func RunArgs(spec Spec, bin, proxyIP string) []string {
 		"-v", spec.Dir + ":" + spec.Dir,
 		"-w", spec.Dir,
 		"-v", spec.Binary + ":" + Binary + ":ro",
-		spec.Image,
-		"sleep", "infinity",
 	}
+	if !hostKernel(spec.Runtime) {
+		// A sandbox's processes are not this machine's: gVisor's and
+		// Kata's are counted by their own kernel, so --pids-limit, a
+		// cgroup on this machine, does not reach them. A process limit
+		// for the box's user does, enforced by that kernel.
+		pids := strconv.FormatInt(spec.Pids, 10)
+		args = append(args, "--ulimit", "nproc="+pids+":"+pids)
+	}
+	return append(args, spec.Image, "sleep", "infinity")
+}
+
+// hostKernel reports whether runtime runs a container's processes on
+// this machine's kernel, as runc does, where --pids-limit holds and a
+// user's process limit would count the user's every process here.
+func hostKernel(runtime string) bool {
+	return runtime == "runc" || runtime == "io.containerd.runc.v2"
 }
 
 // SidecarArgs are docker's arguments that make box spec's sidecar: the
@@ -490,8 +515,8 @@ func (c *Client) create(ctx context.Context, spec Spec, bin string) error {
 		return err
 	}
 	if _, err := c.Runner.Docker(ctx, RunArgs(spec, bin, ip)...); err != nil {
-		if strings.Contains(err.Error(), "unknown or invalid runtime name") {
-			return fmt.Errorf("box %s: %w: %s; register it (for gVisor, see docs/sandbox.md, \"gVisor\") or name another with box.runtime", spec.Name, ErrRuntime, spec.Runtime)
+		if isUnknownRuntime(err) {
+			return fmt.Errorf("box %s: %w: %s; register it with docker (docs/sandbox.md, \"Runtimes\") or name another in the box host's config", spec.Name, ErrRuntime, spec.Runtime)
 		}
 		if strings.Contains(err.Error(), "is already in use") {
 			return fmt.Errorf("box %s: %w", spec.Name, errInUse)

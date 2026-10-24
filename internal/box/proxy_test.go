@@ -200,7 +200,7 @@ func TestProxyModes(t *testing.T) {
 		{"on takes https", Rules{Internet: InternetOn}, "https://example.com/", 200, "tls example.com"},
 		{"allow takes a listed host", Rules{Internet: InternetAllow, Allow: []string{"proxy.golang.org"}}, "http://proxy.golang.org/m", 200, "plain proxy.golang.org /m"},
 		{"allow takes https to a listed host", Rules{Internet: InternetAllow, Allow: []string{"example.com"}}, "https://example.com/", 200, "tls example.com"},
-		{"allow refuses another", Rules{Internet: InternetAllow, Allow: []string{"proxy.golang.org"}}, "http://evil.test/", 403, "dax box: evil.test is not allowed (box.allow; -box-internet)"},
+		{"allow refuses another", Rules{Internet: InternetAllow, Allow: []string{"proxy.golang.org"}}, "http://evil.test/", 403, "dax box: evil.test is not allowed (the box host profile's allow; box.tighten; -box-internet)"},
 		{"allow refuses https to another", Rules{Internet: InternetAllow, Allow: []string{"proxy.golang.org"}}, "https://example.com/", 0, "Forbidden"},
 		{"wildcard takes below", Rules{Internet: InternetAllow, Allow: []string{"*.example.com"}}, "http://a.example.com/", 200, "plain a.example.com"},
 		{"wildcard refuses the apex", Rules{Internet: InternetAllow, Allow: []string{"*.example.com"}}, "http://example.com/", 403, "example.com is not allowed"},
@@ -239,7 +239,7 @@ func TestProxyRefusalBodyOverConnect(t *testing.T) {
 	fmt.Fprintf(conn, "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	b, _ := io.ReadAll(conn)
-	if !strings.HasPrefix(string(b), "HTTP/1.1 403") || !strings.Contains(string(b), "example.com is not allowed (box.allow; -box-internet)") {
+	if !strings.HasPrefix(string(b), "HTTP/1.1 403") || !strings.Contains(string(b), "example.com is not allowed (the box host profile's allow; box.tighten; -box-internet)") {
 		t.Errorf("CONNECT refusal = %q", b)
 	}
 }

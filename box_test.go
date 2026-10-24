@@ -3,16 +3,23 @@ package dax
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/executor"
 )
 
 // boxDocker answers docker by its first argument, each answer once and
@@ -48,6 +55,10 @@ func TestBoxCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := program{name: "dax", version: "test"}
+	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
+	if err := os.WriteFile(hostCfg, []byte(`{"profiles":{"default":{},"open":{"internet":"on","runtime":"io.containerd.kata.v2"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name    string
 		args    []string
@@ -84,25 +95,33 @@ func TestBoxCommand(t *testing.T) {
 		},
 		{
 			name:    "up prints the executor line",
-			args:    []string{"up", "-runtime", "runsc-ptrace"},
+			args:    []string{"up"},
 			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
 			out:     "dax -executor ",
 			rules:   "off",
 		},
 		{
-			name:    "up -internet on",
-			args:    []string{"up", "-internet", "on"},
+			name:    "up -profile from the box host config",
+			args:    []string{"up", "-config", hostCfg, "-profile", "open"},
 			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
 			rules:   "on",
+			calls:   [][]string{{"--runtime", "io.containerd.kata.v2"}},
 		},
-		{name: "up -internet allow with no hosts", args: []string{"up", "-internet", "allow"}, err: "names no hosts"},
-		{name: "up -internet sideways", args: []string{"up", "-internet", "sideways"}, err: "-box-internet"},
+		{
+			name:    "up -internet narrows the profile",
+			args:    []string{"up", "-config", hostCfg, "-profile", "open", "-internet", "off"},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
+			rules:   "off",
+		},
+		{name: "up -internet widening the profile", args: []string{"up", "-internet", "on"}, err: "tighten.internet on is more than profile default's off"},
+		{name: "up -internet sideways", args: []string{"up", "-internet", "sideways"}, err: "tighten.internet"},
+		{name: "up -profile the box host does not have", args: []string{"up", "-profile", "big"}, err: `profile "big"`},
+		{name: "up -config that is not there", args: []string{"up", "-config", "/nonexistent/box-host.json"}, err: "box host config"},
 		{name: "proxy takes no name", args: []string{"proxy", "x"}, err: "unexpected argument"},
 		{name: "no verb", args: nil, err: "usage: dax box up"},
-		{name: "another verb", args: []string{"rm"}, err: `box "rm": want up, ls, down or proxy`},
+		{name: "another verb", args: []string{"rm"}, err: `box "rm": want up, ls, down, serve or proxy`},
 		{name: "ls takes no name", args: []string{"ls", "x"}, err: "unexpected argument"},
 		{name: "down takes one name", args: []string{"down", "a", "b"}, err: `unexpected argument "b"`},
-		{name: "a bad runtime", args: []string{"up", "-runtime", "run sc"}, err: "-box-runtime"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &boxDocker{answers: tc.answers}
@@ -122,7 +141,7 @@ func TestBoxCommand(t *testing.T) {
 				t.Errorf("printed %q, want %q in it", got, tc.out)
 			}
 			for _, want := range tc.calls {
-				if !slices.ContainsFunc(d.calls, func(c []string) bool { return slices.Equal(c, want) }) {
+				if !slices.ContainsFunc(d.calls, func(c []string) bool { return slices.Equal(c, want) || containsRun(c, want) }) {
 					t.Errorf("no docker call %q in %q", want, d.calls)
 				}
 			}
@@ -169,7 +188,7 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 	if i < 0 {
 		t.Fatalf("up made no box: %q", d.calls)
 	}
-	if run := d.calls[i]; !slices.Contains(run, "runsc") || !slices.Contains(run, config.DefaultBox().Image) {
+	if run := d.calls[i]; !slices.Contains(run, box.DefaultRuntime) || !slices.Contains(run, box.DefaultImage) {
 		t.Errorf("up made the box with %q, want the defaults", run)
 	}
 }
@@ -187,27 +206,49 @@ func TestBoxProxyCheck(t *testing.T) {
 }
 
 // -list in a box lists the sessions run in it, from its address alone:
-// a stand-in docker on PATH runs the test binary as the box's dax
-// execute to record one, and -list then finds it without running
-// docker.
+// the box host's command, here or over ssh. The test binary stands in
+// for the box host (it serves as dax execute whatever its arguments),
+// and a stand-in ssh on PATH runs it; -list then finds each session
+// without starting either.
 func TestListFindsTheBoxsSessions(t *testing.T) {
 	h := home(t)
 	bin := t.TempDir()
-	docker := filepath.Join(bin, "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nexec '"+os.Args[0]+"'\n"), 0o755); err != nil {
+	ssh := filepath.Join(bin, "ssh")
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nexec '"+os.Args[0]+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	r := listRig{t: t, root: filepath.Join(t.TempDir(), "sessions")}
 	here := t.TempDir()
-	b, err := projectBox(here)
-	if err != nil {
+	cfg := filepath.Join(h, "box.json")
+	if err := os.WriteFile(cfg, []byte(`{"box":{}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sshCfg := filepath.Join(h, "box-ssh.json")
+	if err := os.WriteFile(sshCfg, []byte(`{"box":{"host":"ssh://me@build:2222","project":"/srv/app"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	launcher := func(path string) []string {
+		t.Helper()
+		user, err := loadUser(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bs, err := config.BoxOf(user, config.Flags{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		argv, _, err := boxLauncher(*bs, here)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return argv
+	}
 	local := r.record(here, nil, "")
-	inBox := r.record(here, b.Command(), t.TempDir())
-	// docker is gone: -list must not need it.
-	if err := os.Remove(docker); err != nil {
+	inBox := r.record(here, launcher(cfg), t.TempDir())
+	overSSH := r.record(here, launcher(sshCfg), t.TempDir())
+	// ssh is gone: -list must not need it.
+	if err := os.Remove(ssh); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,15 +270,20 @@ func TestListFindsTheBoxsSessions(t *testing.T) {
 	if got := list("", config.Flags{}); !slices.Equal(got, []string{local}) {
 		t.Errorf("-list here = %q, want the local session %q", got, local)
 	}
-	if got := list("", config.Flags{Box: &on}); !slices.Equal(got, []string{inBox}) {
-		t.Errorf("-list -box = %q, want the box's session %q", got, inBox)
-	}
-	cfg := filepath.Join(h, "box.json")
-	if err := os.WriteFile(cfg, []byte(`{"box":{}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := list(cfg, config.Flags{}); !slices.Equal(got, []string{inBox}) {
-		t.Errorf("-list with the config's box = %q, want %q", got, inBox)
+	// Each address finds its own session: the local box host's and the
+	// ssh one's are two addresses, each the latest of its own workspace.
+	for _, tc := range []struct {
+		name, cfg string
+		f         config.Flags
+		want      string
+	}{
+		{"-box", "", config.Flags{Box: &on}, inBox},
+		{"the config's box", cfg, config.Flags{}, inBox},
+		{"the config's ssh box", sshCfg, config.Flags{}, overSSH},
+	} {
+		if got := list(tc.cfg, tc.f); !slices.Equal(got, []string{tc.want}) {
+			t.Errorf("-list with %s = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 	if got := list(cfg, config.Flags{Box: &off}); !slices.Equal(got, []string{local}) {
 		t.Errorf("-list -box=false = %q, want %q", got, local)
@@ -258,16 +304,290 @@ func TestBoxRefusalsOnTheCommandLine(t *testing.T) {
 	}{
 		{[]string{"-box", "-executor", "ssh host dax execute"}, "give -box=false to use this executor"},
 		{[]string{"-box", "-config", cfg}, `give -executor "" to run them in a box`},
-		{[]string{"-box-image", "debian"}, "-box-image goes with -box"},
-		{[]string{"-box", "-box-image", "--privileged"}, "-box-image"},
+		{[]string{"-box-host", "ssh://build"}, "-box-host goes with -box"},
+		{[]string{"-box-profile", "go"}, "-box-profile goes with -box"},
+		{[]string{"-box", "-box-host", "build"}, "box.host"},
+		{[]string{"-box", "-box-profile", "--privileged"}, "-box-profile"},
 		{[]string{"-box-internet", "on"}, "-box-internet goes with -box"},
 		{[]string{"-box", "-box-internet", "sideways"}, "want off, on or allow"},
-		{[]string{"-box", "-box-internet", "allow"}, "names no hosts"},
 		{[]string{"-box", "-list", "-executor", "ssh host dax execute"}, "give -box=false"},
 	} {
 		err := run(context.Background(), append(tc.args, "-sessions", "", "-p", "hi"), p)
 		if err == nil || !strings.Contains(err.Error(), tc.wants) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.wants)
 		}
+	}
+}
+
+// containsRun reports whether call is a docker run with the words of
+// want next to each other in it.
+func containsRun(call, want []string) bool {
+	if len(call) == 0 || call[0] != "run" {
+		return false
+	}
+	for i := 0; i+len(want) <= len(call); i++ {
+		if slices.Equal(call[i:i+len(want)], want) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBoxLauncher(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "my 'project'")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := projectBox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := box.Self()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		s    config.BoxSettings
+		want []string
+		// remote is the command the ssh login's shell runs, as it
+		// splits it.
+		remote []string
+	}{
+		{
+			name: "local",
+			s:    config.BoxSettings{Host: config.BoxLocal},
+			want: []string{self, "box", "serve", "-project", b.Dir},
+		},
+		{
+			name: "local with a box host config",
+			s:    config.BoxSettings{Host: config.BoxLocal, HostConfig: "/u/box-host.json"},
+			want: []string{self, "box", "serve", "-project", b.Dir, "-config", "/u/box-host.json"},
+		},
+		{
+			name:   "ssh, the same path there",
+			s:      config.BoxSettings{Host: "ssh://build", SSH: &config.SSHTarget{Host: "build"}},
+			want:   []string{"ssh", "-T", "-o", "BatchMode=yes", "--", "build"},
+			remote: []string{"dax", "box", "serve", "-project", b.Dir},
+		},
+		{
+			name:   "ssh with a user, a port, arguments, a path and a dax there",
+			s:      config.BoxSettings{Host: "ssh://me@build:2222", SSH: &config.SSHTarget{User: "me", Host: "build", Port: "2222"}, SSHArgs: []string{"-F", "/u/ssh.conf"}, Project: "/srv/my app", RemoteDax: "/opt/dax/bin/dax"},
+			want:   []string{"ssh", "-T", "-o", "BatchMode=yes", "-p", "2222", "-F", "/u/ssh.conf", "--", "me@build"},
+			remote: []string{"/opt/dax/bin/dax", "box", "serve", "-project", "/srv/my app"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.s.Request = box.Request{Profile: "go", Tighten: box.Tighten{Internet: "off"}}
+			argv, req, err := boxLauncher(tc.s, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(req) != `{"profile":"go","tighten":{"internet":"off"}}` {
+				t.Errorf("request = %s", req)
+			}
+			if tc.remote == nil {
+				if !slices.Equal(argv, tc.want) {
+					t.Fatalf("argv = %q, want %q", argv, tc.want)
+				}
+				return
+			}
+			if len(argv) != len(tc.want)+1 || !slices.Equal(argv[:len(tc.want)], tc.want) {
+				t.Fatalf("argv = %q, want %q and the remote command", argv, tc.want)
+			}
+			// The login's shell splits the remote command as cmdline does.
+			got, err := cmdline.Split(argv[len(argv)-1])
+			if err != nil || !slices.Equal(got, tc.remote) {
+				t.Errorf("the remote command %q splits to %q (%v), want %q", argv[len(argv)-1], got, err, tc.remote)
+			}
+		})
+	}
+}
+
+// fakeChild is the executor in the box for runBoxServe's test: it
+// answers the session's initialize with a fixed line and ends when its
+// input does.
+type fakeChild struct {
+	inW  *io.PipeWriter
+	out  *io.PipeReader
+	done chan struct{}
+	got  *lockedBuffer
+}
+
+func newFakeChild() *fakeChild {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	c := &fakeChild{inW: inW, out: outR, done: make(chan struct{}), got: &lockedBuffer{}}
+	go func() {
+		defer close(c.done)
+		io.Copy(c.got, inR)
+		outW.Write([]byte("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n"))
+		outW.Close()
+	}()
+	return c
+}
+
+func (c *fakeChild) Stdin() io.WriteCloser { return c.inW }
+func (c *fakeChild) Stdout() io.Reader     { return c.out }
+func (c *fakeChild) Wait() error           { <-c.done; return nil }
+
+func TestBoxServe(t *testing.T) {
+	home(t)
+	dir := t.TempDir()
+	b, err := projectBox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
+	if err := os.WriteFile(hostCfg, []byte(`{"default_profile":"go","profiles":{"go":{"image":"golang:1.26-bookworm","allow":["proxy.golang.org"]},"vm":{"runtime":"io.containerd.kata.v2"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	init := func(box string) string {
+		return `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"` + executor.CapabilityKey + `":{"maxReadBytes":1024` + box + `}}}}}` + "\n"
+	}
+	p := program{name: "dax", version: "test"}
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		first   string
+		err     string
+		rules   string   // the box's internet after it
+		runWith []string // words next to each other in the box's docker run
+	}{
+		{name: "the default profile", args: []string{"-config", hostCfg, "-project", dir}, first: init(""), rules: "allow proxy.golang.org", runWith: []string{"--runtime", "runsc"}},
+		{name: "a profile by name", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"profile":"vm"}`), rules: "off", runWith: []string{"--runtime", "io.containerd.kata.v2"}},
+		{name: "a tightening", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"tighten":{"internet":"off","memory":"1g"}}`), rules: "off", runWith: []string{"--memory", "1g"}},
+		{name: "a widening", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"tighten":{"internet":"on"}}`), err: "more than profile go's allow"},
+		{name: "an MCP server", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"mcp":["github"]}`), err: "not run yet"},
+		{name: "no box host config: the built-in", args: []string{"-project", dir}, first: init(""), rules: "off", runWith: []string{"golang:1.26-bookworm", "sleep", "infinity"}},
+		{name: "a box host config that is not there", args: []string{"-config", "/nonexistent.json", "-project", dir}, first: init(""), err: "box host config"},
+		{name: "a project that is not there", args: []string{"-project", "/nonexistent/project"}, first: init(""), err: "nonexistent"},
+		{name: "an argument", args: []string{"x"}, err: "unexpected argument"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+			state := t.TempDir()
+			var started []string
+			child := newFakeChild()
+			start := func(_ context.Context, argv []string) (box.Child, error) {
+				started = argv
+				return child, nil
+			}
+			var out bytes.Buffer
+			err := runBoxServe(context.Background(), tc.args, p, strings.NewReader(tc.first), &out, &box.Client{Runner: d, StateDir: state}, start)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("err = %v, want %q", err, tc.err)
+				}
+				if tc.first != "" && !strings.Contains(out.String(), tc.err) && !strings.Contains(err.Error(), "box host config") {
+					t.Errorf("the session was told %q, want the reason %q", out.String(), tc.err)
+				}
+				if started != nil {
+					t.Errorf("an executor was started after a refusal: %q", started)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(started, b.Command()) {
+				t.Errorf("started %q, want the box's executor %q", started, b.Command())
+			}
+			if child.got.String() != tc.first {
+				t.Errorf("the executor was sent %q, want the session's initialize as it came", child.got.String())
+			}
+			if !strings.Contains(out.String(), `"result"`) {
+				t.Errorf("the session was sent %q, want the executor's answer", out.String())
+			}
+			if !slices.ContainsFunc(d.calls, func(c []string) bool {
+				return c[0] == "run" && slices.Contains(c, box.Label+"=1") && containsRun(c, tc.runWith)
+			}) {
+				t.Errorf("no box run with %q in %q", tc.runWith, d.calls)
+			}
+			r, err := box.ReadRules(filepath.Join(state, b.Name, box.RulesFile))
+			if err != nil || r.String() != tc.rules {
+				t.Errorf("the box's internet = %v (%v), want %s", r, err, tc.rules)
+			}
+		})
+	}
+}
+
+// A real session's handshake goes through the box host: the executor
+// client dials runBoxServe over pipes, the box host makes the box
+// (a fake docker) and starts the test binary as the dax execute in it,
+// and the client gets that executor's workspace and tools, whichever
+// handshake (server/discover or initialize) its SDK opens with.
+func TestBoxServeRelaysARealSession(t *testing.T) {
+	home(t)
+	dir := t.TempDir()
+	root := t.TempDir()
+	start := func(ctx context.Context, argv []string) (box.Child, error) {
+		cmd := exec.CommandContext(ctx, os.Args[0])
+		cmd.Env = append(os.Environ(), executeRoot+"="+root)
+		cmd.Stderr = os.Stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return nil, err
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, err
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return cmdChild{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		box  json.RawMessage
+		err  string
+	}{
+		{name: "the default profile", box: json.RawMessage(`{}`)},
+		{name: "a refused profile", box: json.RawMessage(`{"profile":"big"}`), err: `profile \"big\"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+			toHost, fromSession := io.Pipe()
+			toSession, fromHost := io.Pipe()
+			served := make(chan error, 1)
+			go func() {
+				err := runBoxServe(ctx, []string{"-project", dir}, program{name: "dax", version: "test"}, toHost, fromHost, &box.Client{Runner: d, StateDir: t.TempDir()}, start)
+				fromHost.Close()
+				served <- err
+			}()
+			dial := func(context.Context) (sdk.Transport, error) {
+				return &sdk.IOTransport{Reader: toSession, Writer: fromSession}, nil
+			}
+			r, err := executor.Dial(ctx, dial, executor.ConnectOptions{Name: "dax", Version: "test", Box: tc.box})
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), strings.ReplaceAll(tc.err, `\"`, `"`)) {
+					t.Fatalf("Dial error = %v, want the box host's reason %q", err, tc.err)
+				}
+				fromSession.Close()
+				<-served
+				return
+			}
+			if err != nil {
+				fromSession.Close()
+				t.Fatalf("Dial: %v (the box host: %v)", err, <-served)
+			}
+			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != "box" || desc.Root != root {
+				t.Errorf("descriptor = %+v, want the in-box executor's", desc)
+			}
+			tools, err := r.Tools(ctx)
+			if err != nil || len(tools) == 0 {
+				t.Errorf("tools = %v, %v", tools, err)
+			}
+			r.Close()
+			fromSession.Close()
+			select {
+			case <-served:
+			case <-ctx.Done():
+				t.Fatal("the box host did not end with the session")
+			}
+		})
 	}
 }

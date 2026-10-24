@@ -1,23 +1,27 @@
 package dax
 
-// This file is -box and `dax box`: the project's box, a container dax
-// keeps (internal/box), whose `dax execute` is the session's executor.
+// This file is -box and `dax box`: a session's box, made by a box host
+// (`dax box serve`, here or over ssh) whose relay is the session's
+// executor; and the box host itself.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"text/tabwriter"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/executor"
 )
 
 // projectBox is the box of the project in dir, by name and directory
-// alone: what -list derives its address from, without running docker.
+// alone, without running docker.
 func projectBox(dir string) (box.Box, error) {
 	pd, err := box.ProjectDir(dir)
 	if err != nil {
@@ -26,11 +30,64 @@ func projectBox(dir string) (box.Box, error) {
 	return box.Box{Name: box.NameFor(pd), Dir: pd}, nil
 }
 
+// boxLauncher is the command that starts s's box host for the project
+// in dir, and what the session asks of it. It is the session's
+// executor command, and its words are the executor's address -list
+// derives without starting anything: they name the project, so two
+// projects on one box host are two addresses. Here it is this dax as
+// `box serve`; over ssh, ssh running the box host's dax there.
+func boxLauncher(s config.BoxSettings, dir string) (argv []string, request json.RawMessage, err error) {
+	request, err = json.Marshal(s.Request)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.SSH == nil {
+		b, err := projectBox(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		self, err := box.Self()
+		if err != nil {
+			return nil, nil, fmt.Errorf("box: this dax: %w", err)
+		}
+		argv = []string{self, "box", "serve", "-project", b.Dir}
+		if s.HostConfig != "" {
+			argv = append(argv, "-config", s.HostConfig)
+		}
+		return argv, request, nil
+	}
+	project := s.Project
+	if project == "" {
+		// The same path as here, which the box host resolves there.
+		b, err := projectBox(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		project = b.Dir
+	}
+	remote := s.RemoteDax
+	if remote == "" {
+		remote = "dax"
+	}
+	argv = []string{"ssh", "-T", "-o", "BatchMode=yes"}
+	if s.SSH.Port != "" {
+		argv = append(argv, "-p", s.SSH.Port)
+	}
+	argv = append(argv, s.SSHArgs...)
+	target := s.SSH.Host
+	if s.SSH.User != "" {
+		target = s.SSH.User + "@" + target
+	}
+	// ssh hands the remote command to the login's shell as one line, so
+	// each word is quoted for it.
+	argv = append(argv, "--", target, box.Quote([]string{remote, "box", "serve", "-project", project}))
+	return argv, request, nil
+}
+
 // ensureBox makes or starts, through c, the box of the project in dir
-// with the settings s, mounting this dax, and gives it running. What it
-// does beyond that, a first start or making it again, is said through
-// say.
-func ensureBox(ctx context.Context, c *box.Client, dir string, s config.BoxSettings, say func(string)) (box.Box, error) {
+// as s says, mounting this dax, and gives it running. What it does
+// beyond that, a first start or making it again, is said through say.
+func ensureBox(ctx context.Context, c *box.Client, dir string, s box.Settings, say func(string)) (box.Box, error) {
 	b, err := projectBox(dir)
 	if err != nil {
 		return b, err
@@ -40,27 +97,116 @@ func ensureBox(ctx context.Context, c *box.Client, dir string, s config.BoxSetti
 		return b, fmt.Errorf("box: this dax: %w", err)
 	}
 	c.Warn, c.Starting, c.Notice = say, say, say
-	rules := box.Rules{Internet: s.Internet}
-	if s.Internet == box.InternetAllow {
-		rules.Allow = s.Allow
-	}
 	return c.Ensure(ctx, box.Spec{
 		Name: b.Name, Dir: b.Dir,
 		Image: s.Image, Runtime: s.Runtime, Memory: s.Memory, CPUs: s.CPUs, Pids: s.Pids,
 		Binary: bin, UID: os.Getuid(), GID: os.Getgid(),
-		Rules: rules,
+		Rules: s.Rules,
 	})
 }
 
-// runBox is `dax box`: up, ls and down, for the boxes -box keeps, and
-// proxy, the egress proxy a box's sidecar runs.
+// loadHostConfig is the box host config at path, or at its default
+// place when path is empty.
+func loadHostConfig(path string) (box.HostConfig, error) {
+	if path != "" {
+		return box.LoadHostConfig(path, true)
+	}
+	def, err := box.HostConfigPath()
+	if err != nil {
+		return box.HostConfig{}, err
+	}
+	return box.LoadHostConfig(def, false)
+}
+
+// runBox is `dax box`: serve, the box host; up, ls and down, for this
+// machine's boxes; and proxy, the egress proxy a box's sidecar runs.
 func runBox(ctx context.Context, args []string, p program, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "serve" {
+		return runBoxServe(ctx, args[1:], p, os.Stdin, stdout, &box.Client{Runner: box.CLI{}}, startExecutor)
+	}
 	return runBoxWith(ctx, args, p, stdout, &box.Client{Runner: box.CLI{}})
 }
 
-// runBoxWith is runBox over c, which the tests give a fake docker.
+// startExecutor starts argv, a box's `docker exec ... dax execute`,
+// with its standard error the box host's.
+func startExecutor(ctx context.Context, argv []string) (box.Child, error) {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmdChild{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+}
+
+type cmdChild struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.Reader
+}
+
+func (c cmdChild) Stdin() io.WriteCloser { return c.stdin }
+func (c cmdChild) Stdout() io.Reader     { return c.stdout }
+func (c cmdChild) Wait() error           { return c.cmd.Wait() }
+
+// runBoxServe is `dax box serve`, the box host: over in and out, the
+// session's executor protocol, relayed to the executor in the box the
+// session's first message asks for, which it makes through c from its
+// config. It is a session's executor command, here or over ssh, and
+// writes nothing to out but the protocol.
+func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, out io.Writer, c *box.Client, start func(context.Context, []string) (box.Child, error)) error {
+	fs := flag.NewFlagSet(p.name+" box serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	cfgPath := fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json, built-in defaults when it is not there")
+	project := fs.String("project", "", "the project's directory on this machine, mounted in the box at its own path; default the current directory")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "usage: %s box serve [flags]   (the box host: a session's executor, started by -box here or over ssh)\n", p.name)
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("box serve: unexpected argument %q", fs.Arg(0))
+	}
+	h, err := loadHostConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	dir := *project
+	if dir == "" {
+		if dir, err = os.Getwd(); err != nil {
+			return err
+		}
+	}
+	say := func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) }
+	return box.Relay(ctx, in, out, executor.CapabilityKey, func(ctx context.Context, r box.Request) (box.Child, error) {
+		s, err := h.Resolve(r)
+		if err != nil {
+			return nil, err
+		}
+		b, err := ensureBox(ctx, c, dir, s, say)
+		if err != nil {
+			return nil, err
+		}
+		return start(ctx, b.Command())
+	})
+}
+
+// runBoxWith is `dax box up|ls|down|proxy` over c, which the tests give
+// a fake docker.
 func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer, c *box.Client) error {
-	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box; print the -executor line)\n       %[1]s box ls\n       %[1]s box down [name]   (remove a box; default this directory's)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
+	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box from this machine's box host config; print its executor's command)\n       %[1]s box ls\n       %[1]s box down [name]   (remove a box; default this directory's)\n       %[1]s box serve [flags]   (the box host, which -box starts)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -70,13 +216,12 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintln(fs.Output(), usage)
 		fs.PrintDefaults()
 	}
-	var cfgPath, image, runtime, internet, listen, rules, check *string
+	var cfgPath, profile, internet, listen, rules, check *string
 	switch args[0] {
 	case "up":
-		cfgPath = fs.String("config", "", "user config file, whose box settings up takes; default ~/.config/dax/config.json")
-		image = fs.String("image", "", "the box's image, in place of box.image")
-		runtime = fs.String("runtime", "", "the box's OCI runtime, in place of box.runtime")
-		internet = fs.String("internet", "", "the box's internet, in place of box.internet: off, on, or allow (box.allow's hosts)")
+		cfgPath = fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json")
+		profile = fs.String("profile", "", "the box host config's profile; default its default")
+		internet = fs.String("internet", "", "narrow the profile's internet: off, allow (its hosts) or on")
 	case "proxy":
 		listen = fs.String("listen", ":"+box.ProxyPort, "address to serve on")
 		rules = fs.String("rules", box.RulesMount+"/"+box.RulesFile, "the rules file, read again when it changes")
@@ -88,8 +233,6 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		}
 		return err
 	}
-	given := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	dir, err := os.Getwd()
 	if err != nil {
 		return err
@@ -99,29 +242,16 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if fs.NArg() > 0 {
 			return fmt.Errorf("box up: unexpected argument %q", fs.Arg(0))
 		}
-		user, err := loadUser(*cfgPath)
+		h, err := loadHostConfig(*cfgPath)
 		if err != nil {
 			return err
 		}
-		on := true
-		f := config.Flags{Box: &on}
-		if given["image"] {
-			f.BoxImage = image
-		}
-		if given["runtime"] {
-			f.BoxRuntime = runtime
-		}
-		if given["internet"] {
-			f.BoxInternet = internet
-		}
-		// A config's executor is for sessions; up makes a box whatever
-		// it says.
-		user.Executor = nil
-		s, err := config.BoxOf(user, f)
+		r := box.Request{Profile: *profile, Tighten: box.Tighten{Internet: *internet}}
+		s, err := h.Resolve(r)
 		if err != nil {
 			return err
 		}
-		b, err := ensureBox(ctx, c, dir, *s, func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) })
+		b, err := ensureBox(ctx, c, dir, s, func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) })
 		if err != nil {
 			return err
 		}
@@ -171,5 +301,5 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintf(stdout, "removed %s\n", name)
 		return nil
 	}
-	return fmt.Errorf("box %q: want up, ls, down or proxy\n%s", args[0], usage)
+	return fmt.Errorf("box %q: want up, ls, down, serve or proxy\n%s", args[0], usage)
 }

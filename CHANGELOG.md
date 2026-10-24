@@ -7,37 +7,69 @@ versions may break flags and the config file.
 
 ## Unreleased
 
-- Added: `-box` runs the tools in this project's box, a container dax
-  makes or reuses and starts the session's executor in with `docker
-  exec`: under gVisor's `runsc` by default, with no capabilities, a
-  read-only root file system, limits on memory, processors and
-  processes, the project mounted at its own path and this dax mounted
-  read-only as the box's, so the executor is always the session's
-  version. A project at `/`, at your home or above it is refused, since
-  the box would mount every key and config there. A box made from other settings is refused (`dax box down`
-  removes it); one whose dax changed since it was made is made again,
-  with a warning. `-list` finds a box's sessions without running
-  docker. Config `box` (user layer only; not with `executor`) sets its
-  image, runtime, memory, processors, processes and internet, and its
-  presence makes `-box` the default; `-box-image`, `-box-runtime` and
-  `-box-internet` override three of them.
-- Added: a box has no internet unless its config or the run gives it
-  some. `box.internet` is `off` (the default), `allow` (the hosts
-  `box.allow` names, `*.domain` for those below one) or `on`, and
-  `-box-internet` sets it for a run. The box sits alone on an internal
+- Added: `-box` runs the tools in this project's box. It starts a box
+  host, `dax box serve` (this dax as a child, or the dax on another
+  machine over ssh, `box.host: "ssh://[user@]host[:port]"`), which makes
+  or reuses the project's container from a profile of its own config
+  and relays the session to the `dax execute` in it, so a box here and
+  a box on a build host are configured, made and used the same way. The
+  box runs under the profile's runtime (`runsc` by default; any runtime
+  docker has registered, Kata's `io.containerd.kata.v2` among them),
+  with no capabilities, a read-only root file system, limits on memory,
+  processors and processes, the project mounted at its own path and the
+  box host's dax mounted read-only as the box's. A project at `/`, at
+  the box host's home or above it is refused, since the box would mount
+  every key and config there. A box made from other settings is refused
+  (`dax box down` removes it); one whose dax changed since it was made
+  is made again, with a warning. `-list` finds a box's sessions without
+  starting the box host. Config `box` (user layer only; not with
+  `executor`) names the host, the profile and tightenings that only
+  narrow it (`memory`, `cpus`, `pids`, `internet`, `allow`); its
+  presence makes `-box` the default; `-box-host`, `-box-profile` and
+  `-box-internet` override for a run. With ssh, `box.project`,
+  `box.remote_dax` and `box.ssh` say where the project and dax are there
+  and what more ssh takes; `executor.pass_env` gives the launcher ssh's
+  agent.
+- Added: the box host config, `~/.config/dax/box-host.json` on the box
+  host's machine (`dax box serve -config`, or `box.host_config` for a
+  local one): the default runtime, `limits` no profile or tightening
+  goes past, `images` patterns, `profiles` (image, runtime, memory,
+  cpus, pids, internet, allow) and `default_profile`. With no file, one
+  profile: `golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512
+  processes, no internet. Its `mcp` catalog is read and checked; a
+  session that asks for one of its servers is refused until MCP boxes
+  are built (docs/plans/proposals/box-host.md).
+- Added: a box has no internet unless its profile gives it some:
+  `internet` is `off` (the default), `allow` (the hosts `allow` names,
+  `*.domain` for those below one) or `on`, which a session narrows with
+  `box.tighten` or `-box-internet`. The box sits alone on an internal
   network of its own; its only way out is a sidecar container running
-  this dax's egress proxy (`dax box proxy`, under runc), HTTP and HTTPS
-  on ports 80 and 443, never to this machine, a private network or a
-  link-local address in any mode. Its rules are a file the proxy reads
-  again, so a run changes the box's internet without making it again;
-  the change applies to every session in the box, and the run says so.
+  dax's egress proxy (`dax box proxy`, under runc), HTTP and HTTPS on
+  ports 80 and 443, never to the box host's machine, a private network
+  or a link-local address in any mode. Its rules are a file the proxy
+  reads again, so a run changes the box's internet without making it
+  again; the change applies to every session in the box, and the run
+  says so.
 - Added: `dax box up`, `dax box ls` and `dax box down`: make this
-  directory's box and print the `-executor` line, list the boxes with
-  their internet, and remove one with its sidecar, network and rules.
-- Docs: docs/sandbox.md has the box and gVisor: installing runsc,
-  registering it with docker on the KVM platform where the default
-  (systrap) cannot start, as on WSL2, the box's internet and how it
-  holds, and what a box confines and what it does not.
+  directory's box from this machine's box host config and print its
+  executor's command, list the boxes with their internet, and remove
+  one with its sidecar, network and rules. They act on this machine's
+  docker.
+- Added: `agent.ExecutorOptions.Box`, what a session asks of a box host
+  when it dials it, sent beside `max_read_bytes` in the executor's
+  capability; an executor that is not a box host ignores it.
+- Docs: docs/sandbox.md has the box, the box host config, a box over
+  ssh, the box's internet and how it holds, and runtimes: gVisor
+  (installing runsc, registering it on the KVM platform where the
+  default, systrap, cannot start, as on WSL2) and Kata 4.2.0 (installing
+  the static bundle, registering the shim, and what was checked: the
+  box's hardening, its internet, shared files between containers, the
+  VM's memory). docs/plans/proposals/box-host.md is the design and its
+  steps.
+- Added: under a sandboxing runtime (anything but `runc`) a box's
+  process limit is also `--ulimit nproc`, which the sandbox's kernel
+  enforces for the box's user: `--pids-limit`, a cgroup on this
+  machine, does not count gVisor's or Kata's processes.
 
 - Dependencies: agentsession v0.0.28, up from v0.0.27, and
   agentconsole v0.0.14, agenteval v0.0.11 and agentkit v0.0.14, up from

@@ -9,22 +9,32 @@ README's [The tools in a sandbox](../README.md#the-tools-in-a-sandbox-dax-execut
 
 ## A box: `dax -box`
 
-For a container on this machine, dax does the recipes below itself:
+For a container, dax does the recipes below itself:
 
 ```sh
 cd ~/src/app
 dax -box
 ```
 
-The first time, it pulls the image and makes `dax-app-<hash>`, the
-box of this directory: the hash is of the directory's path, with links
-resolved, so the name is the same however often the box is made and
-two projects called `app` have two boxes. After that `-box` reuses it,
-starting it if it stopped; two sessions that start it at once share the
-one box. A directory that is `/`, your home or above it is refused,
-since its mount would hand the tools every key and config in your home,
-and so is a path with a colon, which docker's `-v` cannot take. The
-session's executor is
+`-box` starts a **box host**, `dax box serve`, and connects to it as
+its executor. The box host makes or reuses the project's box from its
+own config, then relays the session to the `dax execute` inside it.
+Here the box host is this dax, run as a child; on another machine it
+is that machine's dax, over ssh (see [A box on another
+machine](#a-box-on-another-machine)). Either way the box is made the
+same way, from the same kind of config, and the session sees the same
+box: only the connection differs. The design is
+[docs/plans/proposals/box-host.md](plans/proposals/box-host.md).
+
+The first time, the box host pulls the image and makes
+`dax-app-<hash>`, the box of this directory: the hash is of the
+directory's path, with links resolved, so the name is the same however
+often the box is made and two projects called `app` have two boxes.
+After that `-box` reuses it, starting it if it stopped; two sessions
+that start it at once share the one box. A directory that is `/`, the
+box host's home or above it is refused, since its mount would hand the
+tools every key and config there, and so is a path with a colon, which
+docker's `-v` cannot take. The box host's executor is
 
 ```sh
 docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container -ref dax-app-<hash>
@@ -33,90 +43,214 @@ docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind c
 so everything under [Docker](#docker) holds for it: the pipe is the
 credential, there is no port, and `-list` and memory know the project
 by the box's name and the directory. `-list` with `-box` (or with a
-`box` in your config) finds its sessions without running docker.
+`box` in your config) finds its sessions without starting the box host.
+
+### What the session says, and what the box host decides
+
+What a box is made of, its image, runtime, limits and internet, is the
+box host's: its config, `~/.config/dax/box-host.json` on the machine
+it runs on. The session names one of its profiles and may only narrow
+it. Your config's `box`:
+
+```json
+{
+  "box": {
+    "host": "local",
+    "profile": "go",
+    "tighten": { "memory": "2g", "internet": "allow", "allow": ["proxy.golang.org"] }
+  }
+}
+```
+
+| `box.` | |
+|---|---|
+| `host` | `local` (the default) or `ssh://[user@]host[:port]` |
+| `profile` | one of the box host's profiles; empty is its default |
+| `tighten` | `memory`, `cpus`, `pids`, `internet` (`off` < `allow` < `on`), `allow` (hosts within the profile's): each only narrows; the box host refuses a widening and says why |
+| `mcp` | catalog MCP servers, each in a box of its own: not yet; the box host refuses them |
+| `host_config` | with `local`: the box host config the local box host reads in place of `~/.config/dax/box-host.json` (an absolute path) |
+| `project`, `remote_dax`, `ssh` | with an ssh host: see below |
+
+| Flag | |
+|---|---|
+| `-box`, `-box=false` | run in a box, or here despite the config's `box` |
+| `-box-host local\|ssh://…` | in place of `box.host` |
+| `-box-profile NAME` | in place of `box.profile` |
+| `-box-internet off\|allow\|on` | narrow the profile's internet for this run |
+
+Only your config can name a box; a project's `.dax/config.json` may
+not, and `box` is refused beside an `executor` that names a command or
+a URL. Its `executor.pass_env` alone may stay: it applies to the box
+host's launcher (`SSH_AUTH_SOCK` for ssh's agent, `DOCKER_HOST`).
+
+### The box host config
+
+With no file, the box host makes one profile, `default`:
+`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512 processes, no
+internet. A file says more:
+
+```json
+{
+  "runtime": "runsc",
+  "limits": { "memory": "8g", "cpus": 4, "pids": 1024 },
+  "images": ["golang:*", "node:*"],
+  "default_profile": "go",
+  "profiles": {
+    "go":  { "image": "golang:1.26-bookworm", "allow": ["proxy.golang.org", "sum.golang.org"] },
+    "big": { "image": "golang:1.26-bookworm", "memory": "8g", "cpus": 4, "internet": "on" },
+    "vm":  { "runtime": "io.containerd.kata.v2" }
+  }
+}
+```
+
+| | |
+|---|---|
+| `runtime` | the runtime a profile that names none runs under: any runtime docker has registered (see [Runtimes](#runtimes)) |
+| `limits` | ceilings no profile and no tightening goes past |
+| `images` | glob patterns every image must match; none means any |
+| `default_profile` | the profile a session that names none gets; needed when there are several and none is `default` |
+| `profiles` | the boxes: `image`, `runtime`, `memory`, `cpus`, `pids`, `internet`, `allow`, each defaulting as above |
+| `mcp` | the MCP catalog: read and checked, not yet run (the design's step 2) |
+
+A field it does not know, a value docker would misread, a profile past
+the limits or outside the images, and an internet that says two things
+are refused when the box host starts, before any box is made.
 
 What the box is made with:
 
 | | |
 |---|---|
-| `--runtime runsc` | gVisor (see [gVisor](#gvisor)); `box.runtime` or `-box-runtime` names another. A runtime docker does not know fails the session; dax never falls back to `runc` |
-| `--user` your uid and gid | the files the tools write in the project are yours |
+| `--runtime` | the profile's runtime (see [Runtimes](#runtimes)). A runtime docker does not know fails the session; dax never falls back to another |
+| `--user` the box host's uid and gid | the files the tools write in the project are that user's |
 | `--cap-drop ALL`, `--security-opt no-new-privileges` | no capabilities, and no setuid program can gain any |
 | `--read-only`, `--tmpfs /tmp`, `--tmpfs /home/dax` | nothing outside the project survives the container; the home (`HOME=/home/dax`, and `GOPATH=/home/dax/go`, so go's module and build caches are in it) and `/tmp` are memory, counted against the limit |
-| `--memory`, `--memory-swap`, `--cpus`, `--pids-limit` | `box.memory` (4g, no swap beyond it), `box.cpus` (2), `box.pids` (512) |
+| `--memory`, `--memory-swap`, `--cpus`, `--pids-limit` | the profile's, narrowed by the session's `tighten` |
+| `--ulimit nproc=<pids>` | under a sandbox (anything but `runc`), the profile's process limit, enforced by the sandbox's own kernel for the box's user: `--pids-limit` is a cgroup on this machine, which gVisor's and Kata's processes are not counted in |
 | `--network <box>-net` | the box's own internal network, with no route out; its sidecar is the only other thing on it (see [The box's internet](#the-boxs-internet)) |
 | `-e HTTP_PROXY=…`, `HTTPS_PROXY`, lower case too | the sidecar's proxy, at a fixed address on that network; `NO_PROXY` is localhost |
 | `-v DIR:DIR`, `-w DIR` | the project at its own path, the one mount you can write |
-| `-v <this dax>:/usr/local/bin/dax:ro` | this machine's dax, so the executor is the session's version |
+| `-v <the box host's dax>:/usr/local/bin/dax:ro` | the box host's dax, so the executor is its version |
 
 The container's own process is `sleep infinity`; the tools run in the
 `dax execute` each session's `docker exec` starts.
 
-The image (`box.image`, `-box-image`; default `golang:1.26-bookworm`)
-needs bash, sh, git, `sleep`, and a glibc at least as new as the one
-this dax was built against: a dax built by `go install` links glibc.
-An image without it (alpine) needs a dax built with `CGO_ENABLED=0`.
-dax runs `dax execute -h` in a new box and says so when it fails.
+The image needs bash, sh, git, `sleep`, and a glibc at least as new as
+the one the box host's dax was built against: a dax built by `go
+install` links glibc. An image without it (alpine) needs a dax built
+with `CGO_ENABLED=0`. The box host runs `dax execute -h` in a new box
+and says so when it fails.
 
-A box is made from its settings once. Change `box` in your config and
-the next `-box` refuses the box it finds, since making it again would
-end any other session's tools in it: `dax box down` and start again.
-A dax that changed since the box was made (an upgrade writes a new
-file, which the box's mount does not see) makes the box again, with a
-warning, for the same reason a newer executor is wanted.
+A box is made from its settings once. When a session asks for other
+settings (another profile, other limits), the box host refuses the box
+it finds, since making it again would end any other session's tools in
+it: `dax box down` and start again. A dax that changed since the box
+was made (an upgrade writes a new file, which the box's mount does not
+see) makes the box again, with a warning.
 
 ```sh
-dax box ls        # every box: name, state, runtime, internet, directory
+dax box ls        # this machine's boxes: name, state, runtime, internet, directory
 dax box down      # remove this directory's box, its sidecar, network and rules; or dax box down NAME
-dax box up        # make or start it, and print the -executor line
+dax box up        # make or start it from this machine's box host config, and print its executor's command
 ```
 
-`dax box up` takes `-config`, `-image`, `-runtime` and `-internet`, and prints
-`dax -executor '...'`, for a program that starts the executor itself.
-Only your config can name a box; a project's `.dax/config.json` may
-not, and `box` is refused beside an `executor` that names a command or
-a URL. Its `executor.pass_env` alone may stay: the box's `docker exec`
-is the command it applies to (`DOCKER_HOST`, say).
+`dax box up` takes `-config`, `-profile` and `-internet`. These act on
+this machine's docker; against a box host elsewhere is the design's
+step 3.
 
-### The box's internet
+### A box on another machine
 
-A box has no internet unless you give it some. Each run says so:
-
-```
-dax: box dax-app-1a2b3c4d has no internet; -box-internet=on or box.allow to open it
-```
-
-| `box.internet` | `-box-internet` | |
-|---|---|---|
-| `off` (the default) | `off` | every request refused |
-| `allow` | `allow` | only the hosts `box.allow` names: `proxy.golang.org`, or `*.githubusercontent.com` for every name below it (not the domain itself) |
-| `on` | `on` | any host |
+Install dax on that machine (`go install`), with Docker Engine and the
+runtime its config names, and give it a `~/.config/dax/box-host.json`
+if the built-in profile is not what you want: on that machine it is
+the administrator's file, and no session can widen it. Then:
 
 ```json
 {
   "box": {
-    "allow": ["proxy.golang.org", "sum.golang.org", "github.com", "*.githubusercontent.com"]
-  }
+    "host": "ssh://me@build-host:2222",
+    "profile": "go",
+    "project": "/srv/src/app",
+    "remote_dax": "/home/me/go/bin/dax"
+  },
+  "executor": { "pass_env": ["SSH_AUTH_SOCK"] }
 }
 ```
 
-`box.allow` alone means `allow`; `internet: "allow"` with no hosts, or
-`on` or `off` beside a list, is refused. The flag sets the mode for the
-run: `-box-internet=on` opens a box whose config says `allow`, and
-`allow` takes the config's hosts. Hosts are names, never addresses,
-ports or URLs.
+dax runs
+
+```sh
+ssh -T -o BatchMode=yes -p 2222 -- me@build-host '/home/me/go/bin/dax' box serve -project '/srv/src/app'
+```
+
+and the session is otherwise as here. `project` is the project's path
+on that machine, a checkout there (default: the same path as here);
+cloning it there for you is the design's step 3. `remote_dax` is the
+dax there (default `dax` on the login's PATH, which a non-interactive
+ssh often lacks). `ssh` adds arguments before the host, such as
+`["-F", "/home/me/.ssh/build.conf"]`, for a port forward, a jump host
+or a known-hosts file of its own. As for any ssh executor, `BatchMode`
+means ssh fails rather than asks, so connect by hand once first.
+
+The box host there resolves the profile against its own config, makes
+the box with its own docker, and runs it as the user you log in as.
+`-list` keys the project by the ssh command's words, which name the
+host and the project, and by the box's descriptor.
+
+#### A key that can only start the box host
+
+The user you log in as makes boxes with that machine's docker, and
+whoever can run docker there can make themselves root there. On a
+machine you share, give each person a key that can do nothing but
+start the box host, with sshd's own forced command, in that user's
+`~/.ssh/authorized_keys` on the box host's machine:
+
+```
+command="/home/me/go/bin/dax box serve -project /srv/src/app",restrict ssh-ed25519 AAAA… alice
+```
+
+sshd then runs that command whatever the session asks for: the words
+dax sends (its `remote_dax` and `-project`) are not run, `restrict`
+refuses a terminal, port and agent forwarding, and the project is the
+one the line names, so a key stands for one project. A login with the
+key that asks for a shell, or for `id; cat ~/.ssh/id_ed25519`, gets the
+box host, which refuses anything but a session's first message
+(`dax: box host: the session's first message: EOF`); a dax session with
+the key works as with any other. The administrator's `box-host.json`
+still decides the box; the key only decides who may ask for it.
+
+### The box's internet
+
+A box has no internet unless its profile gives it some. Each run says
+so:
+
+```
+dax: box dax-app-1a2b3c4d has no internet; a box host profile with internet (-box-profile) opens it
+```
+
+| a profile's `internet` | |
+|---|---|
+| `off` (the default) | every request refused |
+| `allow` | only the hosts its `allow` names: `proxy.golang.org`, or `*.githubusercontent.com` for every name below it (not the domain itself) |
+| `on` | any host |
+
+An `allow` list alone means `allow`; `internet: "allow"` with no hosts,
+or `on` or `off` beside a list, is refused. A session narrows it with
+`tighten` or `-box-internet`: `off` under any profile, `allow` with
+hosts the profile's list covers (any hosts under `on`), `on` only under
+`on`. Hosts are names, never addresses, ports or URLs.
 
 How it holds. The box sits alone on an internal network of its own,
 `<box>-net`, with no route anywhere. The only other container on it is
 the box's sidecar, `<box>-proxy`, which is also on `dax-box-egress`, an
 ordinary docker network all boxes' sidecars share. The sidecar runs
-`dax box proxy`: this dax, mounted read-only as in the box, serving
-HTTPS through `CONNECT` and plain HTTP to the hosts its rules take, on
-ports 80 and 443. Its rules are a file on this machine,
+`dax box proxy`: the box host's dax, mounted read-only as in the box,
+serving HTTPS through `CONNECT` and plain HTTP to the hosts its rules
+take, on ports 80 and 443, listening on its address on the box's
+network alone. Its rules are a file on the box host's machine,
 `~/.cache/dax/box/<box>/egress.json`, mounted read-only into the
 sidecar and read again whenever it changes, so a run changes the mode
 without making either container again. In every mode the proxy refuses
-a destination that resolves to this machine, a private network
+a destination that resolves to that machine, a private network
 (including docker's own), a link-local address (a cloud's metadata
 service, 169.254.169.254) or shared address space, checked on the
 address it connects to, so no name that resolves there gets through. A
@@ -135,18 +269,25 @@ it, and says so when it changes another's
 (`box dax-app-1a2b3c4d internet: off -> allow proxy.golang.org; applies
 to every session in the box`). `dax box ls` shows it.
 
-The sidecar runs under `runc`, not gVisor: under runsc, docker's own
-name server on a user-defined network does not answer, and the proxy
-must resolve the hosts it is asked for. It runs dax's proxy and nothing
-the model wrote, with no capabilities, a read-only root, 128 MiB and 64
-processes, as your user. Its image is the box's, for the glibc dax
-needs.
+The sidecar runs under `runc`, whatever the box's runtime: under
+runsc, docker's own name server on a user-defined network does not
+answer, and the proxy must resolve the hosts it is asked for. It runs
+dax's proxy and nothing the model wrote, with no capabilities, a
+read-only root, 128 MiB and 64 processes, as the box host's user. Its
+image is the box's, for the glibc dax needs.
 
-## gVisor
+## Runtimes
 
-A box runs under gVisor's `runsc` by default: the box's processes talk
-to gVisor's kernel, not this machine's. Install Docker Engine and
-runsc from their apt repositories ([docker](https://docs.docker.com/engine/install/ubuntu/),
+A box runs under whichever runtime its profile names, any docker has
+registered; nothing in dax behaves differently by runtime. What
+differs is what has been verified.
+
+### gVisor (`runsc`)
+
+The default, and the one verified: the box's processes talk to
+gVisor's kernel, not the machine's. Install Docker Engine and runsc
+from their apt repositories
+([docker](https://docs.docker.com/engine/install/ubuntu/),
 [gVisor](https://gvisor.dev/docs/user_guide/install/)), then register
 it with docker:
 
@@ -180,14 +321,62 @@ sudo runsc install --runtime=runsc-ptrace -- --platform=ptrace
 sudo systemctl restart docker
 ```
 
-`-box-runtime runsc-ptrace` then names the second.
+A profile with `"runtime": "runsc-ptrace"` then names the second.
 
-What the box does not do: it limits what an approved call can reach,
-not how often you are asked. dax claims no confinement for an
-executor's tools, so every rule and question is as on your machine.
-Its internet is what [The box's internet](#the-boxs-internet) gives
-it, and `on` is any host on the internet. And anything mounted is
-reachable: the project, read-write.
+### Kata Containers (`io.containerd.kata.v2`)
+
+A VM per container, with a kernel of its own. Verified with Kata 4.2.0
+(the static bundle: runtime-rs, QEMU, virtiofsd) under WSL2, kernel
+6.6, where it runs nested on `/dev/kvm`. Install the bundle and
+register the shim with docker:
+
+```sh
+sudo tar --zstd -xf kata-static-4.2.0-amd64.tar.zst -C /
+sudo ln -sf /opt/kata/runtime-rs/bin/containerd-shim-kata-v2 /usr/local/bin/
+# /etc/docker/daemon.json, beside runsc's entries:
+#   "runtimes": { "kata": { "runtimeType": "io.containerd.kata.v2" } }
+sudo systemctl restart docker
+docker run --rm --runtime kata busybox uname -r   # the guest's kernel, not this machine's
+```
+
+The 4.x static bundle carries only the Rust runtime; its shim finds
+`/opt/kata/share/defaults/kata-containers/runtime-rs/configuration.toml`
+(QEMU, virtio-fs) without more setup. A profile names it `kata`, as
+registered, or `io.containerd.kata.v2`, which docker also takes.
+
+What a box under Kata does, as checked here:
+
+- The hardening holds as under gVisor: the box's user, no
+  capabilities, a read-only root, the project writable, and the dax
+  binary's single-file mount, read-only. A box starts in about two
+  seconds.
+- Docker's name server does not answer inside a Kata box on a
+  user-defined network, as under gVisor (it answers on `127.0.0.11` in
+  the container's namespace, and the guest has a loopback of its own),
+  so the sidecar stays under `runc` for Kata too. The box's internal
+  network holds: no route out, the sidecar reached at its address, and
+  the three internet modes as under gVisor.
+- Two containers sharing the project see each other's writes at once,
+  and the host's: a new file, a new directory, an append, a file
+  rewritten under an open descriptor. A read-only mount refuses writes.
+  virtio-fs's `cache = "auto"` (the default) is enough.
+- `--memory 4g` gives the guest about 3.9 GiB; QEMU itself takes about
+  360 MiB of this machine's memory on top while idle. `--cpus 2` shows
+  as three processors, Kata's own vCPU and two.
+- The process limit is the box's user's (`--ulimit nproc`), as under
+  gVisor; see [What a box does not do](#what-a-box-does-not-do).
+
+### What a box does not do
+
+It limits what an approved call can reach, not how often you are
+asked. dax claims no confinement for an executor's tools, so every rule
+and question is as on your machine. Its internet is what [The box's
+internet](#the-boxs-internet) gives it, and `on` is any host on the
+internet. Its process limit is per user: under gVisor and Kata,
+`--pids-limit` does not hold (both started 1000 processes under a limit
+of 100 here), and `--ulimit nproc` does (95 and 97); the processes of
+every session in a box, all the box's user's, count against it
+together. And anything mounted is reachable: the project, read-write.
 
 ## What runs where
 

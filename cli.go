@@ -5,6 +5,7 @@ package dax
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,7 +27,6 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/extension"
-	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
@@ -81,7 +81,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s box up|ls|down   (the boxes -box runs the tools in)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s box up|ls|down|serve   (the boxes -box runs the tools in, and the box host)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -112,10 +112,10 @@ func run(ctx context.Context, args []string, p program) error {
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>; split as a shell splits words, nothing expanded")
 	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded, or the http:// or https:// URL where dax execute -listen serves; the tools run there; \"\" clears the config's")
-	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container dax makes or reuses, under gVisor's runsc by default, with this directory at its own path, reached as the executor; -box=false runs here despite the config's box")
-	boxImage := fs.String("box-image", "", "with -box, the box's image, in place of box.image (default "+config.DefaultBox().Image+")")
-	boxRuntime := fs.String("box-runtime", "", "with -box, the box's OCI runtime, in place of box.runtime (default "+config.DefaultBox().Runtime+")")
-	boxInternet := fs.String("box-internet", "", "with -box, the box's internet for this run, in place of box.internet: off (the default), on (any host), or allow (box.allow's hosts); HTTP and HTTPS through the box's proxy, for every session in the box")
+	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container a box host (dax box serve, here or over ssh) makes or reuses from its config's profile, with the project at its own path, reached as the executor; -box=false runs here despite the config's box")
+	boxHost := fs.String("box-host", "", "with -box, where the box host runs, in place of box.host: local, or ssh://[user@]host[:port]")
+	boxProfile := fs.String("box-profile", "", "with -box, the box host's profile, in place of box.profile")
+	boxInternet := fs.String("box-internet", "", "with -box, narrow the profile's internet for this run: off, allow (its hosts, or box.tighten's) or on; HTTP and HTTPS through the box's proxy, for every session in the box")
 	executorEnv := fs.String("executor-pass-env", "", "variables, separated by commas, that the -executor command alone is given, credentials included (SSH_AUTH_SOCK); overrides executor.pass_env, \"\" clears it")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
 	compactServer := fs.Bool("compact-server", false, "with -compact, use the server's compaction endpoint instead of a local summary")
@@ -261,7 +261,7 @@ func run(ctx context.Context, args []string, p program) error {
 	if given["box"] {
 		flags.Box = boxFlag
 	}
-	flags.BoxImage, flags.BoxRuntime, flags.BoxInternet = str("box-image", boxImage), str("box-runtime", boxRuntime), str("box-internet", boxInternet)
+	flags.BoxHost, flags.BoxProfile, flags.BoxInternet = str("box-host", boxHost), str("box-profile", boxProfile), str("box-internet", boxInternet)
 	if given["executor-pass-env"] {
 		flags.ExecutorPassEnv = []string{}
 		if strings.TrimSpace(*executorEnv) != "" {
@@ -341,17 +341,19 @@ func run(ctx context.Context, args []string, p program) error {
 		wsRoot = dir
 		from   = "-executor"
 	)
+	var boxRequest json.RawMessage
 	if settings.Box != nil {
-		// The box is made or started here, and from then on it is an
-		// executor like any other, started by docker exec.
-		b, err := ensureBox(ctx, &box.Client{Runner: box.CLI{}}, dir, *settings.Box, func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) })
+		// The box host, here or over ssh, makes the box when the session
+		// connects, and relays the session to the executor in it: from
+		// here it is an executor like any other.
+		argv, req, err := boxLauncher(*settings.Box, dir)
 		if err != nil {
 			return fmt.Errorf("-box: %w", err)
 		}
-		settings.Executor, from = b.Command(), "-box"
+		settings.Executor, boxRequest, from = argv, req, "-box"
 	}
 	if len(settings.Executor) > 0 || settings.ExecutorURL != "" {
-		xo := agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv, MaxReadBytes: settings.MaxReadBytes}
+		xo := agent.ExecutorOptions{Name: p.name, Version: p.version, PassEnv: settings.PassEnv, KeyEnv: m.KeyEnv, Secrets: secrets, LauncherEnv: settings.ExecutorPassEnv, MaxReadBytes: settings.MaxReadBytes, Box: boxRequest}
 		if settings.ExecutorURL != "" {
 			// Already running where it serves; nothing here starts it,
 			// so no environment goes with it.
@@ -491,16 +493,14 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 	if err != nil {
 		return err
 	}
-	// A box's address is its docker exec, which its name and directory
-	// alone make: the one a session in it was reached by.
+	// A box's address is its box host's command, which the settings and
+	// the directory alone make: the one a session in it was reached by.
 	if bs, err := config.BoxOf(user, f); err != nil {
 		return err
 	} else if bs != nil {
-		b, err := projectBox(dir)
-		if err != nil {
+		if argv, _, err = boxLauncher(*bs, dir); err != nil {
 			return err
 		}
-		argv = b.Command()
 	}
 	var (
 		sums []agentsession.Summary

@@ -359,7 +359,7 @@ names the file and the field.
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
-| `box` | `{"image": "golang:1.26-bookworm", "runtime": "runsc", "memory": "4g", "cpus": 2, "pids": 512, "internet": "off"}`, each optional (those are the defaults): run the tools in this project's box, a container dax makes or reuses and reaches as its executor (see below); `{}` takes the defaults. `internet` is `off`, `on` (any host) or `allow`, with `"allow": ["proxy.golang.org", "*.githubusercontent.com"]` the hosts it takes (a list alone means `allow`), always HTTP and HTTPS through the box's proxy and never this machine or a private network. Not with `executor` (its `pass_env` alone may stay, for the box's `docker` command) |
+| `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows it. With `local`, `host_config` names another box host config; with ssh, `project` (the path there), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -389,9 +389,9 @@ keys somewhere; a repository does not get to make them.)
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |
 | `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
-| `-box` | run the tools in this project's box (see below), with `box`'s settings or their defaults; `-box=false` runs here despite the config's `box`. Refused with an executor: clear the config's with `-executor ""` |
-| `-box-image IMAGE`, `-box-runtime NAME` | with `-box` or a `box` in your config, override `box.image` and `box.runtime` |
-| `-box-internet off\|on\|allow` | with `-box`, the box's internet for this run, in place of `box.internet`; `allow` takes `box.allow`'s hosts. It is the box's, so it applies to every session in it |
+| `-box` | run the tools in this project's box (see below), with `box`'s settings or a local box host's default profile; `-box=false` runs here despite the config's `box`. Refused with an executor: clear the config's with `-executor ""` |
+| `-box-host local\|ssh://[user@]host[:port]`, `-box-profile NAME` | with `-box` or a `box` in your config, override `box.host` and `box.profile` |
+| `-box-internet off\|allow\|on` | with `-box`, narrow the profile's internet for this run; `allow` keeps the profile's hosts (or `box.tighten`'s). It is the box's, so it applies to every session in it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
@@ -466,32 +466,39 @@ ssh build-host dax execute -root /home/me/src/app
 kubectl exec -i pod/agent -- dax execute -root /work -kind container -ref pod/agent
 ```
 
-`-box` does all of that for one project: it makes, or reuses, a
-container named for this directory (`dax-<base>-<hash>`), under
-gVisor's `runsc`, and starts the session with its `docker exec` as the
-executor. The directory is mounted at its own path and this dax
-read-only as the box's, so the two are always one version; the box has
-no capabilities, a read-only root file system, memory for `/tmp` and
-its home, and limits on memory, processors and processes. The image
-needs bash, sh, git and glibc. `dax box ls` lists the boxes,
-`dax box down` removes this directory's, and `dax box up` makes it and
-prints the `-executor` line for use without `-box`. The box limits what
-an approved call can reach, not how often you are asked: the policy is
-the same as here. It has no internet unless `box.internet`,
-`box.allow` or `-box-internet` gives it some, and then only HTTP and
-HTTPS through its sidecar's proxy, never this machine or a private
-network.
+`-box` does all of that for one project. It starts a box host, `dax
+box serve`: this dax as a child, or the dax on another machine over
+ssh. The box host makes, or reuses, a container named for the project
+(`dax-<base>-<hash>`) from a profile of its own config, under the
+runtime that profile names (gVisor's `runsc` by default; any runtime
+docker has registered, Kata's among them), and relays the session to
+the `dax execute` in it. Local is remote with a shorter connection:
+the same config, the same box, the same decisions. The project is
+mounted at its own path and the box host's dax read-only as the box's;
+the box has no capabilities, a read-only root file system, memory for
+`/tmp` and its home, and limits on memory, processors and processes.
+The image needs bash, sh, git and glibc. What the box is (image,
+runtime, limits, internet) is the box host's config's; the session
+picks a profile and may only narrow it. `dax box ls` lists this
+machine's boxes, `dax box down` removes this directory's, and `dax box
+up` makes it and prints its executor's command. The box limits what an
+approved call can reach, not how often you are asked: the policy is
+the same as here. It has no internet unless its profile gives it some,
+and then only HTTP and HTTPS through its sidecar's proxy, never the
+box host's machine or a private network.
 
 ```sh
-dax -box                       # this directory's box, made on first use
-dax -box -box-internet=on      # this run, any host
-dax -box -box-runtime runc     # no gVisor
+dax -box                               # this directory's box, made on first use
+dax -box -box-profile big              # another of the box host's profiles
+dax -box -box-internet=off             # this run, no internet whatever the profile gives
+dax -box -box-host ssh://me@build-host # the box on another machine
 dax box ls
 dax box down
 ```
 
 [docs/sandbox.md](docs/sandbox.md) has recipes for daily use: the box,
-gVisor, an image with dax in it, each launcher, the config, what to
+the box host config, a box over ssh, runtimes (gVisor, Kata), an image
+with dax in it, each launcher, the config, what to
 check and what does not work yet.
 
 The pipe is the credential: whoever started the process is its one

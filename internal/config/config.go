@@ -18,13 +18,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -32,6 +32,7 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/ext/a2a"
+	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -144,42 +145,95 @@ type Peer struct {
 	TokenEnv string `json:"token_env,omitempty"`
 }
 
-// Box is the box's settings; one left out takes its default
-// (DefaultBox).
+// Box runs the tools in a box a box host makes: `dax box serve`, here
+// or on another machine over ssh. What the box is (its image, runtime,
+// limits and internet) is the box host's config's; the session names a
+// profile there and may only narrow it.
 type Box struct {
-	// Image the box runs: it must have bash, sh, git and glibc.
-	Image string `json:"image,omitempty"`
-	// Runtime is the OCI runtime docker runs it with, runsc for gVisor.
-	Runtime string `json:"runtime,omitempty"`
-	// Memory is its memory limit as docker takes it: "4g", "512m".
-	Memory string `json:"memory,omitempty"`
-	// CPUs and Pids bound its processors and processes.
-	CPUs float64 `json:"cpus,omitempty"`
-	Pids int64   `json:"pids,omitempty"`
-	// Internet is the box's: off (none, the default), allow (the hosts
-	// Allow names) or on (any host), always HTTP and HTTPS through the
-	// box's proxy, never this machine or a private network.
-	Internet string `json:"internet,omitempty"`
-	// Allow names the hosts the box may reach: a name, or *.domain for
-	// every name below domain. Given without internet, it is allow.
-	Allow []string `json:"allow,omitempty"`
+	// Host is where the box host runs: local (the default), or
+	// ssh://[user@]host[:port].
+	Host string `json:"host,omitempty"`
+	// Profile is one of the box host's profiles; empty is its default.
+	Profile string `json:"profile,omitempty"`
+	// MCP names servers of the box host's catalog, each run in a box of
+	// its own (not yet: the box host refuses them).
+	MCP []string `json:"mcp,omitempty"`
+	// Tighten narrows the profile: less memory, CPUs or processes, less
+	// internet, fewer hosts. The box host refuses a widening.
+	Tighten *box.Tighten `json:"tighten,omitempty"`
+	// HostConfig, with host local, is the box host config the local box
+	// host reads in place of ~/.config/dax/box-host.json.
+	HostConfig string `json:"host_config,omitempty"`
+	// Project, with an ssh host, is the project's path on that host;
+	// default the same path as here.
+	Project string `json:"project,omitempty"`
+	// RemoteDax, with an ssh host, is dax there; default dax on the
+	// login's PATH.
+	RemoteDax string `json:"remote_dax,omitempty"`
+	// SSH, with an ssh host, are more arguments for ssh, before the
+	// host: ["-F", "/home/me/.ssh/build.conf"].
+	SSH []string `json:"ssh,omitempty"`
 }
 
-// BoxSettings is the box a session runs its tools in, every field set.
+// BoxLocal is a box host on this machine.
+const BoxLocal = "local"
+
+// BoxSettings is the box a session runs its tools in: where its box
+// host is, how to start it, and what the session asks of it.
 type BoxSettings struct {
-	Image, Runtime, Memory string
-	CPUs                   float64
-	Pids                   int64
-	// Internet is off, allow or on; Allow the hosts allow takes, lower
-	// case.
-	Internet string
-	Allow    []string
+	// Host is BoxLocal or the ssh URL.
+	Host string
+	// SSH is Host parsed, nil when local.
+	SSH *SSHTarget
+	// Request is what the session asks of the box host.
+	Request box.Request
+	// HostConfig, Project, RemoteDax and SSHArgs are Box's.
+	HostConfig, Project, RemoteDax string
+	SSHArgs                        []string
 }
 
-// DefaultBox is the box a box setting or -box leaves to dax.
-func DefaultBox() BoxSettings {
-	return BoxSettings{Image: "golang:1.26-bookworm", Runtime: "runsc", Memory: "4g", CPUs: 2, Pids: 512, Internet: "off"}
+// SSHTarget is an ssh box host.
+type SSHTarget struct{ User, Host, Port string }
+
+// ParseBoxHost is host as Box.Host takes it: BoxLocal, or an ssh URL
+// with a user and a port at most. A host or a user ssh would read as
+// an option (one starting with -) is refused.
+func ParseBoxHost(field, host string) (*SSHTarget, error) {
+	if host == "" || host == BoxLocal {
+		return nil, nil
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Scheme != "ssh" || u.Opaque != "" {
+		return nil, fmt.Errorf("%s %q: want local or ssh://[user@]host[:port]", field, host)
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("%s %q: an ssh host takes no path, query or fragment; give the project's path as box.project", field, host)
+	}
+	t := &SSHTarget{Host: u.Hostname(), Port: u.Port()}
+	if u.User != nil {
+		if _, ok := u.User.Password(); ok {
+			return nil, fmt.Errorf("%s %q: a password; ssh's keys or agent sign in", field, host)
+		}
+		t.User = u.User.Username()
+		if !sshWord.MatchString(t.User) {
+			return nil, fmt.Errorf("%s %q: user %q", field, host, t.User)
+		}
+	}
+	if !sshHost.MatchString(t.Host) {
+		return nil, fmt.Errorf("%s %q: want a host name or address", field, host)
+	}
+	if t.Port != "" {
+		if n, err := strconv.Atoi(t.Port); err != nil || n < 1 || n > 65535 {
+			return nil, fmt.Errorf("%s %q: port %q", field, host, t.Port)
+		}
+	}
+	return t, nil
 }
+
+var (
+	sshWord = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+	sshHost = regexp.MustCompile(`^[A-Za-z0-9_:][A-Za-z0-9._:%-]*$`)
+)
 
 // Executor is how to start or reach the executor.
 type Executor struct {
@@ -457,7 +511,7 @@ func (l *Layer) validate() error {
 		if x := c.Executor; x != nil && (x.Command.Given() || x.URL != "") {
 			return errors.New("box and executor both say where the tools run; give one (executor.pass_env alone may stay: it is the box's docker command's)")
 		}
-		if err := b.check(); err != nil {
+		if err := b.check("box"); err != nil {
 			return err
 		}
 	}
@@ -601,14 +655,17 @@ func BoxOn(user Layer, f Flags) bool {
 }
 
 // BoxOf is the box the user's layer and the flags say the tools run
-// in, its defaults filled in; nil when they run elsewhere. A box with
-// an executor is refused, whichever layer or flag names each, and so
-// are -box-image, -box-runtime and -box-internet without a box.
+// in; nil when they run elsewhere. A box with an executor is refused,
+// whichever layer or flag names each, and so are -box-host,
+// -box-profile and -box-internet without a box.
 func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 	if !BoxOn(user, f) {
-		for name, v := range map[string]*string{"-box-image": f.BoxImage, "-box-runtime": f.BoxRuntime, "-box-internet": f.BoxInternet} {
-			if v != nil {
-				return nil, fmt.Errorf("%s goes with -box or a box in your config", name)
+		for _, x := range []struct {
+			name string
+			v    *string
+		}{{"-box-host", f.BoxHost}, {"-box-profile", f.BoxProfile}, {"-box-internet", f.BoxInternet}} {
+			if x.v != nil {
+				return nil, fmt.Errorf("%s goes with -box or a box in your config", x.name)
 			}
 		}
 		return nil, nil
@@ -623,105 +680,101 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		}
 		return nil, errors.New(`-box: your config's executor says where the tools run; give -executor "" to run them in a box instead`)
 	}
-	s := DefaultBox()
-	if b := user.Box; b != nil {
-		if b.Image != "" {
-			s.Image = b.Image
-		}
-		if b.Runtime != "" {
-			s.Runtime = b.Runtime
-		}
-		if b.Memory != "" {
-			s.Memory = b.Memory
-		}
-		if b.CPUs != 0 {
-			s.CPUs = b.CPUs
-		}
-		if b.Pids != 0 {
-			s.Pids = b.Pids
-		}
-		for _, h := range b.Allow {
-			s.Allow = append(s.Allow, strings.ToLower(h))
-		}
-		switch {
-		case b.Internet != "":
-			s.Internet = b.Internet
-		case len(b.Allow) > 0:
-			s.Internet = "allow"
-		}
+	var b Box
+	if user.Box != nil {
+		b = *user.Box
 	}
-	if f.BoxImage != nil {
-		if !boxImage.MatchString(*f.BoxImage) {
-			return nil, fmt.Errorf("-box-image %q: want an image reference (golang:1.26-bookworm)", *f.BoxImage)
-		}
-		s.Image = *f.BoxImage
+	if f.BoxHost != nil {
+		b.Host = *f.BoxHost
 	}
-	if f.BoxRuntime != nil {
-		if !boxName.MatchString(*f.BoxRuntime) {
-			return nil, fmt.Errorf("-box-runtime %q: want a runtime's name (runsc)", *f.BoxRuntime)
+	if f.BoxProfile != nil {
+		if err := box.CheckName("-box-profile", *f.BoxProfile); err != nil {
+			return nil, err
 		}
-		s.Runtime = *f.BoxRuntime
+		b.Profile = *f.BoxProfile
 	}
 	if f.BoxInternet != nil {
+		t := box.Tighten{}
+		if b.Tighten != nil {
+			t = *b.Tighten
+		}
 		switch *f.BoxInternet {
-		case "off", "on":
-		case "allow":
-			if len(s.Allow) == 0 {
-				return nil, errors.New(`-box-internet allow: box.allow in your config names no hosts`)
-			}
+		case box.InternetOff, box.InternetOn:
+			// A mode for this run in place of the config's: its hosts go
+			// with allow alone.
+			t.Internet, t.Allow = *f.BoxInternet, nil
+		case box.InternetAllow:
+			t.Internet = box.InternetAllow
 		default:
 			return nil, fmt.Errorf("-box-internet %q: want off, on or allow", *f.BoxInternet)
 		}
-		s.Internet = *f.BoxInternet
+		b.Tighten = &t
 	}
-	return &s, nil
+	if err := b.check("box"); err != nil {
+		if f.BoxHost != nil {
+			return nil, fmt.Errorf("-box-host: %w", err)
+		}
+		return nil, err
+	}
+	s := &BoxSettings{Host: BoxLocal, HostConfig: b.HostConfig, Project: b.Project, RemoteDax: b.RemoteDax, SSHArgs: b.SSH}
+	if s.SSH, err = ParseBoxHost("box.host", b.Host); err != nil {
+		return nil, err
+	}
+	if s.SSH != nil {
+		s.Host = b.Host
+	}
+	s.Request = box.Request{Profile: b.Profile, MCP: b.MCP}
+	if b.Tighten != nil {
+		s.Request.Tighten = *b.Tighten
+	}
+	return s, nil
 }
 
-var (
-	boxImage  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
-	boxName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	boxMemory = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
-)
-
-// boxHost is a host name box.allow takes, or *. before one; a name, not
-// an address, a port or a URL.
-var boxHost = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-
-// check refuses a box setting docker would misread as another
-// argument, and an internet that says two things.
-func (b Box) check() error {
-	switch {
-	case b.Image != "" && !boxImage.MatchString(b.Image):
-		return fmt.Errorf("box.image %q: want an image reference (golang:1.26-bookworm)", b.Image)
-	case b.Runtime != "" && !boxName.MatchString(b.Runtime):
-		return fmt.Errorf("box.runtime %q: want a runtime's name (runsc)", b.Runtime)
-	case b.Memory != "" && !boxMemory.MatchString(b.Memory):
-		return fmt.Errorf("box.memory %q: want a size as docker takes it (4g, 512m)", b.Memory)
-	case b.CPUs < 0:
-		return errors.New("box.cpus: want a positive number")
-	case b.Pids < 0:
-		return errors.New("box.pids: want a positive number")
-	case b.Internet != "" && b.Internet != "off" && b.Internet != "on" && b.Internet != "allow":
-		return fmt.Errorf("box.internet %q: want off, on or allow", b.Internet)
-	case b.Internet == "allow" && len(b.Allow) == 0:
-		return errors.New(`box.internet "allow": box.allow names no hosts`)
-	case (b.Internet == "off" || b.Internet == "on") && len(b.Allow) > 0:
-		return fmt.Errorf("box.internet %q with box.allow: give allow, or leave the hosts out", b.Internet)
+// check refuses a box setting that is not one, or that goes with
+// another host than the one named.
+func (b Box) check(field string) error {
+	t, err := ParseBoxHost(field+".host", b.Host)
+	if err != nil {
+		return err
 	}
-	for _, h := range b.Allow {
-		l := strings.ToLower(h)
-		if !boxHost.MatchString(l) || net.ParseIP(strings.TrimPrefix(l, "*.")) != nil || isAllDigitsAndDots(l) {
-			return fmt.Errorf("box.allow %q: want a host name (proxy.golang.org) or *. and a domain (*.githubusercontent.com); no address, port or scheme", h)
+	if b.Profile != "" {
+		if err := box.CheckName(field+".profile", b.Profile); err != nil {
+			return err
+		}
+	}
+	for _, name := range b.MCP {
+		if err := CheckMCPName(name); err != nil {
+			return fmt.Errorf("%s.mcp: %w", field, err)
+		}
+	}
+	if b.Tighten != nil {
+		if err := box.CheckTighten(field+".tighten", *b.Tighten); err != nil {
+			return err
+		}
+	}
+	local := t == nil
+	switch {
+	case local && b.Project != "":
+		return fmt.Errorf("%s.project: with a local box host the project is the directory dax starts in", field)
+	case local && b.RemoteDax != "":
+		return fmt.Errorf("%s.remote_dax goes with an ssh box.host", field)
+	case local && len(b.SSH) > 0:
+		return fmt.Errorf("%s.ssh goes with an ssh box.host", field)
+	case !local && b.HostConfig != "":
+		return fmt.Errorf("%s.host_config: an ssh box host reads its own config, on its machine", field)
+	case b.HostConfig != "" && !filepath.IsAbs(b.HostConfig):
+		return fmt.Errorf("%s.host_config %q: want an absolute path", field, b.HostConfig)
+	case b.Project != "" && !filepath.IsAbs(b.Project):
+		return fmt.Errorf("%s.project %q: want an absolute path on the box host", field, b.Project)
+	case b.RemoteDax != "" && (strings.TrimSpace(b.RemoteDax) == "" || strings.ContainsAny(b.RemoteDax, "\x00\n\r")):
+		return fmt.Errorf("%s.remote_dax %q: want a program's name or path", field, b.RemoteDax)
+	}
+	for _, a := range b.SSH {
+		if a == "" || strings.ContainsAny(a, "\x00\n\r") {
+			return fmt.Errorf("%s.ssh %q: want ssh's arguments, one per string", field, a)
 		}
 	}
 	return nil
-}
-
-// isAllDigitsAndDots reports whether s, past any *., is an IPv4
-// address's digits and dots, which boxHost would take as a name.
-func isAllDigitsAndDots(s string) bool {
-	s = strings.TrimPrefix(s, "*.")
-	return strings.Trim(s, "0123456789.") == ""
 }
 
 // ExecutorOf is the executor the user's layer and the flags name, as
@@ -912,11 +965,11 @@ type Flags struct {
 	// empty clears it.
 	ExecutorPassEnv []string
 	// Box replaces whether the config's box is used: -box, -box=false.
-	// BoxImage, BoxRuntime and BoxInternet replace its image, runtime
-	// and internet.
-	Box                               *bool
-	BoxImage, BoxRuntime, BoxInternet *string
-	Think, Agents                     *bool
+	// BoxHost and BoxProfile replace its host and profile, and
+	// BoxInternet its tightened internet, for the run.
+	Box                              *bool
+	BoxHost, BoxProfile, BoxInternet *string
+	Think, Agents                    *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -948,8 +1001,9 @@ type Settings struct {
 	Executor         []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
 	ExecutorURL      string   // where the executor serves, when it is not started here
 	ExecutorPassEnv  []string // what only the executor's command is given
-	// Box is the box the tools run in, nil for none; the caller makes it
-	// and sets Executor to its command, since nothing here runs docker.
+	// Box is the box the tools run in, nil for none; the caller starts
+	// its box host and sets Executor to that command, since nothing here
+	// runs one.
 	Box          *BoxSettings
 	MCP          []MCP
 	Peers        []a2a.Remote // the user's, sorted by name

@@ -52,6 +52,10 @@ type ConnectOptions struct {
 	// the executor's tools read up to it, capped at the executor's own
 	// -max-read-bytes. Zero asks for tool.DefaultMaxRead.
 	MaxReadBytes int64
+	// Box, when set, is what the session asks of a box host (`dax box
+	// serve`), beside MaxReadBytes under CapabilityKey: the profile and
+	// its tightenings. An executor that is not a box host ignores it.
+	Box json.RawMessage
 }
 
 // Dialer makes a new transport to the executor, for each connection a
@@ -205,7 +209,7 @@ func connect(ctx context.Context, t sdk.Transport, o ConnectOptions) (*conn, sha
 			// connection. The executor uses no other capability of a
 			// client's but the elicitation mcpclient adds.
 			Capabilities: &sdk.ClientCapabilities{Experimental: map[string]any{
-				CapabilityKey: clientCapability{MaxReadBytes: o.MaxReadBytes},
+				CapabilityKey: clientCapability{MaxReadBytes: o.MaxReadBytes, Box: o.Box},
 			}},
 		}),
 		// The executor says its tool list never changes; a call does
@@ -506,9 +510,9 @@ func (r *Remote) redial(a *attempt, old *conn) {
 		r.cur, r.server = cn, cn.server
 	}
 	r.mu.Unlock()
-	a.cn, a.err = cn, err
-	close(a.done)
 
+	// Warned before the requests waiting on the attempt go on, so the
+	// warning comes before anything they print.
 	switch {
 	case r.opts.Warn == nil:
 	case cn != nil:
@@ -516,6 +520,8 @@ func (r *Remote) redial(a *attempt, old *conn) {
 	case errors.Is(err, ErrChanged):
 		r.opts.Warn(err.Error())
 	}
+	a.cn, a.err = cn, err
+	close(a.done)
 }
 
 // lostUnder says whether err, a request's on cn that the caller's

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -69,6 +70,11 @@ type ExecutorOptions struct {
 	// setting and the setting is not the default, dax warns
 	// (CaptureWarnings).
 	MaxReadBytes int64
+	// Box, when set, is what the session asks of a box host (`dax box
+	// serve`, which makes the box the tools run in): a profile and its
+	// tightenings, as JSON, sent on every connection. Any other
+	// executor ignores it.
+	Box json.RawMessage
 }
 
 // DialExecutor starts the program argv[0] with the arguments argv[1:],
@@ -110,7 +116,7 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 		cmd.Stderr = render.CleanWriter(warnings{})
 		return &mcp.CommandTransport{Command: cmd}, nil
 	}
-	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, MaxReadBytes: o.MaxReadBytes})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, MaxReadBytes: o.MaxReadBytes, Box: o.Box})
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +137,7 @@ func DialExecutor(ctx context.Context, argv []string, o ExecutorOptions) (*Execu
 // as DialExecutor's does.
 func DialExecutorURL(ctx context.Context, endpoint string, o ExecutorOptions) (*Executor, error) {
 	dial := func(context.Context) (mcp.Transport, error) { return executor.HTTPTransport(endpoint), nil }
-	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive, MaxReadBytes: o.MaxReadBytes})
+	ex, err := connectExecutor(ctx, dial, executor.ConnectOptions{Name: o.Name, Version: o.Version, KeepAlive: executor.KeepAlive, MaxReadBytes: o.MaxReadBytes, Box: o.Box})
 	if err != nil {
 		return nil, err
 	}
