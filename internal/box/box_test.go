@@ -178,6 +178,17 @@ func TestEnsure(t *testing.T) {
 			err:     "glibc",
 		},
 		{
+			name:    "made by another session meanwhile: that box used",
+			answers: map[string][]answer{"ps": {{}, row("running", same, bin)}, "run": {{err: errors.New(`docker run: docker: Error response from daemon: Conflict. The container name "/dax-app-12345678" is already in use`)}}},
+			verbs:   []string{"ps", "run", "ps"},
+		},
+		{
+			name:    "taken twice: refused",
+			answers: map[string][]answer{"ps": {{}, {}}, "run": {{err: errors.New("docker run: is already in use")}, {err: errors.New("docker run: is already in use")}}},
+			verbs:   []string{"ps", "run", "ps", "run"},
+			err:     "already in use",
+		},
+		{
 			name:    "did not stay up",
 			answers: map[string][]answer{"ps": {{}, row("exited", same, bin)}, "logs": {{out: "sleep: not found"}}},
 			verbs:   []string{"ps", "run", "ps", "logs"},
@@ -210,6 +221,51 @@ func TestEnsure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCheckMounts(t *testing.T) {
+	const home = "/home/me"
+	for _, tc := range []struct {
+		dir, bin string
+		err      string
+	}{
+		{dir: "/home/me/src/app", bin: "/home/me/go/bin/dax"},
+		{dir: "/srv/app", bin: "/usr/local/bin/dax"},
+		{dir: "/home/meow", bin: "/usr/bin/dax"},
+		{dir: "/", bin: "/usr/bin/dax", err: "home directory"},
+		{dir: "/home", bin: "/usr/bin/dax", err: "home directory"},
+		{dir: "/home/me", bin: "/usr/bin/dax", err: "home directory"},
+		{dir: "/home/me/", bin: "/usr/bin/dax", err: "home directory"},
+		{dir: "/home/me/a:b", bin: "/usr/bin/dax", err: "colon"},
+		{dir: "/home/me/src/app", bin: "/opt/x:y/dax", err: "colon"},
+	} {
+		err := CheckMounts(Spec{Dir: tc.dir, Binary: tc.bin}, home)
+		if tc.err == "" && err != nil {
+			t.Errorf("CheckMounts(%q, %q) = %v", tc.dir, tc.bin, err)
+		}
+		if tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)) {
+			t.Errorf("CheckMounts(%q, %q) = %v, want one naming %q", tc.dir, tc.bin, err, tc.err)
+		}
+	}
+}
+
+func TestEnsureRefusesHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	if h, err := filepath.EvalSymlinks(home); err == nil {
+		home = h
+	}
+	spec := testSpec(t)
+	spec.Dir = home
+	f := &fake{}
+	if _, err := (&Client{Runner: f}).Ensure(context.Background(), spec); err == nil {
+		t.Fatal("Ensure made a box over the home directory")
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("docker was run: %q", f.calls)
 	}
 }
 

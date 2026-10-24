@@ -170,6 +170,9 @@ type Info struct {
 // ErrRuntime is a runtime docker does not know.
 var ErrRuntime = errors.New("runtime not registered with docker")
 
+// errInUse is a box's name taken between looking for it and making it.
+var errInUse = errors.New("name already in use")
+
 // Ensure gives the box spec describes, running: the one there, started
 // again if it stopped, or a new one. A box made from other settings is
 // refused, since making it again would end every other session's tools
@@ -178,32 +181,70 @@ var ErrRuntime = errors.New("runtime not registered with docker")
 // not speak this session's protocol.
 func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	b := Box{Name: spec.Name, Dir: spec.Dir}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return b, fmt.Errorf("box: %w", err)
+	}
+	if h, err := filepath.EvalSymlinks(home); err == nil {
+		home = h
+	}
+	if err := CheckMounts(spec, home); err != nil {
+		return b, err
+	}
 	bin, err := binaryLabel(spec.Binary)
 	if err != nil {
 		return b, err
 	}
+	return b, c.ensure(ctx, spec, bin, true)
+}
+
+// ensure is Ensure once the spec is checked. Another session may make
+// the same box between find and run; then docker refuses the name, and
+// ensure looks again, once, and takes the box that session made.
+func (c *Client) ensure(ctx context.Context, spec Spec, bin string, again bool) error {
 	have, found, err := c.find(ctx, spec.Name)
 	if err != nil {
-		return b, err
+		return err
 	}
 	switch {
 	case !found:
-		return b, c.create(ctx, spec, bin)
+		err := c.create(ctx, spec, bin)
+		if again && errors.Is(err, errInUse) {
+			return c.ensure(ctx, spec, bin, false)
+		}
+		return err
 	case have.spec != specLabel(spec):
-		return b, fmt.Errorf("box %s was made with other settings (image, runtime, limits or user) than these; remove it with `dax box down %s` and start again", spec.Name, spec.Name)
+		return fmt.Errorf("box %s was made with other settings (image, runtime, limits or user) than these; remove it with `dax box down %s` and start again", spec.Name, spec.Name)
 	case have.bin != bin:
 		c.warn(fmt.Sprintf("dax changed since box %s was made; making it again, which ends any other session's tools in it", spec.Name))
 		if _, err := c.Runner.Docker(ctx, "rm", "-f", spec.Name); err != nil {
-			return b, err
+			return err
 		}
-		return b, c.create(ctx, spec, bin)
+		return c.create(ctx, spec, bin)
 	case have.state != "running":
 		if _, err := c.Runner.Docker(ctx, "start", spec.Name); err != nil {
-			return b, err
+			return err
 		}
-		return b, c.check(ctx, spec)
+		return c.check(ctx, spec)
 	}
-	return b, nil
+	return nil
+}
+
+// CheckMounts refuses a spec whose mounts would defeat the box or that
+// docker would misread: a project at the root, at home or above it,
+// whose mount would hand the tools every key and config there (dax's
+// own among them), and a path with a colon, where docker's -v splits.
+func CheckMounts(spec Spec, home string) error {
+	for _, p := range []string{spec.Dir, spec.Binary} {
+		if strings.Contains(p, ":") {
+			return fmt.Errorf("box: %s: a path with a colon cannot be mounted", p)
+		}
+	}
+	dir := filepath.Clean(spec.Dir)
+	if dir == "/" || (home != "" && (dir == home || strings.HasPrefix(home, dir+"/"))) {
+		return fmt.Errorf("box: %s holds your home directory, which the box would mount with every key and config in it; start dax in the project's directory", spec.Dir)
+	}
+	return nil
 }
 
 // List is every box, running or not.
@@ -279,6 +320,9 @@ func (c *Client) create(ctx context.Context, spec Spec, bin string) error {
 	if _, err := c.Runner.Docker(ctx, RunArgs(spec, bin)...); err != nil {
 		if strings.Contains(err.Error(), "unknown or invalid runtime name") {
 			return fmt.Errorf("box %s: %w: %s; register it (for gVisor, see docs/sandbox.md, \"gVisor\") or name another with box.runtime", spec.Name, ErrRuntime, spec.Runtime)
+		}
+		if strings.Contains(err.Error(), "is already in use") {
+			return fmt.Errorf("box %s: %w", spec.Name, errInUse)
 		}
 		return fmt.Errorf("box %s: %w", spec.Name, err)
 	}

@@ -20,7 +20,11 @@ The first time, it pulls the image and makes `dax-app-<hash>`, the
 box of this directory: the hash is of the directory's path, with links
 resolved, so the name is the same however often the box is made and
 two projects called `app` have two boxes. After that `-box` reuses it,
-starting it if it stopped. The session's executor is
+starting it if it stopped; two sessions that start it at once share the
+one box. A directory that is `/`, your home or above it is refused,
+since its mount would hand the tools every key and config in your home,
+and so is a path with a colon, which docker's `-v` cannot take. The
+session's executor is
 
 ```sh
 docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container -ref dax-app-<hash>

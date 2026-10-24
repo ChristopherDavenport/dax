@@ -13,7 +13,8 @@ versions may break flags and the config file.
   read-only root file system, limits on memory, processors and
   processes, the project mounted at its own path and this dax mounted
   read-only as the box's, so the executor is always the session's
-  version. A box made from other settings is refused (`dax box down`
+  version. A project at `/`, at your home or above it is refused, since
+  the box would mount every key and config there. A box made from other settings is refused (`dax box down`
   removes it); one whose dax changed since it was made is made again,
   with a warning. `-list` finds a box's sessions without running
   docker. Config `box` (user layer only; not with `executor`) sets its
