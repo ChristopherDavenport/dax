@@ -510,9 +510,9 @@ func (r *Remote) redial(a *attempt, old *conn) {
 		r.cur, r.server = cn, cn.server
 	}
 	r.mu.Unlock()
-	a.cn, a.err = cn, err
-	close(a.done)
 
+	// Warned before the requests waiting on the attempt go on, so the
+	// warning comes before anything they print.
 	switch {
 	case r.opts.Warn == nil:
 	case cn != nil:
@@ -520,6 +520,8 @@ func (r *Remote) redial(a *attempt, old *conn) {
 	case errors.Is(err, ErrChanged):
 		r.opts.Warn(err.Error())
 	}
+	a.cn, a.err = cn, err
+	close(a.done)
 }
 
 // lostUnder says whether err, a request's on cn that the caller's
