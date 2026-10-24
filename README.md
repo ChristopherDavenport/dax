@@ -359,6 +359,7 @@ names the file and the field.
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
+| `box` | `{"image": "golang:1.26-bookworm", "runtime": "runsc", "memory": "4g", "cpus": 2, "pids": 512, "network": "bridge"}`, each optional (those are the defaults): run the tools in this project's box, a container dax makes or reuses and reaches as its executor (see below); `{}` takes the defaults. `network` may be `none` or a docker network of yours, never `host`. Not with `executor` (its `pass_env` alone may stay, for the box's `docker` command) |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -388,6 +389,8 @@ keys somewhere; a repository does not get to make them.)
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |
 | `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
+| `-box` | run the tools in this project's box (see below), with `box`'s settings or their defaults; `-box=false` runs here despite the config's `box`. Refused with an executor: clear the config's with `-executor ""` |
+| `-box-image IMAGE`, `-box-runtime NAME` | with `-box` or a `box` in your config, override `box.image` and `box.runtime` |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
@@ -462,9 +465,29 @@ ssh build-host dax execute -root /home/me/src/app
 kubectl exec -i pod/agent -- dax execute -root /work -kind container -ref pod/agent
 ```
 
-[docs/sandbox.md](docs/sandbox.md) has recipes for daily use: an image
-with dax in it, each launcher, the config, what to check and what does
-not work yet.
+`-box` does all of that for one project: it makes, or reuses, a
+container named for this directory (`dax-<base>-<hash>`), under
+gVisor's `runsc`, and starts the session with its `docker exec` as the
+executor. The directory is mounted at its own path and this dax
+read-only as the box's, so the two are always one version; the box has
+no capabilities, a read-only root file system, memory for `/tmp` and
+its home, and limits on memory, processors and processes. The image
+needs bash, sh, git and glibc. `dax box ls` lists the boxes,
+`dax box down` removes this directory's, and `dax box up` makes it and
+prints the `-executor` line for use without `-box`. The box limits what
+an approved call can reach, not how often you are asked: the policy is
+the same as here. Its network is open unless `box.network` is `none`.
+
+```sh
+dax -box                       # this directory's box, made on first use
+dax -box -box-runtime runc     # no gVisor
+dax box ls
+dax box down
+```
+
+[docs/sandbox.md](docs/sandbox.md) has recipes for daily use: the box,
+gVisor, an image with dax in it, each launcher, the config, what to
+check and what does not work yet.
 
 The pipe is the credential: whoever started the process is its one
 client. There is no listener, no port and no token. Since no policy

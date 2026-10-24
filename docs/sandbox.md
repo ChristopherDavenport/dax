@@ -7,6 +7,118 @@ where `dax execute -listen` serves. These are
 recipes for daily use; what `dax execute` serves and how is in the
 README's [The tools in a sandbox](../README.md#the-tools-in-a-sandbox-dax-execute).
 
+## A box: `dax -box`
+
+For a container on this machine, dax does the recipes below itself:
+
+```sh
+cd ~/src/app
+dax -box
+```
+
+The first time, it pulls the image and makes `dax-app-<hash>`, the
+box of this directory: the hash is of the directory's path, with links
+resolved, so the name is the same however often the box is made and
+two projects called `app` have two boxes. After that `-box` reuses it,
+starting it if it stopped. The session's executor is
+
+```sh
+docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container -ref dax-app-<hash>
+```
+
+so everything under [Docker](#docker) holds for it: the pipe is the
+credential, there is no port, and `-list` and memory know the project
+by the box's name and the directory. `-list` with `-box` (or with a
+`box` in your config) finds its sessions without running docker.
+
+What the box is made with:
+
+| | |
+|---|---|
+| `--runtime runsc` | gVisor (see [gVisor](#gvisor)); `box.runtime` or `-box-runtime` names another. A runtime docker does not know fails the session; dax never falls back to `runc` |
+| `--user` your uid and gid | the files the tools write in the project are yours |
+| `--cap-drop ALL`, `--security-opt no-new-privileges` | no capabilities, and no setuid program can gain any |
+| `--read-only`, `--tmpfs /tmp`, `--tmpfs /home/dax` | nothing outside the project survives the container; the home (`HOME=/home/dax`, go's caches among it) and `/tmp` are memory, counted against the limit |
+| `--memory`, `--memory-swap`, `--cpus`, `--pids-limit` | `box.memory` (4g, no swap beyond it), `box.cpus` (2), `box.pids` (512) |
+| `--network` | `box.network`: `bridge` by default, so commands reach the internet; `none` cuts it off (the executor needs no port); `host` is refused |
+| `-v DIR:DIR`, `-w DIR` | the project at its own path, the one mount you can write |
+| `-v <this dax>:/usr/local/bin/dax:ro` | this machine's dax, so the executor is the session's version |
+
+The container's own process is `sleep infinity`; the tools run in the
+`dax execute` each session's `docker exec` starts.
+
+The image (`box.image`, `-box-image`; default `golang:1.26-bookworm`)
+needs bash, sh, git, `sleep`, and a glibc at least as new as the one
+this dax was built against: a dax built by `go install` links glibc.
+An image without it (alpine) needs a dax built with `CGO_ENABLED=0`.
+dax runs `dax execute -h` in a new box and says so when it fails.
+
+A box is made from its settings once. Change `box` in your config and
+the next `-box` refuses the box it finds, since making it again would
+end any other session's tools in it: `dax box down` and start again.
+A dax that changed since the box was made (an upgrade writes a new
+file, which the box's mount does not see) makes the box again, with a
+warning, for the same reason a newer executor is wanted.
+
+```sh
+dax box ls        # every box: name, state, runtime, directory
+dax box down      # remove this directory's box; or dax box down NAME
+dax box up        # make or start it, and print the -executor line
+```
+
+`dax box up` takes `-config`, `-image` and `-runtime`, and prints
+`dax -executor '...'`, for a program that starts the executor itself.
+Only your config can name a box; a project's `.dax/config.json` may
+not, and `box` is refused beside an `executor` that names a command or
+a URL. Its `executor.pass_env` alone may stay: the box's `docker exec`
+is the command it applies to (`DOCKER_HOST`, say).
+
+## gVisor
+
+A box runs under gVisor's `runsc` by default: the box's processes talk
+to gVisor's kernel, not this machine's. Install Docker Engine and
+runsc from their apt repositories ([docker](https://docs.docker.com/engine/install/ubuntu/),
+[gVisor](https://gvisor.dev/docs/user_guide/install/)), then register
+it with docker:
+
+```sh
+sudo runsc install
+sudo systemctl restart docker
+docker run --rm --runtime=runsc busybox dmesg   # "Starting gVisor..."
+```
+
+On some kernels the default platform, systrap, cannot start a
+sandbox. Under WSL2 (kernel 6.6) every container fails with
+
+```
+docker: Error response from daemon: OCI runtime start failed: starting container: starting root container: urpc method "containerManager.StartRoot" failed: EOF
+```
+
+and runsc's boot log says `panic: failed to create a syscall thread`.
+Find out which platforms work with runsc alone, as yourself:
+
+```sh
+runsc --rootless --network=none --platform=kvm --debug --debug-log=/tmp/runsc/ do true
+```
+
+On WSL2 `kvm` (when `/dev/kvm` is there) and `ptrace` both work. Point
+docker's `runsc` at the faster one, and keep the other as a runtime of
+its own:
+
+```sh
+sudo runsc install --runtime=runsc -- --platform=kvm
+sudo runsc install --runtime=runsc-ptrace -- --platform=ptrace
+sudo systemctl restart docker
+```
+
+`-box-runtime runsc-ptrace` then names the second.
+
+What the box does not do: it limits what an approved call can reach,
+not how often you are asked. dax claims no confinement for an
+executor's tools, so every rule and question is as on your machine.
+Its network is open unless `box.network` is `none`. And anything
+mounted is reachable: the project, read-write.
+
 ## What runs where
 
 In the sandbox: dax-coding's tools (`read`, `write`, `edit`, `glob`,

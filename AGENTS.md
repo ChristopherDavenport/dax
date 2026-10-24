@@ -68,6 +68,9 @@ before changing the shape.
   `-tls-ca`), a record over the store client, an `agent.Controls` over
   the served commands, and a controller that sends the head move
   through its command.
+  `box.go`: `-box` and `dax box up|ls|down`, the project's box
+  (`internal/box`) made or started before the session, whose `docker
+  exec` is then the executor like any other.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type, `ToolEnv` (what tools are built
   over), `Env` (the session as kit options see it), `Renderers`,
@@ -158,6 +161,11 @@ before changing the shape.
   the first one, and never sending a call twice (`agent/executor.go` wraps it as the public
   `agent.Executor` for `-executor`). Kit tools are control and never
   go through it.
+- `internal/box`: a project's box over the docker command line
+  (`Runner`, a fake in the tests): the hardened `docker run`, `Ensure`
+  (reuse, start, refuse other settings, make again for another dax),
+  `List`, `Remove`, the exec command. Standard library only, so it can
+  move to agentworkspace once a second product wants it.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every

@@ -7,6 +7,27 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `-box` runs the tools in this project's box, a container dax
+  makes or reuses and starts the session's executor in with `docker
+  exec`: under gVisor's `runsc` by default, with no capabilities, a
+  read-only root file system, limits on memory, processors and
+  processes, the project mounted at its own path and this dax mounted
+  read-only as the box's, so the executor is always the session's
+  version. A box made from other settings is refused (`dax box down`
+  removes it); one whose dax changed since it was made is made again,
+  with a warning. `-list` finds a box's sessions without running
+  docker. Config `box` (user layer only; not with `executor`) sets its
+  image, runtime, memory, processors, processes and network, and its
+  presence makes `-box` the default; `-box-image` and `-box-runtime`
+  override two of them.
+- Added: `dax box up`, `dax box ls` and `dax box down`: make this
+  directory's box and print the `-executor` line, list the boxes, and
+  remove one.
+- Docs: docs/sandbox.md has the box and gVisor: installing runsc,
+  registering it with docker on the KVM platform where the default
+  (systrap) cannot start, as on WSL2, and what a box confines and what
+  it does not.
+
 - Dependencies: agentsession v0.0.28, up from v0.0.27, and
   agentconsole v0.0.14, agenteval v0.0.11 and agentkit v0.0.14, up from
   v0.0.13, v0.0.10 and v0.0.13, which take agentsession v0.0.27 and
