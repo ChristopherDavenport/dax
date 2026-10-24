@@ -51,7 +51,13 @@ versions may break flags and the config file.
   an MCP server through the executor (`dax-unit NAME`, which the box
   host answers), its tools `mcp__<unit>__<tool>`, and records each
   unit's envelope, with its secrets' names and never their values, in
-  its header (`dax.box`). With no file, one unit, `workspace`
+  its header (`dax.box`). The box host redacts each value a unit's
+  container holds from its server's output, standard output and error,
+  as `[REDACTED NAME]`, in every spelling Go's, Python's, PHP's and
+  JavaScript's JSON encoders write it in, and says so once per unit and
+  secret, so a server that returns its own secret does not put it in
+  the conversation or the record; an encoded or split value is not
+  found. With no file, one unit, `workspace`
   (`golang:1.26-bookworm` under `runsc`, 4g, 2 CPUs, 512 processes, the
   project read-write, no internet), in one profile, `default`.
 - Added: a box has no internet unless its profile gives it some:

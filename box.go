@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
@@ -253,13 +254,25 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		if len(units) > 0 {
 			// A unit's server runs in its container, over this connection;
 			// the container is started again first if it stopped since.
+			// What it writes is redacted of the secrets its container
+			// holds, and the session is told once per unit and secret.
+			var mu sync.Mutex
+			told := map[[2]string]bool{}
 			hosted.StartUnit = func(ctx context.Context, name string, stderr bool) (box.Proc, error) {
 				spec := units[name]
 				ctr, err := c.EnsureUnit(ctx, spec)
 				if err != nil {
 					return nil, err
 				}
-				return c.StartProc(ctx, ctr, commandOf(r, name), stderr)
+				return c.StartUnitProc(ctx, spec, ctr, commandOf(r, name), stderr, func(secret string, _ int) {
+					mu.Lock()
+					first := !told[[2]string{name, secret}]
+					told[[2]string{name, secret}] = true
+					mu.Unlock()
+					if first {
+						say(fmt.Sprintf("unit %s: redacted %s in its output; a server that returns its secret is redacted by the box host, see docs/sandbox.md", name, secret))
+					}
+				})
 			}
 		}
 		return hosted, nil

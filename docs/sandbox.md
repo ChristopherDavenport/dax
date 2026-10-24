@@ -215,13 +215,51 @@ the launcher: `"executor": {"pass_env": ["GITHUB_TOKEN"]}` beside your
 `box`. It reaches the box host alone; the session's tools never get
 it. On another machine the box host's own environment is its login's.
 
+#### A server that returns its secret
+
+A server can hand its own secret back as output: a tool that prints its
+environment, an error that quotes the token it was refused with. The
+session would then hold it as conversation, send it to the model's
+provider, and record it. So the box host redacts what a unit's server
+writes, standard output and error, before any of it is passed on: each
+value the unit's container holds for a variable its `secrets` name,
+read with `docker inspect` when the server starts (so a container made
+before a secret was rotated is redacted by the value it has), becomes
+`[REDACTED NAME]`, and the first replacement of each secret in a
+session is said on the terminal:
+
+```
+dax: unit env: redacted DAX_TEST_TOKEN in its output; a server that returns its secret is redacted by the box host, see docs/sandbox.md
+```
+
+A value is matched as written and as JSON encoders write it inside a
+string: Go's, with and without HTML escaping; with `/` as `\/`;
+Python's `json.dumps` (non-ASCII as `\uXXXX`, lower-case hex, astral
+runes as surrogate pairs) and PHP's `json_encode` (that, and `\/`); and
+JavaScript's `JSON.stringify`. Longer values go first, so a value
+holding another is not half replaced, and the output does not depend on
+the order the secrets are declared in. Output is redacted a line at a
+time; a line over 1 MiB without a newline is passed on in pieces that
+hold back what could begin a value the next piece ends.
+
+It is a backstop, not a guarantee. A value the server encodes another
+way (base64, upper-case hex escapes, reversed, hashed), splits across
+two messages or two calls, or transforms is not found, and a server
+that means to leak its secret can. What holds then is the unit's
+envelope: a secret only reaches the hosts its `allow` names (rule 1).
+agentredact's pass over a recorded store is the other half: it finds
+secrets nobody declared (patterns, home paths, identities) in a
+session being published, and cannot know a unit's values, which never
+leave the box host; the box host knows only those.
+
 #### What the session sees
 
 The box host tells the session what it resolved, in its answer to the
 handshake: the profile and each unit's envelope (its image, runtime,
 files, internet and hosts, and its secrets' names). The session's
 header records the same (`dax.box`), so a session file says what each
-unit could reach; a secret's value is never in it. The executor's line
+unit could reach; dax writes no secret's value in it, and a server's
+own output is redacted of its values (above). The executor's line
 at the start names the profile and the units:
 
 ```

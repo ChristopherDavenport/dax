@@ -176,7 +176,9 @@ before changing the shape.
   unit's container beside the box (`EnsureUnit`, its secrets resolved
   into docker's environment alone); `unitproc.go` and `hostproc.go`, a
   unit's server under `docker exec` and the process methods the box
-  host answers for it; `relay.go`, the box host's relay, which reads
+  host answers for it; `redact.go`, the redaction of a unit's secret
+  values from its server's output, in every JSON spelling, before the
+  box host passes any of it on; `relay.go`, the box host's relay, which reads
   the session's handshake, passes the rest through a message at a
   time, adds what it resolved to the handshake's answer, and answers a
   unit's process methods itself. Runtime-agnostic: any runtime docker has

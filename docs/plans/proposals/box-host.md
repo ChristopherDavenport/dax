@@ -266,6 +266,19 @@ restarts as any MCP server does, its tools `mcp__<unit>__<tool>`), and
 records the envelopes in the session's header (`dax.box`): what each
 unit could reach, with its secrets' names and never their values.
 
+A server can still hand its own secret back as output (an env tool, an
+error quoting its token), which would put the value in the
+conversation, the provider's request and the record. So the box host
+redacts each value the unit's container holds (read with `docker
+inspect` when its server starts) from the server's standard output and
+error before any of it is passed on, in every spelling a JSON encoder
+writes it in, as `[REDACTED NAME]`, and says so once per unit and
+secret. It is a backstop: an encoded or split value passes, and the
+envelope (a secret reaches only its `allow` hosts) is what holds then.
+agentredact's pass over a recorded store is the complement: it finds
+undeclared secrets in a session being published, and cannot know a
+unit's values, which never leave the box host.
+
 Later, the envelope can inform the policy. execution-boundary.md lets
 dax claim confinement for an executor's tools only when the user
 configured the sandbox; a unit with `files: none` and `internet: off`
