@@ -363,6 +363,28 @@ func TestRemoveWithUnits(t *testing.T) {
 			}
 		}
 	}
+	// A box removed before, its state kept: -state removes the state,
+	// and only that box's.
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	for _, n := range []string{"dax-a-1-rag", "dax-a-10-rag"} {
+		if err := os.MkdirAll(filepath.Join(data, n), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := &Client{Runner: &fake{}, StateDir: filepath.Join(dir, "rules"), DataDir: data}
+	if err := c.Remove(context.Background(), "dax-a-1", true); err != nil {
+		t.Fatalf("down -state of a box removed before: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "dax-a-1-rag")); !os.IsNotExist(err) {
+		t.Errorf("its unit's state is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "dax-a-10-rag")); err != nil {
+		t.Errorf("another box's state went: %v", err)
+	}
+	if err := c.Remove(context.Background(), "dax-a-1", true); err == nil || !strings.Contains(err.Error(), "no box") {
+		t.Errorf("down -state with nothing left: %v", err)
+	}
 }
 
 // standInDocker writes a docker that runs `exec [-i] CONTAINER cmd...`

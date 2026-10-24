@@ -581,19 +581,24 @@ func (c *Client) Remove(ctx context.Context, name string, state bool) error {
 		if _, err := c.removeContainer(ctx, u.Name, true); err != nil {
 			return err
 		}
-		if state {
-			if err := c.removeData(u.Name); err != nil {
-				return err
-			}
-		}
 	}
 	there, err := c.removeContainer(ctx, name, found)
 	if err != nil {
 		return err
 	}
 	if state {
-		if err := c.removeData(name); err != nil {
+		// The box's and its units' state directories, those of units
+		// removed before too: each is named for its container, the box's
+		// name or that and a unit's.
+		dirs, err := c.dataDirs(name)
+		if err != nil {
 			return err
+		}
+		for _, d := range dirs {
+			left = true
+			if err := os.RemoveAll(d); err != nil {
+				return fmt.Errorf("box: state of %s: %w", filepath.Base(d), err)
+			}
 		}
 	}
 	if !there && !left {
@@ -602,16 +607,27 @@ func (c *Client) Remove(ctx context.Context, name string, state bool) error {
 	return nil
 }
 
-// removeData removes the state directory of the container name.
-func (c *Client) removeData(name string) error {
-	dir, err := c.dataDir(name)
+// dataDirs are the state directories there are of box name: its own,
+// and its units', named for their containers (UnitName).
+func (c *Client) dataDirs(name string) ([]string, error) {
+	own, err := c.dataDir(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("box: state of %s: %w", name, err)
+	entries, err := os.ReadDir(filepath.Dir(own))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("box: state: %w", err)
 	}
-	return nil
+	var dirs []string
+	for _, e := range entries {
+		if n := e.Name(); e.IsDir() && (n == name || strings.HasPrefix(n, name+"-")) {
+			dirs = append(dirs, filepath.Join(filepath.Dir(own), n))
+		}
+	}
+	return dirs, nil
 }
 
 // RunArgs are docker's arguments that make the box: no capabilities

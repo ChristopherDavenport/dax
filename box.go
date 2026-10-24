@@ -108,6 +108,16 @@ func ensureBox(ctx context.Context, c *box.Client, dir string, r box.Resolved, s
 	})
 }
 
+// commandOf is r's MCP unit name's command.
+func commandOf(r box.Resolved, name string) []string {
+	for _, u := range r.Units {
+		if u.Unit == name {
+			return u.Command
+		}
+	}
+	return nil
+}
+
 // unitSpec is the container of r's MCP unit u, of box b: its sidecar
 // runs this dax in the workspace's image, which has the glibc it needs.
 func unitSpec(b box.Box, r box.Resolved, u box.Settings) (box.Spec, error) {
@@ -218,29 +228,38 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		if err != nil {
 			return box.Hosted{}, err
 		}
+		// The units are made with the box, before the session is answered:
+		// a build is not held to a process start's timeout, and a unit that
+		// cannot be made (a secret that is not set) refuses the session
+		// with the reason.
+		units := map[string]box.Spec{}
+		var names []string
+		for _, u := range r.Units {
+			spec, err := unitSpec(b, r, u)
+			if err != nil {
+				return box.Hosted{}, err
+			}
+			if _, err := c.EnsureUnit(ctx, spec); err != nil {
+				return box.Hosted{}, err
+			}
+			units[u.Unit] = spec
+			names = append(names, u.Unit)
+		}
 		child, err := start(ctx, b.Command())
 		if err != nil {
 			return box.Hosted{}, err
 		}
-		hosted := box.Hosted{Child: child, Info: r.BoxInfo()}
-		units := map[string]box.Settings{}
-		for _, u := range r.Units {
-			units[u.Unit] = u
-			hosted.Units = append(hosted.Units, u.Unit)
-		}
+		hosted := box.Hosted{Child: child, Info: r.BoxInfo(), Units: names}
 		if len(units) > 0 {
-			// A unit's container is made when its server is first started,
-			// and its server runs there, over this connection.
+			// A unit's server runs in its container, over this connection;
+			// the container is started again first if it stopped since.
 			hosted.StartUnit = func(ctx context.Context, name string, stderr bool) (box.Proc, error) {
-				spec, err := unitSpec(b, r, units[name])
-				if err != nil {
-					return nil, err
-				}
+				spec := units[name]
 				ctr, err := c.EnsureUnit(ctx, spec)
 				if err != nil {
 					return nil, err
 				}
-				return c.StartProc(ctx, ctr, units[name].Command, stderr)
+				return c.StartProc(ctx, ctr, commandOf(r, name), stderr)
 			}
 		}
 		return hosted, nil
