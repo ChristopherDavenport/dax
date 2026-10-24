@@ -196,6 +196,28 @@ the box with its own docker, and runs it as the user you log in as.
 `-list` keys the project by the ssh command's words, which name the
 host and the project, and by the box's descriptor.
 
+#### A key that can only start the box host
+
+The user you log in as makes boxes with that machine's docker, and
+whoever can run docker there can make themselves root there. On a
+machine you share, give each person a key that can do nothing but
+start the box host, with sshd's own forced command, in that user's
+`~/.ssh/authorized_keys` on the box host's machine:
+
+```
+command="/home/me/go/bin/dax box serve -project /srv/src/app",restrict ssh-ed25519 AAAA… alice
+```
+
+sshd then runs that command whatever the session asks for: the words
+dax sends (its `remote_dax` and `-project`) are not run, `restrict`
+refuses a terminal, port and agent forwarding, and the project is the
+one the line names, so a key stands for one project. A login with the
+key that asks for a shell, or for `id; cat ~/.ssh/id_ed25519`, gets the
+box host, which refuses anything but a session's first message
+(`dax: box host: the session's first message: EOF`); a dax session with
+the key works as with any other. The administrator's `box-host.json`
+still decides the box; the key only decides who may ask for it.
+
 ### The box's internet
 
 A box has no internet unless its profile gives it some. Each run says
