@@ -245,17 +245,17 @@ func (c *Client) resolveSecret(ctx context.Context, ref string) (string, error) 
 // listUnits is every MCP unit's container, running or not.
 func (c *Client) listUnits(ctx context.Context) ([]Info, error) {
 	out, err := c.Runner.Docker(ctx, "ps", "-a", "--filter", "label="+labelOf, "--format",
-		`{{.Names}}\t{{.State}}\t{{.Label "`+labelOf+`"}}\t{{.Label "`+labelUnit+`"}}\t{{.Label "`+labelRuntime+`"}}\t{{.Label "`+labelFiles+`"}}\t{{.Label "`+labelDir+`"}}`)
+		`{{.Names}}\t{{.State}}\t{{.Label "`+labelOf+`"}}\t{{.Label "`+labelUnit+`"}}\t{{.Label "`+labelRuntime+`"}}\t{{.Label "`+labelFiles+`"}}\t{{.Label "`+labelDir+`"}}\t{{.Image}}`)
 	if err != nil {
 		return nil, err
 	}
 	var units []Info
 	for _, line := range lines(out) {
 		f := strings.Split(line, "\t")
-		for len(f) < 7 {
+		for len(f) < 8 {
 			f = append(f, "")
 		}
-		info := Info{Name: f[0], State: f[1], Of: f[2], Unit: f[3], Runtime: f[4], Files: f[5], Dir: f[6], Internet: "?"}
+		info := Info{Name: f[0], State: f[1], Of: f[2], Unit: f[3], Runtime: f[4], Files: f[5], Dir: f[6], Image: f[7], Internet: "?"}
 		if dir, err := c.stateDir(info.Name); err == nil {
 			if r, err := ReadRules(filepath.Join(dir, RulesFile)); err == nil {
 				info.Internet = r.String()

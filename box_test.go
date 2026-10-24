@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -134,8 +136,11 @@ func TestBoxCommand(t *testing.T) {
 		{name: "up -profile the box host does not have", args: []string{"up", "-profile", "big"}, err: `profile "big"`},
 		{name: "up -config that is not there", args: []string{"up", "-config", "/nonexistent/box-host.json"}, err: "box host config"},
 		{name: "proxy takes no name", args: []string{"proxy", "x"}, err: "unexpected argument"},
-		{name: "no verb", args: nil, err: "usage: dax box up"},
-		{name: "another verb", args: []string{"rm"}, err: `box "rm": want up, ls, down, serve or proxy`},
+		{name: "no verb", args: nil, err: "usage: dax box status"},
+		{name: "another verb", args: []string{"rm"}, err: `box "rm": want status, down, pull, up, ls, serve or proxy`},
+		{name: "down NAME takes no config", args: []string{"down", "-config", "/x.json", "a"}, err: "-config goes without NAME"},
+		{name: "pull from a local box host", args: []string{"pull"}, err: "the project is already here"},
+		{name: "status takes no name", args: []string{"status", "x"}, err: "unexpected argument"},
 		{name: "ls takes no name", args: []string{"ls", "x"}, err: "unexpected argument"},
 		{name: "down takes one name", args: []string{"down", "a", "b"}, err: `unexpected argument "b"`},
 	} {
@@ -143,7 +148,8 @@ func TestBoxCommand(t *testing.T) {
 			d := &boxDocker{answers: tc.answers}
 			var out bytes.Buffer
 			state := t.TempDir()
-			err := runBoxWith(context.Background(), tc.args, p, &out, &box.Client{Runner: d, StateDir: state})
+			c := &box.Client{Runner: d, StateDir: state}
+			err := runBoxWith(context.Background(), tc.args, p, &out, c, askInProcess(p, c))
 			if tc.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.err) {
 					t.Fatalf("err = %v, want %q", err, tc.err)
@@ -171,6 +177,49 @@ func TestBoxCommand(t *testing.T) {
 	}
 }
 
+// askInProcess is askBoxHost with the box host run here, in this
+// process, over c: the request goes to runBoxServe as the launcher's
+// words after "box serve" give it, as a box host started by them would
+// read it.
+func askInProcess(p program, c *box.Client) askFunc {
+	return func(ctx context.Context, argv, _ []string, method string, params any) (json.RawMessage, error) {
+		// Over ssh the box host's words are one, the remote command,
+		// quoted for the login's shell: read back as that shell would.
+		if last := argv[len(argv)-1]; argv[0] == "ssh" {
+			words, err := cmdline.Split(last)
+			if err != nil {
+				return nil, err
+			}
+			argv = words
+		}
+		i := slices.Index(argv, "serve")
+		if i < 0 {
+			return nil, fmt.Errorf("not a box host's command: %q", argv)
+		}
+		req, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		if err != nil {
+			return nil, err
+		}
+		var out bytes.Buffer
+		if err := runBoxServe(ctx, argv[i+1:], p, bytes.NewReader(append(req, '\n')), &out, c, nil); err != nil {
+			return nil, err
+		}
+		var resp struct {
+			Result json.RawMessage `json:"result"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+			return nil, fmt.Errorf("answer %q: %w", out.String(), err)
+		}
+		if resp.Error != nil {
+			return nil, errors.New(resp.Error.Message)
+		}
+		return resp.Result, nil
+	}
+}
+
 // What up prints is a -executor line that splits back into the box's
 // command, which -box would run.
 func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
@@ -182,7 +231,7 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 	t.Chdir(dir)
 	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
 	var out bytes.Buffer
-	if err := runBoxWith(context.Background(), []string{"up"}, program{name: "dax"}, &out, &box.Client{Runner: d, StateDir: t.TempDir()}); err != nil {
+	if err := runBoxWith(context.Background(), []string{"up"}, program{name: "dax"}, &out, &box.Client{Runner: d, StateDir: t.TempDir()}, nil); err != nil {
 		t.Fatal(err)
 	}
 	words, err := cmdline.Split(strings.TrimSpace(out.String()))
@@ -216,7 +265,7 @@ func TestBoxProxyCheck(t *testing.T) {
 	srv := httptest.NewServer(box.NewProxy(rules, t.Logf))
 	defer srv.Close()
 	addr := strings.TrimPrefix(srv.URL, "http://")
-	if err := runBoxWith(context.Background(), []string{"proxy", "-check", addr}, program{name: "dax"}, &bytes.Buffer{}, &box.Client{}); err != nil {
+	if err := runBoxWith(context.Background(), []string{"proxy", "-check", addr}, program{name: "dax"}, &bytes.Buffer{}, &box.Client{}, nil); err != nil {
 		t.Errorf("box proxy -check %s: %v", addr, err)
 	}
 }
@@ -391,6 +440,18 @@ func TestBoxLauncher(t *testing.T) {
 			s:      config.BoxSettings{Host: "ssh://me@build:2222", SSH: &config.SSHTarget{User: "me", Host: "build", Port: "2222"}, SSHArgs: []string{"-F", "/u/ssh.conf"}, Project: "/srv/my app", RemoteDax: "/opt/dax/bin/dax"},
 			want:   []string{"ssh", "-T", "-o", "BatchMode=yes", "-p", "2222", "-F", "/u/ssh.conf", "--", "me@build"},
 			remote: []string{"/opt/dax/bin/dax", "box", "serve", "-project", "/srv/my app"},
+		},
+		{
+			name:   "ssh, a checkout there: its URL in place of a path",
+			s:      config.BoxSettings{Host: "ssh://build", SSH: &config.SSHTarget{Host: "build"}, Checkout: &config.BoxCheckout{URL: "https://github.com/me/app"}},
+			want:   []string{"ssh", "-T", "-o", "BatchMode=yes", "--", "build"},
+			remote: []string{"dax", "box", "serve", "-checkout", "https://github.com/me/app"},
+		},
+		{
+			name:   "ssh, a checkout of a ref",
+			s:      config.BoxSettings{Host: "ssh://build", SSH: &config.SSHTarget{Host: "build"}, Checkout: &config.BoxCheckout{URL: "ssh://git@github.com/me/app", Ref: "release/1.2"}},
+			want:   []string{"ssh", "-T", "-o", "BatchMode=yes", "--", "build"},
+			remote: []string{"dax", "box", "serve", "-checkout", "ssh://git@github.com/me/app", "-ref", "release/1.2"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -703,5 +764,165 @@ func TestBoxServeUnit(t *testing.T) {
 		return c[0] == "run" && slices.Contains(c, "dax.box.of="+b.Name) && containsRun(c, []string{"-v", dir + ":" + dir + ":ro"})
 	}) {
 		t.Errorf("no unit run with the project read-only in %q", d.calls)
+	}
+}
+
+// isolateGit keeps git from the machine's config and gives commits a
+// name, for the tests that run it.
+func isolateGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	empty := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", empty)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AUTHOR_NAME", "test")
+	t.Setenv("GIT_COMMITTER_NAME", "test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.invalid")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.invalid")
+}
+
+func gitAt(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %q: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A checkout end to end, in this process: the box host keeps only what
+// its config allows, a session's start clones it, and status, pull and
+// down reach it through the box host the user's config names, over the
+// ssh launcher's words, never another project.
+func TestBoxServeCheckout(t *testing.T) {
+	h := home(t)
+	isolateGit(t)
+	ctx := context.Background()
+	p := program{name: "dax", version: "test"}
+	src := filepath.Join(t.TempDir(), "srv")
+	up := filepath.Join(src, "up")
+	os.MkdirAll(src, 0o755)
+	gitAt(t, src, "init", "--quiet", "-b", "main", up)
+	os.WriteFile(filepath.Join(up, "a.txt"), []byte("one"), 0o644)
+	gitAt(t, up, "add", "a.txt")
+	gitAt(t, up, "commit", "--quiet", "-m", "one")
+	url := "file://" + up
+	coDir := filepath.Join(t.TempDir(), "checkouts")
+	cfgDir := filepath.Join(h, ".config", "dax")
+	os.MkdirAll(cfgDir, 0o700)
+	hostCfg := filepath.Join(cfgDir, "box-host.json")
+	write := func(allow string) {
+		t.Helper()
+		data := `{"checkouts":{"allow":[` + allow + `],"dir":"` + coDir + `"}}`
+		if allow == "" {
+			data = `{}`
+		}
+		if err := os.WriteFile(hostCfg, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ask := func(c *box.Client, method string, params any, args ...string) (json.RawMessage, error) {
+		return askInProcess(p, c)(ctx, append([]string{"dax", "box", "serve"}, args...), nil, method, params)
+	}
+	c := &box.Client{Runner: &boxDocker{}, StateDir: t.TempDir()}
+
+	// Refused before anything: no checkouts.allow, then one that does not
+	// match.
+	write("")
+	if _, err := ask(c, box.MethodStatus, nil, "-checkout", url); err == nil || !strings.Contains(err.Error(), "keeps no checkouts") {
+		t.Errorf("no allow: %v", err)
+	}
+	write(`"https://github.com/me/*"`)
+	if _, err := ask(c, box.MethodStatus, nil, "-checkout", url); err == nil || !strings.Contains(err.Error(), "not among") {
+		t.Errorf("not allowed: %v", err)
+	}
+	write(`"file://` + src + `/*"`)
+	if _, err := ask(c, box.MethodStatus, nil, "-checkout", "file://"+src+"/up/../../etc"); err == nil {
+		t.Error("took a path with ..")
+	}
+
+	// Before a session: not cloned, nothing made.
+	res, err := ask(c, box.MethodStatus, nil, "-checkout", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st boxStatus
+	json.Unmarshal(res, &st)
+	if !strings.Contains(st.Note, "not cloned yet") || !strings.HasPrefix(st.Project, coDir) {
+		t.Errorf("status before: %+v", st)
+	}
+	if _, err := os.Stat(st.Project); !os.IsNotExist(err) {
+		t.Errorf("status made %s", st.Project)
+	}
+
+	// A session's start clones it, and the box's executor acts there.
+	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+	sc := &box.Client{Runner: d, StateDir: t.TempDir()}
+	var started []string
+	start := func(_ context.Context, argv []string) (box.Child, error) {
+		started = argv
+		return newFakeChild(), nil
+	}
+	first := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}` + "\n"
+	var out bytes.Buffer
+	if err := runBoxServe(ctx, []string{"-checkout", url}, p, strings.NewReader(first), &out, sc, start); err != nil {
+		t.Fatal(err)
+	}
+	if gitAt(t, st.Project, "rev-parse", "HEAD") != gitAt(t, up, "rev-parse", "HEAD") {
+		t.Error("not cloned at the upstream's head")
+	}
+	if !slices.Contains(started, st.Project) {
+		t.Errorf("the executor started %q, not in %s", started, st.Project)
+	}
+
+	// The session's work, committed in the checkout, comes back through
+	// pull, from a user config that names the box host over ssh.
+	os.WriteFile(filepath.Join(st.Project, "b.txt"), []byte("from the box"), 0o644)
+	gitAt(t, st.Project, "add", "b.txt")
+	gitAt(t, st.Project, "commit", "--quiet", "-m", "from the box")
+	head := gitAt(t, st.Project, "rev-parse", "HEAD")
+	userCfg := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(userCfg, []byte(`{"box":{"host":"ssh://me@build","checkout":{"url":"`+url+`.git/"}}}`), 0o600)
+	local := filepath.Join(t.TempDir(), "local")
+	gitAt(t, filepath.Dir(local), "init", "--quiet", "-b", "main", local)
+	t.Chdir(local)
+	var printed bytes.Buffer
+	if err := runBoxWith(ctx, []string{"pull", "-config", userCfg}, p, &printed, c, askInProcess(p, c)); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitAt(t, local, "rev-parse", "dax-box/up"); got != head {
+		t.Errorf("dax-box/up at %s, want %s", got, head)
+	}
+	if !strings.Contains(printed.String(), "into dax-box/up, a new branch") {
+		t.Errorf("pull printed %q", printed.String())
+	}
+	printed.Reset()
+	if err := runBoxWith(ctx, []string{"status", "-config", userCfg}, p, &printed, c, askInProcess(p, c)); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"checkout " + url + " (the remote's default branch)", "head     " + head[:12] + " on main"} {
+		if !strings.Contains(printed.String(), want) {
+			t.Errorf("status printed %q, want %q in it", printed.String(), want)
+		}
+	}
+	// Down acts on this box host's project's box, whatever it is asked.
+	res, err = ask(c, box.MethodDown, map[string]any{"state": true, "box": "dax-other-1"}, "-checkout", url)
+	var removed struct {
+		Removed string `json:"removed"`
+	}
+	json.Unmarshal(res, &removed)
+	if err != nil || removed.Removed != box.NameFor(st.Project) {
+		t.Errorf("down removed %q (%v), want %s", removed.Removed, err, box.NameFor(st.Project))
+	}
+	// Another request of the box host's.
+	if _, err := ask(c, "dax/box.rm", nil, "-checkout", url); err == nil || !strings.Contains(err.Error(), "not one of the box host's requests") {
+		t.Errorf("rm: %v", err)
 	}
 }

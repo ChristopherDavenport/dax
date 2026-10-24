@@ -212,7 +212,12 @@ func (e *Executor) String() string {
 	// Behind a box host: the profile it made, and the session's MCP
 	// units beside the workspace.
 	var info struct {
-		Profile string `json:"profile"`
+		Profile  string `json:"profile"`
+		Checkout *struct {
+			URL  string `json:"url"`
+			Ref  string `json:"ref"`
+			Head string `json:"head"`
+		} `json:"checkout"`
 	}
 	if raw := e.r.Box(); len(raw) > 0 && json.Unmarshal(raw, &info) == nil && info.Profile != "" {
 		line += " · profile " + info.Profile
@@ -222,6 +227,17 @@ func (e *Executor) String() string {
 				names[i] = u.Name
 			}
 			line += ", units " + strings.Join(names, ", ")
+		}
+		// A checkout the box host keeps: its repository and the head the
+		// session starts on.
+		if c := info.Checkout; c != nil && c.URL != "" {
+			line += " · checkout " + c.URL
+			if c.Ref != "" {
+				line += " " + c.Ref
+			}
+			if len(c.Head) >= 12 {
+				line += " at " + c.Head[:12]
+			}
 		}
 	}
 	return line

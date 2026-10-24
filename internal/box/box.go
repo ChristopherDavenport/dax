@@ -294,7 +294,7 @@ type Client struct {
 // unit, Of the box an MCP unit's belongs to.
 type Info struct {
 	Name, State, Dir, Runtime, Internet string
-	Unit, Of, Files                     string
+	Unit, Of, Files, Image              string
 }
 
 // ErrRuntime is a runtime docker does not know.
@@ -518,7 +518,7 @@ func CheckMounts(spec Spec, home string) error {
 // box, then its units.
 func (c *Client) List(ctx context.Context) ([]Info, error) {
 	out, err := c.Runner.Docker(ctx, "ps", "-a", "--filter", "label="+Label+"=1", "--format",
-		`{{.Names}}\t{{.State}}\t{{.Label "`+labelDir+`"}}\t{{.Label "`+labelRuntime+`"}}\t{{.Label "`+labelUnit+`"}}\t{{.Label "`+labelFiles+`"}}`)
+		`{{.Names}}\t{{.State}}\t{{.Label "`+labelDir+`"}}\t{{.Label "`+labelRuntime+`"}}\t{{.Label "`+labelUnit+`"}}\t{{.Label "`+labelFiles+`"}}\t{{.Image}}`)
 	if err != nil {
 		return nil, err
 	}
@@ -529,10 +529,10 @@ func (c *Client) List(ctx context.Context) ([]Info, error) {
 	var all []Info
 	for _, line := range lines(out) {
 		f := strings.Split(line, "\t")
-		for len(f) < 6 {
+		for len(f) < 7 {
 			f = append(f, "")
 		}
-		info := Info{Name: f[0], State: f[1], Dir: f[2], Runtime: f[3], Unit: f[4], Files: f[5], Internet: "?"}
+		info := Info{Name: f[0], State: f[1], Dir: f[2], Runtime: f[3], Unit: f[4], Files: f[5], Image: f[6], Internet: "?"}
 		if info.Unit == "" {
 			// A box made before units were.
 			info.Unit, info.Files = DefaultUnit, Files{Project: FilesRW}.String()

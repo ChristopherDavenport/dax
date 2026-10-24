@@ -5,6 +5,7 @@ package dax
 // executor; and the box host itself.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,12 +14,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"text/tabwriter"
 
 	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/executor"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // projectBox is the box of the project in dir, by name and directory
@@ -57,14 +62,22 @@ func boxLauncher(s config.BoxSettings, dir string) (argv []string, request json.
 		}
 		return argv, request, nil
 	}
-	project := s.Project
-	if project == "" {
-		// The same path as here, which the box host resolves there.
+	// The project there: a checkout the box host keeps, by its URL, or a
+	// path, by default the same path as here, which the box host
+	// resolves there.
+	where := []string{"-project", s.Project}
+	switch {
+	case s.Checkout != nil:
+		where = []string{"-checkout", s.Checkout.URL}
+		if s.Checkout.Ref != "" {
+			where = append(where, "-ref", s.Checkout.Ref)
+		}
+	case s.Project == "":
 		b, err := projectBox(dir)
 		if err != nil {
 			return nil, nil, err
 		}
-		project = b.Dir
+		where[1] = b.Dir
 	}
 	remote := s.RemoteDax
 	if remote == "" {
@@ -81,7 +94,7 @@ func boxLauncher(s config.BoxSettings, dir string) (argv []string, request json.
 	}
 	// ssh hands the remote command to the login's shell as one line, so
 	// each word is quoted for it.
-	argv = append(argv, "--", target, box.Quote([]string{remote, "box", "serve", "-project", project}))
+	argv = append(argv, "--", target, box.Quote(append([]string{remote, "box", "serve"}, where...)))
 	return argv, request, nil
 }
 
@@ -154,7 +167,85 @@ func runBox(ctx context.Context, args []string, p program, stdout io.Writer) err
 	if len(args) > 0 && args[0] == "serve" {
 		return runBoxServe(ctx, args[1:], p, os.Stdin, stdout, &box.Client{Runner: box.CLI{}}, startExecutor)
 	}
-	return runBoxWith(ctx, args, p, stdout, &box.Client{Runner: box.CLI{}})
+	return runBoxWith(ctx, args, p, stdout, &box.Client{Runner: box.CLI{}}, askBoxHost)
+}
+
+// askFunc sends one of the box host's own requests, method with params,
+// to the box host argv starts with env, and gives its answer's result.
+type askFunc func(ctx context.Context, argv, env []string, method string, params any) (json.RawMessage, error)
+
+// askBoxHost starts the box host argv names, as -box would, sends it
+// one request and reads its answer; the box host's standard error is
+// this one's.
+func askBoxHost(ctx context.Context, argv, env []string, method string, params any) (json.RawMessage, error) {
+	req, err := json.Marshal(struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int    `json:"id"`
+		Method  string `json:"method"`
+		Params  any    `json:"params,omitempty"`
+	}{"2.0", 1, method, params})
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = env
+	cmd.Stdin = bytes.NewReader(append(req, '\n'))
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("box host: %w", err)
+	}
+	var resp struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decErr := json.NewDecoder(stdout).Decode(&resp)
+	io.Copy(io.Discard, stdout)
+	waitErr := cmd.Wait()
+	switch {
+	case decErr == nil && resp.Error != nil:
+		return nil, errors.New(resp.Error.Message)
+	case decErr == nil:
+		return resp.Result, nil
+	case waitErr != nil:
+		return nil, fmt.Errorf("box host: %w", waitErr)
+	}
+	return nil, fmt.Errorf("box host: no answer: %w", decErr)
+}
+
+// boxHostOf is the box host the user's config at cfgPath names, as a
+// session's -box would start it for the project in dir, and the
+// environment its launcher gets: this machine's without credentials,
+// but those pass_env and executor.pass_env name. With no box in the
+// config it is a local box host's default.
+func boxHostOf(cfgPath, dir string) (*config.BoxSettings, []string, []string, error) {
+	user, err := loadUser(cfgPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pass := slices.Clone(user.PassEnv)
+	if user.Executor != nil {
+		pass = append(pass, user.Executor.PassEnv...)
+	}
+	// The config's executor is for sessions; these ask the box host.
+	user.Executor = nil
+	on := true
+	bs, err := config.BoxOf(user, config.Flags{Box: &on})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	argv, _, err := boxLauncher(*bs, dir)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	key := user.APIKeyEnv
+	env := tool.ChildEnv(os.Environ(), pass, key)
+	return bs, argv, env, nil
 }
 
 // startExecutor starts argv, a box's `docker exec ... dax execute`,
@@ -189,13 +280,18 @@ func (c cmdChild) Wait() error           { return c.cmd.Wait() }
 // runBoxServe is `dax box serve`, the box host: over in and out, the
 // session's executor protocol, relayed to the executor in the box the
 // session's first message asks for, which it makes through c from its
-// config. It is a session's executor command, here or over ssh, and
-// writes nothing to out but the protocol.
+// config; or, as the first message, one of the box host's own requests
+// about its project (status, down, pull), answered before it exits. It
+// is a session's executor command, here or over ssh, and writes nothing
+// to out but the protocol. Its one project is -project, or -checkout's
+// checkout, and no request reaches another.
 func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, out io.Writer, c *box.Client, start func(context.Context, []string) (box.Child, error)) error {
 	fs := flag.NewFlagSet(p.name+" box serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	cfgPath := fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json, built-in defaults when it is not there")
 	project := fs.String("project", "", "the project's directory on this machine, mounted in the box at its own path; default the current directory")
+	checkout := fs.String("checkout", "", "in place of -project, a repository's URL: the project is this box host's checkout of it, cloned and kept current within its config's checkouts.allow")
+	ref := fs.String("ref", "", "with -checkout, the branch or tag; default the remote's default branch")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "usage: %s box serve [flags]   (the box host: a session's executor, started by -box here or over ssh)\n", p.name)
 		fs.PrintDefaults()
@@ -206,26 +302,54 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		}
 		return err
 	}
-	if fs.NArg() > 0 {
+	switch {
+	case fs.NArg() > 0:
 		return fmt.Errorf("box serve: unexpected argument %q", fs.Arg(0))
+	case *checkout != "" && *project != "":
+		return errors.New("box serve: -checkout and -project both name the project; give one")
+	case *ref != "" && *checkout == "":
+		return errors.New("box serve: -ref goes with -checkout")
+	}
+	if *ref != "" {
+		if err := box.CheckRef("-ref", *ref); err != nil {
+			return err
+		}
 	}
 	h, err := loadHostConfig(*cfgPath)
 	if err != nil {
 		return err
 	}
-	dir := *project
-	if dir == "" {
-		if dir, err = os.Getwd(); err != nil {
+	say := func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) }
+	proj := boxProject{dir: *project}
+	if *checkout != "" {
+		if proj, err = checkoutProject(h, *checkout, *ref); err != nil {
+			return err
+		}
+	} else if proj.dir == "" {
+		if proj.dir, err = os.Getwd(); err != nil {
 			return err
 		}
 	}
-	say := func(msg string) { fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, msg) }
+	admin := func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+		return boxAdmin(ctx, c, proj, method, params)
+	}
 	return box.Relay(ctx, in, out, executor.CapabilityKey, func(ctx context.Context, req box.Request) (box.Hosted, error) {
 		r, err := h.Resolve(req)
 		if err != nil {
 			return box.Hosted{}, err
 		}
-		b, err := ensureBox(ctx, c, dir, r, say)
+		var co *box.CheckoutInfo
+		if proj.url != "" {
+			// Cloned, or fetched and moved on only where nothing of a
+			// session's is lost; what was done, or why not, is said.
+			st, err := box.SyncCheckout(ctx, proj.dir, proj.url, proj.ref)
+			if err != nil {
+				return box.Hosted{}, err
+			}
+			say(fmt.Sprintf("checkout %s at %s: %s; head %s", box.Redact(proj.url), proj.dir, st.Note, short(st.Head)))
+			co = &box.CheckoutInfo{URL: box.Redact(proj.url), Ref: proj.ref, Head: st.Head}
+		}
+		b, err := ensureBox(ctx, c, proj.dir, r, say)
 		if err != nil {
 			return box.Hosted{}, err
 		}
@@ -250,7 +374,9 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		if err != nil {
 			return box.Hosted{}, err
 		}
-		hosted := box.Hosted{Child: child, Info: r.BoxInfo(), Units: names}
+		info := r.BoxInfo()
+		info.Checkout = co
+		hosted := box.Hosted{Child: child, Info: info, Units: names}
 		if len(units) > 0 {
 			// A unit's server runs in its container, over this connection;
 			// the container is started again first if it stopped since.
@@ -276,13 +402,141 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 			}
 		}
 		return hosted, nil
-	})
+	}, box.WithAdmin(admin))
+}
+
+// boxProject is a box host's one project: a directory, and for a
+// checkout its repository's URL and ref.
+type boxProject struct {
+	dir, url, ref string
+}
+
+// checkoutProject is the checkout of raw, a repository's URL, as the
+// box host config h keeps it: refused unless h's checkouts.allow
+// matches it.
+func checkoutProject(h box.HostConfig, raw, ref string) (boxProject, error) {
+	norm, err := box.NormalizeURL(raw)
+	if err != nil {
+		return boxProject{}, fmt.Errorf("box serve: -checkout %w", err)
+	}
+	switch {
+	case len(h.Checkouts.Allow) == 0:
+		return boxProject{}, fmt.Errorf("box serve: this box host keeps no checkouts: its config has no checkouts.allow, so %s is refused", box.Redact(norm))
+	case !h.Checkouts.Allows(norm):
+		return boxProject{}, fmt.Errorf("box serve: %s is not among this box host's checkouts.allow", box.Redact(norm))
+	}
+	dir, err := h.Checkouts.Path(norm)
+	if err != nil {
+		return boxProject{}, err
+	}
+	return boxProject{dir: dir, url: norm, ref: ref}, nil
+}
+
+// short is the first twelve hex digits of a commit.
+func short(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	return commit
+}
+
+// boxStatus is dax/box.status's answer: the project's box and units, and
+// its git state, a checkout's with its URL.
+type boxStatus struct {
+	Project string             `json:"project"`
+	Box     string             `json:"box"`
+	Units   []boxStatusUnit    `json:"units"`
+	Git     *box.CheckoutState `json:"git,omitempty"`
+	Note    string             `json:"note,omitempty"`
+}
+
+type boxStatusUnit struct {
+	Name     string `json:"name"`
+	Unit     string `json:"unit"`
+	State    string `json:"state"`
+	Runtime  string `json:"runtime"`
+	Files    string `json:"files"`
+	Internet string `json:"internet"`
+	Image    string `json:"image"`
+}
+
+// boxAdmin answers the box host's own requests about proj, its one
+// project, through c.
+func boxAdmin(ctx context.Context, c *box.Client, proj boxProject, method string, params json.RawMessage) (any, error) {
+	_, statErr := os.Stat(proj.dir)
+	missing := errors.Is(statErr, os.ErrNotExist)
+	switch method {
+	case box.MethodStatus:
+		st := boxStatus{Project: proj.dir, Units: []boxStatusUnit{}}
+		if missing {
+			st.Note = "not there yet: a session's start makes it"
+			if proj.url != "" {
+				st.Note = "not cloned yet: a session's start clones it"
+			}
+			st.Box = box.NameFor(filepath.Clean(proj.dir))
+			return st, nil
+		}
+		b, err := projectBox(proj.dir)
+		if err != nil {
+			return nil, err
+		}
+		st.Box = b.Name
+		all, err := c.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range all {
+			if i.Name == b.Name || i.Of == b.Name {
+				st.Units = append(st.Units, boxStatusUnit{Name: i.Name, Unit: i.Unit, State: i.State, Runtime: i.Runtime, Files: i.Files, Internet: i.Internet, Image: i.Image})
+			}
+		}
+		if g, err := box.ReadCheckout(ctx, proj.dir); err == nil {
+			g.URL, g.Ref = box.Redact(proj.url), proj.ref
+			st.Git = &g
+		}
+		return st, nil
+	case box.MethodDown:
+		var p struct {
+			State bool `json:"state"`
+		}
+		if len(params) > 0 && string(params) != "null" {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("%s: %w", method, err)
+			}
+		}
+		name := box.NameFor(filepath.Clean(proj.dir))
+		if !missing {
+			b, err := projectBox(proj.dir)
+			if err != nil {
+				return nil, err
+			}
+			name = b.Name
+		}
+		if err := c.Remove(ctx, name, p.State); err != nil {
+			return nil, err
+		}
+		return map[string]any{"removed": name, "state": p.State}, nil
+	case box.MethodPull:
+		if missing {
+			return nil, fmt.Errorf("pull: %s is not there yet: no session has started in it", proj.dir)
+		}
+		bundle, err := box.BundleHead(ctx, proj.dir, box.MaxBundle)
+		if err != nil {
+			return nil, err
+		}
+		bundle.Name = box.RepoName(filepath.Base(proj.dir))
+		if proj.url != "" {
+			bundle.Name = box.RepoName(proj.url)
+		}
+		return bundle, nil
+	}
+	return nil, fmt.Errorf("%s: not one of the box host's requests (status, down, pull)", method)
 }
 
 // runBoxWith is `dax box up|ls|down|proxy` over c, which the tests give
 // a fake docker.
-func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer, c *box.Client) error {
-	usage := fmt.Sprintf("usage: %[1]s box up [flags]   (make or start this directory's box from this machine's box host config; print its executor's command)\n       %[1]s box ls\n       %[1]s box down [-state] [name]   (remove a box and its units; default this directory's)\n       %[1]s box serve [flags]   (the box host, which -box starts)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
+func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer, c *box.Client, ask askFunc) error {
+	usage := fmt.Sprintf("usage: %[1]s box status [-config FILE]   (this project's box, its units and its checkout, from the box host your config's box names)\n       %[1]s box down [-state] [-config FILE]   (remove this project's box and its units, through that box host)\n       %[1]s box down [-state] NAME   (remove the box NAME on this machine's docker)\n       %[1]s box pull [-branch NAME] [-force] [-config FILE]   (fetch the box host's checkout's head into this repository)\n       %[1]s box up [flags]   (make or start this directory's box from this machine's box host config; print its executor's command)\n       %[1]s box ls   (every box on this machine's docker)\n       %[1]s box serve [flags]   (the box host, which -box starts)\n       %[1]s box proxy [flags]   (internal: the egress proxy a box's sidecar runs)", p.name)
 	if len(args) == 0 {
 		return errors.New(usage)
 	}
@@ -292,8 +546,8 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintln(fs.Output(), usage)
 		fs.PrintDefaults()
 	}
-	var cfgPath, profile, internet, listen, rules, check *string
-	var dropState *bool
+	var cfgPath, profile, internet, listen, rules, check, userCfg, branch *string
+	var dropState, force *bool
 	switch args[0] {
 	case "up":
 		cfgPath = fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json")
@@ -301,6 +555,13 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		internet = fs.String("internet", "", "narrow the profile's internet: off, allow (its hosts) or on")
 	case "down":
 		dropState = fs.Bool("state", false, "remove the units' state directories too (a RAG's index); kept by default")
+		userCfg = fs.String("config", "", "with no NAME, your config, whose box names the box host; default ~/.config/dax/config.json")
+	case "status":
+		userCfg = fs.String("config", "", "your config, whose box names the box host; default ~/.config/dax/config.json")
+	case "pull":
+		userCfg = fs.String("config", "", "your config, whose box names the box host; default ~/.config/dax/config.json")
+		branch = fs.String("branch", "", "the branch to fetch into; default dax-box/<the repository's name>")
+		force = fs.Bool("force", false, "replace the branch even when it has commits the box's head does not")
 	case "proxy":
 		listen = fs.String("listen", ":"+box.ProxyPort, "address to serve on")
 		rules = fs.String("rules", box.RulesMount+"/"+box.RulesFile, "the rules file, read again when it changes")
@@ -361,24 +622,148 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fmt.Fprintf(os.Stderr, "%s box proxy: serving %s under %s\n", p.name, *listen, *rules)
 		return box.ServeProxy(ctx, *listen, box.NewProxy(*rules, logf))
 	case "down":
-		name := ""
 		switch fs.NArg() {
 		case 0:
-			b, err := projectBox(dir)
+			// This project's box, through the box host that made it, here
+			// or there: its state there goes with it.
+			_, argv, env, err := boxHostOf(*userCfg, dir)
 			if err != nil {
 				return err
 			}
-			name = b.Name
+			res, err := ask(ctx, argv, env, box.MethodDown, map[string]bool{"state": *dropState})
+			if err != nil {
+				return err
+			}
+			var r struct {
+				Removed string `json:"removed"`
+			}
+			json.Unmarshal(res, &r)
+			fmt.Fprintf(stdout, "removed %s\n", r.Removed)
+			return nil
 		case 1:
-			name = fs.Arg(0)
-		default:
-			return fmt.Errorf("box down: unexpected argument %q", fs.Arg(1))
+			if *userCfg != "" {
+				return errors.New("box down NAME: acts on this machine's docker, with no config; -config goes without NAME")
+			}
+			name := fs.Arg(0)
+			if err := c.Remove(ctx, name, *dropState); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "removed %s\n", name)
+			return nil
 		}
-		if err := c.Remove(ctx, name, *dropState); err != nil {
+		return fmt.Errorf("box down: unexpected argument %q", fs.Arg(1))
+	case "status":
+		if fs.NArg() > 0 {
+			return fmt.Errorf("box status: unexpected argument %q", fs.Arg(0))
+		}
+		_, argv, env, err := boxHostOf(*userCfg, dir)
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "removed %s\n", name)
+		res, err := ask(ctx, argv, env, box.MethodStatus, nil)
+		if err != nil {
+			return err
+		}
+		var st boxStatus
+		if err := json.Unmarshal(res, &st); err != nil {
+			return fmt.Errorf("box status: %w", err)
+		}
+		printStatus(stdout, st)
+		return nil
+	case "pull":
+		if fs.NArg() > 0 {
+			return fmt.Errorf("box pull: unexpected argument %q", fs.Arg(0))
+		}
+		bs, argv, env, err := boxHostOf(*userCfg, dir)
+		if err != nil {
+			return err
+		}
+		if bs.SSH == nil {
+			return errors.New("box pull: the box host is local, so the project is already here: its commits are this directory's")
+		}
+		repo, err := gitTop(ctx, dir)
+		if err != nil {
+			return fmt.Errorf("box pull: run it in the git repository the work should come to: %w", err)
+		}
+		res, err := ask(ctx, argv, env, box.MethodPull, nil)
+		if err != nil {
+			return err
+		}
+		var b box.Bundle
+		if err := json.Unmarshal(res, &b); err != nil {
+			return fmt.Errorf("box pull: %w", err)
+		}
+		name := *branch
+		if name == "" {
+			name = "dax-box/" + b.Name
+		}
+		before, err := box.FetchBundle(ctx, repo, b, name, *force)
+		if err != nil {
+			return err
+		}
+		from := "a detached head"
+		if b.Branch != "" {
+			from = "branch " + b.Branch
+		}
+		switch {
+		case before == "":
+			fmt.Fprintf(stdout, "fetched %s (%s there) into %s, a new branch\n", short(b.Head), from, name)
+		case before == b.Head:
+			fmt.Fprintf(stdout, "%s is already at %s (%s there)\n", name, short(b.Head), from)
+		default:
+			fmt.Fprintf(stdout, "fetched %s (%s there) into %s, which was at %s\n", short(b.Head), from, name, short(before))
+		}
+		if b.Dirty {
+			fmt.Fprintln(stdout, "the checkout there has uncommitted changes, which a pull does not bring: commit them in a session first")
+		}
 		return nil
 	}
-	return fmt.Errorf("box %q: want up, ls, down, serve or proxy\n%s", args[0], usage)
+	return fmt.Errorf("box %q: want status, down, pull, up, ls, serve or proxy\n%s", args[0], usage)
+}
+
+// printStatus writes st as dax box status shows it.
+func printStatus(w io.Writer, st boxStatus) {
+	fmt.Fprintf(w, "project  %s\n", st.Project)
+	if g := st.Git; g != nil {
+		if g.URL != "" {
+			ref := g.Ref
+			if ref == "" {
+				ref = "the remote's default branch"
+			}
+			fmt.Fprintf(w, "checkout %s (%s)\n", g.URL, ref)
+		}
+		on := "detached"
+		if g.Branch != "" {
+			on = g.Branch
+		}
+		dirty := ""
+		if g.Dirty {
+			dirty = ", uncommitted changes"
+		}
+		fmt.Fprintf(w, "head     %s on %s%s\n", short(g.Head), on, dirty)
+	}
+	if st.Note != "" {
+		fmt.Fprintf(w, "note     %s\n", st.Note)
+	}
+	if len(st.Units) == 0 {
+		fmt.Fprintf(w, "box      %s: not there\n", st.Box)
+		return
+	}
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tUNIT\tSTATE\tRUNTIME\tFILES\tINTERNET\tIMAGE")
+	for _, u := range st.Units {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u.Name, u.Unit, u.State, u.Runtime, u.Files, u.Internet, u.Image)
+	}
+	tw.Flush()
+}
+
+// gitTop is the top of the git repository dir is in.
+func gitTop(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%s is not in a git repository", dir)
+	}
+	return strings.TrimSpace(string(out)), nil
 }

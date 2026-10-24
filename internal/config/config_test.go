@@ -743,6 +743,8 @@ func TestBoxPrecedence(t *testing.T) {
 	flagAllow := fromFile
 	flagAllow.Request.Tighten = box.Tighten{Memory: "2g", Internet: "allow", Allow: []string{"proxy.golang.org"}}
 	fromRemote := BoxSettings{Host: "ssh://me@build:2222", SSH: &SSHTarget{User: "me", Host: "build", Port: "2222"}, Project: "/srv/app", RemoteDax: "/opt/dax", SSHArgs: []string{"-F", "/u/.ssh/build"}}
+	checkout := parse(t, `{"box":{"host":"ssh://build","checkout":{"url":"https://GitHub.com/me/app.git","ref":"main"}}}`, false)
+	fromCheckout := BoxSettings{Host: "ssh://build", SSH: &SSHTarget{Host: "build"}, Checkout: &BoxCheckout{URL: "https://github.com/me/app", Ref: "main"}}
 	flagHost := BoxSettings{Host: "ssh://other", SSH: &SSHTarget{Host: "other"}}
 	for _, tc := range []struct {
 		name  string
@@ -756,6 +758,8 @@ func TestBoxPrecedence(t *testing.T) {
 		{"an empty box in the file", empty, Flags{}, &local, ""},
 		{"the file's profile and tightenings", user, Flags{}, &fromFile, ""},
 		{"an ssh box host", remote, Flags{}, &fromRemote, ""},
+		{"a checkout, its URL as the box host matches it", checkout, Flags{}, &fromCheckout, ""},
+		{"a checkout with -box-host local", checkout, Flags{BoxHost: ptr("local")}, nil, "-box-host: box.checkout goes with an ssh box.host"},
 		{"-box=false runs here despite the file", user, Flags{Box: ptr(false)}, nil, ""},
 		{"-box-profile replaces the file's", user, Flags{BoxProfile: ptr("big")}, &flagProfile, ""},
 		{"-box-host replaces the file's", Layer{}, Flags{Box: ptr(true), BoxHost: ptr("ssh://other")}, &flagHost, ""},
@@ -834,6 +838,13 @@ func TestBoxValidation(t *testing.T) {
 		{`{"box":{"host":"ssh://build","remote_dax":" "}}`, "box.remote_dax"},
 		{`{"box":{},"executor":{"command":"ssh host dax execute"}}`, "box and executor both"},
 		{`{"box":{},"executor":{"url":"http://127.0.0.1:7777"}}`, "box and executor both"},
+		{`{"box":{"checkout":{"url":"https://github.com/me/app"}}}`, "box.checkout goes with an ssh box.host"},
+		{`{"box":{"host":"ssh://build","project":"/srv/app","checkout":{"url":"https://github.com/me/app"}}}`, "box.checkout and box.project both"},
+		{`{"box":{"host":"ssh://build","checkout":{"url":"https://tok@github.com/me/app"}}}`, "a user in an https URL is a credential"},
+		{`{"box":{"host":"ssh://build","checkout":{"url":"https://u:secret@github.com/me/app"}}}`, "a password"},
+		{`{"box":{"host":"ssh://build","checkout":{"url":"/srv/app"}}}`, "box.checkout.url"},
+		{`{"box":{"host":"ssh://build","checkout":{"url":"https://github.com/me/app","ref":"-x"}}}`, "box.checkout.ref"},
+		{`{"box":{"host":"ssh://build","checkout":{"url":"https://github.com/me/app","path":"/x"}}}`, "unknown field"},
 	} {
 		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
@@ -843,6 +854,7 @@ func TestBoxValidation(t *testing.T) {
 		`{"box":{"host":"local","profile":"go","host_config":"/u/box-host.json","mcp":["github"],"tighten":{"memory":"512m","cpus":0.5,"pids":64,"internet":"allow","allow":["proxy.golang.org","*.githubusercontent.com"]}}}`,
 		`{"box":{"host":"ssh://me@build-host.example:2222","project":"/srv/app","remote_dax":"/opt/dax/bin/dax","ssh":["-F","/u/.ssh/build.conf"]}}`,
 		`{"box":{"host":"ssh://[::1]:2222"}}`,
+		`{"box":{"host":"ssh://build","checkout":{"url":"git@github.com:me/app.git","ref":"release/1.2"}}}`,
 	} {
 		if _, err := Parse([]byte(ok), "/u/config.json", false); err != nil {
 			t.Errorf("%s: %v", ok, err)
