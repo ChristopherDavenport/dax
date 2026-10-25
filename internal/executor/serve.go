@@ -302,7 +302,7 @@ func (s *Server) build(maxRead int64) (*inProcess, capability, error) {
 		})
 	}
 	if _, ok := env.Workspace.(workspace.Starter); ok {
-		b := wire.DefaultBounds
+		b := wire.DefaultBounds()
 		c.Start = &b
 	}
 	return x, c, nil

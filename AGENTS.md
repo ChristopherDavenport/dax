@@ -200,8 +200,10 @@ before changing the shape.
   `checkout.go`, a repository's URL as checkouts match it, the box
   host's checkout of it, cloned and moved on only when nothing would be
   lost, and the git bundle a pull takes back. Runtime-agnostic: any runtime docker has
-  registered. Standard library only, so it can move to agentworkspace
-  once a second product wants it. The design is
+  registered. Standard library only but for agentworkspace's
+  `mcpworkspace/wire` (itself standard library only), which names the
+  process methods it answers, so it can move to agentworkspace once a
+  second product wants it. The design is
   `docs/plans/proposals/box-host.md`.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its

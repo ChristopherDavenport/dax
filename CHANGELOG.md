@@ -13,11 +13,12 @@ versions may break flags and the config file.
   `agentworkspace/process.*`, and the files' template
   `dax-workspace:///{op}{?path}` is `agentworkspace:///{op}{?path}`.
   A session and the `dax execute` (or `dax box serve`) it reaches must
-  both be this version or later: a newer session refuses an older
-  executor's files template at the handshake, and an older session
-  cannot start a process in a newer executor. Update dax where the
-  executor runs together with dax here; a box is made again for
-  another dax anyway.
+  both be this version or later. Either way round the session refuses
+  the executor at the handshake, over the files template: a newer
+  session says to update dax execute where it runs, and an older one
+  that it serves its files under a template it does not read. Update
+  dax where the executor runs together with dax here; a box is made
+  again for another dax anyway.
 
 ## v0.0.24 - 2026-10-25
 

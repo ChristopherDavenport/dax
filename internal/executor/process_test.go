@@ -144,7 +144,10 @@ func TestAProcessInTheExecutorEchoes(t *testing.T) {
 	if status, err := q.Wait(); status != 3 || err != nil {
 		t.Errorf("wait: %d, %v", status, err)
 	}
-	if _, err := r.Start(context.Background(), workspace.Command{Args: []string{"true"}, Dir: ".."}); err == nil || !strings.Contains(err.Error(), "outside") {
+	// A start the executor refuses is its refusal, under one prefix, and
+	// not the loss of the connection: the process never started.
+	_, err = r.Start(context.Background(), workspace.Command{Args: []string{"true"}, Dir: ".."})
+	if err == nil || !strings.Contains(err.Error(), "outside") || strings.Count(err.Error(), "executor:") != 1 || errors.Is(err, errProcessLost) {
 		t.Errorf("a directory outside the workspace: %v", err)
 	}
 }

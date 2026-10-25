@@ -172,7 +172,7 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}) ||
 		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) ||
 		got.Files == nil || got.Files.URITemplate != wire.FilesURITemplate ||
-		got.Start == nil || *got.Start != wire.DefaultBounds {
+		got.Start == nil || *got.Start != wire.DefaultBounds() {
 		t.Errorf("capability %s\nwant tools %+v", raw, want)
 	}
 	// The listing is sorted by name, so the order is the capability's.

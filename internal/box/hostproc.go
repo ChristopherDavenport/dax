@@ -73,7 +73,7 @@ type hostProc struct {
 	exited chan struct{}
 	status int
 	err    error
-	ended  string // "timeout" or "canceled", once one ended it
+	ended  string // wire.EndedTimeout or wire.EndedCanceled, once one ended it
 	endMu  sync.Mutex
 }
 
@@ -97,7 +97,7 @@ func (t *hostProcs) end() {
 	t.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, hp := range procs {
-		hp.setEnded("canceled")
+		hp.setEnded(wire.EndedCanceled)
 		wg.Go(hp.close)
 	}
 	wg.Wait()
@@ -320,7 +320,7 @@ func (t *hostProcs) startProc(p hostStartParams) (any, error) {
 	}()
 	if p.TimeoutMs > 0 {
 		timer := time.AfterFunc(time.Duration(p.TimeoutMs)*time.Millisecond, func() {
-			hp.setEnded("timeout")
+			hp.setEnded(wire.EndedTimeout)
 			hp.close()
 		})
 		go func() {

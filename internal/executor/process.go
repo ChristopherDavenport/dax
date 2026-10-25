@@ -43,8 +43,11 @@ import (
 // cannot start a process) is refused with an error that is
 // errors.ErrUnsupported; nothing is started anywhere else.
 func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Process, error) {
-	if len(cmd.Args) == 0 {
+	switch {
+	case len(cmd.Args) == 0:
 		return nil, errors.New("executor: no command")
+	case cmd.Stdin != nil:
+		return nil, errors.New("executor: Start takes no Command.Stdin; write to Process.Stdin")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -64,6 +67,10 @@ func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Pr
 		Err:     cn.lostErr,
 	}, cmd)
 	if err != nil {
+		// The start's own error, as the start request gave it: not the
+		// loss mapping (lostErr), since a process that never started
+		// did not end with the connection, and a timeout here is no
+		// reason to probe it.
 		return nil, fmt.Errorf("executor: %w", err)
 	}
 	return p, nil

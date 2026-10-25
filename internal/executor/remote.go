@@ -280,7 +280,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 		return nil, shape{}, refuse("it does not serve its workspace's files (no files in %s), which the session reads AGENTS.md, .dax/skills and .dax/config.json through; update dax execute where it runs", CapabilityKey)
 	}
 	if cp.Files.URITemplate != wire.FilesURITemplate {
-		return nil, shape{}, refuse("it serves its workspace's files under %q; this client reads %q", cp.Files.URITemplate, wire.FilesURITemplate)
+		return nil, shape{}, refuse("it serves its workspace's files under %q; this client reads %q; update dax execute where it runs", cp.Files.URITemplate, wire.FilesURITemplate)
 	}
 	if st := cp.Start; st != nil && !st.Valid() {
 		return nil, shape{}, refuse("its start capability has a bound that is not positive: %+v", *st)
