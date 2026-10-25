@@ -205,3 +205,25 @@ func TestTheFallback(t *testing.T) {
 		}
 	}
 }
+
+// SourceBox's rules are bare asks for the tools box.confine names:
+// bash, write and edit, and a unit's tools by the one glob it takes.
+// A call of one asks under SourceBox's rule, whatever the fallback;
+// anything else Build refuses.
+func TestBoxRules(t *testing.T) {
+	s := Settings{Builtin: true, Fallback: "allow", Box: []string{"bash", "write", "edit", "mcp__files__*"}}
+	for _, tool := range []string{"bash", "write", "edit", "mcp__files__read_file"} {
+		v := verdict(t, s, tool, `{}`)
+		if v.Action != agentturn.Defer || v.Rule == nil || v.Rule.Source.Name != SourceBox {
+			t.Errorf("%s: %v by %v, want an ask from %s", tool, v.Action, v.Rule, SourceBox)
+		}
+	}
+	if v := verdict(t, s, "mcp__other__x", `{}`); v.Action != agentturn.Allow {
+		t.Errorf("another server's tool: %v, want the fallback's allow", v.Action)
+	}
+	for _, bad := range []string{"read", "mcp__*", "mcp__files__x", "mcp__Files__*", "mcp__a_b__*", "bash(rm:*)", "*"} {
+		if _, err := Build(Settings{Box: []string{bad}}); err == nil || !strings.Contains(err.Error(), "policy box") {
+			t.Errorf("box rule %q: %v", bad, err)
+		}
+	}
+}

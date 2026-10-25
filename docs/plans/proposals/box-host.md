@@ -351,12 +351,20 @@ agentredact's pass over a recorded store is the complement: it finds
 undeclared secrets in a session being published, and cannot know a
 unit's values, which never leave the box host.
 
-Later, the envelope can inform the policy. execution-boundary.md lets
-dax claim confinement for an executor's tools only when the user
-configured the sandbox; a unit with `files: none` and `internet: off`
-is such a configured, enforced envelope, so a rule could ask less of
-its tools (agentpolicy's `ConfinedBy`). Not in this step: step 2
-records envelopes and decides nothing by them.
+The envelope informs the policy when the user says so.
+execution-boundary.md lets dax claim confinement for an executor's
+tools only when the user configured the sandbox; `box.confine` in the
+user's config is that: `units` claims a unit whose envelope keeps it
+to no files beyond a read-only project, no internet, no secrets and a
+sandboxing runtime; `workspace` adds the workspace's bash, write and
+edit when the workspace has no internet, off protected paths
+(`.git`, `.dax`, environment files, CI, hooks, editor settings) and
+for bash lines the analyzer reads whole and that hide nothing. The
+claim is the session's, from the box host's envelope, never the
+executor's or a unit's own; a SourceBox bare ask makes it matter, and
+the session also claims whatever its policy allows without SourceBox,
+so nothing that ran unasked starts asking. docs/sandbox.md, "Fewer
+questions in a box", has the rules.
 
 ## Identity
 

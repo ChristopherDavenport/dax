@@ -592,11 +592,81 @@ What a box under Kata does, as checked here:
 - The process limit is the box's user's (`--ulimit nproc`), as under
   gVisor; see [What a box does not do](#what-a-box-does-not-do).
 
+### Fewer questions in a box
+
+A box limits what an approved call can reach; on its own it does not
+change how often you are asked. `box.confine` in your config (or
+`-box-confine` for a run) lets it:
+
+```json
+{ "box": { "confine": "workspace" } }
+```
+
+- `off`, the default: every rule and question is as on your machine.
+- `units`: a unit's tools run unasked when the box host holds the unit
+  to no files of yours beyond a read-only project (`files: none`,
+  `project ro`, its own `state`), no internet, no secrets, and a
+  runtime with a kernel of its own (not `runc`). A unit with internet
+  or a secret keeps asking: the box keeps its token in, not what an
+  API call does with it.
+- `workspace`: those, and the workspace's `bash`, `write` and `edit`
+  when the workspace unit has no internet and runs under gVisor or
+  Kata.
+
+What it does, in the policy's terms: the session takes those calls as
+confined (agentpolicy's `ConfinedBy`) and adds a bare ask rule for each
+such tool, of source `dax:box`, which a confined call skips. A deny
+rule still denies, an ask rule with a specifier (`bash(git push:*)`,
+`Read(ci:.env*)`) still asks, and nothing the policy allows without
+`box.confine` starts asking with it. Your own bare ask for one of these
+tools (`"ask": ["bash"]`) is skipped the same way; to be asked every
+time in a box, write `bash(*)`. The verdict in the record says what
+confined the call: `confined by box:runsc:workspace, so bash does not
+ask`.
+
+The workspace is your project, mounted read-write, so a confined call
+can still change its files on your disk; that is the point, and the
+reason not every call is taken as confined:
+
+- **Protected paths ask.** A `write` or `edit` of, or a bash line that
+  names, `.git` (its hooks and config run commands), `.dax`, an
+  environment file (`.env*`, `.envrc`), CI (`.github`, `.gitlab-ci.yml`,
+  `.circleci`), hooks (`.husky`, `.pre-commit-config.yaml`) or editor
+  settings (`.vscode`, `.idea`) asks as it does without a box, in any
+  directory and any case, links followed for the file tools. A Makefile
+  is not protected: it is source, as everything a build reads is.
+- **A bash line is confined only when it can be read.** The analyzer
+  must read the whole line (no subject it cannot name), and the line
+  must hide nothing: no `$`, backquote, `<(`, `>(` or backslash; no
+  program that runs another or code given as text (a shell, `eval`,
+  `env`, `xargs`, `find`, an interpreter); no `git`, which writes
+  `.git`; no word that is the project's root (`.`), a parent, an
+  absolute path, `~` or a glob over dot files. Anything else asks as
+  without a box. `go test ./...`, `rm -rf build` and `cp src/a.go
+  build/` run; `sh -c '...'`, `git commit` and `rm -rf .` ask.
+- **A redirect asks.** What a line writes through `>` is decided as a
+  write, which the line's confinement does not cover.
+- **Sub-agents get nothing from it.** The explore agent's read-only
+  promise rests on the analyzer, so a sub-agent's call runs unasked
+  only when the policy allows it without `box.confine`.
+- **A repository cannot use it.** Only your config can set `confine`.
+  A project's `.dax/config.json` bare ask for a tool `box.confine`
+  covers keeps that tool asking: `bash`, `write` and `edit` are then
+  not confined at all, and a unit a project's ask names is not either.
+
+What it does not do: a confined command's own program is the box's
+business, not the policy's. `go test` runs the repository's tests, a
+test can write `.git/hooks`, and `cp` follows a link the repository
+already has; the protected paths stop the model's own commands naming
+them, nothing finer. Turn `box.confine` on for projects whose code you
+would run on your own machine without reading it first.
+
 ### What a box does not do
 
 It limits what an approved call can reach, not how often you are
-asked. dax claims no confinement for an executor's tools, so every rule
-and question is as on your machine. Its internet is what [The box's
+asked: unless your `box.confine` says otherwise (see [Fewer questions
+in a box](#fewer-questions-in-a-box)), dax claims no confinement for a
+box's tools, so every rule and question is as on your machine. Its internet is what [The box's
 internet](#the-boxs-internet) gives it, and `on` is any host on the
 internet. Its process limit is per user: under gVisor and Kata,
 `--pids-limit` does not hold (both started 1000 processes under a limit
@@ -986,10 +1056,10 @@ resume the session (`dax -resume <id>`).
 - A `unix:` executor is refused ("not supported yet").
 - An executor at a URL authenticates no one, and is served over plain
   HTTP; keep it on loopback behind a tunnel.
-- The sandbox does not loosen the policy. dax does not claim
-  confinement for the executor's tools, so every rule and question is as
-  on your machine; the sandbox limits what an approved call can reach,
-  not how often you are asked.
+- The sandbox does not loosen the policy unless you ask it to. dax
+  claims no confinement for an executor's tools but a box's that your
+  `box.confine` names ([Fewer questions in a box](#fewer-questions-in-a-box)),
+  so every other rule and question is as on your machine.
 - A dropped connection is made again (see
   [When the connection drops](#when-the-connection-drops)), but a call
   in flight fails, and your MCP servers in the sandbox start again

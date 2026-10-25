@@ -464,7 +464,7 @@ func TestTheBannerNamesTheExecutor(t *testing.T) {
 	if !slices.Contains(lines, "executor: dax v1 · container box · /work") || !strings.HasSuffix(lines[0], "· /work") {
 		t.Errorf("banner %q", lines)
 	}
-	if executorLine(nil) != "" {
+	if executorLine(nil, config.ConfineWorkspace) != "" {
 		t.Error("a line for no executor")
 	}
 }

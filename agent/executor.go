@@ -345,11 +345,20 @@ func unitServersOf(raw json.RawMessage) ([]MCPServer, error) {
 // has is refused, since the tools' names would be one.
 func withUnits(servers, units []MCPServer) ([]MCPServer, error) {
 	for _, u := range units {
-		if slices.ContainsFunc(servers, func(m MCPServer) bool { return m.Name == u.Name }) {
+		if slices.ContainsFunc(servers, func(m MCPServer) bool { return collidesWithUnit(m.Name, u.Name) }) {
 			return nil, fmt.Errorf("mcp %s: a server your config names and a unit of the box host's have the name; rename the server", u.Name)
 		}
 	}
 	return append(slices.Clone(servers), units...), nil
+}
+
+// collidesWithUnit reports whether a server called name would offer
+// tools named as the unit's are, mcp__<unit>__<tool>: name is the unit's,
+// or the unit's and one underscore, whose tools mcp__<unit>___<tool>
+// start as the unit's do. A unit's name has no underscore, and no
+// server's has a double one, so no other name does.
+func collidesWithUnit(name, unit string) bool {
+	return name == unit || name == unit+"_"
 }
 
 // unitName is what a box host's unit may be called (internal/box).

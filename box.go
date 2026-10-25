@@ -26,6 +26,15 @@ import (
 	"github.com/ChristopherDavenport/dax/tool"
 )
 
+// boxConfineOf is the session's box.confine, ConfineOff without a box:
+// a plain executor's tools are never taken as confined.
+func boxConfineOf(b *config.BoxSettings) string {
+	if b == nil {
+		return config.ConfineOff
+	}
+	return b.Confine
+}
+
 // projectBox is the box of the project in dir, by name and directory
 // alone, without running docker.
 func projectBox(dir string) (box.Box, error) {

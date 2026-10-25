@@ -91,6 +91,11 @@ before changing the shape.
   the session-store helpers. It names no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
   session's header, and the listings by it (`List`, `ListExecutor`).
+  `agent/confine.go`: `box.confine`, the session's claim that a box's
+  tools run confined (agentpolicy's `WithConfinement`), from the box
+  host's envelopes and the user's opt-in alone, with the `dax:box`
+  bare asks that make it matter and a baseline engine without them, so
+  nothing allowed today asks; sub-agents' decisions are not claimed.
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left
@@ -106,7 +111,8 @@ before changing the shape.
 - `policy`: generic. Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern
-  or a carve-out.
+  or a carve-out; `dax:box` is `box.confine`'s bare asks, bash, write,
+  edit and `mcp__<unit>__*` alone.
 - `ext/coding` (dax-coding): the coding tools, their rules, matchers,
   aliases and bash stamp, the prompt's nudge, and the policy tests:
   `exploit_test.go`, `widen_test.go`, `gitconfig_test.go`.
@@ -134,7 +140,9 @@ before changing the shape.
   `view.go`, the workspace as the policy's checks read it (links
   through `fs.ReadLinkFS`); `BashSubjects`, `PathSubjects` and
   `Analyzer`, the analysis each tool's facts claim makes, and the
-  git-config check, run through `Exec`.
+  git-config check, run through `Exec`; `confine.go`, which of their
+  calls a box's confinement may cover (protected paths, a bash line
+  read whole that hides nothing), from the facts alone.
 - `facts/factspolicy`: where a tool's facts claim (agenttool's
   `Factual`: what a call would touch and the rewrite it runs with if
   allowed, bash's stamped plan) becomes agentpolicy's subjects and the

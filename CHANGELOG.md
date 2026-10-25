@@ -5,6 +5,25 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `box.confine` (`-box-confine`): `units` or `workspace` has the
+  policy take a box's tools as confined where their envelope allows,
+  so a bare ask for them does not ask. `units` covers an MCP unit with
+  no internet, no secrets, no files beyond a read-only project and a
+  runtime other than runc; `workspace` adds the workspace's bash, write
+  and edit when the workspace has no internet. Protected paths (`.git`,
+  `.dax`, environment files, CI, hooks, editor settings) still ask, a
+  bash line is covered only when the analyzer reads it whole and it
+  hides nothing, a sub-agent's call gets nothing from it, deny rules
+  and ask rules with a specifier still apply, nothing the policy allows
+  without it starts asking, and a project's bare ask for a tool keeps
+  it asking. The rules are a new policy source, `dax:box`. User config
+  only.
+- Changed: `/mcp add` and a config MCP server may not take a box
+  unit's name, or that name and an underscore, whose tools would be
+  named as the unit's.
+
 ## v0.0.23 - 2026-10-24
 
 - Fixed: a box unit's server could lose the last of its output, standard

@@ -128,6 +128,15 @@ func (s *Set) ByName(name string) (Bound, bool) {
 	return Bound{}, false
 }
 
+// Facts is the claim for a call of the tool named name with args, as
+// the policy reads it under ctx (facts): the reading a decision PinBatch
+// marked is the batch's, so a judgement made beside the policy's, the
+// session's confinement (agent/confine.go), reads what the policy
+// decides on rather than a second, later look.
+func (s *Set) Facts(ctx context.Context, name string, args json.RawMessage) (agenttool.Facts, error) {
+	return s.facts(ctx, name, args)
+}
+
 // facts is the claim for a call of the tool named name with args: its
 // batch's reading when ctx is a decision's that PinBatch marked (and
 // the batch's error, which fails every reading under it, when its
