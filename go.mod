@@ -9,6 +9,7 @@ require (
 	github.com/ChristopherDavenport/agentkit v0.0.14
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.17
+	github.com/ChristopherDavenport/agentredact/secrets v0.0.1
 	github.com/ChristopherDavenport/agentsession v0.0.28
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3

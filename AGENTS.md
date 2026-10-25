@@ -197,7 +197,7 @@ before changing the shape.
   unit's server under `docker exec` and the process methods the box
   host answers for it, named by `mcpworkspace/wire`; `redact.go`, the redaction of a unit's secret
   values from its server's output, in every JSON spelling, before the
-  box host passes any of it on; `relay.go`, the box host's relay, which reads
+  box host passes any of it on, through agentredact's `secrets` module; `relay.go`, the box host's relay, which reads
   the session's handshake, passes the rest through a message at a
   time, adds what it resolved to the handshake's answer, and offers the
   session's units as the workspace's own servers
@@ -208,9 +208,10 @@ before changing the shape.
   host's checkout of it, cloned and moved on only when nothing would be
   lost, and the git bundle a pull takes back. Runtime-agnostic: any runtime docker has
   registered. Standard library only but for agentworkspace's
-  `mcpworkspace/wire` (itself standard library only), which names the
-  process methods it answers, so it can move to agentworkspace once a
-  second product wants it. The design is
+  `mcpworkspace/wire`, which names the process methods it answers, and
+  agentredact's `secrets`, the redactor (each standard library only
+  itself), so it can move to agentworkspace once a second product
+  wants it. The design is
   `docs/plans/proposals/box-host.md`.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its

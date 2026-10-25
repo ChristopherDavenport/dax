@@ -7,6 +7,17 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: a unit's secret could reach the session when its server wrote
+  a line longer than a megabyte: where the box host split the line, a
+  value whose end is the start of another value (one secret's suffix
+  another's prefix) was cut inside the first, so most of it passed
+  unredacted, since v0.0.22. The split now moves back past every value
+  that reaches across it (agentredact#16).
+- Changed: the box host redacts a unit's output with agentredact's
+  `secrets` module (v0.0.1), which dax's own redactor moved to;
+  `internal/box/redact.go` keeps reading the container's values and
+  wrapping the unit's server. The output is the same placeholders,
+  `[REDACTED NAME]`, in the same spellings.
 - Added: an MCP server is provided by the workspace or called
   independently (docs/plans/proposals/mcp-placement.md). In
   `mcp_servers`, a command's `in` is `workspace` (the default, as
