@@ -629,7 +629,7 @@ can still change its files on your disk; that is the point, and the
 reason not every call is taken as confined:
 
 - **Protected paths ask.** A `write` or `edit` of, or a bash line that
-  names, `.git` (its hooks and config run commands), `.dax`, an
+  names, `.git` (what git on your machine trusts), `.dax`, an
   environment file (`.env*`, `.envrc`), CI (`.github`, `.gitlab-ci.yml`,
   `.circleci`), hooks (`.husky`, `.pre-commit-config.yaml`) or editor
   settings (`.vscode`, `.idea`) asks as it does without a box, in any
@@ -658,38 +658,62 @@ reason not every call is taken as confined:
 
 The protected paths stop the model's own commands naming them; they do
 not stop a program a confined command runs. A confined `write` of a
-Makefile whose rule writes `.git/hooks/pre-commit`, then a confined
-`make`, would leave a hook that git on your machine runs at your next
-commit, and `go test`, `go generate`, `npm test` or a `tar x` can do the
-same, or set `core.fsmonitor` in `.git/config`. So with `workspace` the
-box host holds what your git trusts read-only in the box, mounted over
-the read-write project, and the box cannot change it whatever runs:
+Makefile whose rule writes a hook, then a confined `make`, would leave
+something git on your machine runs, and `go test`, `go generate`, `npm
+test` or a `tar x` can do the same. Holding chosen files read-only is
+not enough, as three ways round it show:
 
-- the git dir's `config` (and `config.worktree`), and its `hooks`,
-  which the box host makes, empty, when the repository has none, so
-  nothing in the box can make them;
-- every submodule's git dir under `.git/modules`, the same way;
+- **Renaming `.git`.** A program can move the repository aside and make
+  a new `.git` with hooks of its own, which your git then uses.
+- **Removing it.** `rm -rf .git` takes the history with it.
+- **Pointing it elsewhere.** git reads files in `.git` that send it to
+  another directory for its config and hooks (`commondir` is one), and
+  a program can create them.
+
+So with `workspace` the box host mounts the project's `.git` read-only,
+whole, over the read-write project. It is a mount point in the box, so
+it cannot be renamed or removed, and nothing under it can be written,
+whatever runs:
+
+- the project's `.git` directory; or a `.git` file (a worktree or a
+  submodule checkout) and its git dir when that is in the project (one
+  outside it the box cannot reach anyway);
+- every checked-out submodule's `.git`, nested ones too, as git lists
+  them when the box is made, since a rewritten `gitdir:` line would send
+  your git to a directory the box wrote;
 - `core.hooksPath` (yours, global config included) when it is in the
-  project, and `.husky`;
-- a `.git` file's git dir when it is in the project; one outside it
-  (a worktree of a repository elsewhere) the box cannot reach anyway.
+  project, and `.husky`.
 
-In the box `git commit`, `git branch`, `git fetch` into refs and the
-rest that writes objects, refs and the index work; `git config`, `git
-remote add` and installing hooks fail with `Read-only file system`. A
-path among these that leads out of the project, or a hooks path that
-is the project's root, refuses the box with the reason.
+The box host changes nothing in the repository to do this. A guard
+path that is a symbolic link, or leads out of the project, refuses the
+box with the reason, since a link would stay writable; so does a
+`core.hooksPath` in the project that is not there yet, or that is the
+project's root.
 
-The workspace's envelope in the session's header says `"guard": "on"`,
-and the session takes the workspace's tools as confined only when it
-does. A box made before the guard, or without it, is refused with
-`dax box down` to make it again, and so is one whose repository's
-hooks, config or submodules changed since. A project that is not a git
-repository has nothing to guard, and a `git init` in the box would make
-one your git trusts: the box host says `"guard": "none: not a git
-repository"`, the workspace's tools ask as without `box.confine` (units
-are unchanged), and dax says why when the session starts. Run `git
-init` before boxing such a project.
+In the box git that reads works: `status`, `log`, `diff`, `show`,
+`blame`. Git that writes fails with `Read-only file system`: `commit`,
+`add`, `branch`, `stash`, `fetch`, `checkout` of another branch. Commit
+on your side, outside the box; `dax box pull` against such a box is
+refused, since it has no commits of its own. Each session says so when
+it starts: `dax: box <name>: the repository is read-only in this box
+(box.confine workspace); commit outside it`.
+
+The workspace's envelope in the session's header says `"guard": "on:
+.git read-only"`, and the session takes the workspace's tools as
+confined only when it does. A box made before the guard, or without it,
+is refused with `dax box down` to make it again, and so is one whose
+guarded paths changed since. A project that is not a git repository has
+nothing to guard, and a `git init` in the box would make one your git
+trusts: the box host says `"guard": "none: not a git repository"`, the
+workspace's tools ask as without `box.confine` (units are unchanged),
+and dax says why when the session starts. Run `git init` before boxing
+such a project.
+
+Not guarded: a repository a program in the box creates under the
+project, or one there that git does not list as a submodule. Your git,
+run inside such a directory, would trust its hooks and config as it
+trusts any repository's; do not run git in a directory a confined box
+made without looking at it first.
 
 What it does not do: a confined command's own program is otherwise the
 box's business, not the policy's. A test can rewrite any source in the

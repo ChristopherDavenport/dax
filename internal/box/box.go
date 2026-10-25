@@ -391,7 +391,20 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	if spec.Rules.Internet == InternetOff {
 		c.notice(fmt.Sprintf("box %s has no internet; a box host profile with internet (-box-profile) opens it", spec.Name))
 	}
+	if b.Guard == GuardOn {
+		c.notice(fmt.Sprintf("box %s: the repository is read-only in this box (box.confine workspace); commit outside it", spec.Name))
+	}
 	return b, nil
+}
+
+// Guarded reports whether the box name is there and was made behind
+// the git guard, its repository read-only in it.
+func (c *Client) Guarded(ctx context.Context, name string) (bool, error) {
+	have, found, err := c.find(ctx, name)
+	if err != nil || !found {
+		return false, err
+	}
+	return have.guard != "none", nil
 }
 
 // prepare makes what a container of spec's needs before it is made:

@@ -231,8 +231,8 @@ type Request struct {
 	MCP     []string `json:"mcp,omitempty"`
 	Tighten Tighten  `json:"tighten,omitzero"`
 	// Guard asks for the workspace's git guard (box.confine
-	// "workspace"): the repository's hooks and config read-only in the
-	// box. The answer's workspace envelope says whether it is in place.
+	// "workspace"): the repository's .git read-only in the box. The
+	// answer's workspace envelope says whether it is in place.
 	Guard bool `json:"guard,omitempty"`
 }
 
@@ -291,7 +291,8 @@ type Envelope struct {
 	Allow    []string `json:"allow,omitempty"`
 	Secrets  []string `json:"secrets,omitempty"`
 	// Guard is the workspace's git guard when one was asked for: GuardOn
-	// ("on"), or why there is none ("none: not a git repository").
+	// ("on: .git read-only"), or why there is none ("none: not a git
+	// repository").
 	Guard string `json:"guard,omitempty"`
 }
 

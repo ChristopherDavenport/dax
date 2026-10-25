@@ -64,7 +64,7 @@ func (c boxHostConn) Read(ctx context.Context) (jsonrpc.Message, error) {
 // no internet and its git guard on; a unit with a read-only project and
 // no internet; one with internet and a secret; one under runc.
 const confineBoxJSON = `{"profile":"default","units":[
-	{"name":"workspace","kind":"workspace","runtime":"runsc","files":"project rw","internet":"off","guard":"on"},
+	{"name":"workspace","kind":"workspace","runtime":"runsc","files":"project rw","internet":"off","guard":"on: .git read-only"},
 	{"name":"files","kind":"mcp","runtime":"runsc","files":"project ro, state rw","internet":"off"},
 	{"name":"gh","kind":"mcp","runtime":"runsc","files":"none","internet":"allow","allow":["api.github.com"],"secrets":["GITHUB_TOKEN"]},
 	{"name":"weak","kind":"mcp","runtime":"runc","files":"none","internet":"off"}]}`
@@ -221,12 +221,12 @@ func TestBoxConfineDecisions(t *testing.T) {
 			"go test": allow, "rm -rf src": allow, "write src/a.go": allow, "unit files": allow,
 		})},
 		// The workspace is claimed only behind its git guard: a box host
-		// that does not say it holds the repository's hooks and config
-		// read-only (an older dax), or says there is no repository, gets
+		// that does not say it holds the repository's .git read-only (an
+		// older dax), or says there is no repository, gets
 		// the workspace's tools asked as today; its units are unchanged.
-		{name: "workspace, no guard said", box: strings.Replace(confineBoxJSON, `,"guard":"on"`, ``, 1), mode: config.ConfineWorkspace,
+		{name: "workspace, no guard said", box: strings.Replace(confineBoxJSON, `,"guard":"on: .git read-only"`, ``, 1), mode: config.ConfineWorkspace,
 			want: with(map[string]agentturn.ToolAction{"unit files": allow})},
-		{name: "workspace, not a repository", box: strings.Replace(confineBoxJSON, `"guard":"on"`, `"guard":"none: not a git repository"`, 1), mode: config.ConfineWorkspace,
+		{name: "workspace, not a repository", box: strings.Replace(confineBoxJSON, `"guard":"on: .git read-only"`, `"guard":"none: not a git repository"`, 1), mode: config.ConfineWorkspace,
 			want: with(map[string]agentturn.ToolAction{"unit files": allow})},
 		{name: "workspace, a user's deny", box: confineBoxJSON, mode: config.ConfineWorkspace,
 			edit: func(p *policy.Settings) { p.User.Deny = []string{"bash(rm:*)"} },

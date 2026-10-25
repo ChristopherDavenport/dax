@@ -544,6 +544,15 @@ func boxAdmin(ctx context.Context, c *box.Client, proj boxProject, method string
 		if missing {
 			return nil, fmt.Errorf("pull: %s is not there yet: no session has started in it", proj.dir)
 		}
+		if b, err := projectBox(proj.dir); err == nil {
+			guarded, err := c.Guarded(ctx, b.Name)
+			if err != nil {
+				return nil, err
+			}
+			if guarded {
+				return nil, fmt.Errorf("pull: box %s holds the repository read-only (box.confine workspace), so it has no commits of its own to take; commit outside it", b.Name)
+			}
+		}
 		bundle, err := box.BundleHead(ctx, proj.dir, box.MaxBundle)
 		if err != nil {
 			return nil, err
@@ -577,7 +586,7 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		cfgPath = fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json")
 		profile = fs.String("profile", "", "the box host config's profile; default its default")
 		internet = fs.String("internet", "", "narrow the profile's internet: off, allow (its hosts) or on")
-		guard = fs.Bool("guard", false, "hold the repository's hooks and config read-only in the box, as box.confine workspace does")
+		guard = fs.Bool("guard", false, "hold the repository's .git read-only in the box, as box.confine workspace does")
 	case "down":
 		dropState = fs.Bool("state", false, "remove the units' state directories too (a RAG's index); kept by default")
 		userCfg = fs.String("config", "", "with no NAME, your config, whose box names the box host; default ~/.config/dax/config.json")

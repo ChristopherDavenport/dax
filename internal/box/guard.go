@@ -1,12 +1,11 @@
 package box
 
 // This file is a workspace box's git guard (box.confine "workspace",
-// docs/sandbox.md "Fewer questions in a box"): the files of the
-// project's repository that git on the box host's machine trusts and
-// runs, mounted read-only over the read-write project. A confined call
+// docs/sandbox.md "The git guard"): the project's repository, its .git
+// whole, mounted read-only over the read-write project. A confined call
 // is judged by its line, not by the program it runs; a `make`, a test or
-// an archive could otherwise write a hook or a core.fsmonitor that the
-// user's git would run outside the box.
+// an archive could otherwise write a hook, a config or a commondir that
+// the user's git would trust outside the box, or remove the history.
 
 import (
 	"bytes"
@@ -25,9 +24,10 @@ import (
 
 // The guard's states, as the workspace's envelope reports them.
 const (
-	// GuardOn is a guarded box: its repository's hooks and config are
-	// read-only in it.
-	GuardOn = "on"
+	// GuardOn is a guarded box: its repository's .git is read-only in
+	// it, so nothing a program there runs can change what git on the
+	// user's machine trusts (hooks, config, commondir) or its history.
+	GuardOn = "on: .git read-only"
 	// GuardNotRepo is a box asked for a guard over a project that is no
 	// git repository: nothing to mount, and a `git init` in the box would
 	// make a repository the user's git trusts, so nothing is claimed.
@@ -35,46 +35,52 @@ const (
 )
 
 // GuardMounts are the paths of dir's repository a guarded box mounts
-// read-only, sorted, with the guard's state: the git dir's config (and
-// config.worktree, and each worktree's), its hooks (made, empty, when
-// missing, so no program in the box can make them), every submodule's
-// git dir under modules the same way, the effective core.hooksPath and
-// .husky when they are in the project. A git dir outside the project
-// needs none: the box cannot reach it. A path that resolves outside
-// the project is refused, and so is a git dir with no config.
+// read-only, sorted, with the guard's state. Read-only, git on the box
+// host's machine trusts nothing the box wrote, whatever program a
+// confined call runs:
+//
+//   - the project's .git: a directory, mounted whole, so its hooks,
+//     config and commondir cannot change and it cannot be renamed or
+//     removed (it is a mount point); or a .git file, mounted itself,
+//     with its git dir when that is in the project (one outside the
+//     project the box cannot reach);
+//   - every checked-out submodule's .git, nested ones too, as git lists
+//     them when the box is made: a rewritten gitdir line would send git
+//     to a directory the box wrote;
+//   - the effective core.hooksPath when it is in the project, and
+//     .husky.
+//
+// Nothing is made or changed in the repository. A guard path that is a
+// symbolic link, or resolves out of the project, refuses the guard,
+// since the link itself would stay writable; so does a core.hooksPath
+// in the project that is not there yet, which a program could make.
 func GuardMounts(ctx context.Context, dir string) ([]string, string, error) {
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("guard: %w", err)
 	}
 	g := guard{root: root, seen: map[string]bool{}}
-	gitdir, repo, err := g.gitDir()
-	if err != nil {
+	dotgit := filepath.Join(root, ".git")
+	if _, err := os.Lstat(dotgit); errors.Is(err, fs.ErrNotExist) {
+		return nil, GuardNotRepo, nil
+	} else if err != nil {
+		return nil, "", fmt.Errorf("guard: %w", err)
+	}
+	if err := g.dotGit(dotgit); err != nil {
 		return nil, "", err
 	}
-	if !repo {
-		return nil, GuardNotRepo, nil
-	}
-	if gitdir != "" {
-		if err := g.gitDirMounts(gitdir); err != nil {
-			return nil, "", err
-		}
-		if err := g.modules(filepath.Join(gitdir, "modules")); err != nil {
-			return nil, "", err
-		}
-		wts, _ := filepath.Glob(filepath.Join(gitdir, "worktrees", "*", "config.worktree"))
-		for _, w := range wts {
-			if err := g.add(w); err != nil {
-				return nil, "", err
-			}
-		}
+	if err := g.nested(ctx); err != nil {
+		return nil, "", err
 	}
 	hooksPath, err := g.hooksPath(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 	if hooksPath != "" {
-		if err := g.dir(hooksPath); err != nil {
+		if _, err := os.Lstat(hooksPath); errors.Is(err, fs.ErrNotExist) {
+			return nil, "", fmt.Errorf("guard: core.hooksPath %s is in the project but not there yet, and a program in the box could make it; create it (or unset core.hooksPath) before boxing", hooksPath)
+		}
+		if err := g.add(hooksPath); err != nil {
 			return nil, "", err
 		}
 	}
@@ -83,8 +89,7 @@ func GuardMounts(ctx context.Context, dir string) ([]string, string, error) {
 			return nil, "", err
 		}
 	}
-	sort.Strings(g.mounts)
-	return g.mounts, GuardOn, nil
+	return g.result(), GuardOn, nil
 }
 
 type guard struct {
@@ -93,90 +98,80 @@ type guard struct {
 	seen   map[string]bool
 }
 
-// gitDir is the project's git dir, "" when it is outside the project,
-// and whether the project is a repository at all.
-func (g *guard) gitDir() (string, bool, error) {
-	dotgit := filepath.Join(g.root, ".git")
+// dotGit guards one .git: a directory whole; a file itself, and its
+// git dir when that is in the project.
+func (g *guard) dotGit(dotgit string) error {
 	fi, err := os.Lstat(dotgit)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("guard: %w", err)
-	}
-	target := dotgit
-	if fi.Mode().IsRegular() {
-		// A worktree's or a submodule's checkout: "gitdir: <path>".
-		b, err := os.ReadFile(dotgit)
-		if err != nil {
-			return "", false, fmt.Errorf("guard: %w", err)
-		}
-		line, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
-		if !ok {
-			return "", false, fmt.Errorf("guard: %s: not a gitdir file", dotgit)
-		}
-		target = strings.TrimSpace(line)
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(g.root, target)
-		}
-	}
-	resolved, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", false, fmt.Errorf("guard: the git dir %s: %w", target, err)
-	}
-	if !g.inside(resolved) {
-		// The box mounts the project alone, so it cannot reach it.
-		return "", true, nil
-	}
-	return resolved, true, nil
-}
-
-// gitDirMounts guards one git dir: its config, which must be there,
-// config.worktree when there is one, and its hooks, made when missing.
-func (g *guard) gitDirMounts(gitdir string) error {
-	config := filepath.Join(gitdir, "config")
-	if _, err := os.Stat(config); err != nil {
-		return fmt.Errorf("guard: the git dir %s has no config to hold read-only: %w", gitdir, err)
-	}
-	if err := g.add(config); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(filepath.Join(gitdir, "config.worktree")); err == nil {
-		if err := g.add(filepath.Join(gitdir, "config.worktree")); err != nil {
-			return err
-		}
-	}
-	return g.dir(filepath.Join(gitdir, "hooks"))
-}
-
-// modules guards every submodule's git dir under dir, nested ones too:
-// a directory with a HEAD and a config.
-func (g *guard) modules(dir string) error {
-	if _, err := os.Lstat(dir); err != nil {
-		return nil
-	}
-	var gitdirs []string
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if _, err := os.Stat(filepath.Join(p, "HEAD")); err != nil {
-			return nil
-		}
-		if _, err := os.Stat(filepath.Join(p, "config")); err != nil {
-			return nil
-		}
-		gitdirs = append(gitdirs, p)
-		return nil
-	})
 	if err != nil {
 		return fmt.Errorf("guard: %w", err)
 	}
-	for _, gd := range gitdirs {
-		if err := g.gitDirMounts(gd); err != nil {
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("guard: %s is a symbolic link, which would stay writable in the box; it cannot be held read-only", dotgit)
+	case fi.IsDir():
+		return g.add(dotgit)
+	case !fi.Mode().IsRegular():
+		return fmt.Errorf("guard: %s is neither a directory nor a gitdir file", dotgit)
+	}
+	// A worktree's or a submodule's checkout: "gitdir: <path>".
+	if err := g.add(dotgit); err != nil {
+		return err
+	}
+	b, err := os.ReadFile(dotgit)
+	if err != nil {
+		return fmt.Errorf("guard: %w", err)
+	}
+	line, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	if !ok {
+		return fmt.Errorf("guard: %s: not a gitdir file", dotgit)
+	}
+	target := strings.TrimSpace(line)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dotgit), target)
+	}
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return fmt.Errorf("guard: the git dir %s: %w", target, err)
+	}
+	if !g.inside(resolved) {
+		// The box mounts the project alone, so it cannot reach it.
+		return nil
+	}
+	return g.add(resolved)
+}
+
+// nested guards each submodule's .git, nested submodules too, as git
+// lists them when the box is made: a file whose gitdir line, rewritten,
+// would send git (a `git status` in the superproject recurses into its
+// submodules) to a directory the box wrote. A submodule not checked out
+// has none to guard.
+func (g *guard) nested(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", g.root, "submodule", "status", "--recursive")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("guard: git submodule status: %s", strings.TrimSpace(stderr.String()))
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		// "<state><sha> <path>[ (<describe>)]", state one of ' ', '-',
+		// '+', 'U'; '-' is not checked out.
+		if len(line) < 2 || line[0] == '-' {
+			continue
+		}
+		fields := strings.Fields(line[1:])
+		if len(fields) < 2 {
+			continue
+		}
+		dotgit := filepath.Join(g.root, filepath.FromSlash(fields[1]), ".git")
+		if _, err := os.Lstat(dotgit); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if !g.insideLexical(dotgit) {
+			return fmt.Errorf("guard: the submodule %s leads out of the project", fields[1])
+		}
+		if err := g.dotGit(dotgit); err != nil {
 			return err
 		}
 	}
@@ -217,24 +212,26 @@ func (g *guard) hooksPath(ctx context.Context) (string, error) {
 	return p, nil
 }
 
-// dir guards a directory, made, empty, when missing.
-func (g *guard) dir(p string) error {
-	if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			return fmt.Errorf("guard: %w", err)
-		}
-	}
-	return g.add(p)
-}
-
-// add guards p, which must resolve inside the project.
+// add guards p, which must be no link and resolve to itself inside the
+// project: a link would stay writable in the box, and could be pointed
+// elsewhere.
 func (g *guard) add(p string) error {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return fmt.Errorf("guard: %w", err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("guard: %s is a symbolic link, which would stay writable in the box; it cannot be held read-only", p)
+	}
 	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return fmt.Errorf("guard: %w", err)
 	}
 	if !g.inside(resolved) {
 		return fmt.Errorf("guard: %s leads out of the project, to %s; it cannot be held read-only in the box", p, resolved)
+	}
+	if resolved != filepath.Clean(p) {
+		return fmt.Errorf("guard: %s is reached through a symbolic link (it is %s), which would stay writable in the box", p, resolved)
 	}
 	if strings.Contains(resolved, ":") {
 		return fmt.Errorf("guard: %s: a path with a colon cannot be mounted", resolved)
@@ -244,6 +241,23 @@ func (g *guard) add(p string) error {
 		g.mounts = append(g.mounts, resolved)
 	}
 	return nil
+}
+
+// result is the mounts sorted, less any under another: a git dir in
+// the project's .git is read-only with it.
+func (g *guard) result() []string {
+	sort.Strings(g.mounts)
+	var out []string
+	for _, m := range g.mounts {
+		if len(out) > 0 {
+			last := out[len(out)-1]
+			if strings.HasPrefix(m, last+string(filepath.Separator)) {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func (g *guard) inside(p string) bool {

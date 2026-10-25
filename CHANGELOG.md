@@ -20,17 +20,20 @@ versions may break flags and the config file.
   without it starts asking, and a project's bare ask for a tool keeps
   it asking. The rules are a new policy source, `dax:box`. User config
   only.
-- Added: the git guard. With `box.confine workspace` the box host holds
-  the repository's `.git/config`, `.git/hooks` (made when missing), each
-  submodule's, `core.hooksPath` in the project and `.husky` read-only
-  in the box, mounted over the project, so no program a confined call
-  runs (a `make`, a test) can leave a hook or config your git runs
-  outside the box. The workspace's envelope says `"guard": "on"`, and
-  the workspace's tools are taken as confined only then; a project that
-  is not a git repository, or an older box host, keeps them asking. A
-  box made without the guard, or whose repository's hooks, config or
-  submodules changed, is refused until `dax box down`. `dax box up
-  -guard` makes a guarded box by hand.
+- Added: the git guard. With `box.confine workspace` the box host
+  mounts the project's `.git` read-only in the box, whole (a `.git`
+  file and its in-project git dir, each checked-out submodule's `.git`,
+  an in-project `core.hooksPath` and `.husky` too), so no program a
+  confined call runs (a `make`, a test) can leave a hook, a config or a
+  `commondir` your git trusts outside the box, rename `.git`, or remove
+  the history. Git that writes fails in such a box; commit outside it.
+  Each session says so, and `dax box pull` is refused against it. The
+  workspace's envelope says `"guard": "on: .git read-only"`, and the
+  workspace's tools are taken as confined only then; a project that is
+  not a git repository, or an older box host, keeps them asking. A box
+  made without the guard, or whose guarded paths changed, is refused
+  until `dax box down`. `dax box up -guard` makes a guarded box by
+  hand.
 - Changed: `/mcp add` and a config MCP server may not take a box
   unit's name, or that name and an underscore, whose tools would be
   named as the unit's.

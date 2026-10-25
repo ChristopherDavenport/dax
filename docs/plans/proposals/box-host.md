@@ -366,11 +366,12 @@ the session also claims whatever its policy allows without SourceBox,
 so nothing that ran unasked starts asking. Because a confined call is
 judged by its line and not by the program it runs, the workspace's
 claim also needs the git guard: the session asks for it (`guard` in
-the request), the box host mounts the repository's config and hooks,
-each submodule's, an in-project `core.hooksPath` and `.husky`
-read-only over the project and says so in the workspace's envelope
-(`"guard": "on"`, or why not), and the session claims the workspace's
-tools only behind it. docs/sandbox.md, "Fewer questions in a box", has
+the request), the box host mounts the project's `.git` read-only,
+whole (each checked-out submodule's `.git`, an in-project
+`core.hooksPath` and `.husky` too), over the project, and says so in
+the workspace's envelope (`"guard": "on: .git read-only"`, or why
+not), and the session claims the workspace's tools only behind it. Git
+that writes then fails in the box: commits are made outside it. docs/sandbox.md, "Fewer questions in a box", has
 the rules.
 
 ## Identity

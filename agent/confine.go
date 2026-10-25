@@ -146,7 +146,7 @@ func newConfiner(mode string, raw json.RawMessage, set *executor.Set, project []
 			if e.Guard != box.GuardOn {
 				why := e.Guard
 				if why == "" {
-					why = "the box host did not say it holds the repository's hooks and config read-only (an older dax there?)"
+					why = "the box host did not say it holds the repository's .git read-only (an older dax there?)"
 				}
 				fmt.Fprintf(warnings{}, "dax: box.confine workspace: the workspace's tools ask as without it: %s\n", why)
 				break
