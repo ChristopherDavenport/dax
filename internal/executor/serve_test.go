@@ -25,7 +25,7 @@ import (
 )
 
 // served is a third party's extension as an executor serves it: a
-// strict tool with a resource (bash is the sequential one), a read-only one whose
+// strict tool with a resource (bash is the barrier), a read-only one whose
 // replay claim is safe, and one that asks the user, listed out of the
 // name order MCP lists tools in.
 func served() extension.Extension {
@@ -128,8 +128,8 @@ func remoteTool(t *testing.T, r *mcpclient.Remote, name string) agenttool.Tool {
 // with Tools, and each tool in the order it runs in process with its
 // extension, its extension's ReadOnly, whether it claims facts and
 // whether it is strict; where the files are read; and that it starts
-// processes, with the bounds of the process methods. The listing's _meta carries sequential and
-// resource; the server says the tools never change and that it answers
+// processes, with the bounds of the process methods. The listing's _meta carries sequential,
+// barrier and resource; the server says the tools never change and that it answers
 // the facts method.
 func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	s := newServer(t)
@@ -201,8 +201,19 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	if m := metas["deploy"]; m.Resource != "acme:deploys" || !m.Replay {
 		t.Errorf("deploy's _meta %+v", m)
 	}
-	if m := metas["bash"]; !m.Sequential || !m.Facts {
+	// A barrier: the session reads it as one and not as sequential, and
+	// the listing still says sequential, which a client that predates
+	// barriers reads and so runs bash's batch one call at a time.
+	if m := metas["bash"]; !m.Barrier || m.Sequential || !m.Facts {
 		t.Errorf("bash's _meta %+v", m)
+	}
+	for _, tl := range listed.Tools {
+		if tl.Name != "bash" {
+			continue
+		}
+		if raw, _ := tl.Meta[mcpclient.ToolMetaKey].(map[string]any); raw["sequential"] != true || raw["barrier"] != true {
+			t.Errorf("bash's raw _meta %v, want sequential and barrier both", raw)
+		}
 	}
 	if m := metas["status"]; !m.Replay || m.Facts {
 		t.Errorf("status's _meta %+v", m)

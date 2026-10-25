@@ -118,7 +118,7 @@ func TestTheToolsComeInTheExtensionsOrder(t *testing.T) {
 			t.Errorf("%s: definition %+v, want %+v", g.Name(), g.Definition, agenttool.Definition(want))
 		}
 		_, replayable := want.(agenttool.Replayable)
-		if g.ReadOnly != slices.Contains(readOnly, g.Name()) || g.Sequential != (g.Name() == "bash") ||
+		if g.ReadOnly != slices.Contains(readOnly, g.Name()) || g.Sequential || g.Barrier != (g.Name() == "bash") ||
 			g.Factual != (i < 7) || g.Replayable != replayable || g.Resource != agenttool.ResourceOf(want) ||
 			g.Annotations != agenttool.AnnotationsOf(want) {
 			t.Errorf("%s: %+v", g.Name(), g)
@@ -249,7 +249,8 @@ func TestAnAdapterIsItsToolToAgenttool(t *testing.T) {
 		if !reflect.DeepEqual(agenttool.Definition(ad), agenttool.Definition(want)) {
 			t.Errorf("%s: definition %+v, want %+v", want.Name(), agenttool.Definition(ad), agenttool.Definition(want))
 		}
-		if agenttool.IsSequential(ad) != agenttool.IsSequential(want) || agenttool.ResourceOf(ad) != agenttool.ResourceOf(want) ||
+		if agenttool.IsSequential(ad) != agenttool.IsSequential(want) || agenttool.IsBarrier(ad) != agenttool.IsBarrier(want) ||
+			agenttool.ResourceOf(ad) != agenttool.ResourceOf(want) ||
 			agenttool.AnnotationsOf(ad) != agenttool.AnnotationsOf(want) || agenttool.IsStrict(ad) != agenttool.IsStrict(want) ||
 			agenttool.IsFactual(ad) != agenttool.IsFactual(want) {
 			t.Errorf("%s: the adapter differs from its tool", want.Name())

@@ -194,9 +194,12 @@ Where dax does not keep to this yet, and what each needs:
 ## The run
 
 A turn is one assistant message plus its tool calls and their results.
-Calls in a batch run concurrently except a sequential tool, and `bash`
-is sequential, so a command never races a concurrent edit of the same
-file. That is dax's whole concurrency policy. Sub-agents, and under
+Calls in a batch run concurrently, except that `bash` is a barrier
+(agenttool's `Barrier`): a command runs alone in its place in the
+batch, after every call before it and before every call after it, so
+it never races a concurrent edit of the same file, while the calls on
+either side of it still overlap each other. That is dax's whole
+concurrency policy. Sub-agents, and under
 `dax serve -a2a` the A2A callers' conversations, run beside the main
 agent in the same workspace, and nothing orders their calls against
 its.

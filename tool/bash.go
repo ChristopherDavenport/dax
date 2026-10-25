@@ -51,9 +51,10 @@ func WithMaxFile(n int64) BashOption { return func(c *bashConfig) { c.maxFile = 
 
 // Bash returns a tool that runs a shell command at the workspace's
 // root, on whichever machine the workspace is, with the environment the
-// workspace gives its processes. It is sequential: a batch that
-// contains a shell command runs one call at a time, so a command never
-// races a concurrent edit of the same file.
+// workspace gives its processes. It is a barrier (agenttool.Barrier):
+// a command runs alone in its place in the batch, after every call
+// before it and before every call after it, so it never races an edit,
+// while the calls on either side of it still overlap each other.
 //
 // Its facts claim is what a call would touch, from the same analysis the
 // policy's bash rules read (BashSubjects), and, for a line the analysis
@@ -108,7 +109,7 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 				fmt.Fprintf(&b, "[exit %d]", res.ExitCode)
 			}
 			return b.String(), nil
-		}, agenttool.WithSequential(), claim)
+		}, agenttool.WithBarrier(), claim)
 }
 
 // progressWriter reports a command's output as it arrives: as

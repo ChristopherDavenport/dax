@@ -564,7 +564,7 @@ was decided is made and checked there, under that process's own key: a
 stamp made anywhere else is refused, and a file tool's path that
 became a link since the decision is caught where the file is. What MCP has no field for
 crosses beside the tools: agenttool's `_meta` (facts and replay claims,
-sequential, resource), its `execution/facts` method, and the
+sequential, barrier, resource), its `execution/facts` method, and the
 experimental capability `io.github.christopherdavenport.dax/executor`
 with the descriptor, the extensions, each tool in order with its
 extension, read-only, facts and strict, and where its files are read. A

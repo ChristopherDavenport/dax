@@ -887,10 +887,19 @@ REPL and with `-p` it is printed as it comes. Keep the launcher quiet
 (ssh's `-o LogLevel=ERROR`) so a start does not stop for a warning.
 
 Speed: each model response costs two facts requests (its calls, then
-their stamps) however many calls it makes, and each call is one more.
-The project's `AGENTS.md`, config and skills are read over the pipe at
-the start, and a project skill's files when it loads. Over `docker
-exec` this is quick; over ssh each response pays a few round trips.
+their stamps) however many calls it makes, then its calls: those
+between two shell commands go out together, and each command runs
+alone, after the calls before it and before the calls after it. So a
+response of five reads and one command costs at most five round trips
+one after another (two for the facts, then the reads before the
+command, the command, and the reads after it), and four when the
+command comes first or last, where dax v0.0.23 ran every call of such
+a response one at a time, eight in all. A `dax execute` of v0.0.23 or older
+advertises `bash` as sequential only, and a session reaching one runs
+such a response one call at a time, as before. The project's
+`AGENTS.md`, config and skills are read over the pipe at the start, and
+a project skill's files when it loads. Over `docker exec` this is
+quick; over ssh each response pays a few round trips.
 
 ## Sessions and memory
 

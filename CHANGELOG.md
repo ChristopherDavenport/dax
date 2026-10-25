@@ -5,6 +5,25 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: `bash` is a barrier (agenttool's `Barrier`) instead of
+  sequential: a command runs alone in its place in a response's batch,
+  after every call before it and before every call after it, and the
+  calls on either side of it run together. Before, one command made the
+  whole batch run one call at a time. Five reads and a command now take
+  four or five round trips one after another over an executor's link,
+  not eight, which matters over ssh. A command still never overlaps a
+  `write` or `edit` of the same response. A `dax execute` of v0.0.23 or
+  older advertises `bash` as sequential only, and a session reaching
+  one runs such a batch one call at a time, as before; a new executor
+  advertises both, and the session reads the barrier.
+- Dependencies: agenttool, mcpclient and mcpserver v0.0.24, up from
+  v0.0.23 (`Barrier`, `Executor.Preceding`, the barrier in the MCP
+  listing's `_meta`), and agentturn, its `session`, `front/a2a` and
+  `tools/a2a` v0.0.31, up from v0.0.30 (a batch ordered by
+  `Executor.Preceding`).
+
 ## v0.0.23 - 2026-10-24
 
 - Fixed: a box unit's server could lose the last of its output, standard

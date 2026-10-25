@@ -150,8 +150,8 @@ func TestSchemas(t *testing.T) {
 			}
 		}
 	}
-	if !agenttool.IsSequential(Bash(newWS(t, t.TempDir()))) {
-		t.Error("bash should be sequential")
+	if b := Bash(newWS(t, t.TempDir())); !agenttool.IsBarrier(b) || agenttool.IsSequential(b) {
+		t.Error("bash should be a barrier, not sequential")
 	}
 }
 
