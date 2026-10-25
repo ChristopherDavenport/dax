@@ -27,18 +27,33 @@ versions may break flags and the config file.
   them without the flag; a changed set is untrusted again, and an
   untrusted one is left out with a warning naming it. A project's
   server may name no `token_env`, and none may take a name your config
-  gives a server.
+  gives a server, nor that name and an underscore, or the other way
+  round; the trust file is believed only while no other account could
+  have written it or its directory.
+- Added: two servers whose tools would be named alike (one name the
+  other, or it and an underscore: the `-mcp` flag's `cli` beside a
+  configured `cli` among them) are refused when the session opens, and
+  so is a `/mcp add` named like a configured server, an offered one or
+  a box host's unit.
 - Added: `agent.MCPServer`'s `Host`, `URL`, `TokenEnv` and `Project`;
-  `agent.Options`' `TrustMCP` and `MCPTrustFile`; `agent.DefaultMCPTrustFile`.
+  `agent.Options`' `TrustMCP` and `MCPTrustFile`; `agent.DefaultMCPTrustFile`;
+  `agent.Secrets`, the variables every child of a session loses (the
+  extensions', the key's and each MCP server's token variable), for a
+  program that builds the session's workspace or starts its executor,
+  as dax's command line does.
 - Changed: the box host offers a session's MCP units as the workspace's
   own servers (`agentworkspace/servers.list` and `servers.start`, from
   agentworkspace v0.0.3), in place of answering a
   `agentworkspace/process.start` of the reserved `["dax-unit", NAME]`,
   which is gone. A session and the box host it reaches must both be
-  this version or later: an older box host answers no `servers.list`,
-  so a newer session would start none of its units, and an older
-  session's `dax-unit` start reaches the box's executor, which has no
-  such program. A box is made again for another dax anyway.
+  this version or later: behind an older box host, which offers none of
+  the units its handshake names, the session refuses to open ("the box
+  host offers no server for unit X; it is older than this dax, update
+  it"), and an older session's `dax-unit` start reaches the box's
+  executor, which has no such program. A box is made again for another
+  dax anyway. `box.confine` claims a unit's tools only when the unit is
+  a server the box host offered and the session connected, and no other
+  server may take a unit's name.
 - Changed: agentworkspace v0.0.3 and its `mcpworkspace` v0.0.3; a
   command's server in the workspace goes through
   `mcpworkspace.CommandTransport`.

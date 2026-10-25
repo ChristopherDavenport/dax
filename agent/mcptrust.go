@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
@@ -98,9 +99,13 @@ func trusted(servers []MCPServer, d workspace.Descriptor, file string, trust boo
 	return mine
 }
 
-// readTrust is file's contents; a missing file trusts nothing.
+// readTrust is file's contents; a missing file trusts nothing, and so
+// does one another account could have written (checkPrivate).
 func readTrust(file string) (mcpTrustFile, error) {
 	var t mcpTrustFile
+	if err := checkPrivate(file); err != nil {
+		return t, fmt.Errorf("the MCP trust file %s: %w; trusting nothing in it", file, err)
+	}
 	b, err := os.ReadFile(file)
 	if errors.Is(err, fs.ErrNotExist) {
 		return t, nil
@@ -121,9 +126,11 @@ func recordTrust(file string, key recordedWorkspace, h string) error {
 	if err := private.SecureDir(filepath.Dir(file)); err != nil {
 		return err
 	}
+	// A file that cannot be trusted is replaced by one that holds this
+	// trust alone: what it held was untrusted anyway.
 	t, err := readTrust(file)
 	if err != nil {
-		return err
+		t = mcpTrustFile{}
 	}
 	t.Projects = slices.DeleteFunc(t.Projects, func(p trustedProject) bool { return p.Workspace == key })
 	t.Projects = append(t.Projects, trustedProject{Workspace: key, Servers: h})
@@ -144,4 +151,26 @@ func recordTrust(file string, key recordedWorkspace, h string) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), file)
+}
+
+// checkPrivate refuses a trust file another account could have written:
+// one whose directory or itself is writable by group or others, or that
+// is not this user's. A missing file is no refusal: it trusts nothing.
+func checkPrivate(file string) error {
+	for _, p := range []string{filepath.Dir(file), file} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("%s is writable by other users (mode %04o)", p, fi.Mode().Perm())
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+			return fmt.Errorf("%s belongs to another user", p)
+		}
+	}
+	return nil
 }

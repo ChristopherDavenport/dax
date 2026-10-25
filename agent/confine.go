@@ -120,8 +120,10 @@ func childDecision(ctx context.Context, name string) context.Context {
 // resolved box raw, nil when it claims nothing: mode off, no box, or no
 // tool whose envelope qualifies. project are the project's ask rules: a
 // tool a bare one of them covers is not claimed, since a repository's
-// bare ask would otherwise turn into an allow.
-func newConfiner(mode string, raw json.RawMessage, set *executor.Set, project []string, aliases map[string][]string) (*confiner, error) {
+// bare ask would otherwise turn into an allow. offered are the servers
+// the box host offered and the session connected: a unit's tools are
+// claimed only when it is one of them.
+func newConfiner(mode string, raw json.RawMessage, set *executor.Set, project []string, aliases map[string][]string, offered []string) (*confiner, error) {
 	if mode != config.ConfineUnits && mode != config.ConfineWorkspace || len(raw) == 0 || set == nil {
 		return nil, nil
 	}
@@ -153,7 +155,10 @@ func newConfiner(mode string, raw json.RawMessage, set *executor.Set, project []
 			}
 			c.workspace = label
 		case "mcp":
-			if e.Internet == "off" && len(e.Secrets) == 0 && containedFiles(e.Files) && sandboxed(e.Runtime) && !asked.unit(e.Name) {
+			// A unit's tools are claimed only when the unit is a server
+			// the box host offered and the session connected, besides an
+			// envelope: never a name some other server took.
+			if e.Internet == "off" && len(e.Secrets) == 0 && containedFiles(e.Files) && sandboxed(e.Runtime) && !asked.unit(e.Name) && slices.Contains(offered, e.Name) {
 				c.units[e.Name] = label
 			}
 		}
@@ -328,11 +333,11 @@ func (a bareAsks) unit(u string) bool {
 // settings the session runs under, and adds its SourceBox rules to
 // them: the baseline is the policy as it was. It returns nil options
 // when nothing is claimed.
-func confineBox(o Options, set *executor.Set, settings *policy.Settings, matchers map[string]agentpolicy.ToolMatcher, aliases map[string][]string) ([]agentpolicy.Option, error) {
+func confineBox(o Options, set *executor.Set, settings *policy.Settings, matchers map[string]agentpolicy.ToolMatcher, aliases map[string][]string, offered []string) ([]agentpolicy.Option, error) {
 	if o.Executor == nil {
 		return nil, nil
 	}
-	c, err := newConfiner(o.BoxConfine, o.Executor.r.Box(), set, settings.Project.Ask, aliases)
+	c, err := newConfiner(o.BoxConfine, o.Executor.r.Box(), set, settings.Project.Ask, aliases, offered)
 	if err != nil || c == nil {
 		return nil, err
 	}

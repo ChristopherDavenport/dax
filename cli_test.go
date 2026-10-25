@@ -1,6 +1,7 @@
 package dax
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"path/filepath"
@@ -529,5 +530,51 @@ func TestAPeersTokenReachesNoToolHere(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out.Stdout)); got != "bearer=[]" {
 		t.Errorf("the tools saw %q", got)
+	}
+}
+
+// An MCP server's token variable reaches no child here, whatever its
+// name (RAG_BEARER is no name a credential check would catch): not a
+// bash command, not an MCP server started in the workspace, and not the
+// executor's launcher, which the same secrets scrub.
+func TestAnMCPTokenReachesNoChild(t *testing.T) {
+	h := home(t)
+	t.Setenv("RAG_BEARER", "s3cret-bearer")
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"mcp_servers":{"rag":{"url":"https://rag.example/mcp","token_env":"RAG_BEARER"}}}`)
+	proj := t.TempDir()
+	s, err := settingsOf(local(t, proj), "", config.Flags{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p program
+	exts, err := p.selected(choice{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := agent.Secrets(exts, "", mcpServersOf(s, ""))
+	if !slices.Contains(secrets, "RAG_BEARER") {
+		t.Fatalf("secrets %v", secrets)
+	}
+	ws, err := workspace.NewLocal(proj, toolsEnv(s, "", secrets...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	out, err := ws.Exec(context.Background(), workspace.Command{Args: []string{"sh", "-c", "echo bearer=[$RAG_BEARER]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out.Stdout)); got != "bearer=[]" {
+		t.Errorf("bash saw %q", got)
+	}
+	// An MCP server in the workspace is a process Start starts there.
+	proc, err := ws.Start(context.Background(), workspace.Command{Args: []string{"sh", "-c", "echo bearer=[$RAG_BEARER]"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proc.Close()
+	line, _ := bufio.NewReader(proc.Stdout()).ReadString('\n')
+	if got := strings.TrimSpace(line); got != "bearer=[]" {
+		t.Errorf("a workspace MCP server saw %q", got)
 	}
 }

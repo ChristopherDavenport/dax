@@ -279,3 +279,68 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 		t.Errorf("a broken trust file reads as %v", err)
 	}
 }
+
+// A trust file another account could have written trusts nothing: its
+// directory or itself writable by group or others.
+func TestATrustFileOthersCouldWriteTrustsNothing(t *testing.T) {
+	var warned syncBuffer
+	defer CaptureWarnings(&warned)()
+	here := workspace.Descriptor{Kind: workspace.KindLocal, Root: "/src/p"}
+	set := []MCPServer{{Name: "lint", Command: "lint-mcp", Project: true}}
+	for _, which := range []string{"directory", "file"} {
+		t.Run(which, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "dax", "mcp-trust.json")
+			trusted(set, here, file, true)
+			if got := trusted(set, here, file, false); len(got) != 1 {
+				t.Fatalf("the trusted set did not start: %v", got)
+			}
+			target := filepath.Dir(file)
+			if which == "file" {
+				target = file
+			}
+			fi, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(target, fi.Mode().Perm()|0o020); err != nil {
+				t.Fatal(err)
+			}
+			if got := trusted(set, here, file, false); len(got) != 0 {
+				t.Errorf("a group-writable %s: %v started", which, got)
+			}
+			if !strings.Contains(warned.String(), "writable by other users") {
+				t.Errorf("warning %q", warned.String())
+			}
+		})
+	}
+}
+
+// Two servers whose tools would be named alike do not both start: the
+// -mcp flag's "cli" beside a configured "cli", or "a" beside "a_"; and
+// /mcp add may not take a configured server's name.
+func TestServersNamedAlikeAreRefused(t *testing.T) {
+	ctx := context.Background()
+	for _, pair := range [][2]string{{"cli", "cli"}, {"a", "a_"}, {"b_", "b"}} {
+		o := options(t, &scripted{})
+		o.MCP = []MCPServer{{Name: pair[0], Command: "x"}, {Name: pair[1], Command: "y"}}
+		if s, err := New(ctx, o); err == nil || !strings.Contains(err.Error(), "named alike") {
+			if s != nil {
+				s.Close()
+			}
+			t.Errorf("%s beside %s: %v", pair[0], pair[1], err)
+		}
+	}
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	o := options(t, &scripted{})
+	o.MCP = []MCPServer{{Name: "cfg", Command: os.Args[0]}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, name := range []string{"cfg", "cfg_"} {
+		if _, err := s.AddMCP(ctx, name, os.Args[0]); err == nil || !strings.Contains(err.Error(), "configured server cfg") {
+			t.Errorf("/mcp add %s beside the configured cfg: %v", name, err)
+		}
+	}
+}

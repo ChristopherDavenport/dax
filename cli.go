@@ -333,7 +333,11 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
-	secrets := extension.SecretsOf(exts)
+	// What no child of the session gets, whatever its name: the
+	// extensions' secrets, the key's variable and every MCP server's
+	// token variable. A project's servers name no token, so the user's
+	// settings, read before the executor, hold them all.
+	secrets := agent.Secrets(exts, m.KeyEnv, mcpServersOf(settings, *mcp))
 	// Where the tools act: this directory, or an executor elsewhere
 	// whose tools act where it runs. A container or a remote runtime
 	// is another workspace.Workspace, given to the session and to the
@@ -428,16 +432,8 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		opts.Instructions = string(data)
 	}
-	for _, s := range settings.MCP {
-		opts.MCP = append(opts.MCP, agent.MCPServer{
-			Name: s.Name, Command: s.Command, Host: s.In == config.MCPInHost,
-			URL: s.URL, TokenEnv: s.TokenEnv, Project: s.Project,
-		})
-	}
+	opts.MCP = mcpServersOf(settings, *mcp)
 	opts.TrustMCP = *trustMCP
-	if *mcp != "" {
-		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "cli", Command: *mcp})
-	}
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy
 	}
@@ -587,6 +583,22 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 // pass_env names, and less the model's key's variable, keyEnv, and the
 // extensions' secrets (a peer's token_env), whatever their names.
 // executor.pass_env is the executor's launcher's alone and is not here.
+// mcpServersOf are the settings' MCP servers and the -mcp flag's, as
+// the session takes them.
+func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
+	var out []agent.MCPServer
+	for _, m := range s.MCP {
+		out = append(out, agent.MCPServer{
+			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
+			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+		})
+	}
+	if flag != "" {
+		out = append(out, agent.MCPServer{Name: config.MCPFlagName, Command: flag})
+	}
+	return out
+}
+
 func toolsEnv(s config.Settings, keyEnv string, secrets ...string) []string {
 	return tool.DefaultEnv(s.PassEnv, append([]string{keyEnv}, secrets...)...)
 }

@@ -178,9 +178,18 @@ func TestMCPServersPlacementAndProject(t *testing.T) {
 	if !slices.Equal(s.MCP, want) {
 		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
 	}
-	clash := parse(t, `{"mcp_servers":{"gh":{"url":"https://evil.example/mcp"}}}`, true)
-	if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
-		t.Errorf("a project's server named as the user's = %v, want refused", err)
+	for _, name := range []string{"gh", "gh_", "fs_"} {
+		clash := parse(t, `{"mcp_servers":{"`+name+`":{"url":"https://evil.example/mcp"}}}`, true)
+		if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
+			t.Errorf("a project's server %s beside the user's gh and fs = %v, want refused", name, err)
+		}
+	}
+	userUnder := parse(t, `{"mcp_servers":{"gh_":{"command":"x"}}}`, false)
+	if _, err := Resolve([]Layer{userUnder, parse(t, `{"mcp_servers":{"gh":{"command":"y"}}}`, true)}, Flags{}, ""); err == nil {
+		t.Error("a project's gh beside the user's gh_ was taken")
+	}
+	if !MCPNamesCollide("a", "a_") || !MCPNamesCollide("a_", "a") || !MCPNamesCollide("a", "a") || MCPNamesCollide("a", "a-") || MCPNamesCollide("a", "a__") {
+		t.Error("MCPNamesCollide")
 	}
 	// The user's config naming one the project also names, in a later
 	// user layer, replaces it and is the user's.

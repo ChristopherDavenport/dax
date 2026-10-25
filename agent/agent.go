@@ -268,16 +268,20 @@ type Session struct {
 
 	opts    Options
 	live    live
-	env     []string            // what an MCP server outside the workspace starts with
-	offered []string            // the MCP servers the workspace offers, connected at open
-	refused []agentkit.Omission // repository files screened out before the kit
-	ws      workspace.Workspace
-	ownWS   bool // the session opened ws, and closes it
-	files   *tool.Files
-	x       executor.Executor // runs the extensions' tools; the session closes it
-	set     *executor.Set     // x's tools as the kit has them
-	store   agentsession.Store
-	own     bool // the session opened store, and closes it
+	env     []string // what an MCP server outside the workspace starts with
+	offered []string // the MCP servers the workspace offers, connected at open
+	// reserved are the names no other server may take: the offered
+	// servers' and a box host's units'.
+	reserved []string
+	mcpNames []string            // the configured servers connected at open
+	refused  []agentkit.Omission // repository files screened out before the kit
+	ws       workspace.Workspace
+	ownWS    bool // the session opened ws, and closes it
+	files    *tool.Files
+	x        executor.Executor // runs the extensions' tools; the session closes it
+	set      *executor.Set     // x's tools as the kit has them
+	store    agentsession.Store
+	own      bool // the session opened store, and closes it
 	// recorded is false when the store is one the session made in
 	// memory because nothing was to be kept.
 	recorded bool
@@ -525,12 +529,41 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(s.systemPrompt()),
 	)
+	// The servers the workspace offers of its own, a box host's units
+	// among them, each connected below as the config's are. Behind a box
+	// host, every MCP unit its handshake names must be one: an older box
+	// host passes servers.list through to the executor, which offers
+	// none, so its units would not start, and a server of another kind
+	// could take a unit's name and the confinement box.confine claims
+	// for it.
+	var offered workspace.ServerProvider
+	if sp, ok := ws.(workspace.ServerProvider); ok {
+		list, err := sp.Servers(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("the workspace's MCP servers: %w", err)
+		}
+		for _, u := range list {
+			s.offered = append(s.offered, u.Name)
+		}
+		offered = sp
+	}
+	s.reserved = slices.Clone(s.offered)
+	if o.Executor != nil {
+		for _, u := range boxUnits(o.Executor.r.Box()) {
+			if !slices.Contains(s.offered, u) {
+				return nil, fmt.Errorf("the box host offers no server for unit %s; it is older than this dax, update it", u)
+			}
+			if !slices.Contains(s.reserved, u) {
+				s.reserved = append(s.reserved, u)
+			}
+		}
+	}
 	if o.Policy != nil {
 		settings := *o.Policy
 		settings.Shipped = append(slices.Clone(settings.Shipped), a.shipped...)
 		// box.confine: the box's tools the policy takes as confined, and
 		// the rules that make that matter (confine.go).
-		confine, err := confineBox(o, a.set, &settings, a.matchers, a.aliases)
+		confine, err := confineBox(o, a.set, &settings, a.matchers, a.aliases, s.offered)
 		if err != nil {
 			return nil, err
 		}
@@ -553,24 +586,27 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		trustFile = DefaultMCPTrustFile(DefaultUserDir())
 	}
 	servers := trusted(o.MCP, ws.Descriptor(), trustFile, o.TrustMCP)
-	// The servers the workspace offers of its own, a box host's units
-	// among them, each connected as the config's are; a configured
-	// server with an offered one's name is refused, since their tools'
-	// names would be one, and box.confine claims an offered server's
-	// tools by their name.
-	var offered workspace.ServerProvider
-	if sp, ok := ws.(workspace.ServerProvider); ok {
-		list, err := sp.Servers(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("the workspace's MCP servers: %w", err)
-		}
-		for _, u := range list {
-			if slices.ContainsFunc(servers, func(m MCPServer) bool { return collidesWithOffered(m.Name, u.Name) }) {
-				return nil, fmt.Errorf("mcp %s: a server your config names and one the workspace offers have the name; rename the server", u.Name)
+	// Two servers whose tools would be named alike are refused: a rule
+	// for one's tools would be the other's (the -mcp flag's "cli"
+	// beside a configured "cli" among them).
+	for i, a := range servers {
+		for _, b := range servers[i+1:] {
+			if config.MCPNamesCollide(a.Name, b.Name) {
+				return nil, fmt.Errorf("mcp %s and %s: their tools would be named alike; rename one", a.Name, b.Name)
 			}
-			s.offered = append(s.offered, u.Name)
 		}
-		offered = sp
+	}
+	// A configured server whose tools would be named as a reserved one's
+	// (one the workspace offers, or a box host's unit) is refused: their
+	// tools' names would be one, and box.confine claims a unit's tools by
+	// their name.
+	for _, r := range s.reserved {
+		if slices.ContainsFunc(servers, func(m MCPServer) bool { return collidesWithOffered(m.Name, r) }) {
+			return nil, fmt.Errorf("mcp %s: a server your config names and one the workspace offers have the name; rename the server", r)
+		}
+	}
+	for _, m := range servers {
+		s.mcpNames = append(s.mcpNames, m.Name)
 	}
 	for _, m := range servers {
 		t, mopts, err := s.mcpStart(ctx, m)
@@ -876,11 +912,17 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
-	// A server whose tools would be named as an offered server's is
-	// refused: box.confine claims a unit's tools by their name.
-	for _, u := range s.offered {
+	// A server whose tools would be named as an offered server's or a
+	// unit's is refused, since box.confine claims a unit's tools by their
+	// name, and so is one named as a configured server's.
+	for _, u := range s.reserved {
 		if collidesWithOffered(name, u) {
 			return "", fmt.Errorf("mcp %s: the workspace's server %s offers tools under that name; pick another", name, u)
+		}
+	}
+	for _, m := range s.mcpNames {
+		if config.MCPNamesCollide(name, m) {
+			return "", fmt.Errorf("mcp %s: the configured server %s offers tools under that name; pick another", name, m)
 		}
 	}
 	t, mopts, err := s.mcpStart(ctx, MCPServer{Name: name, Command: command})
@@ -1444,14 +1486,21 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 }
 
 // secrets are the variables taken out of the environment the session's
-// tools and MCP servers get whatever their names: the model's key's and
-// the extensions' Secrets.
-func (o Options) secrets() []string {
-	out := extension.SecretsOf(o.Extensions)
-	if o.KeyEnv != "" {
-		out = append(out, o.KeyEnv)
+// tools and MCP servers get whatever their names (Secrets).
+func (o Options) secrets() []string { return Secrets(o.Extensions, o.KeyEnv, o.MCP) }
+
+// Secrets are the variables every child of a session loses whatever
+// their names: the extensions' Secrets, the model's key's variable
+// keyEnv, and each MCP server's TokenEnv. A program that builds the
+// session's workspace, or starts its executor, itself scrubs those
+// environments of these, as dax's command line does, since
+// Options.Workspace carries its own environment.
+func Secrets(exts []extension.Extension, keyEnv string, servers []MCPServer) []string {
+	out := extension.SecretsOf(exts)
+	if keyEnv != "" {
+		out = append(out, keyEnv)
 	}
-	for _, m := range o.MCP {
+	for _, m := range servers {
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}

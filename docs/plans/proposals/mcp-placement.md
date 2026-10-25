@@ -32,9 +32,14 @@ intercepted. A project's config could name no server.
   session's MCP units, which replaces `dax-unit`. The session lists the
   workspace's servers when it opens and connects to every one, as it
   connected to every unit; its tools are `mcp__<name>__*`, and a name a
-  configured server also has is an error, as it was for units. A box's
-  confinement (`box.confine`) still covers these servers' tools, and
-  only these.
+  configured server also has (or it and an underscore) is an error, as
+  it was for units, at open and on `/mcp add`, checked against the
+  offered servers and the units the handshake names alike. Behind a box
+  host, every unit the handshake names must be offered, or the session
+  refuses to open: an older box host offers none. A box's confinement
+  (`box.confine`) still covers these servers' tools, and only these: a
+  unit's tools are claimed only when the unit is both an envelope and a
+  server the session connected.
 
 **Called independently**, whatever the workspace:
 
@@ -55,8 +60,9 @@ A project's config may name servers now, of either kind, which is the
 one exception to "a project config field is refused unless it can only
 tighten". It may not name a `token_env`, since that would send the
 user's credential wherever the repository says; and a name the user's
-own config gives is an error, so a repository cannot stand in for a
-server the user trusts.
+own config gives, or that name and an underscore, or the other way
+round, is an error, so a repository cannot stand in for a server the
+user trusts or take its rules.
 
 A project's servers start only when the user trusts that project's
 exact set: `-trust-mcp` trusts it and records the trust in
@@ -67,7 +73,13 @@ JSON. A later session of the project with the same set starts them
 without the flag; a set that changed, in any server's name, command,
 URL or placement, is untrusted again. An untrusted set does not start,
 and the session says which servers and how to trust them; the user's
-own servers start as ever.
+own servers start as ever. The trust file is believed only while
+neither it nor its directory is writable by another account and it is
+the user's; otherwise it trusts nothing, and says so.
+
+Every server's `token_env` is one of the session's secrets
+(`agent.Secrets`), kept from every child process: the tools', the
+workspace's MCP servers' and the executor launcher's.
 
 ## What changes on the wire
 

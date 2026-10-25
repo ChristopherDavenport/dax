@@ -475,6 +475,16 @@ var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // underscore, which is what joins the server's name to a tool's in
 // mcp__<server>__<tool>: a server a__b would otherwise be
 // indistinguishable from server a with a tool b__x.
+// MCPFlagName is the name of the server the -mcp flag starts, a name of
+// the user's like any in their config.
+const MCPFlagName = "cli"
+
+// MCPNamesCollide reports whether servers called a and b would offer
+// tools under one prefix, mcp__<name>__<tool>: one name is the other,
+// or the other and one underscore, whose tools mcp__<b>___<tool> start
+// as b's do. No name has a double underscore, so no other pair does.
+func MCPNamesCollide(a, b string) bool { return a == b || a == b+"_" || b == a+"_" }
+
 func CheckMCPName(name string) error {
 	switch {
 	case !mcpName.MatchString(name):
@@ -1280,8 +1290,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		for n, m := range l.MCPServers {
 			if l.Project {
-				if had, ok := servers[n]; ok && !had.Project {
-					return Settings{}, fmt.Errorf("mcp_servers.%s: your config names a server %s, and so does the project's (%s); a project may not stand in for one of yours, so rename one", n, n, l.Path)
+				for _, had := range servers {
+					if !had.Project && MCPNamesCollide(n, had.Name) {
+						return Settings{}, fmt.Errorf("mcp_servers.%s: your config names a server %s, and the project's (%s) one whose tools would be named as its are; a project may not stand in for one of yours, so rename one", n, had.Name, l.Path)
+					}
 				}
 			}
 			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Project: l.Project}

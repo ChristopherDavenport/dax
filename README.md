@@ -391,7 +391,9 @@ or a server more, is untrusted again; until it is trusted, dax starts
 your own servers, says which of the project's it left out, and starts
 none of them. A project's server may not name a `token_env` (it would
 send your credential where the repository says) or take a name your
-config gives a server.
+config gives a server (nor that name and an underscore, whose tools
+your rules for it would cover). dax believes the trust file only while
+no other account could have written it.
 
 | flag | |
 |---|---|
