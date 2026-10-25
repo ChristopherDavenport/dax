@@ -14,6 +14,7 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpserver"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/ext/coding"
@@ -157,7 +158,7 @@ func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 	desc := capabilityDescriptor{Kind: "container", Ref: "box", Root: "/work"}
 	capOf := func(c capability) map[string]any { return map[string]any{CapabilityKey: c} }
 	good := func(tools ...capabilityTool) capability {
-		return capability{Version: CapabilityVersion, Descriptor: desc, Extensions: []string{"acme"}, Tools: tools, Files: &capabilityFiles{URITemplate: FilesURITemplate}}
+		return capability{Version: CapabilityVersion, Descriptor: desc, Extensions: []string{"acme"}, Tools: tools, Files: &capabilityFiles{URITemplate: wire.FilesURITemplate}}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -198,7 +199,7 @@ func TestConnectRefusesAServerThatIsNotAnExecutor(t *testing.T) {
 		}, `serves its workspace's files under "file:///{path}"`},
 		{"a start bound that is not positive", func(t *testing.T) connector {
 			c := good(capabilityTool{Name: "read", Extension: "acme"})
-			c.Start = &capabilityStart{MaxProcesses: 32, MaxWriteBytes: 0, MaxReadBytes: 1}
+			c.Start = &wire.Bounds{MaxProcesses: 32, MaxWriteBytes: 0, MaxReadBytes: 1}
 			return fake(t, capOf(c), false, plain("read"))
 		}, "not positive"},
 		{"a listed tool the capability does not name", func(t *testing.T) connector {

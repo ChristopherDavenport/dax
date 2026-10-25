@@ -16,6 +16,8 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -89,11 +91,11 @@ func TestEachHTTPClientIsASessionOfItsOwn(t *testing.T) {
 	a := dialHTTP(t, url, 0)
 	b := dialHTTP(t, url, 0)
 	pa := start(t, a, sleeper)
-	id := pa.(*remoteProcess).id
+	id := idOf(t, pa)
 	pidA := pidOf(t, pa)
 	pidB := pidOf(t, start(t, b, sleeper))
-	_, err := sdk.CallCustomMethod[*idParams, *waitResult](context.Background(), sessionOf(b), MethodClose, &idParams{ID: id})
-	if err == nil || !strings.Contains(err.Error(), errNoProcess.Error()) {
+	_, err := sdk.CallCustomMethod[*mcpworkspace.IDParams, *mcpworkspace.ExitResult](context.Background(), sessionOf(b), wire.MethodClose, &mcpworkspace.IDParams{ProcessID: wire.ProcessID{ID: id}})
+	if err == nil || !strings.Contains(err.Error(), mcpworkspace.ErrNoProcess.Error()) {
 		t.Errorf("b closing a's process: %v", err)
 	}
 	a.Close()

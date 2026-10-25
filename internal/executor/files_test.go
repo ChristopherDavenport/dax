@@ -2,12 +2,10 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -40,7 +39,7 @@ func filesBox(t *testing.T) (executorServer, string) {
 	writeFile(t, filepath.Join(s.dir, "AGENTS.md"), "Be brief.\n")
 	writeFile(t, filepath.Join(s.dir, "dir", "a.txt"), "a\n")
 	writeFile(t, filepath.Join(s.dir, "dir", "sub", "b.txt"), "b\n")
-	writeFile(t, filepath.Join(s.dir, "big"), strings.Repeat("x", MaxFileBytes+1))
+	writeFile(t, filepath.Join(s.dir, "big"), strings.Repeat("x", wire.MaxFileBytes+1))
 	for link, target := range map[string]string{
 		"in":      "AGENTS.md",
 		"out":     filepath.Join(outside, "secret"),
@@ -172,155 +171,6 @@ func TestTheClientReadsTheExecutorsFiles(t *testing.T) {
 	}
 	if err := fstest.TestFS(sub, "a.txt", "sub/b.txt"); err != nil {
 		t.Error(err)
-	}
-}
-
-// readRaw sends a resources/read for uri, as a client that skips the
-// client's checks would, and returns the reply.
-func readRaw(t *testing.T, cs *sdk.ClientSession, uri string) (fileReply, error) {
-	t.Helper()
-	res, err := cs.ReadResource(context.Background(), &sdk.ReadResourceParams{URI: uri})
-	if err != nil {
-		return fileReply{}, err
-	}
-	if len(res.Contents) != 1 || res.Contents[0].MIMEType != "application/json" {
-		t.Fatalf("contents %+v", res.Contents)
-	}
-	var r fileReply
-	if err := json.Unmarshal([]byte(res.Contents[0].Text), &r); err != nil {
-		t.Fatal(err)
-	}
-	return r, nil
-}
-
-// The server checks every request itself, whatever the client did: it
-// refuses an invalid name, "..", an absolute name and a link out, an op
-// it does not have (a write among them) and a URI with anything more
-// (which the template does not match, or the server refuses), and
-// writes nothing.
-func TestTheServerRefusesWhatLeavesOrWrites(t *testing.T) {
-	s, _ := filesBox(t)
-	cs := s.connect(t).Session()
-	before := tree(t, s.dir)
-	for _, tc := range []struct {
-		uri  string
-		kind string
-	}{
-		{"dax-workspace:///read?path=..%2Fsecret", kindOutside},
-		{"dax-workspace:///stat?path=..", kindOutside},
-		{"dax-workspace:///read?path=%2Fetc%2Fpasswd", kindOutside},
-		{"dax-workspace:///read?path=out", kindOutside},
-		{"dax-workspace:///stat?path=climb", kindOutside},
-		{"dax-workspace:///readdir?path=dir%2F..%2F..", kindOutside},
-		{"dax-workspace:///read?path=dir%2F..%2FAGENTS.md", kindInvalid},
-		{"dax-workspace:///read?path=dir%2F", kindInvalid},
-		{"dax-workspace:///read?path=", kindInvalid},
-		{"dax-workspace:///read", kindInvalid},
-		{"dax-workspace:///write?path=new.txt", kindInvalid},
-		{"dax-workspace:///remove?path=AGENTS.md", kindInvalid},
-		{"dax-workspace:///read?path=AGENTS.md&data=x", ""},
-		{"dax-workspace:///read?path=AGENTS.md&path=big", ""},
-		{"dax-workspace://host/read?path=AGENTS.md", ""},
-		{"dax-workspace:///read?path=missing", kindNotExist},
-		{"dax-workspace:///read?path=big", kindOther},
-	} {
-		t.Run(tc.uri, func(t *testing.T) {
-			r, err := readRaw(t, cs, tc.uri)
-			if tc.kind == "" {
-				// Not matched by the template (not found), or invalid.
-				if err == nil && (r.Error == nil || r.Error.Kind != kindInvalid) {
-					t.Errorf("reply %+v, want a refusal", r)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if r.Error == nil || r.Error.Kind != tc.kind || r.Data != nil || r.Info != nil {
-				t.Errorf("reply %+v, want a %s error", r, tc.kind)
-			}
-		})
-	}
-	// A URI the template does not match is not found.
-	if _, err := cs.ReadResource(context.Background(), &sdk.ReadResourceParams{URI: "file:///etc/passwd"}); err == nil {
-		t.Error("file:///etc/passwd was read")
-	}
-	if r, err := readRaw(t, cs, fileURI(opRead, "AGENTS.md")); err != nil || string(r.Data) != "Be brief.\n" {
-		t.Errorf("a good read: %+v %v", r, err)
-	}
-	if after := tree(t, s.dir); !slices.Equal(before, after) {
-		t.Errorf("the workspace changed:\n%v\n%v", before, after)
-	}
-}
-
-// tree is every name under dir with its size and mode.
-func tree(t *testing.T, dir string) []string {
-	t.Helper()
-	var out []string
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		fi, err := d.Info()
-		if err != nil {
-			return err
-		}
-		out = append(out, p+" "+fi.Mode().String()+" "+fi.ModTime().String())
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-// A name is percent-encoded byte by byte outside the unreserved set,
-// which the template's {?path} matches, and the server decodes it back.
-func TestFileURIsRoundTrip(t *testing.T) {
-	s := newServer(t)
-	cs := s.connect(t).Session()
-	for _, name := range []string{"a b+c&d=e?f#g%h", "ünï/cødé.md", "dir/sub/x~y_z-1.2"} {
-		writeFile(t, filepath.Join(s.dir, filepath.FromSlash(name)), name)
-		uri := fileURI(opRead, name)
-		if op, got, err := parseFileURI(uri); err != nil || op != opRead || got != name {
-			t.Errorf("parse %s = %s %q %v", uri, op, got, err)
-		}
-		if r, err := readRaw(t, cs, uri); err != nil || string(r.Data) != name {
-			t.Errorf("read %s: %+v %v", uri, r, err)
-		}
-	}
-}
-
-// A listing whose names would walk somewhere else is refused by the
-// client, whatever the executor sends.
-func TestTheClientRefusesABadListing(t *testing.T) {
-	for _, name := range []string{"..", ".", "", "a/b", "dup"} {
-		t.Run(name, func(t *testing.T) {
-			entries := []fileInfo{{Name: name}}
-			if name == "dup" {
-				entries = append(entries, fileInfo{Name: name})
-			}
-			srv := sdk.NewServer(&sdk.Implementation{Name: "liar", Version: "1"}, nil)
-			srv.AddResourceTemplate(&sdk.ResourceTemplate{Name: "f", URITemplate: FilesURITemplate}, func(context.Context, *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
-				data, _ := json.Marshal(fileReply{Entries: entries})
-				return &sdk.ReadResourceResult{Contents: []*sdk.ResourceContents{{Text: string(data)}}}, nil
-			})
-			ctx := context.Background()
-			st, ct := sdk.NewInMemoryTransports()
-			ss, err := srv.Connect(ctx, st, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ss.Close()
-			cs, err := sdk.NewClient(&sdk.Implementation{Name: "c", Version: "1"}, nil).Connect(ctx, ct, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cs.Close()
-			if es, err := fs.ReadDir(remoteFS{oneSession{cs}}, "."); err == nil {
-				t.Errorf("listing %v accepted", es)
-			}
-		})
 	}
 }
 

@@ -594,8 +594,9 @@ decide their calls on the model's arguments, a wider policy than the
 user's. The session's workspace is then a view of the executor's:
 its root and descriptor, nothing to write or run with, and its files,
 read-only, which the executor serves as MCP resources under
-`dax-workspace:///{op}{?path}` (stat, lstat, readdir, readlink, read)
-through its workspace's confined file system, a read bounded at 1 MiB
+`agentworkspace:///{op}{?path}` (stat, lstat, readdir, readlink, read;
+agentworkspace's `mcpworkspace`, `ServeFiles` and `NewFS`) through its
+workspace's confined file system, a read bounded at 1 MiB
 and a listing at 10,000 entries, each request within 30 seconds. The
 reply carries a refusal's kind, so the view's errors are the ones a
 local workspace gives (`fs.ErrNotExist`, `workspace.ErrOutside`,
@@ -619,9 +620,10 @@ closes it.
 
 `dax execute` can also start a process for its session, one that
 outlives a call, with pipes to it, as a `workspace.Starter` does
-(`internal/executor/process.go`): custom JSON-RPC methods
-(`dax/process.start`, `.write`, `.read`, `.closeStdin`, `.signal`,
-`.wait`, `.close`), not tools, so no client of the executor is offered
+(`internal/executor/process.go`, over agentworkspace's
+`mcpworkspace`: `Processes` in the executor, `Start` in the session):
+custom JSON-RPC methods (`agentworkspace/process.start`, `.write`,
+`.read`, `.closeStdin`, `.signal`, `.wait`, `.close`), not tools, so no client of the executor is offered
 a tool that runs a command and none of its tools starts one; it starts
 only what its one client asks for, and holds no list and reads no
 config. The capability's `start` field names them, with their bounds.

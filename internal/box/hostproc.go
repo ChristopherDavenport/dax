@@ -1,10 +1,11 @@
 package box
 
 // This file is the box host's own processes: the servers of a session's
-// MCP units, started by a dax/process.start of ["dax-unit", NAME] and
-// answered here with the semantics internal/executor/process.go gives
-// the executor's (the methods, their parameters and results, the
-// bounds), under ids the executor's cannot be.
+// MCP units, started by an agentworkspace/process.start of ["dax-unit",
+// NAME] and answered here with the semantics agentworkspace's
+// mcpworkspace gives the executor's (the methods, their parameters and
+// results, the bounds: package wire), under ids the executor's cannot
+// be.
 
 import (
 	"context"
@@ -16,27 +17,29 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
-// The process methods, as internal/executor/process.go names them.
+// The process methods, as mcpworkspace names them.
 const (
-	methodPrefix     = "dax/process."
-	methodStart      = "dax/process.start"
-	methodWrite      = "dax/process.write"
-	methodRead       = "dax/process.read"
-	methodCloseStdin = "dax/process.closeStdin"
-	methodSignal     = "dax/process.signal"
-	methodWait       = "dax/process.wait"
-	methodClose      = "dax/process.close"
+	methodPrefix     = wire.MethodPrefix
+	methodStart      = wire.MethodStart
+	methodWrite      = wire.MethodWrite
+	methodRead       = wire.MethodRead
+	methodCloseStdin = wire.MethodCloseStdin
+	methodSignal     = wire.MethodSignal
+	methodWait       = wire.MethodWait
+	methodClose      = wire.MethodClose
 )
 
 // The bounds, as the executor's: processes open at once, bytes in one
 // write and in one read's reply, and what is held of output no read
 // took yet.
 const (
-	hostMaxProcesses  = 32
-	hostMaxWriteBytes = 1 << 20
-	hostMaxReadBytes  = 64 << 10
+	hostMaxProcesses  = wire.MaxProcesses
+	hostMaxWriteBytes = wire.MaxWriteBytes
+	hostMaxReadBytes  = wire.MaxReadBytes
 	hostOutputBytes   = 64 << 10
 )
 

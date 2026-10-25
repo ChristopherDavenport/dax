@@ -18,6 +18,8 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/extension"
@@ -41,6 +43,16 @@ func (l *lockedBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// idOf is p's id at the executor.
+func idOf(t *testing.T, p workspace.Process) string {
+	t.Helper()
+	id, ok := mcpworkspace.ProcessID(p)
+	if !ok {
+		t.Fatalf("%T is not a process the executor started", p)
+	}
+	return id
 }
 
 // start is r.Start of args, failing the test on an error; the process
@@ -95,7 +107,7 @@ func TestAProcessInTheExecutorEchoes(t *testing.T) {
 	r, _ := s.remote(t)
 	p := start(t, r, workspace.Command{Args: []string{"cat"}})
 
-	big := bytes.Repeat([]byte("0123456789abcdef"), (MaxWriteBytes+MaxWriteBytes/2)/16)
+	big := bytes.Repeat([]byte("0123456789abcdef"), (wire.MaxWriteBytes+wire.MaxWriteBytes/2)/16)
 	var got bytes.Buffer
 	read := make(chan error, 1)
 	go func() {
@@ -161,7 +173,7 @@ func TestAProcessStandardErrorReachesTheStream(t *testing.T) {
 	q := start(t, r, workspace.Command{Args: []string{"sh", "-c", "echo oops >&2"}})
 	q.Wait()
 	cs := sessionOf(r)
-	if _, err := sdk.CallCustomMethod[*readParams, *readResult](context.Background(), cs, MethodRead, &readParams{ID: q.(*remoteProcess).id, FD: 2}); err == nil {
+	if _, err := sdk.CallCustomMethod[*mcpworkspace.ReadParams, *mcpworkspace.ReadResult](context.Background(), cs, wire.MethodRead, &mcpworkspace.ReadParams{ReadArgs: wire.ReadArgs{ID: idOf(t, q), FD: 2}}); err == nil {
 		t.Error("read fd 2 of a process started without a stream")
 	}
 }
@@ -267,119 +279,6 @@ func TestTheExecutorsDoneEndsItsProcesses(t *testing.T) {
 	}
 }
 
-// A session sees only its own processes: an id another session started
-// is refused for every method, and the process goes on.
-func TestAnotherSessionsProcessIsRefused(t *testing.T) {
-	s := newServer(t)
-	a, _ := s.remote(t)
-	b, _ := s.remote(t)
-	p := start(t, a, workspace.Command{Args: []string{"cat"}})
-	id := p.(*remoteProcess).id
-	ctx := context.Background()
-	cs := sessionOf(b)
-	for name, call := range map[string]func() error{
-		MethodWrite: func() error {
-			_, err := sdk.CallCustomMethod[*writeParams, *emptyResult](ctx, cs, MethodWrite, &writeParams{ID: id, Data: []byte("x")})
-			return err
-		},
-		MethodRead: func() error {
-			_, err := sdk.CallCustomMethod[*readParams, *readResult](ctx, cs, MethodRead, &readParams{ID: id, FD: 1})
-			return err
-		},
-		MethodCloseStdin: func() error {
-			_, err := sdk.CallCustomMethod[*idParams, *emptyResult](ctx, cs, MethodCloseStdin, &idParams{ID: id})
-			return err
-		},
-		MethodSignal: func() error {
-			_, err := sdk.CallCustomMethod[*signalParams, *signalResult](ctx, cs, MethodSignal, &signalParams{ID: id, Signal: "KILL"})
-			return err
-		},
-		MethodWait: func() error {
-			_, err := sdk.CallCustomMethod[*idParams, *waitResult](ctx, cs, MethodWait, &idParams{ID: id})
-			return err
-		},
-		MethodClose: func() error {
-			_, err := sdk.CallCustomMethod[*idParams, *waitResult](ctx, cs, MethodClose, &idParams{ID: id})
-			return err
-		},
-	} {
-		if err := call(); err == nil || !strings.Contains(err.Error(), errNoProcess.Error()) {
-			t.Errorf("%s of another session's process: %v", name, err)
-		}
-	}
-	if _, err := p.Stdin().Write([]byte("still\n")); err != nil {
-		t.Fatal(err)
-	}
-	line, err := bufio.NewReader(p.Stdout()).ReadString('\n')
-	if err != nil || line != "still\n" {
-		t.Errorf("after the other session's calls: %q, %v", line, err)
-	}
-}
-
-// A session has at most MaxProcesses open; a write is at most
-// MaxWriteBytes and a read's reply at most MaxReadBytes, whatever it
-// asks; and a start, a fd and a signal must be ones the methods know.
-func TestTheProcessMethodsAreBounded(t *testing.T) {
-	s := newServer(t)
-	r, _ := s.remote(t)
-	ctx := context.Background()
-	var open []workspace.Process
-	for range MaxProcesses {
-		open = append(open, start(t, r, workspace.Command{Args: []string{"cat"}}))
-	}
-	if _, err := r.Start(ctx, workspace.Command{Args: []string{"cat"}}); err == nil || !strings.Contains(err.Error(), "32 processes") {
-		t.Errorf("start %d: %v", MaxProcesses+1, err)
-	}
-	if err := open[0].Close(); err != nil {
-		t.Fatal(err)
-	}
-	p := start(t, r, workspace.Command{Args: []string{"cat"}})
-	for _, q := range open[1:] {
-		q.Close()
-	}
-
-	cs := sessionOf(r)
-	id := p.(*remoteProcess).id
-	if _, err := sdk.CallCustomMethod[*writeParams, *emptyResult](ctx, cs, MethodWrite, &writeParams{ID: id, Data: make([]byte, MaxWriteBytes+1)}); err == nil {
-		t.Error("a write over MaxWriteBytes")
-	}
-	if _, err := p.Stdin().Write(bytes.Repeat([]byte("x"), 3*MaxReadBytes)); err != nil {
-		t.Fatal(err)
-	}
-	res, err := sdk.CallCustomMethod[*readParams, *readResult](ctx, cs, MethodRead, &readParams{ID: id, FD: 1, Max: 1 << 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Data) == 0 || len(res.Data) > MaxReadBytes {
-		t.Errorf("a read asking 1 MiB gave %d bytes, want 1 to %d", len(res.Data), MaxReadBytes)
-	}
-	for name, call := range map[string]func() error{
-		"fd 3": func() error {
-			_, err := sdk.CallCustomMethod[*readParams, *readResult](ctx, cs, MethodRead, &readParams{ID: id, FD: 3})
-			return err
-		},
-		"HUP": func() error {
-			_, err := sdk.CallCustomMethod[*signalParams, *signalResult](ctx, cs, MethodSignal, &signalParams{ID: id, Signal: "HUP"})
-			return err
-		},
-		"no command": func() error {
-			_, err := sdk.CallCustomMethod[*startParams, *startResult](ctx, cs, MethodStart, &startParams{})
-			return err
-		},
-		"an environment entry without =": func() error {
-			_, err := sdk.CallCustomMethod[*startParams, *startResult](ctx, cs, MethodStart, &startParams{Args: []string{"true"}, Env: []string{"X"}})
-			return err
-		},
-	} {
-		if err := call(); err == nil {
-			t.Errorf("%s was taken", name)
-		}
-	}
-	if _, err := r.Start(ctx, workspace.Command{Args: []string{"cat"}, Stdin: []byte("x")}); err == nil {
-		t.Error("a start with Command.Stdin")
-	}
-}
-
 // notStarter is a workspace that cannot start a process.
 type notStarter struct{ workspace.Workspace }
 
@@ -412,7 +311,7 @@ func TestAnExecutorWithoutStartIsRefused(t *testing.T) {
 	if !errors.Is(err, errors.ErrUnsupported) || !strings.Contains(err.Error(), "update dax execute where it runs") {
 		t.Errorf("start: %v", err)
 	}
-	if _, err := sdk.CallCustomMethod[*startParams, *startResult](context.Background(), sessionOf(r), MethodStart, &startParams{Args: []string{"touch", sentinel}}); err == nil {
+	if _, err := sdk.CallCustomMethod[*mcpworkspace.StartParams, *mcpworkspace.StartResult](context.Background(), sessionOf(r), wire.MethodStart, &mcpworkspace.StartParams{StartArgs: wire.StartArgs{Args: []string{"touch", sentinel}}}); err == nil {
 		t.Error("the executor took a start")
 	}
 	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {

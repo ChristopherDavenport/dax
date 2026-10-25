@@ -14,6 +14,8 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -124,7 +126,7 @@ type conn struct {
 	c      *mcpclient.Remote
 	server sdk.Implementation
 	byName map[string]agenttool.Tool
-	start  *capabilityStart // nil when the executor starts no process
+	start  *wire.Bounds // nil when the executor starts no process
 	// procs is the context of every request about a process that
 	// waits on it (a read, a wait), ended before the connection
 	// closes, which would otherwise wait for them; its cause says why.
@@ -217,9 +219,9 @@ func connect(ctx context.Context, t sdk.Transport, o ConnectOptions) (*conn, sha
 		// The executor says its tool list never changes; a call does
 		// not wait for a notification after it.
 		mcpclient.WithNotificationGrace(0),
-		// The process methods (process.go), which only the session
-		// sends.
-		mcpclient.WithClientSetup(registerProcessMethods),
+		// The process methods (mcpworkspace's), which only the
+		// session sends.
+		mcpclient.WithClientSetup(mcpworkspace.RegisterClient),
 	)
 	if err != nil {
 		return nil, shape{}, fmt.Errorf("executor: %w", err)
@@ -277,10 +279,10 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	if cp.Files == nil {
 		return nil, shape{}, refuse("it does not serve its workspace's files (no files in %s), which the session reads AGENTS.md, .dax/skills and .dax/config.json through; update dax execute where it runs", CapabilityKey)
 	}
-	if cp.Files.URITemplate != FilesURITemplate {
-		return nil, shape{}, refuse("it serves its workspace's files under %q; this client reads %q", cp.Files.URITemplate, FilesURITemplate)
+	if cp.Files.URITemplate != wire.FilesURITemplate {
+		return nil, shape{}, refuse("it serves its workspace's files under %q; this client reads %q", cp.Files.URITemplate, wire.FilesURITemplate)
 	}
-	if st := cp.Start; st != nil && (st.MaxProcesses <= 0 || st.MaxWriteBytes <= 0 || st.MaxReadBytes <= 0) {
+	if st := cp.Start; st != nil && !st.Valid() {
 		return nil, shape{}, refuse("its start capability has a bound that is not positive: %+v", *st)
 	}
 	if cp.MaxReadBytes < 0 {
@@ -749,11 +751,11 @@ func (r *Remote) Call(ctx context.Context, c Call) (agenttool.Result, error) {
 }
 
 // FS is the executor's workspace's files, read-only, each request
-// within filesTimeout (files.go), over the current connection. It
-// implements fs.StatFS, fs.ReadDirFS, fs.ReadFileFS and fs.ReadLinkFS;
-// a name that leaves the workspace is workspace.ErrOutside, as the
-// executor's own file system has it.
-func (r *Remote) FS() fs.FS { return remoteFS{r} }
+// within filesTimeout (files.go), over the current connection
+// (mcpworkspace.NewFS). It implements fs.StatFS, fs.ReadDirFS,
+// fs.ReadFileFS and fs.ReadLinkFS; a name that leaves the workspace is
+// workspace.ErrOutside, as the executor's own file system has it.
+func (r *Remote) FS() fs.FS { return filesOf(r.readFiles) }
 
 // readFiles is a request for the workspace's files on the connection,
 // which has no effect: read again once on a new connection if the

@@ -5,6 +5,20 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: the executor's process methods and workspace files are
+  agentworkspace's `mcpworkspace` (agentworkspace v0.0.2), no longer
+  dax's own code, and are renamed on the wire: `dax/process.*` is
+  `agentworkspace/process.*`, and the files' template
+  `dax-workspace:///{op}{?path}` is `agentworkspace:///{op}{?path}`.
+  A session and the `dax execute` (or `dax box serve`) it reaches must
+  both be this version or later: a newer session refuses an older
+  executor's files template at the handshake, and an older session
+  cannot start a process in a newer executor. Update dax where the
+  executor runs together with dax here; a box is made again for
+  another dax anyway.
+
 ## v0.0.24 - 2026-10-25
 
 - Added: `box.confine` (`-box-confine`): `units` or `workspace` has the

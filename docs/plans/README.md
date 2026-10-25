@@ -147,7 +147,11 @@ before the dax step that uses them, as the workspace's rules require.
      every configured server and `/mcp add` runs in the sandbox and an
      executor that cannot start one fails it, **done** (branch
      `executor-mcp`). Follow-up: an executor over an address rather
-     than a command.
+     than a command. The process methods and the files moved to
+     agentworkspace's `mcpworkspace` (agentworkspace v0.0.2), as
+     `agentworkspace/process.*` and `agentworkspace:///{op}{?path}`, so
+     a program other than dax can serve and reach a workspace the same
+     way; dax keeps the connection, its redial and its capability.
 4. **Where the orchestration runs** (optional): agentturn's `Control`
    and `front/control`, agentkit's `Kit.Control`, agentconsole as the
    view, RFC 0003's store client in dax: `dax serve` and `dax attach`.

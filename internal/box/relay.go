@@ -93,9 +93,9 @@ const clientCapabilitiesMeta = "io.modelcontextprotocol/clientCapabilities"
 // a time, between in and the executor and the executor and out, as it
 // came, but for two kinds: the executor's answers to the handshake
 // (initialize and server/discover, each try) gain the box host's Info
-// under key, as "box"; and a process method for a unit's server (a
-// dax/process.start of ["dax-unit", NAME], and every later method on
-// the id it gave) is the box host's, answered here, never sent on. A
+// under key, as "box"; and a process method for a unit's server (an
+// agentworkspace/process.start of ["dax-unit", NAME], and every later
+// method on the id it gave) is the box host's, answered here, never sent on. A
 // box start refuses is the first message's JSON-RPC error, with the
 // reason, and so is every request after it until in ends (a client
 // whose discover is refused tries initialize next, and must read why
