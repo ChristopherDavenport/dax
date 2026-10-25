@@ -12,13 +12,13 @@ require (
 	github.com/ChristopherDavenport/agentsession v0.0.28
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
-	github.com/ChristopherDavenport/agenttool v0.0.23
-	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.23
-	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.23
-	github.com/ChristopherDavenport/agentturn v0.0.30
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.30
-	github.com/ChristopherDavenport/agentturn/session v0.0.30
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.30
+	github.com/ChristopherDavenport/agenttool v0.0.24
+	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.24
+	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.24
+	github.com/ChristopherDavenport/agentturn v0.0.31
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.31
+	github.com/ChristopherDavenport/agentturn/session v0.0.31
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.31
 	github.com/ChristopherDavenport/agentworkspace v0.0.1
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
