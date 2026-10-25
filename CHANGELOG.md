@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.24 - 2026-10-25
 
 - Added: `box.confine` (`-box-confine`): `units` or `workspace` has the
   policy take a box's tools as confined where their envelope allows,
