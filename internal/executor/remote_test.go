@@ -87,7 +87,7 @@ func TestConnectBuildsTheToolsInTheExecutorsOrder(t *testing.T) {
 	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "status", "deploy", "ask"}; !slices.Equal(names, want) {
 		t.Errorf("order %v, want %v", names, want)
 	}
-	if b := byName["bash"]; b.Extension != coding.Name || !b.ReadOnly || !b.Factual || !b.Sequential {
+	if b := byName["bash"]; b.Extension != coding.Name || !b.ReadOnly || !b.Factual || !b.Barrier || b.Sequential {
 		t.Errorf("bash %+v", b)
 	}
 	if st := byName["status"]; st.Extension != "acme" || !st.ReadOnly || st.Factual {

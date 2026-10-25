@@ -73,13 +73,16 @@ func Bind(ctx context.Context, x Executor) (*Set, error) {
 // adapter is t as an agenttool tool whose calls the executor runs.
 // agenttool.Definition of it is t.Definition, so a request carries the
 // same bytes as the tool itself would give, and what agenttool reads of
-// a tool (IsSequential, ResourceOf, AnnotationsOf, IsStrict, IsFactual,
-// ReplayOf) is what it reads of the tool.
+// a tool (IsSequential, IsBarrier, ResourceOf, AnnotationsOf,
+// IsStrict, IsFactual, ReplayOf) is what it reads of the tool.
 func (s *Set) adapter(t Tool) agenttool.Tool {
 	name := t.Name()
 	opts := []agenttool.Option{agenttool.WithAnnotations(t.Annotations)}
 	if t.Sequential {
 		opts = append(opts, agenttool.WithSequential())
+	}
+	if t.Barrier {
+		opts = append(opts, agenttool.WithBarrier())
 	}
 	if t.Resource != "" {
 		opts = append(opts, agenttool.WithResource(t.Resource))

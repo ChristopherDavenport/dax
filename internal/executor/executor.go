@@ -72,7 +72,10 @@ type Tool struct {
 	// ReadOnly is the extension's ReadOnly naming the tool.
 	ReadOnly   bool
 	Sequential bool
-	Resource   string
+	// Barrier is agenttool.IsBarrier of the tool: each call runs alone
+	// in its place in the batch, the calls on either side overlapping.
+	Barrier  bool
+	Resource string
 	// Factual is whether the tool makes the facts claim
 	// (agenttool.IsFactual).
 	Factual bool
@@ -113,6 +116,7 @@ func toolOf(ext string, t agenttool.Tool, readOnly bool) Tool {
 		Annotations: agenttool.AnnotationsOf(t),
 		ReadOnly:    readOnly,
 		Sequential:  agenttool.IsSequential(t),
+		Barrier:     agenttool.IsBarrier(t),
 		Resource:    agenttool.ResourceOf(t),
 		Factual:     agenttool.IsFactual(t),
 		Replayable:  replayable,
