@@ -5,6 +5,13 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: a box unit's server could lose the last of its output, standard
+  error most of all, when it exited: its pipes were exec's own, which
+  `Wait` closes as the process ends, before they were read. They are
+  now pipes the box host reads to their end.
+
 ## v0.0.22 - 2026-10-24
 
 - Added: `-box` runs the tools in this project's box. It starts a box
