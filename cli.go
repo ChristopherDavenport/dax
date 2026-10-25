@@ -115,6 +115,7 @@ func run(ctx context.Context, args []string, p program) error {
 	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container a box host (dax box serve, here or over ssh) makes or reuses from its config's profile, with the project at its own path, reached as the executor; -box=false runs here despite the config's box")
 	boxHost := fs.String("box-host", "", "with -box, where the box host runs, in place of box.host: local, or ssh://[user@]host[:port]")
 	boxProfile := fs.String("box-profile", "", "with -box, the box host's profile, in place of box.profile")
+	boxConfine := fs.String("box-confine", "", "with -box, which of the box's tools the policy takes as confined, so a bare ask rule for them does not ask: off, units (MCP units with no internet and no files of yours beyond a read-only project) or workspace (those and bash, write and edit in a box with no internet); see docs/sandbox.md")
 	boxInternet := fs.String("box-internet", "", "with -box, narrow the profile's internet for this run: off, allow (its hosts, or box.tighten's) or on; HTTP and HTTPS through the box's proxy, for every session in the box")
 	executorEnv := fs.String("executor-pass-env", "", "variables, separated by commas, that the -executor command alone is given, credentials included (SSH_AUTH_SOCK); overrides executor.pass_env, \"\" clears it")
 	agentsFlag := fs.Bool("agents", true, "offer the sub-agents as tools: explore (read-only) and task (changes files)")
@@ -262,6 +263,7 @@ func run(ctx context.Context, args []string, p program) error {
 		flags.Box = boxFlag
 	}
 	flags.BoxHost, flags.BoxProfile, flags.BoxInternet = str("box-host", boxHost), str("box-profile", boxProfile), str("box-internet", boxInternet)
+	flags.BoxConfine = str("box-confine", boxConfine)
 	if given["executor-pass-env"] {
 		flags.ExecutorPassEnv = []string{}
 		if strings.TrimSpace(*executorEnv) != "" {
@@ -385,6 +387,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
 		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Executor: ex, Root: *root, Sync: policyMode,
+		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
 		AgentsMDGlobal: settings.AgentsMDGlobal,
@@ -443,7 +446,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex), Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}
 	var f front
@@ -584,11 +587,17 @@ func toolsEnv(s config.Settings, keyEnv string, secrets ...string) []string {
 }
 
 // executorLine is the banner's line about the executor, "" for none.
-func executorLine(ex *agent.Executor) string {
+func executorLine(ex *agent.Executor, confine string) string {
 	if ex == nil {
 		return ""
 	}
-	return ex.String()
+	line := ex.String()
+	if confine == config.ConfineUnits || confine == config.ConfineWorkspace {
+		// What the user's box.confine asks of the policy, beside what
+		// the box host made.
+		line += " · confine " + confine
+	}
+	return line
 }
 
 // pricing loads the terminal client's price source. It is empty without

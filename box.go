@@ -26,6 +26,15 @@ import (
 	"github.com/ChristopherDavenport/dax/tool"
 )
 
+// boxConfineOf is the session's box.confine, ConfineOff without a box:
+// a plain executor's tools are never taken as confined.
+func boxConfineOf(b *config.BoxSettings) string {
+	if b == nil {
+		return config.ConfineOff
+	}
+	return b.Confine
+}
+
 // projectBox is the box of the project in dir, by name and directory
 // alone, without running docker.
 func projectBox(dir string) (box.Box, error) {
@@ -119,6 +128,7 @@ func ensureBox(ctx context.Context, c *box.Client, dir string, r box.Resolved, s
 		Files:  w.Files,
 		Binary: bin, UID: os.Getuid(), GID: os.Getgid(),
 		Rules: w.Rules,
+		Guard: r.Guard,
 	})
 }
 
@@ -383,6 +393,13 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		}
 		info := r.BoxInfo()
 		info.Checkout = co
+		for i := range info.Units {
+			if info.Units[i].Kind == box.KindWorkspace {
+				// What the box was made with, which the session's claim
+				// over the workspace waits for.
+				info.Units[i].Guard = b.Guard
+			}
+		}
 		hosted := box.Hosted{Child: child, Info: info, Units: names}
 		if len(units) > 0 {
 			// A unit's server runs in its container, over this connection;
@@ -527,6 +544,15 @@ func boxAdmin(ctx context.Context, c *box.Client, proj boxProject, method string
 		if missing {
 			return nil, fmt.Errorf("pull: %s is not there yet: no session has started in it", proj.dir)
 		}
+		if b, err := projectBox(proj.dir); err == nil {
+			guarded, err := c.Guarded(ctx, b.Name)
+			if err != nil {
+				return nil, err
+			}
+			if guarded {
+				return nil, fmt.Errorf("pull: box %s holds the repository read-only (box.confine workspace), so it has no commits of its own to take; commit outside it", b.Name)
+			}
+		}
 		bundle, err := box.BundleHead(ctx, proj.dir, box.MaxBundle)
 		if err != nil {
 			return nil, err
@@ -554,12 +580,13 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		fs.PrintDefaults()
 	}
 	var cfgPath, profile, internet, listen, rules, check, userCfg, branch *string
-	var dropState, force *bool
+	var dropState, force, guard *bool
 	switch args[0] {
 	case "up":
 		cfgPath = fs.String("config", "", "the box host config; default ~/.config/dax/box-host.json")
 		profile = fs.String("profile", "", "the box host config's profile; default its default")
 		internet = fs.String("internet", "", "narrow the profile's internet: off, allow (its hosts) or on")
+		guard = fs.Bool("guard", false, "hold the repository's .git read-only in the box, as box.confine workspace does")
 	case "down":
 		dropState = fs.Bool("state", false, "remove the units' state directories too (a RAG's index); kept by default")
 		userCfg = fs.String("config", "", "with no NAME, your config, whose box names the box host; default ~/.config/dax/config.json")
@@ -593,7 +620,7 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if err != nil {
 			return err
 		}
-		req := box.Request{Profile: *profile, Tighten: box.Tighten{Internet: *internet}}
+		req := box.Request{Profile: *profile, Tighten: box.Tighten{Internet: *internet}, Guard: *guard}
 		r, err := h.Resolve(req)
 		if err != nil {
 			return err

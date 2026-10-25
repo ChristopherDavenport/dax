@@ -7,6 +7,36 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `box.confine` (`-box-confine`): `units` or `workspace` has the
+  policy take a box's tools as confined where their envelope allows,
+  so a bare ask for them does not ask. `units` covers an MCP unit with
+  no internet, no secrets, no files beyond a read-only project and a
+  runtime other than runc; `workspace` adds the workspace's bash, write
+  and edit when the workspace has no internet. Protected paths (`.git`,
+  `.dax`, environment files, CI, hooks, editor settings) still ask, a
+  bash line is covered only when the analyzer reads it whole and it
+  hides nothing, a sub-agent's call gets nothing from it, deny rules
+  and ask rules with a specifier still apply, nothing the policy allows
+  without it starts asking, and a project's bare ask for a tool keeps
+  it asking. The rules are a new policy source, `dax:box`. User config
+  only.
+- Added: the git guard. With `box.confine workspace` the box host
+  mounts the project's `.git` read-only in the box, whole (a `.git`
+  file and its in-project git dir, each checked-out submodule's `.git`,
+  an in-project `core.hooksPath` and `.husky` too), so no program a
+  confined call runs (a `make`, a test) can leave a hook, a config or a
+  `commondir` your git trusts outside the box, rename `.git`, or remove
+  the history. Git that writes fails in such a box; commit outside it.
+  Each session says so, and `dax box pull` is refused against it. The
+  workspace's envelope says `"guard": "on: .git read-only"`, and the
+  workspace's tools are taken as confined only then; a project that is
+  not a git repository, or an older box host, keeps them asking. A box
+  made without the guard, or whose guarded paths changed, is refused
+  until `dax box down`. `dax box up -guard` makes a guarded box by
+  hand.
+- Changed: `/mcp add` and a config MCP server may not take a box
+  unit's name, or that name and an underscore, whose tools would be
+  named as the unit's.
 - Changed: `bash` is a barrier (agenttool's `Barrier`) instead of
   sequential: a command runs alone in its place in a response's batch,
   after every call before it and before every call after it, and the

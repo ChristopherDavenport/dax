@@ -121,6 +121,12 @@ type Options struct {
 	// are read through it. It is the caller's to close, after the
 	// session.
 	Executor *Executor
+	// BoxConfine is the session's box.confine, with a box host in front
+	// of Executor: config.ConfineUnits or config.ConfineWorkspace has the
+	// policy take that box's tools as confined (confine.go), so a bare
+	// ask rule for them does not ask. Empty or config.ConfineOff, and
+	// any value without a box host's envelope, claims nothing.
+	BoxConfine string
 	// Store records the session: a store the caller opened, which it
 	// closes after the session; a remote one (agentsession RFC 0003)
 	// fits here as a local one does. Nil opens the content-addressed
@@ -493,11 +499,17 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if o.Policy != nil {
 		settings := *o.Policy
 		settings.Shipped = append(slices.Clone(settings.Shipped), a.shipped...)
+		// box.confine: the box's tools the policy takes as confined, and
+		// the rules that make that matter (confine.go).
+		confine, err := confineBox(o, a.set, &settings, a.matchers, a.aliases)
+		if err != nil {
+			return nil, err
+		}
 		p, err := policy.Build(settings)
 		if err != nil {
 			return nil, err
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, agentpolicy.WithAliases(a.aliases)))
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases)}, confine...)...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
@@ -817,6 +829,19 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
+	// A server whose tools would be named as a box unit's is refused:
+	// box.confine claims a unit's tools by their name.
+	if s.opts.Executor != nil {
+		units, err := s.opts.Executor.unitServers()
+		if err != nil {
+			return "", err
+		}
+		for _, u := range units {
+			if collidesWithUnit(name, u.Name) {
+				return "", fmt.Errorf("mcp %s: the box host's unit %s offers tools under that name; pick another", name, u.Name)
+			}
+		}
+	}
 	t, mopts, err := s.mcpStart(ctx, name, command)
 	if err != nil {
 		return "", err
@@ -1262,6 +1287,9 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if e == nil {
 			return nil, nil
 		}
+		// A sub-agent's call is decided without box.confine's own claim
+		// (confine.go): only what the policy allows anyway runs unasked.
+		ctx = childDecision(ctx, name)
 		bctx, done := set.PinBatch(ctx, info)
 		defer done() // a no-op after the done below, which comes before the question
 		v, err := e.Would(bctx, info)

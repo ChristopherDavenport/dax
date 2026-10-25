@@ -729,23 +729,27 @@ func TestExecutorOfIsResolves(t *testing.T) {
 }
 
 func TestBoxPrecedence(t *testing.T) {
-	local := BoxSettings{Host: BoxLocal}
+	local := BoxSettings{Host: BoxLocal, Confine: ConfineOff}
 	user := parse(t, `{"box":{"profile":"go","tighten":{"memory":"2g","allow":["proxy.golang.org"]}}}`, false)
 	remote := parse(t, `{"box":{"host":"ssh://me@build:2222","project":"/srv/app","remote_dax":"/opt/dax","ssh":["-F","/u/.ssh/build"]}}`, false)
 	empty := parse(t, `{"box":{}}`, false)
 	executor := parse(t, `{"executor":{"command":"ssh host dax execute"}}`, false)
 	envOnly := parse(t, `{"box":{},"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`, false)
-	fromFile := BoxSettings{Host: BoxLocal, Request: box.Request{Profile: "go", Tighten: box.Tighten{Memory: "2g", Allow: []string{"proxy.golang.org"}}}}
+	fromFile := BoxSettings{Host: BoxLocal, Confine: ConfineOff, Request: box.Request{Profile: "go", Tighten: box.Tighten{Memory: "2g", Allow: []string{"proxy.golang.org"}}}}
 	flagProfile := fromFile
 	flagProfile.Request.Profile = "big"
 	flagOn := fromFile
 	flagOn.Request.Tighten = box.Tighten{Memory: "2g", Internet: "on"}
 	flagAllow := fromFile
 	flagAllow.Request.Tighten = box.Tighten{Memory: "2g", Internet: "allow", Allow: []string{"proxy.golang.org"}}
-	fromRemote := BoxSettings{Host: "ssh://me@build:2222", SSH: &SSHTarget{User: "me", Host: "build", Port: "2222"}, Project: "/srv/app", RemoteDax: "/opt/dax", SSHArgs: []string{"-F", "/u/.ssh/build"}}
+	fromRemote := BoxSettings{Host: "ssh://me@build:2222", Confine: ConfineOff, SSH: &SSHTarget{User: "me", Host: "build", Port: "2222"}, Project: "/srv/app", RemoteDax: "/opt/dax", SSHArgs: []string{"-F", "/u/.ssh/build"}}
 	checkout := parse(t, `{"box":{"host":"ssh://build","checkout":{"url":"https://GitHub.com/me/app.git","ref":"main"}}}`, false)
-	fromCheckout := BoxSettings{Host: "ssh://build", SSH: &SSHTarget{Host: "build"}, Checkout: &BoxCheckout{URL: "https://github.com/me/app", Ref: "main"}}
-	flagHost := BoxSettings{Host: "ssh://other", SSH: &SSHTarget{Host: "other"}}
+	fromCheckout := BoxSettings{Host: "ssh://build", Confine: ConfineOff, SSH: &SSHTarget{Host: "build"}, Checkout: &BoxCheckout{URL: "https://github.com/me/app", Ref: "main"}}
+	flagHost := BoxSettings{Host: "ssh://other", Confine: ConfineOff, SSH: &SSHTarget{Host: "other"}}
+	confined := parse(t, `{"box":{"confine":"units"}}`, false)
+	fromConfined := BoxSettings{Host: BoxLocal, Confine: ConfineUnits}
+	flagConfine := BoxSettings{Host: BoxLocal, Confine: ConfineWorkspace, Request: box.Request{Guard: true}}
+	flagConfineOff := BoxSettings{Host: BoxLocal, Confine: ConfineOff}
 	for _, tc := range []struct {
 		name  string
 		user  Layer
@@ -754,6 +758,11 @@ func TestBoxPrecedence(t *testing.T) {
 		err   string
 	}{
 		{"none", Layer{}, Flags{}, nil, ""},
+		{"the file's confine", confined, Flags{}, &fromConfined, ""},
+		{"-box-confine replaces the file's", confined, Flags{BoxConfine: ptr("workspace")}, &flagConfine, ""},
+		{"-box-confine off", confined, Flags{BoxConfine: ptr("off")}, &flagConfineOff, ""},
+		{"a bad -box-confine", Layer{}, Flags{Box: ptr(true), BoxConfine: ptr("everything")}, nil, "want off, units or workspace"},
+		{"-box-confine without a box", Layer{}, Flags{BoxConfine: ptr("workspace")}, nil, "-box-confine goes with -box"},
 		{"the flag alone is a local box host's default profile", Layer{}, Flags{Box: ptr(true)}, &local, ""},
 		{"an empty box in the file", empty, Flags{}, &local, ""},
 		{"the file's profile and tightenings", user, Flags{}, &fromFile, ""},
@@ -821,6 +830,7 @@ func TestBoxValidation(t *testing.T) {
 		{`{"box":{"host":"ssh://-oProxyCommand=x"}}`, "box.host"},
 		{`{"box":{"host":"ssh://-me@build"}}`, "user"},
 		{`{"box":{"profile":"go --x"}}`, "box.profile"},
+		{`{"box":{"confine":"all"}}`, "box.confine"},
 		{`{"box":{"mcp":["git hub"]}}`, "box.mcp"},
 		{`{"box":{"tighten":{"memory":"lots"}}}`, "box.tighten.memory"},
 		{`{"box":{"tighten":{"cpus":-1}}}`, "box.tighten.cpus"},
@@ -863,5 +873,10 @@ func TestBoxValidation(t *testing.T) {
 	// A repository may not say where the session's commands run.
 	if _, err := Parse([]byte(`{"box":{}}`), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "box: a project file may only tighten") {
 		t.Errorf("a project's box: %v", err)
+	}
+	// Nor that its tools are confined, which would turn its asks into
+	// allows.
+	if _, err := Parse([]byte(`{"box":{"confine":"workspace"}}`), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "box: a project file may only tighten") {
+		t.Errorf("a project's box.confine: %v", err)
 	}
 }

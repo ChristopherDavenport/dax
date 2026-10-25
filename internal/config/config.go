@@ -178,6 +178,30 @@ type Box struct {
 	// SSH, with an ssh host, are more arguments for ssh, before the
 	// host: ["-F", "/home/me/.ssh/build.conf"].
 	SSH []string `json:"ssh,omitempty"`
+	// Confine says which of the box's tools the session's policy takes
+	// as confined, so a bare ask rule for them does not ask: off (the
+	// default), units (the MCP units the box host holds to no files
+	// beyond their own, read-only project and no internet), or
+	// workspace (those and the workspace's bash, write and edit, when
+	// its internet is off). See docs/sandbox.md, "Fewer questions in a
+	// box".
+	Confine string `json:"confine,omitempty"`
+}
+
+// The values of Box.Confine.
+const (
+	ConfineOff       = "off"
+	ConfineUnits     = "units"
+	ConfineWorkspace = "workspace"
+)
+
+// CheckConfine refuses a value Box.Confine does not take.
+func CheckConfine(field, v string) error {
+	switch v {
+	case "", ConfineOff, ConfineUnits, ConfineWorkspace:
+		return nil
+	}
+	return fmt.Errorf("%s %q: want off, units or workspace", field, v)
 }
 
 // BoxCheckout is a repository for the box host to clone and keep: its
@@ -206,6 +230,8 @@ type BoxSettings struct {
 	// Checkout is Box's, its URL as box.NormalizeURL writes it; nil for
 	// none.
 	Checkout *BoxCheckout
+	// Confine is Box's, ConfineOff when it says nothing.
+	Confine string
 }
 
 // SSHTarget is an ssh box host.
@@ -679,7 +705,7 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		for _, x := range []struct {
 			name string
 			v    *string
-		}{{"-box-host", f.BoxHost}, {"-box-profile", f.BoxProfile}, {"-box-internet", f.BoxInternet}} {
+		}{{"-box-host", f.BoxHost}, {"-box-profile", f.BoxProfile}, {"-box-internet", f.BoxInternet}, {"-box-confine", f.BoxConfine}} {
 			if x.v != nil {
 				return nil, fmt.Errorf("%s goes with -box or a box in your config", x.name)
 			}
@@ -726,6 +752,12 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		}
 		b.Tighten = &t
 	}
+	if f.BoxConfine != nil {
+		if err := CheckConfine("-box-confine", *f.BoxConfine); err != nil {
+			return nil, err
+		}
+		b.Confine = *f.BoxConfine
+	}
 	if err := b.check("box"); err != nil {
 		if f.BoxHost != nil {
 			return nil, fmt.Errorf("-box-host: %w", err)
@@ -744,6 +776,13 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 		s.Host = b.Host
 	}
 	s.Request = box.Request{Profile: b.Profile, MCP: b.MCP}
+	s.Confine = b.Confine
+	if s.Confine == "" {
+		s.Confine = ConfineOff
+	}
+	// The workspace's claim needs its git guard: the box host holds the
+	// repository's .git read-only, and says so.
+	s.Request.Guard = s.Confine == ConfineWorkspace
 	if b.Tighten != nil {
 		s.Request.Tighten = *b.Tighten
 	}
@@ -771,6 +810,9 @@ func (b Box) check(field string) error {
 		if err := box.CheckTighten(field+".tighten", *b.Tighten); err != nil {
 			return err
 		}
+	}
+	if err := CheckConfine(field+".confine", b.Confine); err != nil {
+		return err
 	}
 	local := t == nil
 	switch {
@@ -1003,7 +1045,9 @@ type Flags struct {
 	// BoxInternet its tightened internet, for the run.
 	Box                              *bool
 	BoxHost, BoxProfile, BoxInternet *string
-	Think, Agents                    *bool
+	// BoxConfine replaces box.confine for the run.
+	BoxConfine    *string
+	Think, Agents *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
