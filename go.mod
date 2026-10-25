@@ -19,8 +19,8 @@ require (
 	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.31
 	github.com/ChristopherDavenport/agentturn/session v0.0.31
 	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.31
-	github.com/ChristopherDavenport/agentworkspace v0.0.2
-	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.2
+	github.com/ChristopherDavenport/agentworkspace v0.0.3
+	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.3
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15

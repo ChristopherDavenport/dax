@@ -93,15 +93,15 @@ Why a relay and not a second executor server: the facts and stamps
 are the in-box executor's, and a relay cannot change them. A server
 that re-served the tools would sit between the facts and the call.
 
-In step 2 the relay answers one more thing itself: an
-`agentworkspace/process.start` (`dax/process.start` before
-agentworkspace's `mcpworkspace` took the methods) whose arguments are `["dax-unit", NAME]`, for one of the session's MCP
-units, starts that unit's server in the unit's container (`docker exec
--i`), and the relay answers that process's methods, with ids of its own
-that cannot be the executor's. `dax-unit` is a reserved word, not a
-program: a `dax execute` with no box host in front fails it as a
-program not found. Every other process start, and every other method,
-still passes through.
+In step 2 the relay answers one more thing itself: the session's MCP
+units, which it offers as the workspace's own servers.
+`agentworkspace/servers.list` names them, and an
+`agentworkspace/servers.start` of one (before mcp-placement.md, a
+`process.start` of the reserved `["dax-unit", NAME]`) starts that
+unit's server in the unit's container (`docker exec -i`); the relay
+answers that process's methods, with ids of its own that cannot be the
+executor's. A name not one of the session's units is refused. Every
+process start, and every other method, still passes through.
 
 ## The box host config
 
@@ -334,8 +334,8 @@ allow, secrets: [names]}]}`. The units are made with the box, before
 that answer, so an image build is not held to a process start's
 timeout and a unit that cannot be made refuses the session with the
 reason. The session starts each MCP unit as an MCP
-server named after it (`dax-unit NAME`, through the executor, so it
-restarts as any MCP server does, its tools `mcp__<unit>__<tool>`), and
+server named after it (the box host's offered server, so it restarts
+as any MCP server does, its tools `mcp__<unit>__<tool>`), and
 records the envelopes in the session's header (`dax.box`): what each
 unit could reach, with its secrets' names and never their values.
 
@@ -452,7 +452,7 @@ supported, not code.
    image builds cached by a hash of their declaration, secrets resolved
    on the box host into one unit's container, each unit's internet
    through its own sidecar and network, `files` and `state` mounts,
-   `agentworkspace/process.start` of `dax-unit NAME` answered by the relay, the
+   the units offered as servers and answered by the relay, the
    envelopes in the handshake and the record.
 3. **Checkouts and administration** (above): `box.checkout` and the
    box host's `checkouts`, cloned and kept current only when clean;

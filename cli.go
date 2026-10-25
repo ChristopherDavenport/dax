@@ -124,6 +124,7 @@ func run(ctx context.Context, args []string, p program) error {
 	agentsMDGlobal := fs.String("agents-md-global", "", "your own instruction files for every session, separated by "+string(filepath.ListSeparator)+" as in PATH; overrides agents_md_global, \"\" clears it")
 	skillsFlag := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
+	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
@@ -332,7 +333,11 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
-	secrets := extension.SecretsOf(exts)
+	// What no child of the session gets, whatever its name: the
+	// extensions' secrets, the key's variable and every MCP server's
+	// token variable. A project's servers name no token, so the user's
+	// settings, read before the executor, hold them all.
+	secrets := agent.Secrets(exts, m.KeyEnv, mcpServersOf(settings, *mcp))
 	// Where the tools act: this directory, or an executor elsewhere
 	// whose tools act where it runs. A container or a remote runtime
 	// is another workspace.Workspace, given to the session and to the
@@ -427,12 +432,8 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		opts.Instructions = string(data)
 	}
-	for _, s := range settings.MCP {
-		opts.MCP = append(opts.MCP, agent.MCPServer{Name: s.Name, Command: s.Command})
-	}
-	if *mcp != "" {
-		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "cli", Command: *mcp})
-	}
+	opts.MCP = mcpServersOf(settings, *mcp)
+	opts.TrustMCP = *trustMCP
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy
 	}
@@ -582,6 +583,22 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 // pass_env names, and less the model's key's variable, keyEnv, and the
 // extensions' secrets (a peer's token_env), whatever their names.
 // executor.pass_env is the executor's launcher's alone and is not here.
+// mcpServersOf are the settings' MCP servers and the -mcp flag's, as
+// the session takes them.
+func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
+	var out []agent.MCPServer
+	for _, m := range s.MCP {
+		out = append(out, agent.MCPServer{
+			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
+			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+		})
+	}
+	if flag != "" {
+		out = append(out, agent.MCPServer{Name: config.MCPFlagName, Command: flag})
+	}
+	return out
+}
+
 func toolsEnv(s config.Settings, keyEnv string, secrets ...string) []string {
 	return tool.DefaultEnv(s.PassEnv, append([]string{keyEnv}, secrets...)...)
 }

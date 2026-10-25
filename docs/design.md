@@ -475,12 +475,19 @@ What is not equal yet, and why:
 - A workspace whose root is below its repository's root sees no
   AGENTS.md above its root unless it is this machine's `Dir`: its file
   system ends at the root.
-- An MCP stdio server runs in the workspace only when it is a
-  `workspace.Starter`, over the process's pipes (the MCP SDK's
-  `IOTransport`), at its root and with its environment; in a workspace
-  that cannot start a process, it runs on this machine, with this
-  machine's environment scrubbed. An executor's view is a Starter, so
-  with `-executor` this machine never runs one.
+- An MCP server is provided by the workspace or called independently
+  (docs/plans/proposals/mcp-placement.md). A command's stdio server
+  placed in the workspace (the default) runs there only when it is a
+  `workspace.Starter`, over the process's pipes
+  (`mcpworkspace.CommandTransport`), at its root and with its
+  environment; in a workspace that cannot start a process, it runs on
+  this machine, with this machine's environment scrubbed. An executor's
+  view is a Starter, so with `-executor` this machine runs none of
+  these. The servers the workspace offers of its own
+  (`workspace.ServerProvider`: a box host's units) are connected beside
+  them, by name (`mcpworkspace.ServerTransport`). A server placed on
+  the host (`"in": "host"`) or at a `url` is called from this machine
+  whatever the workspace, its tools never taken as confined.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
   `Store`: opening takes a lease, an append returns a new result, and a
@@ -626,7 +633,11 @@ custom JSON-RPC methods (`agentworkspace/process.start`, `.write`,
 `.read`, `.closeStdin`, `.signal`, `.wait`, `.close`), not tools, so no client of the executor is offered
 a tool that runs a command and none of its tools starts one; it starts
 only what its one client asks for, and holds no list and reads no
-config. The capability's `start` field names them, with their bounds.
+config. The capability's `start` field names them, with their bounds,
+and its `servers` field says the executor's workspace offers MCP
+servers of its own, which `agentworkspace/servers.list` and
+`servers.start` reach; a box host in front of the executor offers its
+units whatever that says.
 Each session's processes are a table of its own, and an id another
 session started is refused; at most 32 are open at once, a write is at
 most 1 MiB, a read's reply at most 64 KiB, a read waits for output (a
@@ -643,8 +654,10 @@ the executor's workspace is a `workspace.Starter` over it, so with
 starts in the executor at its root, and one the executor cannot start
 fails (the session, or the `/mcp add`), saying to update `dax execute`,
 rather than start on this machine. Only control says which servers
-start: the user's config, the flags and `/mcp add`; a project's config
-may not name one, and the executor keeps no list. Their tools are
+start: the user's config, the flags and `/mcp add`, the project's
+config once the user has trusted its set (`-trust-mcp`), and the
+servers the workspace offers of its own (a box host's units), which the
+session connects to; the executor keeps no list. Their tools are
 the kit's MCP client's, which takes no facts claims, so they are
 decided by name under the user's rules (they ask by default), make no
 facts request of the executor, and are recorded here as on this

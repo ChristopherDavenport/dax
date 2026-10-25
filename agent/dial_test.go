@@ -117,6 +117,22 @@ func newRemoteBox(t *testing.T) *remoteBox {
 	return newRemoteBoxAt(t, t.TempDir(), workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: "/work"})
 }
 
+// newRemoteBoxOffering is newRemoteBox whose workspace offers servers.
+func newRemoteBoxOffering(t *testing.T, servers []workspace.OfferedServer) *remoteBox {
+	t.Helper()
+	dir := t.TempDir()
+	local, err := workspace.NewLocal(dir, tool.DefaultEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { local.Close() })
+	ws, err := workspace.Offer(local, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newRemoteBoxOver(t, dir, ws, workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: "/work"})
+}
+
 // newRemoteBoxAt is a box over dir that says it is d.
 func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox {
 	t.Helper()
@@ -125,6 +141,13 @@ func newRemoteBoxAt(t *testing.T, dir string, d workspace.Descriptor) *remoteBox
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.Close() })
+	return newRemoteBoxOver(t, dir, ws, d)
+}
+
+// newRemoteBoxOver is a box over ws, whose root is dir, that says it is
+// d.
+func newRemoteBoxOver(t *testing.T, dir string, ws workspace.Starter, d workspace.Descriptor) *remoteBox {
+	t.Helper()
 	srv, err := executor.NewServer(executor.ServeOptions{Name: "dax", Version: "box", Descriptor: d},
 		codingWith(acme()), extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})
 	if err != nil {

@@ -168,10 +168,11 @@ and its own sidecar. No unit can reach another unit, or the box, or
 their files but through what both mount. Its image needs `sh` and
 `sleep` (a distroless image has neither: build one from a base that
 does); its sidecar runs dax in the workspace's image. The session
-starts each unit's server as an MCP server named after the unit, as
-it starts any MCP server with an executor (`dax-unit NAME`, which the
-box host answers itself), so its tools are `mcp__<unit>__<tool>`, and a
-server that ends is started again on the next call.
+starts each unit's server as an MCP server named after the unit: the
+box host offers the units as the workspace's own servers
+(`agentworkspace/servers.list` and `servers.start`, which it answers
+itself), so its tools are `mcp__<unit>__<tool>`, and a server that ends
+is started again on the next call.
 
 #### The three rules
 
@@ -968,8 +969,11 @@ daxbox() { dax -executor "docker exec -i $(basename "$PWD")-box dax execute -roo
 - MCP servers are configured as usual (`mcp_servers`, `-mcp`) and start
   in the sandbox, at its root, so their commands must exist there.
   `/mcp add <name> <command>` (in `-front repl`) starts one there
-  mid-session. The sandbox keeps no list of its own and a project's
-  config cannot name one.
+  mid-session. A server with `"in": "host"`, or a `url`, is called from
+  this machine instead, beside the sandbox; its tools are never taken
+  as confined. The sandbox keeps no list of its own (a box host offers
+  its units), and a project's config names servers only you trusted
+  with `-trust-mcp`.
 - Your `pass_env` and `executor.pass_env` apply only to the command
   that starts the executor (and `pass_env` to the tools when you run
   dax without one); what the sandbox's commands get is `dax execute`'s

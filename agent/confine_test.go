@@ -10,6 +10,7 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -74,20 +75,36 @@ const confineBoxJSON = `{"profile":"default","units":[
 // box.confine mode, with settings edit applied to its policy.
 func confineSession(t *testing.T, raw string, mode string, edit func(*policy.Settings)) *Session {
 	t.Helper()
+	s, err := confineSessionWith(t, raw, mode, edit, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// confineSessionWith is confineSession whose box offers only the units
+// named in offer when offer is not nil, and with mcp configured too; it
+// returns New's error.
+func confineSessionWith(t *testing.T, raw string, mode string, edit func(*policy.Settings), offer []string, servers ...MCPServer) (*Session, error) {
+	t.Helper()
 	ctx := context.Background()
-	// The units' servers start as `dax-unit NAME` in the executor, which
-	// a box host would answer; here a program of that name on the box's
-	// PATH serves the test binary's own MCP server.
-	bin := t.TempDir()
+	// The units' servers are what the box offers (servers.list and
+	// servers.start, which a box host answers); here the box's workspace
+	// offers each MCP unit as the test binary's own MCP server.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "dax-unit"), []byte("#!/bin/sh\nDAX_TEST_MCP_SERVER=1 exec '"+self+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
+	var offered []workspace.OfferedServer
+	units := boxUnits(json.RawMessage(raw))
+	if offer != nil {
+		units = offer
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	b := newRemoteBox(t)
+	for _, u := range units {
+		offered = append(offered, workspace.OfferedServer{Server: workspace.Server{Name: u},
+			Command: workspace.Command{Args: []string{self}, Env: []string{"DAX_TEST_MCP_SERVER=1"}}})
+	}
+	b := newRemoteBoxOffering(t, offered)
 	for _, d := range []string{"src", ".git/hooks", ".github/workflows"} {
 		if err := os.MkdirAll(filepath.Join(b.dir, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -112,15 +129,16 @@ func confineSession(t *testing.T, raw string, mode string, edit func(*policy.Set
 	t.Cleanup(func() { ex.Close() })
 	o := remoteOptions(t, &scripted{}, ex)
 	o.BoxConfine = mode
+	o.MCP = servers
 	if edit != nil {
 		edit(o.Policy)
 	}
 	s, err := New(ctx, o)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	t.Cleanup(func() { s.Close() })
-	return s
+	return s, nil
 }
 
 // unitTool stands in for a unit's MCP tool: only its name matters to
@@ -282,12 +300,12 @@ func TestBoxConfineReasons(t *testing.T) {
 func TestAServerCannotTakeAUnitsName(t *testing.T) {
 	s := confineSession(t, confineBoxJSON, config.ConfineUnits, nil)
 	for _, name := range []string{"files", "files_"} {
-		if _, err := s.AddMCP(context.Background(), name, "server"); err == nil || !strings.Contains(err.Error(), "unit files") {
+		if _, err := s.AddMCP(context.Background(), name, "server"); err == nil || !strings.Contains(err.Error(), "server files") {
 			t.Errorf("/mcp add %s: %v", name, err)
 		}
 	}
-	if !collidesWithUnit("files_", "files") || collidesWithUnit("files-x", "files") || collidesWithUnit("file", "files") {
-		t.Error("collidesWithUnit")
+	if !collidesWithOffered("files_", "files") || collidesWithOffered("files-x", "files") || collidesWithOffered("file", "files") {
+		t.Error("collidesWithOffered")
 	}
 }
 
@@ -305,5 +323,51 @@ func TestContainedFiles(t *testing.T) {
 		if got := sandboxed(rt); got != want {
 			t.Errorf("sandboxed(%q) = %v, want %v", rt, got, want)
 		}
+	}
+}
+
+// Behind an older box host, which passes servers.list through to the
+// executor and so offers none, a session whose handshake names units
+// fails to open, saying so, rather than start without its units and
+// leave their names to another server.
+func TestAnOlderBoxHostFailsTheSession(t *testing.T) {
+	_, err := confineSessionWith(t, confineBoxJSON, config.ConfineUnits, nil, []string{})
+	if err == nil || !strings.Contains(err.Error(), "the box host offers no server for unit files; it is older than this dax, update it") {
+		t.Fatalf("New = %v", err)
+	}
+}
+
+// A server placed on the host, or one at a URL, may not take a unit's
+// name: box.confine would claim its tools.
+func TestAHostServerCannotTakeAUnitsName(t *testing.T) {
+	for _, m := range []MCPServer{
+		{Name: "files", Command: "server", Host: true},
+		{Name: "files_", Command: "server", Host: true},
+		{Name: "files", URL: "https://evil.example/mcp"},
+	} {
+		if s, err := confineSessionWith(t, confineBoxJSON, config.ConfineUnits, nil, nil, m); err == nil || !strings.Contains(err.Error(), "rename the server") {
+			if s != nil {
+				s.Close()
+			}
+			t.Errorf("%+v beside the unit files: %v", m, err)
+		}
+	}
+}
+
+// The confiner claims a unit's tools only when the unit is a server the
+// session connected, beside its envelope.
+func TestTheConfinerClaimsOnlyConnectedUnits(t *testing.T) {
+	s := confineSession(t, confineBoxJSON, config.ConfineUnits, nil)
+	raw := json.RawMessage(confineBoxJSON)
+	c, err := newConfiner(config.ConfineUnits, raw, s.set, nil, nil, []string{"files", "gh", "weak"})
+	if err != nil || c == nil || c.units["files"] == "" {
+		t.Fatalf("with files connected: %+v, %v", c, err)
+	}
+	c, err = newConfiner(config.ConfineUnits, raw, s.set, nil, nil, []string{"gh", "weak"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != nil && c.units["files"] != "" {
+		t.Errorf("files claimed though no server of it was connected: %+v", c.units)
 	}
 }
