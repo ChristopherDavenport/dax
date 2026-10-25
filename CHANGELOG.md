@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.26 - 2026-10-25
 
 - Fixed: a unit's secret could reach the session when its server wrote
   a line longer than a megabyte: where the box host split the line, a
