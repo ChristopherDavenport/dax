@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -63,21 +64,42 @@ func (c *Client) StartProc(ctx context.Context, container string, command []stri
 	if err != nil {
 		return nil, err
 	}
-	out, err := cmd.StdoutPipe()
+	// Pipes of our own, not cmd.StdoutPipe and StderrPipe: Wait, which
+	// runs as soon as the process starts, closes those when it exits,
+	// and what the process wrote last is lost unread. These end only
+	// when every writer has, so the reader gets all of it, then EOF;
+	// Close closes the read ends.
+	out, outW, err := os.Pipe()
 	if err != nil {
+		stdin.Close()
 		return nil, err
 	}
-	p := &unitProc{docker: docker, container: container, cmd: cmd, stdin: stdin, exited: make(chan struct{})}
-	var errPipe io.ReadCloser
+	cmd.Stdout = outW
+	p := &unitProc{docker: docker, container: container, cmd: cmd, stdin: stdin, exited: make(chan struct{}), readEnds: []*os.File{out}}
+	var errPipe, errW *os.File
 	if stderr {
-		if errPipe, err = cmd.StderrPipe(); err != nil {
+		if errPipe, errW, err = os.Pipe(); err != nil {
+			stdin.Close()
+			out.Close()
+			outW.Close()
 			return nil, err
 		}
+		cmd.Stderr = errW
+		p.readEnds = append(p.readEnds, errPipe)
 	} else {
 		// Kept, a little, for the error when it does not start.
 		cmd.Stderr = &p.early
 	}
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// The child has its copies of the write ends; ours would keep the
+	// pipes open after it exits.
+	outW.Close()
+	if errW != nil {
+		errW.Close()
+	}
+	if err != nil {
+		stdin.Close()
+		p.closeReadEnds()
 		return nil, err
 	}
 	p.stdout = bufio.NewReaderSize(out, 32<<10)
@@ -135,7 +157,14 @@ type unitProc struct {
 	status int
 	err    error
 
+	readEnds []*os.File // the output pipes' read ends, closed by Close
 	closeOne sync.Once
+}
+
+func (p *unitProc) closeReadEnds() {
+	for _, f := range p.readEnds {
+		f.Close()
+	}
 }
 
 func (p *unitProc) Stdin() io.WriteCloser { return p.stdin }
@@ -186,6 +215,7 @@ func (p *unitProc) Signal(name string) (bool, error) {
 // given closeGrace; then the docker command itself.
 func (p *unitProc) Close() error {
 	p.closeOne.Do(func() {
+		defer p.closeReadEnds()
 		p.stdin.Close()
 		for _, sig := range []string{"", "TERM", "KILL"} {
 			if sig != "" {
