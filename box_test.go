@@ -932,3 +932,44 @@ func TestBoxServeCheckout(t *testing.T) {
 		t.Errorf("rm: %v", err)
 	}
 }
+
+// A box behind the git guard has its repository read-only, so it has no
+// commits of its own: the box host refuses to pull from it, and pulls
+// from an unguarded box of the same project as before.
+func TestBoxPullRefusedBehindTheGuard(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitAt(t, dir, "init", "--quiet", "-b", "main")
+	gitAt(t, dir, "-c", "user.name=t", "-c", "user.email=t@e.invalid", "commit", "--quiet", "--allow-empty", "-m", "c")
+	for _, tc := range []struct {
+		name, guard, err string
+	}{
+		{name: "guarded", guard: "0123456789abcdef", err: "read-only"},
+		{name: "unguarded", guard: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &boxDocker{answers: map[string][]string{"ps": {"running\tspec\tbin\t" + tc.guard + "\n"}}}
+			c := &box.Client{Runner: d, StateDir: t.TempDir()}
+			res, err := boxAdmin(context.Background(), c, boxProject{dir: dir}, box.MethodPull, nil)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || !strings.Contains(err.Error(), "commit outside it") {
+					t.Fatalf("pull = %v, %v; want a refusal naming %q", res, err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b, ok := res.(box.Bundle); !ok || b.Head == "" {
+				t.Errorf("pull gave %#v", res)
+			}
+		})
+	}
+}

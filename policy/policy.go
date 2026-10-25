@@ -16,6 +16,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -25,6 +26,11 @@ import (
 const (
 	SourceUser    = "dax:config"
 	SourceProject = "dax:project"
+	// SourceBox is the rules a session's box.confine adds: a bare ask
+	// for each tool the box confines, which a confined call of it skips
+	// (agentpolicy's WithConfinement), so the tool asks only when the
+	// call is not confined.
+	SourceBox = "dax:box"
 )
 
 // SourceExtension is the source of the rules the extension called name
@@ -50,6 +56,13 @@ type Settings struct {
 	// User and Project are the user's config's rules and the project's.
 	User    Rules
 	Project Rules
+	// Box are the tools a session's box.confine takes as confined, each
+	// a bare ask of source SourceBox: dax-coding's bash, write and edit
+	// by name, and an MCP unit's tools as mcp__<unit>__*, the one glob
+	// it takes, since a unit's tools are listed only once it connects.
+	// What it names asks as the default would, unless the call is
+	// confined.
+	Box []string
 }
 
 // Rules are rule lists in the policy grammar, one string per entry.
@@ -159,6 +172,16 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		}
 		sets = append(sets, set)
 	}
+	if len(s.Box) > 0 {
+		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBox, Trusted: true, Rank: rankExtension}}
+		for _, name := range s.Box {
+			if !boxTool(name) {
+				return agentpolicy.Policy{}, fmt.Errorf("policy box: %q: want bash, write, edit or mcp__<unit>__*", name)
+			}
+			set.Ask = append(set.Ask, agentpolicy.Rule{Tool: name})
+		}
+		sets = append(sets, set)
+	}
 	p, err := agentpolicy.Merge(sets...)
 	if err != nil {
 		return agentpolicy.Policy{}, err
@@ -173,6 +196,24 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 	}
 	return p, nil
 }
+
+// boxTool reports whether name is one SourceBox may name: a file tool
+// or the shell by name, or every tool of one MCP unit, whose name is
+// letters, digits and dashes (box.UnitName's).
+func boxTool(name string) bool {
+	switch name {
+	case "bash", "write", "edit":
+		return true
+	}
+	unit, ok := strings.CutPrefix(name, "mcp__")
+	if !ok {
+		return false
+	}
+	unit, ok = strings.CutSuffix(unit, "__*")
+	return ok && boxUnit.MatchString(unit)
+}
+
+var boxUnit = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // owned refuses a shipped rule that reaches past its extension: one
 // naming a tool or alias the extension does not own, a tool pattern,
