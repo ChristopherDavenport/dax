@@ -3,8 +3,9 @@ package box
 // This file is the box host's relay: the session's executor protocol
 // passed through to the executor in the box, a message at a time, but
 // for the first, which says which box to make, the handshake's answers,
-// which gain what the box host resolved, and the process methods of the
-// session's MCP units' servers, which the box host answers itself.
+// which gain what the box host resolved, and the session's MCP units,
+// which the box host offers as the workspace's servers and answers for
+// itself: their listing, their start and their process methods.
 
 import (
 	"bufio"
@@ -17,6 +18,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
 // Child is the executor the relay passes the session through to: its
@@ -93,9 +96,10 @@ const clientCapabilitiesMeta = "io.modelcontextprotocol/clientCapabilities"
 // a time, between in and the executor and the executor and out, as it
 // came, but for two kinds: the executor's answers to the handshake
 // (initialize and server/discover, each try) gain the box host's Info
-// under key, as "box"; and a process method for a unit's server (an
-// agentworkspace/process.start of ["dax-unit", NAME], and every later
-// method on the id it gave) is the box host's, answered here, never sent on. A
+// under key, as "box"; and the servers the session's workspace offers
+// are its units, the box host's: agentworkspace/servers.list, a
+// servers.start of a unit's name and every process method on the id it
+// gave are answered here, never sent on. A
 // box start refuses is the first message's JSON-RPC error, with the
 // reason, and so is every request after it until in ends (a client
 // whose discover is refused tries initialize next, and must read why
@@ -269,7 +273,8 @@ func (rl *relay) fromSession(br *bufio.Reader, stdin io.Writer) {
 }
 
 // own reports whether line is the box host's to answer, and answers it
-// if so: a process method of a unit's server, or the cancelling of one.
+// if so: the servers the session's workspace offers, a process method of
+// a unit's server, or the cancelling of one.
 // It notes a handshake's try on the way.
 func (rl *relay) own(line []byte) bool {
 	if !bytes.Contains(line, []byte(`"method"`)) {
@@ -306,23 +311,27 @@ func (rl *relay) own(line []byte) bool {
 		}
 		cancel()
 		return true
-	case !strings.HasPrefix(m.Method, methodPrefix) || len(m.ID) == 0:
-		return false
-	case m.Method == methodStart:
-		var p struct {
-			Args []string `json:"args"`
+	case m.Method == wire.MethodServersList && len(m.ID) > 0:
+		// The session's workspace offers its units, and nothing else:
+		// the box's executor is not asked.
+		list := wire.ServerList{Servers: []wire.ServerInfo{}}
+		for _, u := range rl.units {
+			list.Servers = append(list.Servers, wire.ServerInfo{Name: u})
 		}
-		if json.Unmarshal(m.Params, &p) != nil || len(p.Args) == 0 || p.Args[0] != UnitCommand {
-			return false
-		}
-		if len(p.Args) != 2 || !slices.Contains(rl.units, p.Args[1]) {
+		rl.answer(m.ID, list, nil)
+		return true
+	case m.Method == wire.MethodServersStart && len(m.ID) > 0:
+		var p wire.ServerStartArgs
+		if json.Unmarshal(m.Params, &p) != nil || !slices.Contains(rl.units, p.Name) {
 			have := "none"
 			if len(rl.units) > 0 {
 				have = strings.Join(rl.units, ", ")
 			}
-			rl.answer(m.ID, nil, fmt.Errorf("%s %s: not one of this session's units (%s)", UnitCommand, strings.Join(p.Args[1:], " "), have))
+			refuseCode(rl, m.ID, wire.CodeNoServer, fmt.Errorf("server %q: not one of this session's units (%s)", p.Name, have))
 			return true
 		}
+	case !strings.HasPrefix(m.Method, methodPrefix) || len(m.ID) == 0:
+		return false
 	default:
 		var p struct {
 			ID string `json:"id"`
@@ -511,6 +520,11 @@ func (p plainWriter) write(b []byte) error {
 // refuse answers the request id with err as a JSON-RPC error, so the
 // session reads why rather than a closed pipe.
 func refuse(out lineWriter, id json.RawMessage, err error) {
+	refuseCode(out, id, -32603, err)
+}
+
+// refuseCode is refuse with the JSON-RPC error code code.
+func refuseCode(out lineWriter, id json.RawMessage, code int, err error) {
 	if len(id) == 0 {
 		return
 	}
@@ -524,7 +538,7 @@ func refuse(out lineWriter, id json.RawMessage, err error) {
 	}{JSONRPC: "2.0", ID: id, Error: struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
-	}{Code: -32603, Message: err.Error()}})
+	}{Code: code, Message: err.Error()}})
 	if merr != nil {
 		return
 	}

@@ -318,7 +318,8 @@ Settings come from three layers, each overriding the one before:
   "memory_dir": "~/.dax/memory",
   "pricing_file": "~/.config/dax/prices.json",
   "mcp_servers": {
-    "fs": { "command": "mcp-server-filesystem /home/me/notes" }
+    "fs": { "command": "mcp-server-filesystem /home/me/notes", "in": "host" },
+    "gh": { "url": "https://api.githubcopilot.com/mcp/", "token_env": "GITHUB_TOKEN" }
   },
   "policy": {
     "builtin": true,
@@ -355,7 +356,7 @@ names the file and the field.
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
-| `mcp_servers` | stdio MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`; `command` is split as `executor`'s string is |
+| `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp` |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
@@ -373,11 +374,24 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `mcp_servers`, `executor` or `peers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor` or `peers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
 keys somewhere; a repository does not get to make them.)
+
+The one exception is `mcp_servers`: a project may name the servers its
+work needs, but they start only once you have trusted that exact set
+for that project. Run `dax -trust-mcp` after reading them in the
+project's `.dax/config.json`: it starts them and records the trust in
+`~/.dax/mcp-trust.json`, keyed by the project's workspace (as `-list`
+names it) and a hash of the set, so later sessions start them without
+the flag. A set that changes in any way, a command, a URL, a placement
+or a server more, is untrusted again; until it is trusted, dax starts
+your own servers, says which of the project's it left out, and starts
+none of them. A project's server may not name a `token_env` (it would
+send your credential where the repository says) or take a name your
+config gives a server.
 
 | flag | |
 |---|---|
@@ -401,6 +415,7 @@ keys somewhere; a repository does not get to make them.)
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
+| `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
 | `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
 
@@ -619,12 +634,14 @@ claim fails, a reading takes longer than 30 seconds, the executor is
 gone) the call is blocked, never allowed. The banner and the record name
 the executor's workspace, and the model is told its root.
 
-The MCP servers run in the sandbox too: every one in your config's
-`mcp_servers`, `-mcp` and `/mcp add` starts in `dax execute`, at its
-root and with the environment its commands get, never on this machine.
-Which servers start is yours alone to say: the executor keeps no list
-and reads no config, and a project's `.dax/config.json` may not name
-one. Their tools are `mcp__<name>__<tool>` as anywhere, decided here by
+The MCP servers run in the sandbox too: every command in your config's
+`mcp_servers` (but those with `"in": "host"`), `-mcp` and `/mcp add`
+starts in `dax execute`, at its root and with the environment its
+commands get, never on this machine. A server with `"in": "host"` or a
+`url` is called independently of the sandbox, from this machine.
+Which servers start is said here: the executor keeps no list and reads
+no config, a box host offers its units, and a project's
+`.dax/config.json` names servers only you have trusted (`-trust-mcp`). Their tools are `mcp__<name>__<tool>` as anywhere, decided here by
 name under your rules (they ask by default; an MCP server's tools make
 no claim of what they would touch), and recorded here. Their standard
 error comes back cleaned, and `/mcp remove`, the session's end or the

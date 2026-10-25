@@ -675,11 +675,11 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 	}
 }
 
-// A unit's server, through the box host: the handshake's answer names
-// the session's units, and an agentworkspace/process.start of ["dax-unit", NAME]
-// makes the unit's container (a fake docker) and runs the server in it
-// (a stand-in docker that runs it here), answered by the box host, the
-// executor never asked.
+// A unit's server, through the box host: the box host offers the
+// session's units as the workspace's servers, and an
+// agentworkspace/servers.start of one's name makes the unit's container
+// (a fake docker) and runs the server in it (a stand-in docker that
+// runs it here), answered by the box host, the executor never asked.
 func TestBoxServeUnit(t *testing.T) {
 	home(t)
 	dir := t.TempDir()
@@ -737,7 +737,11 @@ func TestBoxServeUnit(t *testing.T) {
 	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"`+executor.CapabilityKey+`":{"box":{}}}}}}`+"\n")
 	// The fake executor answers the initialize when its input ends; the
 	// box host's own answers come first.
-	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"agentworkspace/process.start","params":{"args":["dax-unit","echo"]}}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":5,"method":"agentworkspace/servers.list","params":{}}`+"\n")
+	if got := next(); !strings.Contains(got, `"servers":[{"name":"echo"}]`) {
+		t.Fatalf("servers.list answered %s", got)
+	}
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"agentworkspace/servers.start","params":{"name":"echo"}}`+"\n")
 	got := next()
 	if !strings.Contains(got, `"id":"unit-1"`) {
 		t.Fatalf("start answered %s", got)
@@ -757,8 +761,8 @@ func TestBoxServeUnit(t *testing.T) {
 	if err := <-served; err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(child.got.String(), "dax-unit") {
-		t.Errorf("the executor was sent the unit's start: %s", child.got.String())
+	if strings.Contains(child.got.String(), "servers.") {
+		t.Errorf("the executor was sent the box host's servers methods: %s", child.got.String())
 	}
 	if !slices.ContainsFunc(d.calls, func(c []string) bool {
 		return c[0] == "run" && slices.Contains(c, "dax.box.of="+b.Name) && containsRun(c, []string{"-v", dir + ":" + dir + ":ro"})

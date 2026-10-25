@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -221,12 +221,8 @@ func (e *Executor) String() string {
 	}
 	if raw := e.r.Box(); len(raw) > 0 && json.Unmarshal(raw, &info) == nil && info.Profile != "" {
 		line += " · profile " + info.Profile
-		if units, err := unitServersOf(raw); err == nil && len(units) > 0 {
-			names := make([]string, len(units))
-			for i, u := range units {
-				names[i] = u.Name
-			}
-			line += ", units " + strings.Join(names, ", ")
+		if units := boxUnits(raw); len(units) > 0 {
+			line += ", units " + strings.Join(units, ", ")
 		}
 		// A checkout the box host keeps: its repository and the head the
 		// session starts on.
@@ -257,7 +253,10 @@ type executorView struct {
 	r    *executor.Remote
 }
 
-var _ workspace.Starter = (*executorView)(nil)
+var (
+	_ workspace.Starter        = (*executorView)(nil)
+	_ workspace.ServerProvider = (*executorView)(nil)
+)
 
 func (v *executorView) Root() string                     { return v.d.Root }
 func (v *executorView) FS() fs.FS                        { return v.fsys }
@@ -283,6 +282,18 @@ func (v *executorView) Start(ctx context.Context, cmd workspace.Command) (worksp
 	return v.r.Start(ctx, cmd)
 }
 
+// Servers lists the MCP servers the executor's workspace offers: a box
+// host's units for the session, or none.
+func (v *executorView) Servers(ctx context.Context) ([]workspace.Server, error) {
+	return v.r.Servers(ctx)
+}
+
+// StartServer starts one of them in the executor, or wherever its
+// workspace runs it (a unit's container), over the connection.
+func (v *executorView) StartServer(ctx context.Context, name string, stderr io.Writer) (workspace.Process, error) {
+	return v.r.StartServer(ctx, name, stderr)
+}
+
 // keepOpen is an executor the session runs its tools through and does
 // not close: the caller's Executor, which reads a model response's
 // facts in one request (executor.Batcher).
@@ -304,62 +315,34 @@ func (e *Executor) runs(exts []extension.Extension) error {
 	return nil
 }
 
-// unitServers are the session's MCP units, as the box host in front of
-// the executor resolved them (unitServersOf). None without a box host.
-func (e *Executor) unitServers() ([]MCPServer, error) {
-	return unitServersOf(e.r.Box())
-}
-
-// unitServersOf is each MCP unit in raw, what a box host resolved, as
-// an MCP server named after its unit, whose command, `dax-unit NAME`,
-// the box host answers by starting the unit's server in the unit's
-// container.
-func unitServersOf(raw json.RawMessage) ([]MCPServer, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
+// boxUnits names the MCP units in raw, what a box host resolved, for
+// the banner; the servers themselves are what the box host offers
+// (executorView.Servers).
+func boxUnits(raw json.RawMessage) []string {
 	var info struct {
 		Units []struct {
 			Name string `json:"name"`
 			Kind string `json:"kind"`
 		} `json:"units"`
 	}
-	if err := json.Unmarshal(raw, &info); err != nil {
-		return nil, fmt.Errorf("executor: the box host's units: %w", err)
+	if len(raw) == 0 || json.Unmarshal(raw, &info) != nil {
+		return nil
 	}
-	var out []MCPServer
+	var out []string
 	for _, u := range info.Units {
-		if u.Kind != "mcp" {
-			continue
-		}
-		if !unitName.MatchString(u.Name) {
-			return nil, fmt.Errorf("executor: the box host's unit %q: not a unit's name", u.Name)
-		}
-		out = append(out, MCPServer{Name: u.Name, Command: "dax-unit " + u.Name})
-	}
-	return out, nil
-}
-
-// withUnits is servers, the session's own MCP servers, and the box
-// host's units after them; a unit whose name a server of the session's
-// has is refused, since the tools' names would be one.
-func withUnits(servers, units []MCPServer) ([]MCPServer, error) {
-	for _, u := range units {
-		if slices.ContainsFunc(servers, func(m MCPServer) bool { return collidesWithUnit(m.Name, u.Name) }) {
-			return nil, fmt.Errorf("mcp %s: a server your config names and a unit of the box host's have the name; rename the server", u.Name)
+		if u.Kind == "mcp" {
+			out = append(out, u.Name)
 		}
 	}
-	return append(slices.Clone(servers), units...), nil
+	return out
 }
 
-// collidesWithUnit reports whether a server called name would offer
-// tools named as the unit's are, mcp__<unit>__<tool>: name is the unit's,
-// or the unit's and one underscore, whose tools mcp__<unit>___<tool>
-// start as the unit's do. A unit's name has no underscore, and no
-// server's has a double one, so no other name does.
-func collidesWithUnit(name, unit string) bool {
-	return name == unit || name == unit+"_"
+// collidesWithOffered reports whether a server called name would offer
+// tools named as the offered server's are, mcp__<offered>__<tool>: name
+// is the offered server's, or it and one underscore, whose tools
+// mcp__<offered>___<tool> start as its do. An offered server's name has
+// no underscore (workspace.ValidServerName), and no configured server's
+// has a double one, so no other name does.
+func collidesWithOffered(name, offered string) bool {
+	return name == offered || name == offered+"_"
 }
-
-// unitName is what a box host's unit may be called (internal/box).
-var unitName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)

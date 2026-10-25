@@ -83,6 +83,11 @@ type capability struct {
 	// process methods); nil from an executor older than the field or
 	// whose workspace cannot.
 	Start *wire.Bounds `json:"start,omitempty"`
+	// Servers says the executor's workspace offers MCP servers of its
+	// own (workspace.ServerProvider), which the server methods list and
+	// start; false from an executor older than the field. A box host in
+	// front of the executor offers its units whatever this says.
+	Servers bool `json:"servers,omitempty"`
 	// MaxReadBytes is the most bytes of a file the session's tools
 	// read; zero from an executor older than the field, whose tools
 	// read what its own -max-read-bytes says.
@@ -304,6 +309,7 @@ func (s *Server) build(maxRead int64) (*inProcess, capability, error) {
 	if _, ok := env.Workspace.(workspace.Starter); ok {
 		b := wire.DefaultBounds()
 		c.Start = &b
+		_, c.Servers = env.Workspace.(workspace.ServerProvider)
 	}
 	return x, c, nil
 }

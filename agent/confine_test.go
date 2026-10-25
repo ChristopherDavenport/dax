@@ -10,6 +10,7 @@ import (
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -75,19 +76,19 @@ const confineBoxJSON = `{"profile":"default","units":[
 func confineSession(t *testing.T, raw string, mode string, edit func(*policy.Settings)) *Session {
 	t.Helper()
 	ctx := context.Background()
-	// The units' servers start as `dax-unit NAME` in the executor, which
-	// a box host would answer; here a program of that name on the box's
-	// PATH serves the test binary's own MCP server.
-	bin := t.TempDir()
+	// The units' servers are what the box offers (servers.list and
+	// servers.start, which a box host answers); here the box's workspace
+	// offers each MCP unit as the test binary's own MCP server.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "dax-unit"), []byte("#!/bin/sh\nDAX_TEST_MCP_SERVER=1 exec '"+self+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
+	var offered []workspace.OfferedServer
+	for _, u := range boxUnits(json.RawMessage(raw)) {
+		offered = append(offered, workspace.OfferedServer{Server: workspace.Server{Name: u},
+			Command: workspace.Command{Args: []string{self}, Env: []string{"DAX_TEST_MCP_SERVER=1"}}})
 	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	b := newRemoteBox(t)
+	b := newRemoteBoxOffering(t, offered)
 	for _, d := range []string{"src", ".git/hooks", ".github/workflows"} {
 		if err := os.MkdirAll(filepath.Join(b.dir, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -282,12 +283,12 @@ func TestBoxConfineReasons(t *testing.T) {
 func TestAServerCannotTakeAUnitsName(t *testing.T) {
 	s := confineSession(t, confineBoxJSON, config.ConfineUnits, nil)
 	for _, name := range []string{"files", "files_"} {
-		if _, err := s.AddMCP(context.Background(), name, "server"); err == nil || !strings.Contains(err.Error(), "unit files") {
+		if _, err := s.AddMCP(context.Background(), name, "server"); err == nil || !strings.Contains(err.Error(), "server files") {
 			t.Errorf("/mcp add %s: %v", name, err)
 		}
 	}
-	if !collidesWithUnit("files_", "files") || collidesWithUnit("files-x", "files") || collidesWithUnit("file", "files") {
-		t.Error("collidesWithUnit")
+	if !collidesWithOffered("files_", "files") || collidesWithOffered("files-x", "files") || collidesWithOffered("file", "files") {
+		t.Error("collidesWithOffered")
 	}
 }
 

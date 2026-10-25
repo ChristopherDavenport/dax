@@ -389,9 +389,9 @@ func TestTheProjectConfigIsReadThroughTheExecutor(t *testing.T) {
 		{"it may not name an executor", func(t *testing.T) {
 			write(t, file, `{"executor":{"command":"ssh elsewhere dax execute"}}`)
 		}, "", box + "/.dax/config.json: executor: a project file may only tighten"},
-		{"it may not name an MCP server", func(t *testing.T) {
-			write(t, file, `{"mcp_servers":{"x":{"command":"touch started"}}}`)
-		}, "", "mcp_servers: a project file may only tighten"},
+		{"it may not name an MCP server's token", func(t *testing.T) {
+			write(t, file, `{"mcp_servers":{"x":{"url":"https://x.example/mcp","token_env":"GITHUB_TOKEN"}}}`)
+		}, "", "mcp_servers.x: token_env: a project file may not name a token"},
 		{"it may not allow", func(t *testing.T) { write(t, file, `{"policy":{"allow":["bash"]}}`) }, "", "may not allow anything"},
 		{"a link out of the executor's workspace", func(t *testing.T) {
 			must(t, os.Symlink(filepath.Join(outside, "config.json"), file))

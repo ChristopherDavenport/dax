@@ -47,6 +47,10 @@ var closeGrace = 2 * time.Second
 // in its container, which Signal kills by.
 const pidPrefix = "dax-unit-pid "
 
+// wrapperName is the wrapper's $0, the name its shell goes by in the
+// unit's container.
+const wrapperName = "dax-unit"
+
 // StartProc starts command in the MCP unit's container, with standard
 // error kept when stderr: `docker exec -i <container> sh -c 'echo
 // pid; exec "$@"' dax-unit <command>`, so that its id in the container,
@@ -60,7 +64,7 @@ func (c *Client) StartProc(ctx context.Context, container string, command []stri
 	if docker == "" {
 		docker = "docker"
 	}
-	args := append([]string{"exec", "-i", container, "sh", "-c", `echo "` + pidPrefix + `$$"; exec "$@"`, UnitCommand}, command...)
+	args := append([]string{"exec", "-i", container, "sh", "-c", `echo "` + pidPrefix + `$$"; exec "$@"`, wrapperName}, command...)
 	cmd := exec.Command(docker, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

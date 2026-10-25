@@ -127,6 +127,10 @@ type conn struct {
 	server sdk.Implementation
 	byName map[string]agenttool.Tool
 	start  *wire.Bounds // nil when the executor starts no process
+	// servers says the executor's workspace offers MCP servers: its
+	// capability says so, or a box host in front of it answers for its
+	// units.
+	servers bool
 	// procs is the context of every request about a process that
 	// waits on it (a read, a wait), ended before the connection
 	// closes, which would otherwise wait for them; its cause says why.
@@ -295,7 +299,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	for _, t := range c.Tools() {
 		listed[t.Name()] = t
 	}
-	cn := &conn{c: c, server: server, byName: map[string]agenttool.Tool{}, start: cp.Start}
+	cn := &conn{c: c, server: server, byName: map[string]agenttool.Tool{}, start: cp.Start, servers: cp.Servers || len(cp.Box) > 0}
 	sh := shape{
 		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Root: cp.Descriptor.Root},
 		extensions: slices.Clone(cp.Extensions),

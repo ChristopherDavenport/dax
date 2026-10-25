@@ -124,6 +124,7 @@ func run(ctx context.Context, args []string, p program) error {
 	agentsMDGlobal := fs.String("agents-md-global", "", "your own instruction files for every session, separated by "+string(filepath.ListSeparator)+" as in PATH; overrides agents_md_global, \"\" clears it")
 	skillsFlag := fs.Bool("skills", true, "offer the skills in .dax/skills, ~/.dax/skills and the config's skills_dirs through the skill tool")
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
+	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
@@ -428,8 +429,12 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.Instructions = string(data)
 	}
 	for _, s := range settings.MCP {
-		opts.MCP = append(opts.MCP, agent.MCPServer{Name: s.Name, Command: s.Command})
+		opts.MCP = append(opts.MCP, agent.MCPServer{
+			Name: s.Name, Command: s.Command, Host: s.In == config.MCPInHost,
+			URL: s.URL, TokenEnv: s.TokenEnv, Project: s.Project,
+		})
 	}
+	opts.TrustMCP = *trustMCP
 	if *mcp != "" {
 		opts.MCP = append(opts.MCP, agent.MCPServer{Name: "cli", Command: *mcp})
 	}

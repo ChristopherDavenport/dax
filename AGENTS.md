@@ -85,10 +85,15 @@ before changing the shape.
   answers (anyone else's form is cancelled).
 - `agent`: one `agentkit.New` per session; the two-phase build of the
   extensions and their checks (`agent/extension.go`), the policy built
-  from them, the sub-agents' policy hook, the MCP servers it starts, in
-  the workspace or here, each started again by the next call after it
-  ends, with a warning and a `dax.mcp.restart` entry (`mcpStart`), and
-  the session-store helpers. It names no tool. `agent/identity.go`: the project's
+  from them, the sub-agents' policy hook, the MCP servers it connects,
+  each started again by the next call after it ends, with a warning and
+  a `dax.mcp.restart` entry (`mcpStart`): a command's in the workspace
+  or here, one placed on the host, one at a URL (`agent/mcpurl.go`, its
+  token held to the URL's origin), and those the workspace offers of
+  its own (`workspace.ServerProvider`, a box host's units); a project's
+  only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
+  `~/.dax/mcp-trust.json`); and the session-store helpers. It names
+  no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
   session's header, and the listings by it (`List`, `ListExecutor`).
   `agent/confine.go`: `box.confine`, the session's claim that a box's
@@ -194,8 +199,10 @@ before changing the shape.
   values from its server's output, in every JSON spelling, before the
   box host passes any of it on; `relay.go`, the box host's relay, which reads
   the session's handshake, passes the rest through a message at a
-  time, adds what it resolved to the handshake's answer, and answers a
-  unit's process methods itself, or, for a first message of the box
+  time, adds what it resolved to the handshake's answer, and offers the
+  session's units as the workspace's own servers
+  (`agentworkspace/servers.list` and `servers.start`) and answers their
+  process methods itself, or, for a first message of the box
   host's own (`dax/box.status|down|pull`), answers that and returns;
   `checkout.go`, a repository's URL as checkouts match it, the box
   host's checkout of it, cloned and moved on only when nothing would be
@@ -253,7 +260,10 @@ an `Unreleased` changelog line:
   subset, package tool's unexported `safeWords` and `readOnlyArgs`;
   widening either needs a test with the review's exploit strings
   (ext/coding/exploit_test.go) and a reason.
-- A project config field is refused unless it can only tighten.
+- A project config field is refused unless it can only tighten. The one
+  exception is `mcp_servers`: a project's servers start only once the
+  user trusts that project's exact set (`-trust-mcp`), and a project's
+  server may name no `token_env` and no name the user's config gives.
 - Tools, dax's and any extension's, act through `tool.Files` over the
   session's `workspace.Workspace` (`ReadFile`, `WriteFile`, `Update`,
   `Stat`, `ReadDir`) and its `Exec`; never `os` or `os/exec` on a

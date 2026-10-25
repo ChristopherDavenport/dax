@@ -1,11 +1,11 @@
 package box
 
 // This file is the box host's own processes: the servers of a session's
-// MCP units, started by an agentworkspace/process.start of ["dax-unit",
-// NAME] and answered here with the semantics agentworkspace's
-// mcpworkspace gives the executor's (the methods, their parameters and
-// results, the bounds: package wire), under ids the executor's cannot
-// be.
+// MCP units, which the box host offers as the session's workspace's
+// servers, started by an agentworkspace/servers.start of a unit's name
+// and answered here with the semantics agentworkspace's mcpworkspace
+// gives the executor's (the methods, their parameters and results, the
+// bounds: package wire), under ids the executor's cannot be.
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
@@ -134,11 +133,6 @@ func (hp *hostProc) result() map[string]any {
 
 // The methods' parameters, as the executor takes them.
 type (
-	hostStartParams struct {
-		Args      []string `json:"args"`
-		TimeoutMs int64    `json:"timeoutMs,omitempty"`
-		Stderr    bool     `json:"stderr,omitempty"`
-	}
 	hostIDParams struct {
 		ID string `json:"id"`
 	}
@@ -161,12 +155,12 @@ type (
 // start of one) and gives its result, or an error.
 func (t *hostProcs) serve(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	switch method {
-	case methodStart:
-		var p hostStartParams
+	case wire.MethodServersStart:
+		var p wire.ServerStartArgs
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return t.startProc(p)
+		return t.startProc(p.Name, p.Stderr)
 	}
 	var id hostIDParams
 	if err := json.Unmarshal(params, &id); err != nil {
@@ -277,12 +271,9 @@ func (t *hostProcs) lookup(id string) (*hostProc, error) {
 	return nil, fmt.Errorf("process %q: no such process in this session", id)
 }
 
-func (t *hostProcs) startProc(p hostStartParams) (any, error) {
-	if len(p.Args) != 2 || p.Args[0] != UnitCommand {
-		return nil, fmt.Errorf("%s takes one unit's name", UnitCommand)
-	}
-	if p.TimeoutMs < 0 {
-		return nil, errors.New("a negative timeout")
+func (t *hostProcs) startProc(unit string, stderr bool) (any, error) {
+	if unit == "" {
+		return nil, errors.New("no unit's name")
 	}
 	t.mu.Lock()
 	switch {
@@ -294,14 +285,14 @@ func (t *hostProcs) startProc(p hostStartParams) (any, error) {
 		return nil, fmt.Errorf("%d unit processes are open in this session, the most there may be; close one first", hostMaxProcesses)
 	}
 	t.mu.Unlock()
-	proc, err := t.start(t.ctx, p.Args[1], p.Stderr)
+	proc, err := t.start(t.ctx, unit, stderr)
 	if err != nil {
 		return nil, err
 	}
 	hp := &hostProc{p: proc, stdout: newOutBuf(), gone: make(chan struct{}), exited: make(chan struct{})}
 	go hp.stdout.fill(proc.Stdout(), hp.gone)
 	var stderrDone chan struct{}
-	if r := proc.Stderr(); r != nil && p.Stderr {
+	if r := proc.Stderr(); r != nil && stderr {
 		hp.stderr = newOutBuf()
 		stderrDone = make(chan struct{})
 		go func() {
@@ -318,16 +309,6 @@ func (t *hostProcs) startProc(p hostStartParams) (any, error) {
 		hp.status, hp.err = status, err
 		close(hp.exited)
 	}()
-	if p.TimeoutMs > 0 {
-		timer := time.AfterFunc(time.Duration(p.TimeoutMs)*time.Millisecond, func() {
-			hp.setEnded(wire.EndedTimeout)
-			hp.close()
-		})
-		go func() {
-			<-hp.exited
-			timer.Stop()
-		}()
-	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {

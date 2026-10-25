@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -99,8 +100,10 @@ type Config struct {
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
 	MemoryDir *string `json:"memory_dir,omitempty"`
-	// MCPServers are stdio MCP servers, by name; the name is the
-	// prefix of their tools, mcp__<name>__<tool>.
+	// MCPServers are MCP servers, by name; the name is the prefix of
+	// their tools, mcp__<name>__<tool>. A project's file may name them,
+	// but they start only once the user trusts the project's set
+	// (-trust-mcp).
 	MCPServers map[string]MCPServer `json:"mcp_servers,omitempty"`
 	// MaxReadBytes is the most bytes of a file the read tool scans and
 	// the edit tool will rewrite; default 2 MiB.
@@ -342,12 +345,31 @@ func (c Command) Line() string {
 	return c.line
 }
 
-// MCPServer is how to start one MCP server.
+// MCPServer is how to reach one MCP server: a command started in the
+// workspace or on this machine, or a URL. Exactly one of Command and
+// URL is given.
 type MCPServer struct {
-	// Command is the command line, split as a shell splits words, with
-	// nothing expanded (cmdline.Split).
-	Command string `json:"command"`
+	// Command is the command line of a stdio server, split as a shell
+	// splits words, with nothing expanded (cmdline.Split).
+	Command string `json:"command,omitempty"`
+	// In says where Command runs: MCPInWorkspace (the default), in the
+	// workspace when it can start a process and here when it cannot,
+	// with an executor in the executor or not at all; or MCPInHost, on
+	// this machine whatever the workspace.
+	In string `json:"in,omitempty"`
+	// URL is a streamable HTTP server called from this machine: https,
+	// or http to a loopback host.
+	URL string `json:"url,omitempty"`
+	// TokenEnv names the variable holding the bearer token sent to URL's
+	// origin only; empty sends none. Refused in a project's file.
+	TokenEnv string `json:"token_env,omitempty"`
 }
+
+// Where a command server runs (MCPServer.In).
+const (
+	MCPInWorkspace = "workspace"
+	MCPInHost      = "host"
+)
 
 // Policy holds the rules of the policy layer. A rule is a tool name,
 // or a name with a specifier: "read", "bash(go test:*)", "write(docs/**)".
@@ -512,7 +534,6 @@ func (l *Layer) validate() error {
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
-			{"mcp_servers", len(c.MCPServers) > 0},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
 			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"peers", len(c.Peers) > 0},
 		} {
@@ -566,11 +587,8 @@ func (l *Layer) validate() error {
 		if err := CheckMCPName(name); err != nil {
 			return fmt.Errorf("mcp_servers: %w", err)
 		}
-		if strings.TrimSpace(s.Command) == "" {
-			return fmt.Errorf("mcp_servers.%s: command is required", name)
-		}
-		if _, err := cmdline.Split(s.Command); err != nil {
-			return fmt.Errorf("mcp_servers.%s: command: %w", name, err)
+		if err := s.check(name, l.Project); err != nil {
+			return err
 		}
 	}
 	if p := c.Policy; p != nil {
@@ -656,6 +674,76 @@ func checkExecutorURL(field, s string) error {
 		return fmt.Errorf("%s %q: a query or fragment; give the executor's address alone", field, s)
 	}
 	return nil
+}
+
+// check reports whether s can be reached, as the server called name in
+// a project's file when project.
+func (s MCPServer) check(name string, project bool) error {
+	command, url := strings.TrimSpace(s.Command) != "", s.URL != ""
+	switch {
+	case command && url:
+		return fmt.Errorf("mcp_servers.%s: give command or url, not both", name)
+	case !command && !url:
+		return fmt.Errorf("mcp_servers.%s: command or url is required", name)
+	}
+	if command {
+		if _, err := cmdline.Split(s.Command); err != nil {
+			return fmt.Errorf("mcp_servers.%s: command: %w", name, err)
+		}
+		switch s.In {
+		case "", MCPInWorkspace, MCPInHost:
+		default:
+			return fmt.Errorf("mcp_servers.%s: in %q: want %s or %s", name, s.In, MCPInWorkspace, MCPInHost)
+		}
+		if s.TokenEnv != "" {
+			return fmt.Errorf("mcp_servers.%s: token_env is for a url; a command's server gets its environment", name)
+		}
+		return nil
+	}
+	if s.In != "" {
+		return fmt.Errorf("mcp_servers.%s: in is for a command; a url is called from this machine", name)
+	}
+	if err := checkMCPURL(s.URL); err != nil {
+		return fmt.Errorf("mcp_servers.%s: url: %w", name, err)
+	}
+	if s.TokenEnv != "" {
+		if project {
+			return fmt.Errorf("mcp_servers.%s: token_env: a project file may not name a token, which would send your credential where the repository says; put the server in your own config (%s)", name, Path())
+		}
+		if !envName.MatchString(s.TokenEnv) {
+			return fmt.Errorf("mcp_servers.%s: token_env: %q is not a variable name", name, s.TokenEnv)
+		}
+	}
+	return nil
+}
+
+// checkMCPURL refuses a URL a server's requests, and a token, should
+// not go to: one that is not https, unless it is http to this machine,
+// and one carrying credentials or a fragment.
+func checkMCPURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return fmt.Errorf("%q: want an https:// URL", s)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%q carries credentials; name the variable that holds the token in token_env", u.Redacted())
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("%q: a fragment; give the server's endpoint", s)
+	}
+	if u.Scheme == "http" && !loopbackHost(u.Hostname()) {
+		return fmt.Errorf("%q: http only to a loopback host, since its requests would cross the network in the clear", s)
+	}
+	return nil
+}
+
+// loopbackHost reports whether host is this machine's.
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // checkExecutorEnv refuses a launcher's pass list that names something
@@ -1094,8 +1182,12 @@ type Settings struct {
 	Sources map[string]string
 }
 
-// MCP is one server to start.
-type MCP struct{ Name, Command string }
+// MCP is one server to reach, as MCPServer gives it, and whether a
+// project's file named it.
+type MCP struct {
+	Name, Command, In, URL, TokenEnv string
+	Project                          bool
+}
 
 // PolicySettings is the policy folded across layers; policy.Build
 // reads it.
@@ -1187,7 +1279,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			}
 		}
 		for n, m := range l.MCPServers {
-			servers[n] = MCP{Name: n, Command: m.Command}
+			if l.Project {
+				if had, ok := servers[n]; ok && !had.Project {
+					return Settings{}, fmt.Errorf("mcp_servers.%s: your config names a server %s, and so does the project's (%s); a project may not stand in for one of yours, so rename one", n, n, l.Path)
+				}
+			}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Project: l.Project}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer

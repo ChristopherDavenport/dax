@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"slices"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
 const testKey = "io.example/executor"
@@ -527,7 +530,13 @@ func TestRelayUnitProcess(t *testing.T) {
 	s.send(strings.TrimSuffix(initialize("1", nil), "\n"))
 	s.answer("1")
 
-	s.send(`{"jsonrpc":"2.0","id":10,"method":"agentworkspace/process.start","params":{"args":["dax-unit","files"],"stderr":true}}`)
+	// The session's workspace offers its units, and the box host says
+	// so itself.
+	s.send(`{"jsonrpc":"2.0","id":9,"method":"agentworkspace/servers.list","params":{}}`)
+	if r := resultOf(t, s.answer("9")); fmt.Sprint(r["servers"]) != "[map[name:files]]" {
+		t.Errorf("servers.list = %v, want the session's units", r)
+	}
+	s.send(`{"jsonrpc":"2.0","id":10,"method":"agentworkspace/servers.start","params":{"name":"files","stderr":true}}`)
 	id, _ := resultOf(t, s.answer("10"))["id"].(string)
 	if !strings.HasPrefix(id, hostIDPrefix) {
 		t.Fatalf("a unit's process id %q is not the box host's", id)
@@ -550,8 +559,8 @@ func TestRelayUnitProcess(t *testing.T) {
 	s.send(`{"jsonrpc":"2.0","id":15,"method":"agentworkspace/process.read","params":{"id":"` + id + `","fd":1}}`)
 	s.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":15}}`)
 	errorOf(t, s.answer("15"))
-	// A unit not this session's, and the reserved word misused.
-	s.send(`{"jsonrpc":"2.0","id":16,"method":"agentworkspace/process.start","params":{"args":["dax-unit","github"]}}`)
+	// A unit not this session's is refused as a server not offered.
+	s.send(`{"jsonrpc":"2.0","id":16,"method":"agentworkspace/servers.start","params":{"name":"github"}}`)
 	if msg := errorOf(t, s.answer("16")); !strings.Contains(msg, "not one of this session's units (files)") {
 		t.Errorf("another unit: %s", msg)
 	}
@@ -573,7 +582,7 @@ func TestRelayUnitProcess(t *testing.T) {
 		t.Errorf("a closed process: %s", msg)
 	}
 	// A second server, left running: the session's end ends it.
-	s.send(`{"jsonrpc":"2.0","id":23,"method":"agentworkspace/process.start","params":{"args":["dax-unit","files"]}}`)
+	s.send(`{"jsonrpc":"2.0","id":23,"method":"agentworkspace/servers.start","params":{"name":"files"}}`)
 	resultOf(t, s.answer("23"))
 	inW.Close()
 	select {
@@ -594,7 +603,7 @@ func TestRelayUnitProcess(t *testing.T) {
 		t.Errorf("the session's end left a unit's server running (%d started)", len(procs))
 	}
 	sent := child.sent()
-	for _, mine := range []string{`"id":10`, `"id":11`, `"id":12`, `"id":15`, `"id":16`, `"id":19`, `"id":21`, `"id":23`, `"requestId":15`, "dax-unit"} {
+	for _, mine := range []string{`"id":9`, `"id":10`, `"id":11`, `"id":12`, `"id":15`, `"id":16`, `"id":19`, `"id":21`, `"id":23`, `"requestId":15`, "servers."} {
 		if strings.Contains(sent, mine) {
 			t.Errorf("the executor was sent the box host's %s", mine)
 		}
@@ -611,13 +620,13 @@ func TestHostProcsBounds(t *testing.T) {
 	tbl := newHostProcs(func(context.Context, string, bool) (Proc, error) { return newFakeProc(false), nil })
 	defer tbl.close()
 	ctx := context.Background()
-	start := json.RawMessage(`{"args":["dax-unit","x"]}`)
+	start := json.RawMessage(`{"name":"x"}`)
 	for i := 0; i < hostMaxProcesses; i++ {
-		if _, err := tbl.serve(ctx, methodStart, start); err != nil {
+		if _, err := tbl.serve(ctx, wire.MethodServersStart, start); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := tbl.serve(ctx, methodStart, start); err == nil || !strings.Contains(err.Error(), "the most there may be") {
+	if _, err := tbl.serve(ctx, wire.MethodServersStart, start); err == nil || !strings.Contains(err.Error(), "the most there may be") {
 		t.Errorf("start past the bound: %v", err)
 	}
 	big := make([]byte, hostMaxWriteBytes+1)
@@ -625,35 +634,14 @@ func TestHostProcsBounds(t *testing.T) {
 	if _, err := tbl.serve(ctx, methodWrite, params); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Errorf("a write past the bound: %v", err)
 	}
-	for _, bad := range []string{`{"args":["dax-unit"]}`, `{"args":["sh"]}`, `{"args":["dax-unit","x"],"timeoutMs":-1}`} {
-		if _, err := tbl.serve(ctx, methodStart, json.RawMessage(bad)); err == nil {
+	for _, bad := range []string{`{}`, `{"name":""}`, `not json`} {
+		if _, err := tbl.serve(ctx, wire.MethodServersStart, json.RawMessage(bad)); err == nil {
 			t.Errorf("start %s was taken", bad)
 		}
 	}
 	if _, err := tbl.serve(ctx, methodSignal, json.RawMessage(`{"id":"unit-1","signal":"HUP"}`)); err == nil {
 		// fakeProc takes any name; the real one refuses HUP (unitproc).
 		_ = err
-	}
-}
-
-// A start's timeout ends the process, and its wait says so.
-func TestHostProcsTimeout(t *testing.T) {
-	tbl := newHostProcs(func(context.Context, string, bool) (Proc, error) { return newFakeProc(false), nil })
-	defer tbl.close()
-	ctx := context.Background()
-	res, err := tbl.serve(ctx, methodStart, json.RawMessage(`{"args":["dax-unit","x"],"timeoutMs":50}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := res.(map[string]any)["id"].(string)
-	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	r, err := tbl.serve(wctx, methodWait, json.RawMessage(`{"id":"`+id+`"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.(map[string]any)["ended"] != "timeout" {
-		t.Errorf("wait after the timeout = %v", r)
 	}
 }
 

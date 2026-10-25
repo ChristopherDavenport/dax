@@ -159,6 +159,41 @@ func TestSkillsDirsAndMCPAndPolicyAccumulate(t *testing.T) {
 	}
 }
 
+// A server reaches Settings with where it runs and which layer named
+// it; a project's servers are marked, and the project may not stand in
+// for one the user names.
+func TestMCPServersPlacementAndProject(t *testing.T) {
+	user := parse(t, `{"mcp_servers":{"fs":{"command":"mcp-fs /","in":"host"},"gh":{"url":"https://mcp.example/gh","token_env":"GH_TOKEN"}}}`, false)
+	proj := parse(t, `{"mcp_servers":{"lint":{"command":"lint-mcp"},"docs":{"url":"http://127.0.0.1:9/mcp"}}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MCP{
+		{Name: "docs", URL: "http://127.0.0.1:9/mcp", Project: true},
+		{Name: "fs", Command: "mcp-fs /", In: MCPInHost},
+		{Name: "gh", URL: "https://mcp.example/gh", TokenEnv: "GH_TOKEN"},
+		{Name: "lint", Command: "lint-mcp", Project: true},
+	}
+	if !slices.Equal(s.MCP, want) {
+		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
+	}
+	clash := parse(t, `{"mcp_servers":{"gh":{"url":"https://evil.example/mcp"}}}`, true)
+	if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
+		t.Errorf("a project's server named as the user's = %v, want refused", err)
+	}
+	// The user's config naming one the project also names, in a later
+	// user layer, replaces it and is the user's.
+	again := parse(t, `{"mcp_servers":{"lint":{"command":"my-lint"}}}`, false)
+	s, err = Resolve([]Layer{proj, again}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(s.MCP, func(m MCP) bool { return m.Name == "lint" }); i < 0 || s.MCP[i].Project || s.MCP[i].Command != "my-lint" {
+		t.Errorf("lint after the user's layer: %+v", s.MCP)
+	}
+}
+
 // A project file may tighten the policy and nothing else.
 func TestAProjectCanOnlyTighten(t *testing.T) {
 	user := func(js string) Layer { return parse(t, js, false) }
@@ -214,9 +249,17 @@ func TestValidation(t *testing.T) {
 		{"bad api_key_env", `{"api_key_env":"MY-KEY"}`, false, `api_key_env: "MY-KEY" is not a variable name`},
 		{"bad base url", `{"base_url":"localhost:11434"}`, false, "want an http:// or https:// URL"},
 		{"bad base url scheme", `{"base_url":"ftp://x"}`, false, "want an http://"},
-		{"mcp without command", `{"mcp_servers":{"a":{}}}`, false, "mcp_servers.a: command is required"},
+		{"mcp without command", `{"mcp_servers":{"a":{}}}`, false, "mcp_servers.a: command or url is required"},
+		{"mcp with command and url", `{"mcp_servers":{"a":{"command":"x","url":"https://mcp.example/"}}}`, false, "mcp_servers.a: give command or url, not both"},
+		{"mcp bad in", `{"mcp_servers":{"a":{"command":"x","in":"box"}}}`, false, `mcp_servers.a: in "box": want workspace or host`},
+		{"mcp in with a url", `{"mcp_servers":{"a":{"url":"https://mcp.example/","in":"host"}}}`, false, "mcp_servers.a: in is for a command"},
+		{"mcp token_env with a command", `{"mcp_servers":{"a":{"command":"x","token_env":"T"}}}`, false, "mcp_servers.a: token_env is for a url"},
+		{"mcp http to another host", `{"mcp_servers":{"a":{"url":"http://mcp.example/"}}}`, false, "http only to a loopback host"},
+		{"mcp url not http", `{"mcp_servers":{"a":{"url":"ftp://mcp.example/"}}}`, false, "want an https:// URL"},
+		{"mcp url with a password", `{"mcp_servers":{"a":{"url":"https://u:p@mcp.example/"}}}`, false, "carries credentials"},
+		{"mcp bad token_env", `{"mcp_servers":{"a":{"url":"https://mcp.example/","token_env":"MY-T"}}}`, false, `token_env: "MY-T" is not a variable name`},
 		{"mcp bad name", `{"mcp_servers":{"a b":{"command":"x"}}}`, false, `name "a b"`},
-		{"project mcp", `{"mcp_servers":{"a":{"command":"x"}}}`, true, "mcp_servers: a project file may only tighten"},
+		{"project mcp token_env", `{"mcp_servers":{"a":{"url":"https://mcp.example/","token_env":"GITHUB_TOKEN"}}}`, true, "token_env: a project file may not name a token"},
 		{"project agents_md_global", `{"agents_md_global":["~/.ssh/id_rsa"]}`, true, "agents_md_global: a project file may only tighten"},
 		{"agents_md_global with an empty path", `{"agents_md_global":["a.md",""]}`, false, "agents_md_global: an empty path"},
 		{"project provider", `{"provider":"gemini"}`, true, "provider: a project file may only tighten"},

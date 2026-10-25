@@ -5,6 +5,44 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: an MCP server is provided by the workspace or called
+  independently (docs/plans/proposals/mcp-placement.md). In
+  `mcp_servers`, a command's `in` is `workspace` (the default, as
+  before) or `host`, which runs it on this machine even beside an
+  executor or a box; and a server may be a `url`, a streamable HTTP
+  server called from this machine (https, or http to loopback), with
+  `token_env` naming the variable whose token is sent to its origin
+  alone, no redirect off it followed, the variable kept from every
+  child process. The servers the workspace offers of its own
+  (agentworkspace's `ServerProvider`) are connected beside the config's,
+  named after themselves; the executor's capability says whether its
+  workspace offers any (`servers`).
+- Added: a project's `.dax/config.json` may name MCP servers, the one
+  field a project may set that does not only tighten. They start only
+  once you trust the project's exact set: `-trust-mcp` starts them and
+  records the trust in `~/.dax/mcp-trust.json` (private), keyed by the
+  project's workspace and a hash of the set, so later sessions start
+  them without the flag; a changed set is untrusted again, and an
+  untrusted one is left out with a warning naming it. A project's
+  server may name no `token_env`, and none may take a name your config
+  gives a server.
+- Added: `agent.MCPServer`'s `Host`, `URL`, `TokenEnv` and `Project`;
+  `agent.Options`' `TrustMCP` and `MCPTrustFile`; `agent.DefaultMCPTrustFile`.
+- Changed: the box host offers a session's MCP units as the workspace's
+  own servers (`agentworkspace/servers.list` and `servers.start`, from
+  agentworkspace v0.0.3), in place of answering a
+  `agentworkspace/process.start` of the reserved `["dax-unit", NAME]`,
+  which is gone. A session and the box host it reaches must both be
+  this version or later: an older box host answers no `servers.list`,
+  so a newer session would start none of its units, and an older
+  session's `dax-unit` start reaches the box's executor, which has no
+  such program. A box is made again for another dax anyway.
+- Changed: agentworkspace v0.0.3 and its `mcpworkspace` v0.0.3; a
+  command's server in the workspace goes through
+  `mcpworkspace.CommandTransport`.
+
 ## v0.0.25 - 2026-10-25
 
 - Changed: the executor's process methods and workspace files are

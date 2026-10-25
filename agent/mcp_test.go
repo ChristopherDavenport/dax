@@ -289,8 +289,8 @@ func TestAnMCPServerRunsHereWhenTheWorkspaceCannotStartIt(t *testing.T) {
 		t.Fatal(err)
 	} else if tr, err := dial(ctx); err != nil {
 		t.Fatal(err)
-	} else if _, ok := tr.(*startTransport); !ok {
-		t.Errorf("a workspace.Local's transport: %T", tr)
+	} else if _, ok := tr.(*mcp.CommandTransport); ok {
+		t.Errorf("a workspace.Local's transport is this machine's command transport, not one started in the workspace")
 	}
 	if _, err := mcpServer(ws, "  ", env); err == nil {
 		t.Error("an empty command should be an error")

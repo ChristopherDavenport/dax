@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
@@ -71,6 +72,54 @@ func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Pr
 		// loss mapping (lostErr), since a process that never started
 		// did not end with the connection, and a timeout here is no
 		// reason to probe it.
+		return nil, fmt.Errorf("executor: %w", err)
+	}
+	return p, nil
+}
+
+// Servers lists the MCP servers the executor's workspace offers
+// (mcpworkspace.ListServers): a box host's units, answered by the box
+// host in front of the executor, or the servers its own workspace
+// offers. An executor whose capability says it offers none, and that no
+// box host is in front of, is not asked: it offers none.
+func (r *Remote) Servers(ctx context.Context) ([]workspace.Server, error) {
+	cn, err := r.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !cn.servers {
+		return nil, nil
+	}
+	list, err := mcpworkspace.ListServers(ctx, mcpworkspace.Conn{Session: cn.c.Session()})
+	if err != nil {
+		return nil, fmt.Errorf("executor: %w", err)
+	}
+	return list, nil
+}
+
+// StartServer starts the server called name that the executor's
+// workspace offers, as Start starts a command: over the current
+// connection, living on it alone, and refused by an executor that
+// cannot start a process.
+func (r *Remote) StartServer(ctx context.Context, name string, stderr io.Writer) (workspace.Process, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cn, err := r.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cn.start == nil {
+		return nil, fmt.Errorf("executor (%s %s) cannot start a process (no start in %s); update dax execute where it runs: %w", cn.server.Name, cn.server.Version, CapabilityKey, errors.ErrUnsupported)
+	}
+	p, err := mcpworkspace.StartServer(ctx, mcpworkspace.Conn{
+		Session: cn.c.Session(),
+		Bounds:  *cn.start,
+		Done:    cn.procs,
+		Lost:    errProcessLost,
+		Err:     cn.lostErr,
+	}, name, stderr)
+	if err != nil {
 		return nil, fmt.Errorf("executor: %w", err)
 	}
 	return p, nil

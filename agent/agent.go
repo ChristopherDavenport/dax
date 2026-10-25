@@ -38,6 +38,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -170,13 +171,27 @@ type Options struct {
 	// decides which calls run, ask or are refused. nil lets every call
 	// run, and the extensions' BeforeToolCall hooks are not run.
 	Policy *policy.Settings
-	// MCP are stdio MCP servers started with the session, each offering
-	// its tools as mcp__<Name>__<tool>. Each runs in the workspace when
-	// it can start a process (workspace.Starter), at its root and with
-	// its environment, and otherwise on this machine. With an Executor
-	// each runs in the executor, and one that cannot start a process
-	// fails the session. Their stderr is dax's, cleaned.
+	// MCP are the MCP servers connected with the session, each offering
+	// its tools as mcp__<Name>__<tool>. A command's server runs in the
+	// workspace when it can start a process (workspace.Starter), at its
+	// root and with its environment, and otherwise on this machine; with
+	// an Executor it runs in the executor, and one that cannot start a
+	// process fails the session. A server placed on the host runs on
+	// this machine whatever the workspace, and one at a URL is called
+	// from this machine. The servers the workspace offers of its own
+	// (workspace.ServerProvider: a box host's units) are connected
+	// beside these. A project's servers start only when TrustMCP is set
+	// or the trust file holds their set for this workspace. Their stderr
+	// is dax's, cleaned.
 	MCP []MCPServer
+	// TrustMCP trusts the set of MCP servers the project's config names
+	// for this workspace, starts them, and records the trust in
+	// MCPTrustFile, so a later session of the project with the same set
+	// starts them without it (-trust-mcp).
+	TrustMCP bool
+	// MCPTrustFile is where the trusted sets are kept; empty is
+	// DefaultMCPTrustFile under DefaultUserDir.
+	MCPTrustFile string
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
 	// With an Executor, its tools take ExecutorOptions.MaxReadBytes,
@@ -211,13 +226,26 @@ type Options struct {
 	executor executor.Executor
 }
 
-// MCPServer is a stdio MCP server to start.
+// MCPServer is an MCP server to connect: a command's stdio server, or
+// one at a URL.
 type MCPServer struct {
 	// Name is the prefix of the server's tools.
 	Name string
 	// Command is the command line, split as a shell splits words with
 	// nothing expanded; no shell runs it.
 	Command string
+	// Host runs Command on this machine whatever the workspace, with
+	// this machine's environment scrubbed, even with an Executor: a
+	// server called independently of the sandbox.
+	Host bool
+	// URL is a streamable HTTP server called from this machine, in
+	// place of a command; TokenEnv names the variable whose token is
+	// sent to its origin alone, and which every child's environment
+	// loses.
+	URL, TokenEnv string
+	// Project says the project's config named the server: it starts only
+	// when the user trusts the project's set (Options.TrustMCP).
+	Project bool
 }
 
 // DefaultUserDir is ~/.dax.
@@ -241,6 +269,7 @@ type Session struct {
 	opts    Options
 	live    live
 	env     []string            // what an MCP server outside the workspace starts with
+	offered []string            // the MCP servers the workspace offers, connected at open
 	refused []agentkit.Omission // repository files screened out before the kit
 	ws      workspace.Workspace
 	ownWS   bool // the session opened ws, and closes it
@@ -519,23 +548,41 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
-	servers := o.MCP
-	if o.Executor != nil {
-		// The box host's MCP units, each an MCP server started through
-		// the executor as any other, which the box host runs in the
-		// unit's own container.
-		units, err := o.Executor.unitServers()
+	trustFile := o.MCPTrustFile
+	if trustFile == "" {
+		trustFile = DefaultMCPTrustFile(DefaultUserDir())
+	}
+	servers := trusted(o.MCP, ws.Descriptor(), trustFile, o.TrustMCP)
+	// The servers the workspace offers of its own, a box host's units
+	// among them, each connected as the config's are; a configured
+	// server with an offered one's name is refused, since their tools'
+	// names would be one, and box.confine claims an offered server's
+	// tools by their name.
+	var offered workspace.ServerProvider
+	if sp, ok := ws.(workspace.ServerProvider); ok {
+		list, err := sp.Servers(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("the workspace's MCP servers: %w", err)
 		}
-		if servers, err = withUnits(servers, units); err != nil {
-			return nil, err
+		for _, u := range list {
+			if slices.ContainsFunc(servers, func(m MCPServer) bool { return collidesWithOffered(m.Name, u.Name) }) {
+				return nil, fmt.Errorf("mcp %s: a server your config names and one the workspace offers have the name; rename the server", u.Name)
+			}
+			s.offered = append(s.offered, u.Name)
 		}
+		offered = sp
 	}
 	for _, m := range servers {
-		t, mopts, err := s.mcpStart(ctx, m.Name, m.Command)
+		t, mopts, err := s.mcpStart(ctx, m)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
+		}
+		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
+	}
+	for _, name := range s.offered {
+		t, mopts, err := s.mcpConnect(ctx, name, mcpOffered(offered, name))
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", name, err)
 		}
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
 	}
@@ -829,20 +876,14 @@ func mcpPrefix(name string) (string, error) {
 // from the next run as mcp__<name>__<tool>. It returns the label
 // RemoveMCP takes.
 func (s *Session) AddMCP(ctx context.Context, name, command string) (string, error) {
-	// A server whose tools would be named as a box unit's is refused:
-	// box.confine claims a unit's tools by their name.
-	if s.opts.Executor != nil {
-		units, err := s.opts.Executor.unitServers()
-		if err != nil {
-			return "", err
-		}
-		for _, u := range units {
-			if collidesWithUnit(name, u.Name) {
-				return "", fmt.Errorf("mcp %s: the box host's unit %s offers tools under that name; pick another", name, u.Name)
-			}
+	// A server whose tools would be named as an offered server's is
+	// refused: box.confine claims a unit's tools by their name.
+	for _, u := range s.offered {
+		if collidesWithOffered(name, u) {
+			return "", fmt.Errorf("mcp %s: the workspace's server %s offers tools under that name; pick another", name, u)
 		}
 	}
-	t, mopts, err := s.mcpStart(ctx, name, command)
+	t, mopts, err := s.mcpStart(ctx, MCPServer{Name: name, Command: command})
 	if err != nil {
 		return "", err
 	}
@@ -1046,13 +1087,16 @@ type mcpDial func(context.Context) (mcp.Transport, error)
 // split as a shell splits words with nothing expanded (cmdline.Split),
 // with its diagnostics on dax's stderr. In a workspace that can start a
 // process (workspace.Starter) the server runs there, at its root, with
-// the workspace's environment, over the process's pipes; in one that
-// cannot, it runs on this machine (mcpTransport), with env as its whole
-// environment. An executor's view is a Starter, so with -executor every
-// server runs in the executor or not at all, and a restart starts it in
-// the executor again, over the executor's connection of the moment.
+// the workspace's environment, over the process's pipes
+// (mcpworkspace.CommandTransport); in one that cannot, it runs on this
+// machine (mcpTransport), with env as its whole environment. An
+// executor's view is a Starter, so with -executor every such server
+// runs in the executor or not at all, and a restart starts it in the
+// executor again, over the executor's connection of the moment. A
+// server placed on the host (MCPServer.Host) is mcpTransport's alone.
 func mcpServer(ws workspace.Workspace, command string, env []string) (mcpDial, error) {
-	if _, ok := ws.(workspace.Starter); !ok {
+	starter, ok := ws.(workspace.Starter)
+	if !ok {
 		return mcpTransport(command, env)
 	}
 	fields, err := splitCommand(command)
@@ -1060,44 +1104,19 @@ func mcpServer(ws workspace.Workspace, command string, env []string) (mcpDial, e
 		return nil, err
 	}
 	// A server's diagnostics are text from a program the model may have
-	// chosen; they get the same cleaning as its output.
-	t := &startTransport{ws: ws, cmd: workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})}}
-	// Each Connect starts the server anew, so one transport serves
-	// every start.
+	// chosen; they get the same cleaning as its output. Each Connect
+	// starts the server anew, so one transport serves every start.
+	t := mcpworkspace.CommandTransport(starter, workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})})
 	return func(context.Context) (mcp.Transport, error) { return t, nil }, nil
 }
 
-// startTransport starts an MCP server in a workspace when the client
-// connects, and speaks to it over the process's standard input and
-// output. It may be connected again, and each Connect starts a new
-// process.
-type startTransport struct {
-	ws  workspace.Workspace
-	cmd workspace.Command
+// mcpOffered is the dial of the server called name that the workspace
+// offers (workspace.ServerProvider): a box host's unit, started where
+// the box host runs it, its diagnostics cleaned onto dax's stderr.
+func mcpOffered(sp workspace.ServerProvider, name string) mcpDial {
+	t := mcpworkspace.ServerTransport(sp, name, render.CleanWriter(warnings{}))
+	return func(context.Context) (mcp.Transport, error) { return t, nil }
 }
-
-func (t *startTransport) Connect(ctx context.Context) (mcp.Connection, error) {
-	// The server lives as long as the connection, not the context it
-	// was connected under (a command's, say), as one the command
-	// transport starts does; closing the connection ends it, and so
-	// does closing the workspace.
-	p, err := workspace.Start(context.WithoutCancel(ctx), t.ws, t.cmd)
-	if err != nil {
-		return nil, err
-	}
-	pipes := processPipes{p}
-	return (&mcp.IOTransport{Reader: pipes, Writer: pipes}).Connect(ctx)
-}
-
-// processPipes is a started process's output to read and input to
-// write. Closing it, as the connection does when it closes, ends the
-// process the way the MCP stdio shutdown asks: its input closed, a
-// moment to leave, then SIGTERM, then SIGKILL (Process.Close).
-type processPipes struct{ p workspace.Process }
-
-func (r processPipes) Read(b []byte) (int, error)  { return r.p.Stdout().Read(b) }
-func (r processPipes) Write(b []byte) (int, error) { return r.p.Stdin().Write(b) }
-func (r processPipes) Close() error                { return r.p.Close() }
 
 // mcpTransport is the dial of an MCP server started on this machine
 // from a command line, split as mcpServer splits it, with env as its
@@ -1120,18 +1139,35 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 	}, nil
 }
 
-// mcpStart is what the session connects the MCP server called name to,
-// whether the config or /mcp add named it: the transport of its first
-// start, and the client's options, which name its tools
-// mcp__<name>__<tool> and start it again when its session ends (a
-// process that exited, or, with -executor, the connection it was
-// started over lost), each restart reported (mcpRestarted).
-func (s *Session) mcpStart(ctx context.Context, name, command string) (mcp.Transport, []mcpclient.Option, error) {
-	prefix, err := mcpPrefix(name)
+// mcpDialOf is the dial of m wherever it runs: at its URL, on this
+// machine, or as mcpServer places a command.
+func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
+	switch {
+	case m.URL != "":
+		return mcpURL(m.URL, m.TokenEnv)
+	case m.Host:
+		return mcpTransport(m.Command, s.env)
+	}
+	return mcpServer(s.ws, m.Command, s.env)
+}
+
+// mcpStart is what the session connects the MCP server m to, whether
+// the config or /mcp add named it: the transport of its first start,
+// and the client's options, which name its tools mcp__<name>__<tool>
+// and start it again when its session ends (a process that exited, or,
+// with -executor, the connection it was started over lost), each
+// restart reported (mcpRestarted).
+func (s *Session) mcpStart(ctx context.Context, m MCPServer) (mcp.Transport, []mcpclient.Option, error) {
+	dial, err := s.mcpDialOf(m)
 	if err != nil {
 		return nil, nil, err
 	}
-	dial, err := mcpServer(s.ws, command, s.env)
+	return s.mcpConnect(ctx, m.Name, dial)
+}
+
+// mcpConnect is mcpStart's for a dial already made.
+func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial) (mcp.Transport, []mcpclient.Option, error) {
+	prefix, err := mcpPrefix(name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1414,6 +1450,11 @@ func (o Options) secrets() []string {
 	out := extension.SecretsOf(o.Extensions)
 	if o.KeyEnv != "" {
 		out = append(out, o.KeyEnv)
+	}
+	for _, m := range o.MCP {
+		if m.TokenEnv != "" {
+			out = append(out, m.TokenEnv)
+		}
 	}
 	return out
 }

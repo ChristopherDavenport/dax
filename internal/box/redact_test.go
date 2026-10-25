@@ -12,6 +12,8 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
 // One value, every spelling a JSON encoder writes it in, written out
@@ -151,7 +153,7 @@ echo 'err tok"en/1é' >&2
 	defer procs.close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	res, err := procs.serve(ctx, methodStart, json.RawMessage(`{"args":["dax-unit","env"],"stderr":true}`))
+	res, err := procs.serve(ctx, wire.MethodServersStart, json.RawMessage(`{"name":"env","stderr":true}`))
 	if err != nil {
 		t.Fatal(err)
 	}
