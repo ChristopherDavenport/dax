@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.25 - 2026-10-25
 
 - Changed: the executor's process methods and workspace files are
   agentworkspace's `mcpworkspace` (agentworkspace v0.0.2), no longer
