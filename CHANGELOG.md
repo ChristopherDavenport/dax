@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.22 - 2026-10-24
 
 - Added: `-box` runs the tools in this project's box. It starts a box
   host, `dax box serve` (this dax as a child, or the dax on another
