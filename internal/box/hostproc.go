@@ -1,10 +1,11 @@
 package box
 
 // This file is the box host's own processes: the servers of a session's
-// MCP units, started by a dax/process.start of ["dax-unit", NAME] and
-// answered here with the semantics internal/executor/process.go gives
-// the executor's (the methods, their parameters and results, the
-// bounds), under ids the executor's cannot be.
+// MCP units, started by an agentworkspace/process.start of ["dax-unit",
+// NAME] and answered here with the semantics agentworkspace's
+// mcpworkspace gives the executor's (the methods, their parameters and
+// results, the bounds: package wire), under ids the executor's cannot
+// be.
 
 import (
 	"context"
@@ -16,27 +17,29 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
-// The process methods, as internal/executor/process.go names them.
+// The process methods, as mcpworkspace names them.
 const (
-	methodPrefix     = "dax/process."
-	methodStart      = "dax/process.start"
-	methodWrite      = "dax/process.write"
-	methodRead       = "dax/process.read"
-	methodCloseStdin = "dax/process.closeStdin"
-	methodSignal     = "dax/process.signal"
-	methodWait       = "dax/process.wait"
-	methodClose      = "dax/process.close"
+	methodPrefix     = wire.MethodPrefix
+	methodStart      = wire.MethodStart
+	methodWrite      = wire.MethodWrite
+	methodRead       = wire.MethodRead
+	methodCloseStdin = wire.MethodCloseStdin
+	methodSignal     = wire.MethodSignal
+	methodWait       = wire.MethodWait
+	methodClose      = wire.MethodClose
 )
 
 // The bounds, as the executor's: processes open at once, bytes in one
 // write and in one read's reply, and what is held of output no read
 // took yet.
 const (
-	hostMaxProcesses  = 32
-	hostMaxWriteBytes = 1 << 20
-	hostMaxReadBytes  = 64 << 10
+	hostMaxProcesses  = wire.MaxProcesses
+	hostMaxWriteBytes = wire.MaxWriteBytes
+	hostMaxReadBytes  = wire.MaxReadBytes
 	hostOutputBytes   = 64 << 10
 )
 
@@ -70,7 +73,7 @@ type hostProc struct {
 	exited chan struct{}
 	status int
 	err    error
-	ended  string // "timeout" or "canceled", once one ended it
+	ended  string // wire.EndedTimeout or wire.EndedCanceled, once one ended it
 	endMu  sync.Mutex
 }
 
@@ -94,7 +97,7 @@ func (t *hostProcs) end() {
 	t.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, hp := range procs {
-		hp.setEnded("canceled")
+		hp.setEnded(wire.EndedCanceled)
 		wg.Go(hp.close)
 	}
 	wg.Wait()
@@ -317,7 +320,7 @@ func (t *hostProcs) startProc(p hostStartParams) (any, error) {
 	}()
 	if p.TimeoutMs > 0 {
 		timer := time.AfterFunc(time.Duration(p.TimeoutMs)*time.Millisecond, func() {
-			hp.setEnded("timeout")
+			hp.setEnded(wire.EndedTimeout)
 			hp.close()
 		})
 		go func() {

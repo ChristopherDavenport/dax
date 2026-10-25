@@ -163,7 +163,10 @@ before changing the shape.
   executor's, with what MCP cannot carry in a capability, and its
   workspace's files served read-only as MCP resources and read back as
   an `fs.FS` (`files.go`), and processes started for the session
-  through custom methods, not tools (`process.go`); `Handler`
+  through custom methods, not tools (`process.go`): both are
+  agentworkspace's `mcpworkspace` (`ServeFiles` and `NewFS`,
+  `Processes` and `Start`, the names in its `wire` package), and what
+  is dax's is the connection they ride, its capability and its redial; `Handler`
   (`http.go`), such a server over streamable HTTP, each client a
   session of its own, closed when idle with its processes ended first;
   `Remote`
@@ -187,7 +190,7 @@ before changing the shape.
   unit's container beside the box (`EnsureUnit`, its secrets resolved
   into docker's environment alone); `unitproc.go` and `hostproc.go`, a
   unit's server under `docker exec` and the process methods the box
-  host answers for it; `redact.go`, the redaction of a unit's secret
+  host answers for it, named by `mcpworkspace/wire`; `redact.go`, the redaction of a unit's secret
   values from its server's output, in every JSON spelling, before the
   box host passes any of it on; `relay.go`, the box host's relay, which reads
   the session's handshake, passes the rest through a message at a
@@ -197,8 +200,10 @@ before changing the shape.
   `checkout.go`, a repository's URL as checkouts match it, the box
   host's checkout of it, cloned and moved on only when nothing would be
   lost, and the git bundle a pull takes back. Runtime-agnostic: any runtime docker has
-  registered. Standard library only, so it can move to agentworkspace
-  once a second product wants it. The design is
+  registered. Standard library only but for agentworkspace's
+  `mcpworkspace/wire` (itself standard library only), which names the
+  process methods it answers, so it can move to agentworkspace once a
+  second product wants it. The design is
   `docs/plans/proposals/box-host.md`.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
 - `internal/cmdline`: `Split`, a command line as a program and its
@@ -226,7 +231,9 @@ an `Unreleased` changelog line:
 - `../agentpolicy`, `../agentsession`, `../agentskill`, `../agentsmd`,
   `../agentmemory`.
 - `../agentconsole`: the terminal client, a dependency.
-- `../agentworkspace`: where the tools act, `Workspace` and `Local`.
+- `../agentworkspace`: where the tools act, `Workspace` and `Local`;
+  its nested module `mcpworkspace`, a workspace's processes and files
+  over MCP, which the executor serves and the session reaches.
 
 ## Conventions
 

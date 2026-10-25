@@ -93,8 +93,9 @@ Why a relay and not a second executor server: the facts and stamps
 are the in-box executor's, and a relay cannot change them. A server
 that re-served the tools would sit between the facts and the call.
 
-In step 2 the relay answers one more thing itself: a `dax/process.start`
-whose arguments are `["dax-unit", NAME]`, for one of the session's MCP
+In step 2 the relay answers one more thing itself: an
+`agentworkspace/process.start` (`dax/process.start` before
+agentworkspace's `mcpworkspace` took the methods) whose arguments are `["dax-unit", NAME]`, for one of the session's MCP
 units, starts that unit's server in the unit's container (`docker exec
 -i`), and the relay answers that process's methods, with ids of its own
 that cannot be the executor's. `dax-unit` is a reserved word, not a
@@ -451,7 +452,7 @@ supported, not code.
    image builds cached by a hash of their declaration, secrets resolved
    on the box host into one unit's container, each unit's internet
    through its own sidecar and network, `files` and `state` mounts,
-   `dax/process.start` of `dax-unit NAME` answered by the relay, the
+   `agentworkspace/process.start` of `dax-unit NAME` answered by the relay, the
    envelopes in the handshake and the record.
 3. **Checkouts and administration** (above): `box.checkout` and the
    box host's `checkouts`, cloned and kept current only when clean;

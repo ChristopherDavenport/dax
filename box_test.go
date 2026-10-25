@@ -676,7 +676,7 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 }
 
 // A unit's server, through the box host: the handshake's answer names
-// the session's units, and a dax/process.start of ["dax-unit", NAME]
+// the session's units, and an agentworkspace/process.start of ["dax-unit", NAME]
 // makes the unit's container (a fake docker) and runs the server in it
 // (a stand-in docker that runs it here), answered by the box host, the
 // executor never asked.
@@ -737,13 +737,13 @@ func TestBoxServeUnit(t *testing.T) {
 	io.WriteString(inW, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"experimental":{"`+executor.CapabilityKey+`":{"box":{}}}}}}`+"\n")
 	// The fake executor answers the initialize when its input ends; the
 	// box host's own answers come first.
-	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"dax/process.start","params":{"args":["dax-unit","echo"]}}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"agentworkspace/process.start","params":{"args":["dax-unit","echo"]}}`+"\n")
 	got := next()
 	if !strings.Contains(got, `"id":"unit-1"`) {
 		t.Fatalf("start answered %s", got)
 	}
-	io.WriteString(inW, `{"jsonrpc":"2.0","id":3,"method":"dax/process.write","params":{"id":"unit-1","data":"aGkK"}}`+"\n")
-	io.WriteString(inW, `{"jsonrpc":"2.0","id":4,"method":"dax/process.read","params":{"id":"unit-1","fd":1}}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":3,"method":"agentworkspace/process.write","params":{"id":"unit-1","data":"aGkK"}}`+"\n")
+	io.WriteString(inW, `{"jsonrpc":"2.0","id":4,"method":"agentworkspace/process.read","params":{"id":"unit-1","fd":1}}`+"\n")
 	for range 2 {
 		if l := next(); strings.Contains(l, `"id":4`) && !strings.Contains(l, `"data":"aGkK"`) {
 			t.Fatalf("read answered %s", l)

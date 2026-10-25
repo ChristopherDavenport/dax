@@ -63,8 +63,9 @@ const (
 // may send the one to the other (rule 2).
 const ExfiltrationAccepted = "accepted"
 
-// UnitCommand is the reserved first word of a dax/process.start that
-// asks the box host for a unit's server: ["dax-unit", NAME]. It is not
+// UnitCommand is the reserved first word of an
+// agentworkspace/process.start that asks the box host for a unit's
+// server: ["dax-unit", NAME]. It is not
 // a program; behind no box host it is not found.
 const UnitCommand = "dax-unit"
 

@@ -12,6 +12,8 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpserver"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/extension"
@@ -23,7 +25,7 @@ import (
 // field for: the workspace's descriptor, the extensions whose tools it
 // runs, and each tool's extension, read-only, facts and strict, in the
 // order the tools run in process; and the resource template its
-// workspace's files are read under (files.go). The go-sdk lists tools
+// workspace's files are read under (files.go, mcpworkspace's). The go-sdk lists tools
 // sorted by name, and dax's per-extension ReadOnly is not the
 // annotation hint, so neither can be read off the listing.
 //
@@ -31,14 +33,14 @@ import (
 //	 "descriptor": {"kind": "container", "ref": "box", "root": "/work"},
 //	 "extensions": ["dax-coding"],
 //	 "tools": [{"name": "read", "extension": "dax-coding", "readOnly": true, "facts": true}, ...],
-//	 "files": {"uriTemplate": "dax-workspace:///{op}{?path}"},
+//	 "files": {"uriTemplate": "agentworkspace:///{op}{?path}"},
 //	 "maxReadBytes": 2097152}
 //
 // files came after version 1 was released, as a field a client of
 // version 1 ignores; a client that reads it refuses an executor
 // without it. start came after files, the same way: it says the
-// executor answers the process methods (process.go), with their
-// bounds, and is absent when its workspace cannot start a process; a
+// executor answers the process methods (process.go, mcpworkspace's
+// agentworkspace/process.*), with their bounds (wire.Bounds), and is absent when its workspace cannot start a process; a
 // client refuses to start a process in an executor without it, and
 // starts none anywhere else.
 //
@@ -80,7 +82,7 @@ type capability struct {
 	// Start says the executor starts processes for the session (the
 	// process methods); nil from an executor older than the field or
 	// whose workspace cannot.
-	Start *capabilityStart `json:"start,omitempty"`
+	Start *wire.Bounds `json:"start,omitempty"`
 	// MaxReadBytes is the most bytes of a file the session's tools
 	// read; zero from an executor older than the field, whose tools
 	// read what its own -max-read-bytes says.
@@ -104,7 +106,7 @@ type clientCapability struct {
 }
 
 // capabilityFiles says the workspace's files are served, read-only, as
-// MCP resources under URITemplate (FilesURITemplate).
+// MCP resources under URITemplate (wire.FilesURITemplate).
 type capabilityFiles struct {
 	URITemplate string `json:"uriTemplate"`
 }
@@ -165,8 +167,8 @@ type Server struct {
 	exts    Extensions
 	env     extension.ToolEnv // the session's MaxReadBytes is set on a copy
 	desc    capabilityDescriptor
-	procs   *processServer // nil when the workspace cannot start a process
-	ceiling int64          // o.MaxReadBytes, or tool.DefaultMaxRead
+	procs   *mcpworkspace.Processes // nil when the workspace cannot start a process
+	ceiling int64                   // o.MaxReadBytes, or tool.DefaultMaxRead
 
 	mu       sync.Mutex
 	middle   []sdk.Middleware
@@ -200,10 +202,10 @@ type sessionTools struct {
 // ceiling when it asked nothing. They are closed when the session ends.
 //
 // It also serves env's workspace's files, read-only, as resources
-// under FilesURITemplate, so that the session reads the project's
+// under wire.FilesURITemplate (mcpworkspace.ServeFiles), so that the session reads the project's
 // AGENTS.md, .dax/skills and .dax/config.json where the project is;
 // and, when the workspace can start a process (workspace.Starter),
-// the process methods (process.go), so that the MCP servers the
+// the process methods (mcpworkspace.Processes), so that the MCP servers the
 // session's user configured run here too. Those are custom methods,
 // not tools: no tool of the server starts a process the session did
 // not ask for, and no other client sees one in the listing.
@@ -237,7 +239,13 @@ func NewServer(o ServeOptions, exts Extensions, env extension.ToolEnv) (*Server,
 		return nil, err
 	}
 	if _, ok := env.Workspace.(workspace.Starter); ok {
-		s.procs = newProcessServer(env.Workspace, o.Done)
+		s.procs = mcpworkspace.NewProcesses(env.Workspace)
+		if o.Done != nil {
+			go func(procs *mcpworkspace.Processes) {
+				<-o.Done
+				procs.Close()
+			}(s.procs)
+		}
 	}
 	return s, nil
 }
@@ -273,7 +281,7 @@ func (s *Server) build(maxRead int64) (*inProcess, capability, error) {
 	c := capability{
 		Version: CapabilityVersion, Descriptor: s.desc,
 		Extensions: []string{}, Tools: []capabilityTool{},
-		Files:        &capabilityFiles{URITemplate: FilesURITemplate},
+		Files:        &capabilityFiles{URITemplate: wire.FilesURITemplate},
 		MaxReadBytes: maxRead,
 	}
 	for _, e := range exts {
@@ -294,7 +302,8 @@ func (s *Server) build(maxRead int64) (*inProcess, capability, error) {
 		})
 	}
 	if _, ok := env.Workspace.(workspace.Starter); ok {
-		c.Start = &capabilityStart{MaxProcesses: MaxProcesses, MaxWriteBytes: MaxWriteBytes, MaxReadBytes: MaxReadBytes}
+		b := wire.DefaultBounds()
+		c.Start = &b
 	}
 	return x, c, nil
 }
@@ -338,10 +347,10 @@ func (s *Server) Sessions() []*sdk.ServerSession {
 }
 
 // endSession ends ss's processes and the requests waiting on them
-// (processServer.end).
+// (mcpworkspace.Processes.End).
 func (s *Server) endSession(ss *sdk.ServerSession) {
 	if s.procs != nil {
-		s.procs.end(ss)
+		s.procs.End(ss)
 	}
 }
 
@@ -382,9 +391,9 @@ func (s *Server) session() (*sdk.Server, error) {
 			Resources: &sdk.ResourceCapabilities{ListChanged: false},
 		},
 	})
-	serveFiles(srv, s.env.Workspace.FS())
+	mcpworkspace.ServeFiles(srv, s.env.Workspace.FS())
 	if s.procs != nil {
-		if err := s.procs.register(srv); err != nil {
+		if err := s.procs.Register(srv); err != nil {
 			return nil, err
 		}
 	}

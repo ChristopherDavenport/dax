@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 )
 
 // Proc is a process the box host started for the session: a unit's
@@ -191,9 +193,8 @@ func (p *unitProc) gone() bool {
 }
 
 func (p *unitProc) Signal(name string) (bool, error) {
-	switch name {
-	case "INT", "TERM", "KILL":
-	default:
+	// The names are the wire's, which kill(1) takes as they are.
+	if _, ok := wire.SignalOf(name); !ok {
 		return false, fmt.Errorf("signal %q: want INT, TERM or KILL", name)
 	}
 	if p.gone() || p.pid == 0 {
@@ -217,7 +218,7 @@ func (p *unitProc) Close() error {
 	p.closeOne.Do(func() {
 		defer p.closeReadEnds()
 		p.stdin.Close()
-		for _, sig := range []string{"", "TERM", "KILL"} {
+		for _, sig := range []string{"", wire.SignalTERM, wire.SignalKILL} {
 			if sig != "" {
 				p.Signal(sig)
 			}

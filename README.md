@@ -574,7 +574,7 @@ reaches the session.
 
 It also serves the workspace's files, read-only, so the session reads
 the project where the project is: MCP resources under the template
-`dax-workspace:///{op}{?path}`, where `op` is `stat`, `lstat`,
+`agentworkspace:///{op}{?path}` (agentworkspace's `mcpworkspace`), where `op` is `stat`, `lstat`,
 `readdir`, `readlink` or `read` and `path` a name relative to the root
 (`.` for the root itself), percent-encoded. Every name goes through the
 workspace's own confinement: one that is absolute, climbs out with `..`
@@ -588,8 +588,9 @@ own directory would give.
 
 It can start a process for the session, a process that lives longer
 than one call with pipes to it, as the session's own machine starts an
-MCP server: dax-specific JSON-RPC methods, `dax/process.start`,
-`.write`, `.read`, `.closeStdin`, `.signal`, `.wait` and `.close`,
+MCP server: custom JSON-RPC methods (agentworkspace's `mcpworkspace`),
+`agentworkspace/process.start`, `.write`, `.read`, `.closeStdin`,
+`.signal`, `.wait` and `.close`,
 named in the capability's `start` field. They are not tools, so another
 harness connected to `dax execute` is offered no tool that runs a
 command, and nothing in the sandbox (its files, a project's config, a

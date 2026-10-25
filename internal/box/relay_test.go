@@ -94,7 +94,7 @@ func TestRelay(t *testing.T) {
 	rest := `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" +
 		`{"jsonrpc":"2.0","id":"a-7","method":"tools/list"}` + "\n" +
 		`{"jsonrpc":"2.0","id":0,"result":{}}` + "\n" +
-		`{"jsonrpc":"2.0","id":2,"method":"dax/process.start","params":{"args":["x"]}}` + "\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"agentworkspace/process.start","params":{"args":["x"]}}` + "\n" +
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"arguments":{"s":"` + strings.Repeat("x", 100<<10) + `"}}}` + "\n"
 	for _, tc := range []struct {
 		name    string
@@ -527,53 +527,53 @@ func TestRelayUnitProcess(t *testing.T) {
 	s.send(strings.TrimSuffix(initialize("1", nil), "\n"))
 	s.answer("1")
 
-	s.send(`{"jsonrpc":"2.0","id":10,"method":"dax/process.start","params":{"args":["dax-unit","files"],"stderr":true}}`)
+	s.send(`{"jsonrpc":"2.0","id":10,"method":"agentworkspace/process.start","params":{"args":["dax-unit","files"],"stderr":true}}`)
 	id, _ := resultOf(t, s.answer("10"))["id"].(string)
 	if !strings.HasPrefix(id, hostIDPrefix) {
 		t.Fatalf("a unit's process id %q is not the box host's", id)
 	}
-	s.send(`{"jsonrpc":"2.0","id":11,"method":"dax/process.write","params":{"id":"` + id + `","data":"aGVsbG8K"}}`)
+	s.send(`{"jsonrpc":"2.0","id":11,"method":"agentworkspace/process.write","params":{"id":"` + id + `","data":"aGVsbG8K"}}`)
 	resultOf(t, s.answer("11"))
-	s.send(`{"jsonrpc":"2.0","id":12,"method":"dax/process.read","params":{"id":"` + id + `","fd":1}}`)
+	s.send(`{"jsonrpc":"2.0","id":12,"method":"agentworkspace/process.read","params":{"id":"` + id + `","fd":1}}`)
 	if r := resultOf(t, s.answer("12")); r["data"] != "aGVsbG8K" {
 		t.Errorf("read = %v, want what was written", r)
 	}
-	s.send(`{"jsonrpc":"2.0","id":13,"method":"dax/process.read","params":{"id":"` + id + `","fd":2}}`)
+	s.send(`{"jsonrpc":"2.0","id":13,"method":"agentworkspace/process.read","params":{"id":"` + id + `","fd":2}}`)
 	if r := resultOf(t, s.answer("13")); r["data"] == nil {
 		t.Errorf("standard error read = %v", r)
 	}
-	s.send(`{"jsonrpc":"2.0","id":14,"method":"dax/process.read","params":{"id":"` + id + `","fd":3}}`)
+	s.send(`{"jsonrpc":"2.0","id":14,"method":"agentworkspace/process.read","params":{"id":"` + id + `","fd":3}}`)
 	if msg := errorOf(t, s.answer("14")); !strings.Contains(msg, "fd 3") {
 		t.Errorf("fd 3: %s", msg)
 	}
 	// A read that waits is cancelled by the session as the SDK cancels.
-	s.send(`{"jsonrpc":"2.0","id":15,"method":"dax/process.read","params":{"id":"` + id + `","fd":1}}`)
+	s.send(`{"jsonrpc":"2.0","id":15,"method":"agentworkspace/process.read","params":{"id":"` + id + `","fd":1}}`)
 	s.send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":15}}`)
 	errorOf(t, s.answer("15"))
 	// A unit not this session's, and the reserved word misused.
-	s.send(`{"jsonrpc":"2.0","id":16,"method":"dax/process.start","params":{"args":["dax-unit","github"]}}`)
+	s.send(`{"jsonrpc":"2.0","id":16,"method":"agentworkspace/process.start","params":{"args":["dax-unit","github"]}}`)
 	if msg := errorOf(t, s.answer("16")); !strings.Contains(msg, "not one of this session's units (files)") {
 		t.Errorf("another unit: %s", msg)
 	}
 	// The executor's own processes pass through.
-	s.send(`{"jsonrpc":"2.0","id":17,"method":"dax/process.start","params":{"args":["mcp-server"]}}`)
+	s.send(`{"jsonrpc":"2.0","id":17,"method":"agentworkspace/process.start","params":{"args":["mcp-server"]}}`)
 	s.answer("17")
-	s.send(`{"jsonrpc":"2.0","id":18,"method":"dax/process.read","params":{"id":"p1","fd":1}}`)
+	s.send(`{"jsonrpc":"2.0","id":18,"method":"agentworkspace/process.read","params":{"id":"p1","fd":1}}`)
 	s.answer("18")
-	s.send(`{"jsonrpc":"2.0","id":19,"method":"dax/process.closeStdin","params":{"id":"` + id + `"}}`)
+	s.send(`{"jsonrpc":"2.0","id":19,"method":"agentworkspace/process.closeStdin","params":{"id":"` + id + `"}}`)
 	resultOf(t, s.answer("19"))
-	s.send(`{"jsonrpc":"2.0","id":20,"method":"dax/process.wait","params":{"id":"` + id + `"}}`)
+	s.send(`{"jsonrpc":"2.0","id":20,"method":"agentworkspace/process.wait","params":{"id":"` + id + `"}}`)
 	if r := resultOf(t, s.answer("20")); r["status"] != float64(0) {
 		t.Errorf("wait = %v", r)
 	}
-	s.send(`{"jsonrpc":"2.0","id":21,"method":"dax/process.close","params":{"id":"` + id + `"}}`)
+	s.send(`{"jsonrpc":"2.0","id":21,"method":"agentworkspace/process.close","params":{"id":"` + id + `"}}`)
 	resultOf(t, s.answer("21"))
-	s.send(`{"jsonrpc":"2.0","id":22,"method":"dax/process.wait","params":{"id":"` + id + `"}}`)
+	s.send(`{"jsonrpc":"2.0","id":22,"method":"agentworkspace/process.wait","params":{"id":"` + id + `"}}`)
 	if msg := errorOf(t, s.answer("22")); !strings.Contains(msg, "no such process") {
 		t.Errorf("a closed process: %s", msg)
 	}
 	// A second server, left running: the session's end ends it.
-	s.send(`{"jsonrpc":"2.0","id":23,"method":"dax/process.start","params":{"args":["dax-unit","files"]}}`)
+	s.send(`{"jsonrpc":"2.0","id":23,"method":"agentworkspace/process.start","params":{"args":["dax-unit","files"]}}`)
 	resultOf(t, s.answer("23"))
 	inW.Close()
 	select {

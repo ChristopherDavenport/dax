@@ -17,6 +17,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/ChristopherDavenport/agenttool/mcpserver"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace/wire"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/ext/coding"
@@ -170,8 +171,8 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 	d := testDescriptor(s.ws.Root())
 	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}) ||
 		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) ||
-		got.Files == nil || got.Files.URITemplate != FilesURITemplate ||
-		got.Start == nil || *got.Start != (capabilityStart{MaxProcesses: MaxProcesses, MaxWriteBytes: MaxWriteBytes, MaxReadBytes: MaxReadBytes}) {
+		got.Files == nil || got.Files.URITemplate != wire.FilesURITemplate ||
+		got.Start == nil || *got.Start != wire.DefaultBounds() {
 		t.Errorf("capability %s\nwant tools %+v", raw, want)
 	}
 	// The listing is sorted by name, so the order is the capability's.
