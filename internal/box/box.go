@@ -60,6 +60,9 @@ const (
 	labelOf    = "dax.box.of"
 	labelUnit  = "dax.box.unit"
 	labelFiles = "dax.box.files"
+	// labelGuard is a hash of the box's git guard, "none" without one,
+	// so a refusal can say the guard is what differs.
+	labelGuard = "dax.box.guard"
 )
 
 // Binary is where the box's dax is mounted.
@@ -129,11 +132,20 @@ type Spec struct {
 	// Decl is a hash of the unit's declaration (Settings.Decl), in an MCP
 	// unit's spec label.
 	Decl string
+	// Guard asks for the box's git guard (box.confine "workspace"):
+	// Ensure computes GuardMounts for Dir on this machine and the box
+	// mounts them read-only over the project. GuardState and GuardMounts
+	// are what it found; both are in the spec label.
+	Guard       bool
+	GuardState  string
+	GuardMounts []string
 }
 
-// Box is a running box.
+// Box is a running box. Guard is its git guard's state when one was
+// asked for (GuardOn, GuardNotRepo), "" otherwise.
 type Box struct {
 	Name, Dir string
+	Guard     string
 }
 
 // Command is the program and its arguments that start `dax execute`
@@ -363,6 +375,16 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	if err := c.prepare(ctx, &spec); err != nil {
 		return b, err
 	}
+	if spec.Guard {
+		// On this machine, where the user's git runs: what it trusts
+		// in the project is held read-only in the box.
+		mounts, state, err := GuardMounts(ctx, spec.Dir)
+		if err != nil {
+			return b, fmt.Errorf("box %s: %w", spec.Name, err)
+		}
+		spec.GuardMounts, spec.GuardState = mounts, state
+		b.Guard = state
+	}
 	if err := c.ensure(ctx, spec, bin, true); err != nil {
 		return b, err
 	}
@@ -429,6 +451,9 @@ func (c *Client) ensure(ctx context.Context, spec Spec, bin string, again bool) 
 		return err
 	}
 	if found && have.spec != specLabel(spec) {
+		if have.guard != guardTag(spec) {
+			return fmt.Errorf("box %s was made with another git guard than these settings ask for (box.confine workspace, or the repository's hooks, config or submodules changed); remove it with `dax box down %s` and start again", spec.Name, spec.Name)
+		}
 		return fmt.Errorf("box %s was made with other settings (image, runtime, limits or user) than these; remove it with `dax box down %s` and start again", spec.Name, spec.Name)
 	}
 	if err := c.setRules(spec); err != nil {
@@ -650,6 +675,7 @@ func RunArgs(spec Spec, bin, proxyIP, stateDir string) []string {
 		"--label", labelBinary + "=" + bin,
 		"--label", labelUnit + "=" + spec.unit(),
 		"--label", labelFiles + "=" + Files{Project: FilesRW, State: spec.Files.State}.String(),
+		"--label", labelGuard + "=" + guardTag(spec),
 		"--runtime", spec.Runtime,
 		"--user", strconv.Itoa(spec.UID) + ":" + strconv.Itoa(spec.GID),
 		"--cap-drop", "ALL",
@@ -671,6 +697,11 @@ func RunArgs(spec Spec, bin, proxyIP, stateDir string) []string {
 		"-v", spec.Dir + ":" + spec.Dir,
 		"-w", spec.Dir,
 		"-v", spec.Binary + ":" + Binary + ":ro",
+	}
+	for _, m := range spec.GuardMounts {
+		// Over the read-write project, after it: what git on this
+		// machine trusts and runs, which nothing in the box may change.
+		args = append(args, "-v", m+":"+m+":ro")
 	}
 	args = append(args, stateArgs(spec, stateDir)...)
 	if !hostKernel(spec.Runtime) {
@@ -971,12 +1002,12 @@ func (c *Client) checkProxy(ctx context.Context, spec Spec, ip string) error {
 	return nil
 }
 
-type found struct{ state, spec, bin string }
+type found struct{ state, spec, bin, guard string }
 
 // find is the box name's state and labels; false when there is none.
 func (c *Client) find(ctx context.Context, name string) (found, bool, error) {
 	out, err := c.Runner.Docker(ctx, "ps", "-a", "--filter", "label="+Label+"=1", "--filter", "name=^"+name+"$", "--format",
-		`{{.State}}\t{{.Label "`+labelSpec+`"}}\t{{.Label "`+labelBinary+`"}}`)
+		`{{.State}}\t{{.Label "`+labelSpec+`"}}\t{{.Label "`+labelBinary+`"}}\t{{.Label "`+labelGuard+`"}}`)
 	if err != nil {
 		return found{}, false, err
 	}
@@ -985,10 +1016,14 @@ func (c *Client) find(ctx context.Context, name string) (found, bool, error) {
 		return found{}, false, nil
 	}
 	f := strings.Split(ls[0], "\t")
-	for len(f) < 3 {
+	for len(f) < 4 {
 		f = append(f, "")
 	}
-	return found{state: f[0], spec: f[1], bin: f[2]}, true, nil
+	guard := f[3]
+	if guard == "" {
+		guard = "none" // a box made before the guard was
+	}
+	return found{state: f[0], spec: f[1], bin: f[2], guard: guard}, true, nil
 }
 
 func (c *Client) warn(msg string) {
@@ -1013,6 +1048,12 @@ func specLabel(s Spec) string {
 		// Only when it keeps one, so a box made before state was is the
 		// same box.
 		words = append(words, "state")
+	}
+	if g := guardLabel(s); g != "" {
+		// Likewise only with a guard: the state and every mount, so a
+		// repository whose hooks, config or submodules changed is another
+		// box.
+		words = append(words, "guard", g)
 	}
 	for _, v := range words {
 		h.Write([]byte(v))

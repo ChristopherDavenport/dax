@@ -26,6 +26,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
+	"github.com/ChristopherDavenport/dax/internal/box"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -49,6 +50,7 @@ type boxEnvelope struct {
 	Files    string   `json:"files"`
 	Internet string   `json:"internet"`
 	Secrets  []string `json:"secrets"`
+	Guard    string   `json:"guard"`
 }
 
 // boxEnvelopes are the units raw, a box host's resolved box, names.
@@ -136,9 +138,20 @@ func newConfiner(mode string, raw json.RawMessage, set *executor.Set, project []
 		label := "box:" + e.Runtime + ":" + e.Name
 		switch e.Kind {
 		case "workspace":
-			if mode == config.ConfineWorkspace && e.Internet == "off" && sandboxed(e.Runtime) {
-				c.workspace = label
+			if mode != config.ConfineWorkspace || e.Internet != "off" || !sandboxed(e.Runtime) {
+				break
 			}
+			// Only behind the git guard: a program a confined call runs
+			// could otherwise write a hook or config the user's git runs.
+			if e.Guard != box.GuardOn {
+				why := e.Guard
+				if why == "" {
+					why = "the box host did not say it holds the repository's hooks and config read-only (an older dax there?)"
+				}
+				fmt.Fprintf(warnings{}, "dax: box.confine workspace: the workspace's tools ask as without it: %s\n", why)
+				break
+			}
+			c.workspace = label
 		case "mcp":
 			if e.Internet == "off" && len(e.Secrets) == 0 && containedFiles(e.Files) && sandboxed(e.Runtime) && !asked.unit(e.Name) {
 				c.units[e.Name] = label

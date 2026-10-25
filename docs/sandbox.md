@@ -654,11 +654,48 @@ reason not every call is taken as confined:
   covers keeps that tool asking: `bash`, `write` and `edit` are then
   not confined at all, and a unit a project's ask names is not either.
 
-What it does not do: a confined command's own program is the box's
-business, not the policy's. `go test` runs the repository's tests, a
-test can write `.git/hooks`, and `cp` follows a link the repository
-already has; the protected paths stop the model's own commands naming
-them, nothing finer. Turn `box.confine` on for projects whose code you
+#### The git guard
+
+The protected paths stop the model's own commands naming them; they do
+not stop a program a confined command runs. A confined `write` of a
+Makefile whose rule writes `.git/hooks/pre-commit`, then a confined
+`make`, would leave a hook that git on your machine runs at your next
+commit, and `go test`, `go generate`, `npm test` or a `tar x` can do the
+same, or set `core.fsmonitor` in `.git/config`. So with `workspace` the
+box host holds what your git trusts read-only in the box, mounted over
+the read-write project, and the box cannot change it whatever runs:
+
+- the git dir's `config` (and `config.worktree`), and its `hooks`,
+  which the box host makes, empty, when the repository has none, so
+  nothing in the box can make them;
+- every submodule's git dir under `.git/modules`, the same way;
+- `core.hooksPath` (yours, global config included) when it is in the
+  project, and `.husky`;
+- a `.git` file's git dir when it is in the project; one outside it
+  (a worktree of a repository elsewhere) the box cannot reach anyway.
+
+In the box `git commit`, `git branch`, `git fetch` into refs and the
+rest that writes objects, refs and the index work; `git config`, `git
+remote add` and installing hooks fail with `Read-only file system`. A
+path among these that leads out of the project, or a hooks path that
+is the project's root, refuses the box with the reason.
+
+The workspace's envelope in the session's header says `"guard": "on"`,
+and the session takes the workspace's tools as confined only when it
+does. A box made before the guard, or without it, is refused with
+`dax box down` to make it again, and so is one whose repository's
+hooks, config or submodules changed since. A project that is not a git
+repository has nothing to guard, and a `git init` in the box would make
+one your git trusts: the box host says `"guard": "none: not a git
+repository"`, the workspace's tools ask as without `box.confine` (units
+are unchanged), and dax says why when the session starts. Run `git
+init` before boxing such a project.
+
+What it does not do: a confined command's own program is otherwise the
+box's business, not the policy's. A test can rewrite any source in the
+project, an environment file or CI config included, and `cp` follows a
+link the repository already has; none of that runs on your machine
+until you run it. Turn `box.confine` on for projects whose code you
 would run on your own machine without reading it first.
 
 ### What a box does not do

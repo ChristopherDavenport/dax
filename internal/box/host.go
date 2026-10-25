@@ -230,6 +230,10 @@ type Request struct {
 	Profile string   `json:"profile,omitempty"`
 	MCP     []string `json:"mcp,omitempty"`
 	Tighten Tighten  `json:"tighten,omitzero"`
+	// Guard asks for the workspace's git guard (box.confine
+	// "workspace"): the repository's hooks and config read-only in the
+	// box. The answer's workspace envelope says whether it is in place.
+	Guard bool `json:"guard,omitempty"`
 }
 
 // Tighten narrows a profile's workspace unit: smaller limits, less
@@ -269,6 +273,9 @@ type Resolved struct {
 	Profile   string
 	Workspace Settings
 	Units     []Settings
+	// Guard is the request's: the workspace box is made with its git
+	// guard.
+	Guard bool
 }
 
 // Envelope is a unit as the session and its record see it: what it
@@ -283,6 +290,9 @@ type Envelope struct {
 	Internet string   `json:"internet"`
 	Allow    []string `json:"allow,omitempty"`
 	Secrets  []string `json:"secrets,omitempty"`
+	// Guard is the workspace's git guard when one was asked for: GuardOn
+	// ("on"), or why there is none ("none: not a git repository").
+	Guard string `json:"guard,omitempty"`
 }
 
 // BoxInfo is what the box host tells the session it resolved, in its
@@ -755,7 +765,7 @@ func (h HostConfig) Resolve(r Request) (Resolved, error) {
 		return Resolved{}, err
 	}
 	s.Rules = rules
-	out := Resolved{Profile: name, Workspace: s}
+	out := Resolved{Profile: name, Workspace: s, Guard: r.Guard}
 	want := p.MCP
 	if len(r.MCP) > 0 {
 		for _, m := range r.MCP {

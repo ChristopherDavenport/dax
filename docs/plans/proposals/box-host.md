@@ -363,8 +363,15 @@ for bash lines the analyzer reads whole and that hide nothing. The
 claim is the session's, from the box host's envelope, never the
 executor's or a unit's own; a SourceBox bare ask makes it matter, and
 the session also claims whatever its policy allows without SourceBox,
-so nothing that ran unasked starts asking. docs/sandbox.md, "Fewer
-questions in a box", has the rules.
+so nothing that ran unasked starts asking. Because a confined call is
+judged by its line and not by the program it runs, the workspace's
+claim also needs the git guard: the session asks for it (`guard` in
+the request), the box host mounts the repository's config and hooks,
+each submodule's, an in-project `core.hooksPath` and `.husky`
+read-only over the project and says so in the workspace's envelope
+(`"guard": "on"`, or why not), and the session claims the workspace's
+tools only behind it. docs/sandbox.md, "Fewer questions in a box", has
+the rules.
 
 ## Identity
 

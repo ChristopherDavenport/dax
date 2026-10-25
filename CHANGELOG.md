@@ -20,6 +20,17 @@ versions may break flags and the config file.
   without it starts asking, and a project's bare ask for a tool keeps
   it asking. The rules are a new policy source, `dax:box`. User config
   only.
+- Added: the git guard. With `box.confine workspace` the box host holds
+  the repository's `.git/config`, `.git/hooks` (made when missing), each
+  submodule's, `core.hooksPath` in the project and `.husky` read-only
+  in the box, mounted over the project, so no program a confined call
+  runs (a `make`, a test) can leave a hook or config your git runs
+  outside the box. The workspace's envelope says `"guard": "on"`, and
+  the workspace's tools are taken as confined only then; a project that
+  is not a git repository, or an older box host, keeps them asking. A
+  box made without the guard, or whose repository's hooks, config or
+  submodules changed, is refused until `dax box down`. `dax box up
+  -guard` makes a guarded box by hand.
 - Changed: `/mcp add` and a config MCP server may not take a box
   unit's name, or that name and an underscore, whose tools would be
   named as the unit's.

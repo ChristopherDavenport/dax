@@ -780,6 +780,9 @@ func BoxOf(user Layer, f Flags) (*BoxSettings, error) {
 	if s.Confine == "" {
 		s.Confine = ConfineOff
 	}
+	// The workspace's claim needs its git guard: the box host holds the
+	// repository's hooks and config read-only, and says so.
+	s.Request.Guard = s.Confine == ConfineWorkspace
 	if b.Tighten != nil {
 		s.Request.Tighten = *b.Tighten
 	}

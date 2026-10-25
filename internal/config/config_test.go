@@ -748,7 +748,7 @@ func TestBoxPrecedence(t *testing.T) {
 	flagHost := BoxSettings{Host: "ssh://other", Confine: ConfineOff, SSH: &SSHTarget{Host: "other"}}
 	confined := parse(t, `{"box":{"confine":"units"}}`, false)
 	fromConfined := BoxSettings{Host: BoxLocal, Confine: ConfineUnits}
-	flagConfine := BoxSettings{Host: BoxLocal, Confine: ConfineWorkspace}
+	flagConfine := BoxSettings{Host: BoxLocal, Confine: ConfineWorkspace, Request: box.Request{Guard: true}}
 	flagConfineOff := BoxSettings{Host: BoxLocal, Confine: ConfineOff}
 	for _, tc := range []struct {
 		name  string
