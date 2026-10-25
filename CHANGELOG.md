@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.23 - 2026-10-24
 
 - Fixed: a box unit's server could lose the last of its output, standard
   error most of all, when it exited: its pipes were exec's own, which
