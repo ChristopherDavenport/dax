@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.29 - 2026-10-26
 
 - Added: `dax workspace -connect URL`, the served workspace for a host
   the session cannot reach: in place of listening, it dials out to a
