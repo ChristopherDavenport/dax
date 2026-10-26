@@ -1039,6 +1039,9 @@ func TestWorkspacePrecedence(t *testing.T) {
 		{"the flag and the file's box", boxed, Flags{Workspace: ptr("https://box.example")}, "-workspace: your config's box says where the tools run; give -box=false"},
 		{"-box and the file's workspace", user, Flags{Box: ptr(true)}, `-box: your config's workspace says where the tools act; give -workspace ""`},
 		{"pass_env names the token", parse(t, `{"workspace":{"url":"https://box.example"},"pass_env":["DAX_WORKSPACE_TOKEN"]}`, false), Flags{}, "pass_env: DAX_WORKSPACE_TOKEN holds the workspace's token"},
+		{"the model's key's variable", parse(t, `{"provider":"openresponses","model":"m","base_url":"https://x","api_key_env":"SHARED","workspace":{"url":"https://box.example","token_env":"SHARED"}}`, false), Flags{}, "workspace.token_env: SHARED is api_key_env too"},
+		{"an MCP server's token", parse(t, `{"mcp_servers":{"docs":{"url":"https://docs.example/mcp","token_env":"DAX_WORKSPACE_TOKEN"}},"workspace":{"url":"https://box.example"}}`, false), Flags{}, "workspace.token_env: DAX_WORKSPACE_TOKEN is MCP server docs's token_env too"},
+		{"a peer's token", parse(t, `{"peers":{"r":{"url":"https://r.example","token_env":"SHARED"}},"workspace":{"url":"https://box.example","token_env":"SHARED"}}`, false), Flags{}, "workspace.token_env: SHARED is peer r's token_env too"},
 		{"executor.pass_env names the token", parse(t, `{"workspace":{"url":"https://box.example","token_env":"T"},"executor":{"pass_env":["T"]}}`, false), Flags{}, "executor.pass_env: T holds the workspace's token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

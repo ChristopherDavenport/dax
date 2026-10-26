@@ -521,14 +521,19 @@ func run(ctx context.Context, args []string, p program) error {
 // address recorded. Nothing is started or dialed. A session whose tools
 // ran elsewhere than this machine says where at the end of its line.
 func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f config.Flags) error {
-	var user config.Layer
-	if f.Executor == nil {
-		var err error
-		if user, err = loadUser(cfgPath); err != nil {
-			return err
-		}
+	// Where the tools act is resolved as a run resolves it (config's
+	// Resolve: the executor, the workspace, then the box, from your file
+	// and the flags), with the same refusals of two together, so -list
+	// lists the project a run with these flags would act in.
+	user, err := loadUser(cfgPath)
+	if err != nil {
+		return err
 	}
 	argv, url, err := config.ExecutorOf(user, f)
+	if err != nil {
+		return err
+	}
+	served, err := config.WorkspaceOf(user, f)
 	if err != nil {
 		return err
 	}
@@ -540,10 +545,6 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		if argv, _, err = boxLauncher(*bs, dir); err != nil {
 			return err
 		}
-	}
-	served, err := config.WorkspaceOf(user, f)
-	if err != nil {
-		return err
 	}
 	var (
 		sums []agentsession.Summary

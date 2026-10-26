@@ -40,6 +40,12 @@ versions may break flags and the config file.
   on SIGINT and SIGTERM, ending what they started, where a hangup
   killed them before; and their HTTP servers close a keep-alive
   connection left idle for two minutes. `dax workspace` does the same.
+- Changed: `dax serve` refuses a `$DAX_SERVE_TOKEN` or
+  `$DAX_SERVE_A2A_TOKEN` shorter than 32 bytes, which could be guessed;
+  leave it unset and serve makes one, as before. `dax workspace` takes
+  the same rule for `$DAX_WORKSPACE_TOKEN`, refuses a `-pass-env` that
+  names it, and `workspace.token_env` may not be `api_key_env`, an MCP
+  server's or a peer's `token_env`.
 - Added: `agent.ListWorkspaceURL`, the sessions of a workspace served
   at a URL, without dialing it.
 - Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,

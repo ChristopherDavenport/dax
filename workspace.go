@@ -23,6 +23,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"time"
 
@@ -72,6 +73,9 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	pass, err := splitPassEnv("workspace", *passEnv)
 	if err != nil {
 		return err
+	}
+	if slices.Contains(pass, config.WorkspaceTokenEnv) {
+		return fmt.Errorf("workspace: -pass-env: %s is this server's token, which no command it runs may be given", config.WorkspaceTokenEnv)
 	}
 	return (&workspaceServer{name: p.name, dir: *dir, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, pass: pass, signals: true}).run(ctx)
 }

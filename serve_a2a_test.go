@@ -1031,8 +1031,8 @@ func TestTheConversationsDirectoryIsKeyedByStoreAndWorkspace(t *testing.T) {
 // dax serve refuses an A2A token that is serve's own, before it serves
 // anything or takes the conversations' directory.
 func TestServeRefusesAnA2ATokenThatIsServes(t *testing.T) {
-	t.Setenv(serveTokenEnv, "one-token-for-both")
-	t.Setenv(a2aTokenEnv, "one-token-for-both")
+	t.Setenv(serveTokenEnv, "one-token-for-both-serve-and-a2a-alike")
+	t.Setenv(a2aTokenEnv, "one-token-for-both-serve-and-a2a-alike")
 	rig := startRig(t, &steps{}, policy.Rules{}, nil, nil, false)
 	dir := t.TempDir()
 	f := &serveFront{info: frontInfo{Name: "dax", Dir: rig.dir}, addr: "127.0.0.1:0", out: &syncBuf{}, tokenDir: t.TempDir(), a2a: true, a2aDir: dir}

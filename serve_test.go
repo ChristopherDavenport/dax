@@ -320,9 +320,15 @@ func TestTheServeTokenFileIsPrivate(t *testing.T) {
 		t.Errorf("the token file is still there after cleanup: %v", err)
 	}
 
+	// A short one is refused, whatever it is for.
 	t.Setenv(serveTokenEnv, "from-the-environment")
+	if _, _, _, err := serveToken("s2", dir); err == nil || !strings.Contains(err.Error(), "$DAX_SERVE_TOKEN is 20 bytes; a token from the environment must be at least 32") {
+		t.Errorf("a short token: %v", err)
+	}
+	long := "from-the-environment-and-long-enough"
+	t.Setenv(serveTokenEnv, long)
 	token, file, cleanup, err = serveToken("s2", dir)
-	if err != nil || token != "from-the-environment" || file != "" {
+	if err != nil || token != long || file != "" {
 		t.Errorf("with $%s: token %q, file %q, %v", serveTokenEnv, token, file, err)
 	}
 	cleanup()

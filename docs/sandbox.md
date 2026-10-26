@@ -1172,7 +1172,8 @@ or in your config: {"workspace": {"url": "http://127.0.0.1:7779", "token_env": "
 ```
 
 It runs until a signal, reads no config, and says this on standard
-error. The token is `$DAX_WORKSPACE_TOKEN` when set; otherwise it makes
+error. The token is `$DAX_WORKSPACE_TOKEN` when set, which must be at
+least 32 bytes (`openssl rand -base64 32`); otherwise it makes
 one and writes it to a file only you can read, removed when it stops,
 and prints the file's path, never the token. Copy the token to the
 machine you run dax on, by whatever you trust, and put it in the
@@ -1180,7 +1181,8 @@ variable there. The token's holder may read and write the directory
 and run any command as the user `dax workspace` runs as; there is no
 `-insecure-no-auth`. The served directory's commands get its
 environment less anything that looks like a credential, unless
-`-pass-env` names it, as `dax execute`'s do.
+`-pass-env` names it, as `dax execute`'s do; `-pass-env` may not name
+`DAX_WORKSPACE_TOKEN`, the server's own token.
 
 Without a certificate it listens on loopback only (`127.0.0.1`, `::1`,
 `localhost`; port 0 picks one), and another machine tunnels:
@@ -1203,7 +1205,7 @@ your config names:
 | `workspace.` | |
 |---|---|
 | `url` | https, or http to a loopback host; no user, password, query or fragment. `-workspace URL` replaces it, `-workspace ""` clears it |
-| `token_env` | the variable holding the token; default `DAX_WORKSPACE_TOKEN`. dax takes it out of its own environment as soon as the settings are read, before it starts any process (the key command first), so no child here inherits it, and never prints or records it. `pass_env` and `executor.pass_env` may not name it |
+| `token_env` | the variable holding the token; default `DAX_WORKSPACE_TOKEN`. dax takes it out of its own environment as soon as the settings are read, before it starts any process (the key command first), so no child here inherits it, and never prints or records it. `pass_env` and `executor.pass_env` may not name it, nor may it be `api_key_env` or an MCP server's or a peer's `token_env` |
 | `tls_ca` | for https: a CA certificate (PEM) in place of the system's roots; nothing skips the verification |
 
 Only your config and the flags can name a workspace: a project's

@@ -119,6 +119,7 @@ func TestServingAWorkspaceRefuses(t *testing.T) {
 		{[]string{"workspace", "-tls-cert", "cert.pem"}, "dax workspace: -tls-cert and -tls-key go together"},
 		{[]string{"workspace", "-tls-cert", "/nonexistent/cert.pem", "-tls-key", "/nonexistent/key.pem"}, "dax workspace: -tls-cert, -tls-key"},
 		{[]string{"workspace", "-pass-env", "A=B"}, `workspace: -pass-env: "A=B" is not a variable name`},
+		{[]string{"workspace", "-pass-env", "SSH_AUTH_SOCK,DAX_WORKSPACE_TOKEN"}, "-pass-env: DAX_WORKSPACE_TOKEN is this server's token"},
 		{[]string{"workspace", "-insecure-no-auth"}, "flag provided but not defined: -insecure-no-auth"},
 		{[]string{"workspace", "/srv/app"}, `unexpected argument "/srv/app"`},
 		{[]string{"workspace", "-dir", "/nonexistent/dir", "-listen", "127.0.0.1:0"}, "workspace:"},
@@ -127,6 +128,21 @@ func TestServingAWorkspaceRefuses(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// A token from the environment shorter than 32 bytes is refused before
+// anything is served, and no file is written.
+func TestAServedWorkspaceRefusesAShortToken(t *testing.T) {
+	home(t)
+	t.Setenv(config.WorkspaceTokenEnv, "x")
+	tokens := t.TempDir()
+	w := &workspaceServer{name: "dax", dir: t.TempDir(), addr: "127.0.0.1:0", out: &syncBuffer{}, tokenDir: tokens}
+	if err := w.run(t.Context()); err == nil || !strings.Contains(err.Error(), "$DAX_WORKSPACE_TOKEN is 1 bytes; a token from the environment must be at least 32") {
+		t.Errorf("a short token: %v", err)
+	}
+	if entries, _ := os.ReadDir(tokens); len(entries) != 0 {
+		t.Errorf("files were written: %v", entries)
 	}
 }
 
@@ -240,12 +256,12 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 		t.Errorf("the token file outlived dax workspace: %v", err)
 	}
 
-	t.Setenv(config.WorkspaceTokenEnv, "the-environment's-token")
+	t.Setenv(config.WorkspaceTokenEnv, "the-environment's-token-long-enough-to-take")
 	s = serveWorkspace(t, dir, nil)
 	if s.tokenFile != "" {
 		t.Errorf("a token from the environment was written to %s", s.tokenFile)
 	}
-	if out := s.out.String(); strings.Contains(out, "the-environment's-token") || !strings.Contains(out, "token: $DAX_WORKSPACE_TOKEN") {
+	if out := s.out.String(); strings.Contains(out, "the-environment's-token-long-enough-to-take") || !strings.Contains(out, "token: $DAX_WORKSPACE_TOKEN") {
 		t.Errorf("dax workspace's lines with the environment's token:\n%s", out)
 	}
 	if ws, err = dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, os.Getenv(config.WorkspaceTokenEnv)); err != nil {
@@ -486,7 +502,20 @@ func TestListFindsTheServedWorkspacesSessions(t *testing.T) {
 	if out := list(cfg, config.Flags{Workspace: str("")}); strings.Contains(out, id) || out == "" {
 		t.Errorf("-list -workspace \"\" lists %q, want this directory's session alone", out)
 	}
+	// -list resolves where the tools act as a run does: -executor ""
+	// leaves the config's workspace, and -executor with it is refused.
+	if out := list(cfg, config.Flags{Executor: str("")}); !strings.Contains(out, id) || !strings.HasSuffix(out, at) {
+		t.Errorf("-list -executor \"\" with the config's workspace: %q", out)
+	}
+	if err := runList(context.Background(), io.Discard, root, here, cfg, config.Flags{Executor: str("ssh host dax execute")}); err == nil || !strings.Contains(err.Error(), `-executor: your config's workspace says where the tools act`) {
+		t.Errorf("-list -executor beside the config's workspace: %v", err)
+	}
+	if err := runList(context.Background(), io.Discard, root, here, cfg, config.Flags{Box: ptrTo(true)}); err == nil || !strings.Contains(err.Error(), `-box: your config's workspace says where the tools act`) {
+		t.Errorf("-list -box beside the config's workspace: %v", err)
+	}
 }
+
+func ptrTo[T any](v T) *T { return &v }
 
 // The workspace's token leaves dax's environment before anything here
 // starts a process: the key command, which provider.New runs at once,

@@ -726,9 +726,11 @@ DAX_WORKSPACE_TOKEN=... dax -workspace http://127.0.0.1:7779
 | `-pass-env NAME,NAME` | credential-looking variables the workspace's commands keep anyway, as `dax execute`'s |
 
 It reads no config. Every request needs its one token, whose holder may
-read and write the directory and run any command as its user there: `$DAX_WORKSPACE_TOKEN`, or one it
-makes and writes to a file only you can read under `~/.dax/serve`,
-removed when it stops; it prints the file's path, never the token.
+read and write the directory and run any command as its user there:
+`$DAX_WORKSPACE_TOKEN` (at least 32 bytes, and not one `-pass-env`
+may name), or one it makes and writes to a file only you can read
+under `~/.dax/serve`, removed when it stops; it prints the file's path,
+never the token.
 Authentication is always on: there is no `-insecure-no-auth`. Without
 TLS it listens on loopback only, and another machine tunnels to it.
 A request from a web page is refused. A signal stops it, and every

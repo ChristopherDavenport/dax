@@ -134,8 +134,8 @@ func remoteProject(t *testing.T) (dir, outside string) {
 
 // The tools and the policy's checks behave the same whether the
 // workspace is this machine's directory, a container that calls it
-// /workspace, or the directory served over HTTP (remote): a path is the
-// workspace's, written in its own namespace.
+// /workspace, or that container served over HTTP (remote): a path is
+// the workspace's, written in its own namespace.
 func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 	dir, outside := remoteProject(t)
 	local, err := workspace.NewLocal(dir, DefaultEnv(nil))
@@ -143,7 +143,9 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { local.Close() })
-	for _, ws := range []workspace.Workspace{local, newMapped(t, dir), served(t, local)} {
+	// The served one is the container stand-in, so its root is no path
+	// on this machine and a check that read this machine's disk fails.
+	for _, ws := range []workspace.Workspace{local, newMapped(t, dir), served(t, newMapped(t, dir))} {
 		root := ws.Root()
 		t.Run(ws.Descriptor().Kind, func(t *testing.T) {
 			f := NewFiles(ws)

@@ -1670,6 +1670,22 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 				return s, fmt.Errorf("%s: %s holds the workspace's token, which only the workspace is sent; take it out of %s", list.field, w.TokenEnv, list.field)
 			}
 		}
+		// One variable for two credentials would send one where the
+		// other goes, and dax takes the workspace's out of its
+		// environment, so the other would find none.
+		if w.TokenEnv == s.APIKeyEnv {
+			return s, fmt.Errorf("workspace.token_env: %s is api_key_env too, the model's key; name a variable of the workspace's own", w.TokenEnv)
+		}
+		for _, m := range s.MCP {
+			if m.TokenEnv == w.TokenEnv {
+				return s, fmt.Errorf("workspace.token_env: %s is MCP server %s's token_env too; name a variable of the workspace's own", w.TokenEnv, m.Name)
+			}
+		}
+		for _, p := range s.Peers {
+			if p.TokenEnv == w.TokenEnv {
+				return s, fmt.Errorf("workspace.token_env: %s is peer %s's token_env too; name a variable of the workspace's own", w.TokenEnv, p.Name)
+			}
+		}
 	}
 	// A peer's token is the peer's alone: no command, server or
 	// launcher may be handed it.

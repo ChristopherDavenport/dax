@@ -380,11 +380,20 @@ func serveToken(id, dir string) (token, file string, cleanup func(), err error) 
 	return makeToken(serveTokenEnv, dir, id+".token")
 }
 
-// makeToken is a token: the one env holds, or one made here and written
-// to name in dir (~/.dax/serve when empty), a file only the user can
-// read, which cleanup removes.
+// minTokenBytes is the least a token from the environment may be: a
+// made one is 43 characters of 32 random bytes, and a short one a user
+// chose (or one meant for something else) could be guessed.
+const minTokenBytes = 32
+
+// makeToken is a token: the one env holds, which must be at least
+// minTokenBytes long, or one made here and written to name in dir
+// (~/.dax/serve when empty), a file only the user can read, which
+// cleanup removes.
 func makeToken(env, dir, name string) (token, file string, cleanup func(), err error) {
 	if t := os.Getenv(env); t != "" {
+		if len(t) < minTokenBytes {
+			return "", "", nil, fmt.Errorf("$%s is %d bytes; a token from the environment must be at least %d (openssl rand -base64 32 makes one), or leave it unset and one is made", env, len(t), minTokenBytes)
+		}
 		return t, "", func() {}, nil
 	}
 	buf := make([]byte, 32)
