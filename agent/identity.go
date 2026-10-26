@@ -12,6 +12,8 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // A session's project is its workspace: where its tools act, as the
@@ -186,6 +188,49 @@ func ListExecutor(ctx context.Context, root string, argv []string) (workspace.De
 // as DialExecutorURL reaches it.
 func ListExecutorURL(ctx context.Context, root, endpoint string) (workspace.Descriptor, []agentsession.Summary, error) {
 	return listExecutor(ctx, root, executorURLID(endpoint))
+}
+
+// ListWorkspaceURL returns the sessions of the project a workspace
+// served at baseURL holds (`dax workspace`, reached by -workspace),
+// without dialing it: the workspace the latest session recorded in a
+// remote workspace at that URL names, its root the served root, and
+// every session recorded in that workspace, newest first. A URL no
+// recorded session used lists nothing, and the descriptor is zero.
+// URLs are compared as config.WorkspaceRef writes them, the identity
+// -workspace records, so spellings of one address are one; a URL
+// stands for whatever serves there last, as an executor's address does.
+func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Descriptor, []agentsession.Summary, error) {
+	var none workspace.Descriptor
+	if !cas.IsStore(root) {
+		return none, nil, nil
+	}
+	store, err := readOnly(root)
+	if err != nil {
+		return none, nil, err
+	}
+	defer store.Close()
+	ref := config.WorkspaceRef(baseURL)
+	var (
+		ws      workspace.Descriptor
+		found   bool
+		scanErr error
+	)
+	// The store lists newest first, so the first is the latest.
+	for sum, err := range store.List(ctx, agentsession.ListFilter{}) {
+		if err != nil {
+			scanErr = err
+			break
+		}
+		if d, ok := recordedIn(sum.Header); ok && d.Kind == workspace.KindRemote && config.WorkspaceRef(d.Ref) == ref {
+			ws, found = d, true
+			break
+		}
+	}
+	if !found {
+		return none, nil, scanErr
+	}
+	sums, err := listIn(ctx, store, agentsession.ListFilter{CWD: ws.Root}, &ws)
+	return ws, sums, errors.Join(scanErr, err)
 }
 
 func listExecutor(ctx context.Context, root, id string) (workspace.Descriptor, []agentsession.Summary, error) {

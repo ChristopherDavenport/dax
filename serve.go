@@ -42,9 +42,20 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
+
+// stopSignals stop dax serve, dax execute and dax workspace cleanly:
+// an interrupt, a termination, a hangup (the terminal or the ssh
+// session it ran in went away) and a quit, each ending what they
+// started before they exit.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
+// serveIdle is how long a server of dax's keeps a keep-alive
+// connection no request is on; it never cuts a stream.
+const serveIdle = 2 * time.Minute
 
 // serveTokenEnv names the variable that holds the token dax serve
 // takes and dax attach sends. Without it, dax serve makes one and
@@ -162,7 +173,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	// as the session is served.
 	defer sess.Answering()()
 
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 
@@ -206,7 +217,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	stop := ctx
 	if f.signals {
 		var cancel context.CancelFunc
-		stop, cancel = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		stop, cancel = signal.NotifyContext(ctx, stopSignals...)
 		defer cancel()
 	}
 	var serveErr error
@@ -286,15 +297,21 @@ func (f *serveFront) listen() (net.Listener, string, error) {
 // serveTLS is the TLS dax serve serves with: the certificate and key
 // files, both or neither (nil: no TLS). TLS 1.2 is the least it takes.
 func serveTLS(certFile, keyFile string) (*tls.Config, error) {
+	return loadTLS("dax serve", certFile, keyFile)
+}
+
+// loadTLS is the TLS mode serves with: the certificate and key files,
+// both or neither (nil: no TLS), at TLS 1.2 at least.
+func loadTLS(mode, certFile, keyFile string) (*tls.Config, error) {
 	switch {
 	case certFile == "" && keyFile == "":
 		return nil, nil
 	case certFile == "" || keyFile == "":
-		return nil, errors.New("dax serve: -tls-cert and -tls-key go together")
+		return nil, errors.New(mode + ": -tls-cert and -tls-key go together")
 	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("dax serve: -tls-cert, -tls-key: %w", err)
+		return nil, fmt.Errorf("%s: -tls-cert, -tls-key: %w", mode, err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
@@ -364,11 +381,20 @@ func serveToken(id, dir string) (token, file string, cleanup func(), err error) 
 	return makeToken(serveTokenEnv, dir, id+".token")
 }
 
-// makeToken is a token: the one env holds, or one made here and written
-// to name in dir (~/.dax/serve when empty), a file only the user can
-// read, which cleanup removes.
+// minTokenBytes is the least a token from the environment may be: a
+// made one is 43 characters of 32 random bytes, and a short one a user
+// chose (or one meant for something else) could be guessed.
+const minTokenBytes = 32
+
+// makeToken is a token: the one env holds, which must be at least
+// minTokenBytes long, or one made here and written to name in dir
+// (~/.dax/serve when empty), a file only the user can read, which
+// cleanup removes.
 func makeToken(env, dir, name string) (token, file string, cleanup func(), err error) {
 	if t := os.Getenv(env); t != "" {
+		if len(t) < minTokenBytes {
+			return "", "", nil, fmt.Errorf("$%s is %d bytes; a token from the environment must be at least %d (openssl rand -base64 32 makes one), or leave it unset and one is made", env, len(t), minTokenBytes)
+		}
 		return t, "", func() {}, nil
 	}
 	buf := make([]byte, 32)
@@ -409,15 +435,15 @@ func makeToken(env, dir, name string) (token, file string, cleanup func(), err e
 // is not token. closeStore ends the record's follows.
 func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
 	ctl := control.Handler(viewed{sess},
-		control.WithAuthenticator(control.BearerTokens(map[string]control.Principal{
+		control.WithAuthenticator(authn.New(map[string]control.Principal{
 			token: {Name: servePrincipal, Scopes: control.AllScopes},
-		})),
+		}).Authenticator(control.ErrUnauthenticated)),
 		control.WithCommands(serveCommands(sess, sess, dir)),
 	)
 	store := remote.NewHandler(sess.Recorder().Store(),
-		remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+		remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
-		})),
+		}).Authenticator(remote.ErrUnauthenticated)),
 		remote.WithErrorLog(logf),
 	)
 	mux := http.NewServeMux()

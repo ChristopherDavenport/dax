@@ -585,7 +585,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if trustFile == "" {
 		trustFile = DefaultMCPTrustFile(DefaultUserDir())
 	}
-	servers := trusted(o.MCP, ws.Descriptor(), trustFile, o.TrustMCP)
+	_, starts := ws.(workspace.Starter)
+	servers := trusted(o.MCP, ws.Descriptor(), !starts, trustFile, o.TrustMCP)
 	// Two servers whose tools would be named alike are refused: a rule
 	// for one's tools would be the other's (the -mcp flag's "cli"
 	// beside a configured "cli" among them).
@@ -1182,13 +1183,23 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 }
 
 // mcpDialOf is the dial of m wherever it runs: at its URL, on this
-// machine, or as mcpServer places a command.
+// machine, or as mcpServer places a command. A project's command
+// server is placed in the workspace or not at all: in a workspace
+// elsewhere that cannot start a process (a served one whose token
+// lacks exec), it is refused rather than moved to this machine, as an
+// executor that cannot start one fails it. Your own servers keep the
+// rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
 	switch {
 	case m.URL != "":
 		return mcpURL(m.URL, m.TokenEnv)
 	case m.Host:
 		return mcpTransport(m.Command, s.env)
+	}
+	if _, ok := s.ws.(workspace.Starter); !ok && m.Project {
+		if d := s.ws.Descriptor(); d.Kind != workspace.KindLocal {
+			return nil, fmt.Errorf("the project's server would run on this machine, since its workspace, %s, cannot start a process; a project's servers run in its workspace or not at all: serve the workspace with a token that may run commands (dax workspace's does), or leave this server out of the project's config", where(d))
+		}
 	}
 	return mcpServer(s.ws, m.Command, s.env)
 }

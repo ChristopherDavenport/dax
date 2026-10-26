@@ -211,13 +211,13 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 		return strings.Join(out, ",")
 	}
 
-	if got := names(trusted([]MCPServer{mine, lint, docs}, here, file, false)); got != "mine" {
+	if got := names(trusted([]MCPServer{mine, lint, docs}, here, false, file, false)); got != "mine" {
 		t.Errorf("untrusted: %s", got)
 	}
 	if w := warned.String(); !strings.Contains(w, "lint, docs") || !strings.Contains(w, "-trust-mcp") {
 		t.Errorf("warning %q", w)
 	}
-	if got := names(trusted([]MCPServer{mine, lint, docs}, here, file, true)); got != "mine,lint,docs" {
+	if got := names(trusted([]MCPServer{mine, lint, docs}, here, false, file, true)); got != "mine,lint,docs" {
 		t.Errorf("with -trust-mcp: %s", got)
 	}
 	fi, err := os.Stat(file)
@@ -228,7 +228,7 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 		t.Errorf("trust directory: %v, %v", di, err)
 	}
 	// The same set, in another order, is trusted without the flag.
-	if got := names(trusted([]MCPServer{docs, mine, lint}, here, file, false)); got != "docs,mine,lint" {
+	if got := names(trusted([]MCPServer{docs, mine, lint}, here, false, file, false)); got != "docs,mine,lint" {
 		t.Errorf("trusted set: %s", got)
 	}
 	// A changed command, a changed placement, a server more: another set.
@@ -237,7 +237,7 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 		"moved to the host": {mine, {Name: "lint", Command: "lint-mcp", Host: true, Project: true}, docs},
 		"a server more":     {mine, lint, docs, {Name: "x", Command: "x", Project: true}},
 	} {
-		if got := names(trusted(set, here, file, false)); got != "mine" {
+		if got := names(trusted(set, here, false, file, false)); got != "mine" {
 			t.Errorf("%s: %s started", what, got)
 		}
 	}
@@ -247,14 +247,14 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 		{Kind: workspace.KindLocal, Root: "/src/q"},
 		{Kind: workspace.KindContainer, Ref: "box", Root: "/src/p"},
 	} {
-		if got := names(trusted([]MCPServer{mine, lint, docs}, other, file, false)); got != "mine" {
+		if got := names(trusted([]MCPServer{mine, lint, docs}, other, false, file, false)); got != "mine" {
 			t.Errorf("%+v: %s started", other, got)
 		}
 	}
 	// Trusting a new set for the project replaces the old one.
 	newSet := []MCPServer{mine, lint}
-	trusted(newSet, here, file, true)
-	if got := names(trusted([]MCPServer{mine, lint, docs}, here, file, false)); got != "mine" {
+	trusted(newSet, here, false, file, true)
+	if got := names(trusted([]MCPServer{mine, lint, docs}, here, false, file, false)); got != "mine" {
 		t.Errorf("the old set after a new one was trusted: %s", got)
 	}
 	tf, err := readTrust(file)
@@ -264,7 +264,7 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 	// No project servers: nothing to trust, nothing said.
 	var quiet syncBuffer
 	restore := CaptureWarnings(&quiet)
-	if got := names(trusted([]MCPServer{mine}, here, file, false)); got != "mine" || quiet.String() != "" {
+	if got := names(trusted([]MCPServer{mine}, here, false, file, false)); got != "mine" || quiet.String() != "" {
 		t.Errorf("no project servers: %s, %q", got, quiet.String())
 	}
 	restore()
@@ -272,7 +272,7 @@ func TestAProjectsServersNeedTrust(t *testing.T) {
 	if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := names(trusted([]MCPServer{mine, lint}, here, file, false)); got != "mine" {
+	if got := names(trusted([]MCPServer{mine, lint}, here, false, file, false)); got != "mine" {
 		t.Errorf("a broken trust file: %s", got)
 	}
 	if _, err := readTrust(file); err == nil || errors.Is(err, os.ErrNotExist) {
@@ -290,8 +290,8 @@ func TestATrustFileOthersCouldWriteTrustsNothing(t *testing.T) {
 	for _, which := range []string{"directory", "file"} {
 		t.Run(which, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "dax", "mcp-trust.json")
-			trusted(set, here, file, true)
-			if got := trusted(set, here, file, false); len(got) != 1 {
+			trusted(set, here, false, file, true)
+			if got := trusted(set, here, false, file, false); len(got) != 1 {
 				t.Fatalf("the trusted set did not start: %v", got)
 			}
 			target := filepath.Dir(file)
@@ -305,7 +305,7 @@ func TestATrustFileOthersCouldWriteTrustsNothing(t *testing.T) {
 			if err := os.Chmod(target, fi.Mode().Perm()|0o020); err != nil {
 				t.Fatal(err)
 			}
-			if got := trusted(set, here, file, false); len(got) != 0 {
+			if got := trusted(set, here, false, file, false); len(got) != 0 {
 				t.Errorf("a group-writable %s: %v started", which, got)
 			}
 			if !strings.Contains(warned.String(), "writable by other users") {

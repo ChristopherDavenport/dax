@@ -46,10 +46,10 @@ github.com/ChristopherDavenport/agentturn/session v0.0.32 h1:WRVnjViSSI6I1q8Ucrt
 github.com/ChristopherDavenport/agentturn/session v0.0.32/go.mod h1:k5/4hY20NSZePdT9JsW0+YYGKlYMwnNo+8NFOq2cKBY=
 github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.32 h1:78j71xr12edZ+gWipcCHLvFg64Pm2RSRXO/JO9qiiCE=
 github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.32/go.mod h1:3EJbmZdj7uU4LxBqJZQe55KaX0CLIgBW1VOvk7oKyFc=
-github.com/ChristopherDavenport/agentworkspace v0.0.4 h1:9Q6YbmO6GxMzAOEfR2jP/7joOEoiw8deX7kku4g1aWQ=
-github.com/ChristopherDavenport/agentworkspace v0.0.4/go.mod h1:SvUSPNOIoOBhmtDKnGn1QBdgaDXTUwutX49JKjIkpQs=
-github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.4 h1:3SOTaQLhzSmAbfi30WyDPv44ON1UjtvaDr517yK2Gr8=
-github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.4/go.mod h1:7l3TfcKSiktdV3cYNqXGg3kgqIP6qxi3B1cC3RVgiTY=
+github.com/ChristopherDavenport/agentworkspace v0.0.5 h1:fX8xFfpI83bXqZMXT0Dun2JV4jrVDzV/guRaSyzeDMo=
+github.com/ChristopherDavenport/agentworkspace v0.0.5/go.mod h1:SvUSPNOIoOBhmtDKnGn1QBdgaDXTUwutX49JKjIkpQs=
+github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.5 h1:9nrN75iXaRIcSu3MPVM4G3wnd+QmmvBIKUb8kA+LTSo=
+github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.5/go.mod h1:i7ngYITA97OwR6Eb21/XZSk9lVaIec27o1fKZsP22Cg=
 github.com/ChristopherDavenport/openresponses v0.0.15 h1:QdqIanhSw47FAMz4h6+dLL+RuTBPq3LBjcFb4Xb3AZM=
 github.com/ChristopherDavenport/openresponses v0.0.15/go.mod h1:oZT6GCySXw3+vL5LzrJrRI5qagBumqvwDZdp6Kr++a8=
 github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15 h1:oqfla3sdht63vHw0tpnacCzuu7xD6B1C2I0J7/pQchQ=

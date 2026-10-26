@@ -361,6 +361,7 @@ names the file and the field.
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
 | `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there) or `checkout` (`{"url", "ref"}`: a repository the box host clones and keeps, within its config's `checkouts.allow`; no credentials in the URL), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. `confine` (`off`, `units`, `workspace`) has the policy take the box's tools as confined where their envelope allows, so a bare ask for them does not ask; `workspace` also has the box host hold the repository's `.git` read-only in the box, the git guard (git that writes then fails there; commit outside it), and claims nothing for the workspace without it (docs/sandbox.md, "Fewer questions in a box"). Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
+| `workspace` | `{"url": "https://box.example:7779", "token_env": "DAX_WORKSPACE_TOKEN", "tls_ca": "ca.pem"}`: run the tools here, in a workspace `dax workspace` serves there (see [A served workspace](#a-served-workspace-dax-workspace)). `url` is https, or http to a loopback host, with no user, password, query or fragment; `token_env` names the variable holding its token (default `DAX_WORKSPACE_TOKEN`), which only the workspace is sent and `pass_env` may not name; `tls_ca`, for https, a CA certificate to verify its certificate against in place of the system's. Your file only; not with `executor` or `box` |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -374,7 +375,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor` or `peers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace` or `peers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -405,6 +406,7 @@ no other account could have written it.
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |
 | `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
+| `-workspace URL` | overrides `workspace.url`: the URL where `dax workspace` serves, its token from `$DAX_WORKSPACE_TOKEN` or `workspace.token_env`; `""` clears the config's. Refused with an executor or a box: clear the config's with `-executor ""` or `-box=false` |
 | `-box` | run the tools in this project's box (see below), with `box`'s settings or a local box host's default profile; `-box=false` runs here despite the config's `box`. Refused with an executor: clear the config's with `-executor ""` |
 | `-box-host local\|ssh://[user@]host[:port]`, `-box-profile NAME` | with `-box` or a `box` in your config, override `box.host` and `box.profile` |
 | `-box-confine off\|units\|workspace` | with `-box`, `box.confine` for this run |
@@ -693,6 +695,63 @@ Standard output carries MCP and nothing else. While it serves,
 `os.Stdout` is standard error, so a stray print from a tool cannot
 corrupt the stream; commands get no standard input and their output is
 captured. Logs and errors go to standard error.
+
+## A served workspace: `dax workspace`
+
+`dax workspace` serves a directory, whole, over HTTP: its files, its
+writes, its environment, its commands and its long-lived processes,
+each crossing the wire on its own (agentworkspace's `remote`). A
+session started with `-workspace` (or `"workspace"` in your config)
+acts in it, while its tools, their checks and the policy run here.
+`dax execute` cuts at the tool calls, so the tools run where they act;
+this cuts at the primitives, so the tools run here and only what they
+touch is there. [docs/sandbox.md](docs/sandbox.md#a-served-workspace-dax-workspace)
+compares the two.
+
+```sh
+dax workspace -dir ~/src/app                    # there
+# dax workspace: serving /home/me/src/app at http://127.0.0.1:7779
+# token: /home/me/.dax/serve/workspace-7779-1a2b3c4d.token
+# connect: DAX_WORKSPACE_TOKEN="$(cat /home/me/.dax/serve/workspace-7779-1a2b3c4d.token)" dax -workspace http://127.0.0.1:7779
+
+ssh -N -L 7779:127.0.0.1:7779 build-host &      # here
+DAX_WORKSPACE_TOKEN=... dax -workspace http://127.0.0.1:7779
+```
+
+| `dax workspace` flag | |
+|---|---|
+| `-dir DIR` | the directory to serve; default the current one |
+| `-listen ADDR` | where to serve; default `127.0.0.1:7779`, port 0 picks one. A loopback address unless `-tls-cert` and `-tls-key` are given |
+| `-tls-cert FILE`, `-tls-key FILE` | serve HTTPS with this certificate and key (PEM); then `-listen` may be any address |
+| `-pass-env NAME,NAME` | credential-looking variables the workspace's commands keep anyway, as `dax execute`'s |
+
+It reads no config. Every request needs its one token, whose holder may
+read and write the directory and run any command as its user there:
+`$DAX_WORKSPACE_TOKEN` (at least 32 bytes, and not one `-pass-env`
+may name), or one it makes and writes to a file only you can read
+under `~/.dax/serve`, removed when it stops; it prints the file's path,
+never the token.
+Authentication is always on: there is no `-insecure-no-auth`. Without
+TLS it listens on loopback only, and another machine tunnels to it.
+A request from a web page is refused. A signal stops it, and every
+process a session started in it ends first.
+
+The session sends the token from `workspace.token_env`
+(`DAX_WORKSPACE_TOKEN` by default), takes the variable out of its own
+environment as soon as its settings are read, before it starts any
+process (the key command first), so no child here gets it, and never
+prints or records it. The URL is https, verified against the system's roots or
+`workspace.tls_ca`, or http to a loopback host; only your config and
+the flags can name it, never a project's, and not beside an executor
+or a box. The session's header records the workspace as `remote`, the
+URL as its ref and the served root, and `-list -workspace URL` lists
+its sessions without connecting. The project's `AGENTS.md`,
+`.dax/skills` and `.dax/config.json` are the served directory's, read
+through it; your MCP servers start there, through the workspace (a
+token without `exec` cannot start them, and then your own run here and
+the project's not at all). It
+serves this machine's directory alone: MCP servers a workspace offers
+of its own (a box host's units) do not cross the wire yet.
 
 ## Policy
 
@@ -1451,8 +1510,9 @@ there.
 
 What is not there yet:
 
-- dax uses only `workspace.Local`; a container or remote workspace is
-  a program's to provide until agentworkspace ships one. `dax execute`
+- dax serves `workspace.Local` and dials agentworkspace's `remote`
+  (`dax workspace`, `-workspace`); a container workspace is a
+  program's to provide until agentworkspace ships one. `dax execute`
   serves the tools from inside a sandbox and `-executor`
   (`agent.Options.Executor`, `agent.DialExecutor`) runs a session's
   tools and MCP servers there and reads the project's files through

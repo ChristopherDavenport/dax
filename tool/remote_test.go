@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,9 +19,11 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 )
 
 // mapped stands in for a container: its processes and its files see
@@ -79,6 +83,30 @@ func (m *mapped) Exec(ctx context.Context, c workspace.Command) (*workspace.Outp
 	return o, nil
 }
 
+// served is ws as agentworkspace's remote serves it, dialed over HTTP
+// behind a bearer token whose principal may read, write and run, as
+// `dax workspace` serves a directory and -workspace dials it: every
+// stat, read, write and process crosses the wire on its own, and the
+// tools and the policy's checks run on this side.
+func served(t *testing.T, ws workspace.Workspace) workspace.Workspace {
+	t.Helper()
+	h, err := remote.NewHandler(ws, remote.WithAuthenticator(authn.New(map[string]remote.Principal{
+		"tok": {Name: "test", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec}},
+	}).Authenticator(remote.ErrUnauthenticated)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { h.Close() })
+	c, err := remote.Dial(t.Context(), srv.URL, remote.WithHTTPClient(bearer(t, srv.URL, "tok")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
 // noLinks is a workspace whose FS cannot tell a link from what it leads
 // to, as an FS over a plain file API may not.
 type noLinks struct{ *workspace.Local }
@@ -107,8 +135,9 @@ func remoteProject(t *testing.T) (dir, outside string) {
 }
 
 // The tools and the policy's checks behave the same whether the
-// workspace is this machine's directory or a container that calls it
-// /workspace: a path is the workspace's, written in its own namespace.
+// workspace is this machine's directory, a container that calls it
+// /workspace, or that container served over HTTP (remote): a path is
+// the workspace's, written in its own namespace.
 func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 	dir, outside := remoteProject(t)
 	local, err := workspace.NewLocal(dir, DefaultEnv(nil))
@@ -116,7 +145,9 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { local.Close() })
-	for _, ws := range []workspace.Workspace{local, newMapped(t, dir)} {
+	// The served one is the container stand-in, so its root is no path
+	// on this machine and a check that read this machine's disk fails.
+	for _, ws := range []workspace.Workspace{local, newMapped(t, dir), served(t, newMapped(t, dir))} {
 		root := ws.Root()
 		t.Run(ws.Descriptor().Kind, func(t *testing.T) {
 			f := NewFiles(ws)
@@ -303,6 +334,10 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 	}{
 		{"local", local, agentturn.Allow},
 		{"no links", noLinks{local}, agentturn.Defer},
+		// Served, its FS reads links when the served one does, and
+		// not when it does not.
+		{"remote", served(t, local), agentturn.Allow},
+		{"remote with no links", served(t, noLinks{local}), agentturn.Defer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := NewFiles(tc.ws)
@@ -373,4 +408,15 @@ func TestAGlobThroughALinkOutIsRefused(t *testing.T) {
 	if !an.Check(context.Background(), "ls src/*").Auto {
 		t.Error("ls src/* asks; a glob that stays inside should run")
 	}
+}
+
+// bearer is a client that sends token to url's origin, as dax's own
+// clients do (internal/authn).
+func bearer(t *testing.T, url, token string) *http.Client {
+	t.Helper()
+	c, err := authn.Client(nil, url, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

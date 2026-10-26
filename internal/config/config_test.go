@@ -932,3 +932,159 @@ func TestBoxValidation(t *testing.T) {
 		t.Errorf("a project's box.confine: %v", err)
 	}
 }
+
+// A served workspace: https, or http to this machine, with no
+// credentials, query or fragment in its URL, and a variable's name for
+// its token; never in a project's file, and never beside an executor or
+// a box in one file.
+func TestWorkspaceValidation(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{`{"workspace":{}}`, "workspace.url is required"},
+		{`{"workspace":{"url":"ftp://box"}}`, "want the https:// or http:// URL"},
+		{`{"workspace":{"url":"box:7779"}}`, "want the https:// or http:// URL"},
+		{`{"workspace":{"url":"https:///x"}}`, "want the https:// or http:// URL"},
+		{`{"workspace":{"url":"http://box.example:7779"}}`, "http only to a loopback host"},
+		{`{"workspace":{"url":"http://10.0.0.1:7779"}}`, "http only to a loopback host"},
+		{`{"workspace":{"url":"https://me:pw@box.example"}}`, "carries credentials"},
+		{`{"workspace":{"url":"https://tok@box.example"}}`, "carries credentials"},
+		{`{"workspace":{"url":"https://box.example/?token=x"}}`, "a query or fragment"},
+		{`{"workspace":{"url":"https://box.example/?"}}`, "a query or fragment"},
+		{`{"workspace":{"url":"https://box.example/#x"}}`, "a query or fragment"},
+		{`{"workspace":{"url":"https://box.example","token_env":"MY-TOKEN"}}`, `workspace.token_env: "MY-TOKEN" is not a variable name`},
+		{`{"workspace":{"url":"http://127.0.0.1:7779","tls_ca":"/ca.pem"}}`, "workspace.tls_ca is for an https url"},
+		{`{"workspace":{"url":"https://box.example","token":"x"}}`, "unknown field"},
+		{`{"workspace":{"url":"https://box.example"},"executor":{"command":"ssh host dax execute"}}`, "workspace and executor both"},
+		{`{"workspace":{"url":"https://box.example"},"executor":{"url":"http://127.0.0.1:7777"}}`, "workspace and executor both"},
+		{`{"workspace":{"url":"https://box.example"},"box":{}}`, "workspace and box both"},
+	} {
+		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
+		}
+	}
+	for _, ok := range []string{
+		`{"workspace":{"url":"http://127.0.0.1:7779"}}`,
+		`{"workspace":{"url":"http://localhost:7779/"}}`,
+		`{"workspace":{"url":"http://[::1]:7779"}}`,
+		`{"workspace":{"url":"https://box.example:7779/ws","token_env":"BOX_TOKEN","tls_ca":"/u/ca.pem"}}`,
+		// executor.pass_env alone says nothing of where the tools act.
+		`{"workspace":{"url":"https://box.example"},"executor":{"pass_env":["SSH_AUTH_SOCK"]}}`,
+	} {
+		if _, err := Parse([]byte(ok), "/u/config.json", false); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	// A repository may not send the session's tools and files to
+	// another machine, however its workspace is written.
+	for _, file := range []string{`{"workspace":{"url":"https://evil.example"}}`, `{"workspace":{}}`} {
+		if _, err := Parse([]byte(file), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "workspace: a project file may only tighten") {
+			t.Errorf("a project's workspace %s: %v", file, err)
+		}
+	}
+}
+
+// The flag's URL replaces the file's, keeping its token_env and tls_ca,
+// and "" clears it; the token's variable defaults to
+// DAX_WORKSPACE_TOKEN. A workspace with an executor or a box is refused
+// whichever layer or flag names each, saying which to clear, and its
+// token goes to no command, server or launcher here.
+func TestWorkspacePrecedence(t *testing.T) {
+	user := parse(t, `{"workspace":{"url":"https://box.example:7779","token_env":"BOX_TOKEN","tls_ca":"ca.pem"}}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	want := &WorkspaceSettings{URL: "https://box.example:7779", TokenEnv: "BOX_TOKEN", TLSCA: "/home/u/.config/dax/ca.pem"}
+	if err != nil || !reflect.DeepEqual(s.Workspace, want) {
+		t.Fatalf("file: %+v, %v", s.Workspace, err)
+	}
+	if !HasWorkspace(user, Flags{}) || HasExecutor(user, Flags{}) {
+		t.Error("HasWorkspace or HasExecutor of the file's workspace")
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Workspace: ptr(" https://other.example ")}, ""); err != nil || !reflect.DeepEqual(s.Workspace, &WorkspaceSettings{URL: "https://other.example", TokenEnv: "BOX_TOKEN", TLSCA: want.TLSCA}) {
+		t.Fatalf("the flag over the file: %+v, %v", s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Workspace: ptr("")}, ""); err != nil || s.Workspace != nil {
+		t.Fatalf("the empty flag clears it: %+v, %v", s.Workspace, err)
+	}
+	if HasWorkspace(user, Flags{Workspace: ptr("")}) {
+		t.Error("HasWorkspace with -workspace \"\"")
+	}
+	if s, err = Resolve(nil, Flags{Workspace: ptr("http://127.0.0.1:7779")}, ""); err != nil || !reflect.DeepEqual(s.Workspace, &WorkspaceSettings{URL: "http://127.0.0.1:7779", TokenEnv: WorkspaceTokenEnv}) {
+		t.Fatalf("the flag alone: %+v, %v", s.Workspace, err)
+	}
+	// A project's layer that got past Parse names none, and tightens as
+	// usual beside the user's.
+	proj := Layer{Project: true, Path: "/work/proj/.dax/config.json", Config: Config{Workspace: &Workspace{URL: "https://evil.example"}}}
+	if s, err = Resolve([]Layer{proj}, Flags{}, ""); err != nil || s.Workspace != nil {
+		t.Errorf("a project's workspace was taken: %+v, %v", s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user, proj}, Flags{}, ""); err != nil || s.Workspace.URL != "https://box.example:7779" {
+		t.Errorf("a project's workspace replaced the user's: %+v, %v", s.Workspace, err)
+	}
+
+	executor := parse(t, `{"executor":{"command":"ssh host dax execute"}}`, false)
+	boxed := parse(t, `{"box":{}}`, false)
+	for _, tc := range []struct {
+		name  string
+		user  Layer
+		flags Flags
+		want  string
+	}{
+		{"a flag that is not a URL", Layer{}, Flags{Workspace: ptr("box:7779")}, "-workspace \"box:7779\": want the https:// or http:// URL"},
+		{"a flag over http elsewhere", Layer{}, Flags{Workspace: ptr("http://box.example:7779")}, "http only to a loopback host"},
+		{"a flag with a password", Layer{}, Flags{Workspace: ptr("https://me:pw@box.example")}, "carries credentials"},
+		{"a flag with a query", Layer{}, Flags{Workspace: ptr("https://box.example/?t=x")}, "a query or fragment"},
+		{"a flag over http and the file's tls_ca", user, Flags{Workspace: ptr("http://127.0.0.1:7779")}, "workspace.tls_ca is for an https URL"},
+		{"both flags with an executor", Layer{}, Flags{Workspace: ptr("https://box.example"), Executor: ptr("ssh host dax execute")}, "-executor and -workspace both"},
+		{"the flag and the file's executor", executor, Flags{Workspace: ptr("https://box.example")}, `-workspace: your config's executor says where the tools run; give -executor ""`},
+		{"-executor and the file's workspace", user, Flags{Executor: ptr("http://127.0.0.1:7777")}, `-executor: your config's workspace says where the tools act; give -workspace ""`},
+		{"both flags with a box", Layer{}, Flags{Workspace: ptr("https://box.example"), Box: ptr(true)}, "-box and -workspace both"},
+		{"the flag and the file's box", boxed, Flags{Workspace: ptr("https://box.example")}, "-workspace: your config's box says where the tools run; give -box=false"},
+		{"-box and the file's workspace", user, Flags{Box: ptr(true)}, `-box: your config's workspace says where the tools act; give -workspace ""`},
+		{"pass_env names the token", parse(t, `{"workspace":{"url":"https://box.example"},"pass_env":["DAX_WORKSPACE_TOKEN"]}`, false), Flags{}, "pass_env: DAX_WORKSPACE_TOKEN holds the workspace's token"},
+		{"the model's key's variable", parse(t, `{"provider":"openresponses","model":"m","base_url":"https://x","api_key_env":"SHARED","workspace":{"url":"https://box.example","token_env":"SHARED"}}`, false), Flags{}, "workspace.token_env: SHARED is api_key_env too"},
+		{"an MCP server's token", parse(t, `{"mcp_servers":{"docs":{"url":"https://docs.example/mcp","token_env":"DAX_WORKSPACE_TOKEN"}},"workspace":{"url":"https://box.example"}}`, false), Flags{}, "workspace.token_env: DAX_WORKSPACE_TOKEN is MCP server docs's token_env too"},
+		{"a peer's token", parse(t, `{"peers":{"r":{"url":"https://r.example","token_env":"SHARED"}},"workspace":{"url":"https://box.example","token_env":"SHARED"}}`, false), Flags{}, "workspace.token_env: SHARED is peer r's token_env too"},
+		{"executor.pass_env names the token", parse(t, `{"workspace":{"url":"https://box.example","token_env":"T"},"executor":{"pass_env":["T"]}}`, false), Flags{}, "executor.pass_env: T holds the workspace's token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Resolve([]Layer{tc.user}, tc.flags, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Resolve: err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	// Each clearing flag does what its error says.
+	for _, tc := range []struct {
+		name  string
+		user  Layer
+		flags Flags
+	}{
+		{"-executor \"\" beside the file's executor", executor, Flags{Workspace: ptr("https://box.example"), Executor: ptr("")}},
+		{"-box=false beside the file's box", boxed, Flags{Workspace: ptr("https://box.example"), Box: ptr(false)}},
+	} {
+		if s, err := Resolve([]Layer{tc.user}, tc.flags, ""); err != nil || s.Workspace == nil || s.Box != nil || len(s.Executor) > 0 {
+			t.Errorf("%s: %+v %+v %q, %v", tc.name, s.Workspace, s.Box, s.Executor, err)
+		}
+	}
+	if s, err := Resolve([]Layer{user}, Flags{Workspace: ptr(""), Executor: ptr("ssh host dax execute")}, ""); err != nil || s.Workspace != nil || len(s.Executor) != 4 {
+		t.Errorf("-workspace \"\" beside -executor: %+v %q, %v", s.Workspace, s.Executor, err)
+	}
+}
+
+// A workspace's identity is its URL normalised: spellings of one
+// address are one.
+func TestWorkspaceRef(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://127.0.0.1:7779":         "http://127.0.0.1:7779",
+		"http://127.0.0.1:7779/":        "http://127.0.0.1:7779",
+		" HTTP://LOCALHOST:7779/ ":      "http://localhost:7779",
+		"http://localhost:80":           "http://localhost",
+		"https://Box.Example:443/ws/":   "https://box.example/ws",
+		"https://box.example:8443":      "https://box.example:8443",
+		"http://box.example:443":        "http://box.example:443",
+		"http://[::1]:7779":             "http://[::1]:7779",
+		"https://[::1]:443":             "https://[::1]",
+		"https://me@box.example/?x=1#y": "https://box.example",
+	} {
+		if got := WorkspaceRef(in); got != want {
+			t.Errorf("WorkspaceRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -34,6 +34,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -320,9 +321,15 @@ func TestTheServeTokenFileIsPrivate(t *testing.T) {
 		t.Errorf("the token file is still there after cleanup: %v", err)
 	}
 
+	// A short one is refused, whatever it is for.
 	t.Setenv(serveTokenEnv, "from-the-environment")
+	if _, _, _, err := serveToken("s2", dir); err == nil || !strings.Contains(err.Error(), "$DAX_SERVE_TOKEN is 20 bytes; a token from the environment must be at least 32") {
+		t.Errorf("a short token: %v", err)
+	}
+	long := "from-the-environment-and-long-enough"
+	t.Setenv(serveTokenEnv, long)
 	token, file, cleanup, err = serveToken("s2", dir)
-	if err != nil || token != "from-the-environment" || file != "" {
+	if err != nil || token != long || file != "" {
 		t.Errorf("with $%s: token %q, file %q, %v", serveTokenEnv, token, file, err)
 	}
 	cleanup()
@@ -588,7 +595,7 @@ func TestAMoveTheServedSessionRefusesComesBack(t *testing.T) {
 	g.let()
 	s := startServeWith(t, g.steps, policy.Rules{Allow: []string{"bash(touch:*)"}}, func(o *agent.Options) { o.Streamer = g })
 	ctx := t.Context()
-	ctl, err := control.Dial(ctx, s.url+controlPrefix, control.WithBearerToken(s.token))
+	ctl, err := control.Dial(ctx, s.url+controlPrefix, control.WithHTTPClient(bearerClient(t, s.url, s.token)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,4 +801,15 @@ func TestServeTakesAnyAddressOnlyWithTLS(t *testing.T) {
 			t.Errorf("%s with cert %q key %q: %v, want ok=%v", tc.addr, tc.cert, tc.key, err, tc.ok)
 		}
 	}
+}
+
+// bearerClient is a client that sends token to url's origin, as dax's
+// own clients do (internal/authn).
+func bearerClient(t *testing.T, url, token string) *http.Client {
+	t.Helper()
+	c, err := authn.Client(nil, url, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

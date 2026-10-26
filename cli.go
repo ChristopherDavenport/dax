@@ -69,6 +69,11 @@ func run(ctx context.Context, args []string, p program) error {
 	if len(args) > 0 && args[0] == "attach" {
 		return runAttach(ctx, args[1:], p)
 	}
+	// workspace serves a directory for a session elsewhere to run its
+	// tools in (-workspace), and runs no session.
+	if len(args) > 0 && args[0] == "workspace" {
+		return runWorkspace(ctx, args[1:], p)
+	}
 	// box keeps the boxes -box runs sessions in, and runs no session.
 	if len(args) > 0 && args[0] == "box" {
 		return runBox(ctx, args[1:], p, os.Stdout)
@@ -81,7 +86,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s box up|ls|down|serve   (the boxes -box runs the tools in, and the box host)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s workspace [flags]   (serve this directory over HTTP for -workspace; %[1]s workspace -h)\n       %[1]s box up|ls|down|serve   (the boxes -box runs the tools in, and the box host)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -101,7 +106,7 @@ func run(ctx context.Context, args []string, p program) error {
 	once := fs.String("p", "", "run one prompt and exit")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
-	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's workspace, and exit")
+	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's or served workspace's, and exit")
 	verify := fs.String("verify", "", "verify the request hashes of the session with this ID and exit")
 	project := fs.String("project", "", "write the session with this ID as a JSONL file into -out and exit")
 	out := fs.String("out", ".", "directory -project writes into")
@@ -112,6 +117,7 @@ func run(ctx context.Context, args []string, p program) error {
 	compactAt := fs.Int("compact", 0, "fold the transcript through a local summary above this many estimated tokens; default three quarters of the model's context window when the vendor reports it, 0 disables")
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>; split as a shell splits words, nothing expanded")
 	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded, or the http:// or https:// URL where dax execute -listen serves; the tools run there; \"\" clears the config's")
+	wsFlag := fs.String("workspace", "", "the https:// URL, or http:// to loopback, where dax workspace serves: the tools and the policy run here and act in that workspace, its token from $"+config.WorkspaceTokenEnv+" or the config's workspace.token_env; \"\" clears the config's")
 	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container a box host (dax box serve, here or over ssh) makes or reuses from its config's profile, with the project at its own path, reached as the executor; -box=false runs here despite the config's box")
 	boxHost := fs.String("box-host", "", "with -box, where the box host runs, in place of box.host: local, or ssh://[user@]host[:port]")
 	boxProfile := fs.String("box-profile", "", "with -box, the box host's profile, in place of box.profile")
@@ -185,6 +191,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		if given["box"] {
 			f.Box = boxFlag
+		}
+		if given["workspace"] {
+			f.Workspace = wsFlag
 		}
 		return runList(ctx, os.Stdout, *root, dir, *cfgPath, f)
 	case *project != "":
@@ -260,6 +269,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.Executor = str("executor", executorCmd)
+	flags.Workspace = str("workspace", wsFlag)
 	if given["box"] {
 		flags.Box = boxFlag
 	}
@@ -295,7 +305,8 @@ func run(ctx context.Context, args []string, p program) error {
 	// session's workspace is opened below, once the settings say what
 	// its processes may inherit; this one only reads, and runs nothing.
 	// With an executor the project is where it runs, and its file is
-	// read through it once it is connected (executorSettings).
+	// read through it once it is connected (executorSettings); with a
+	// served workspace, through that once it is dialed.
 	user, err := loadUser(*cfgPath)
 	if err != nil {
 		return err
@@ -308,6 +319,14 @@ func run(ctx context.Context, args []string, p program) error {
 	proj.Close()
 	if err != nil {
 		return err
+	}
+	// A served workspace's token leaves the environment before anything
+	// here starts a process, the key command first among them.
+	var wsToken string
+	if settings.Workspace != nil {
+		if wsToken, err = takeWorkspaceToken(settings.Workspace.TokenEnv); err != nil {
+			return err
+		}
 	}
 	cost, err := pricing(settings.PricingFile)
 	if err != nil {
@@ -348,7 +367,10 @@ func run(ctx context.Context, args []string, p program) error {
 		wsRoot = dir
 		from   = "-executor"
 	)
-	var boxRequest json.RawMessage
+	var (
+		boxRequest json.RawMessage
+		wsLine     string
+	)
 	if settings.Box != nil {
 		// The box host, here or over ssh, makes the box when the session
 		// connects, and relays the session to the executor in it: from
@@ -380,6 +402,19 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 		wsRoot = ex.Workspace().Root()
+	} else if settings.Workspace != nil {
+		// Served elsewhere: the tools, their facts and the policy run
+		// here, and every file and process they touch is the served
+		// workspace's. The project's file is read through it.
+		served, err := dialWorkspace(ctx, *settings.Workspace, wsToken)
+		if err != nil {
+			return err
+		}
+		defer served.Close()
+		if settings, err = projectSettings("-workspace", served, user, flags); err != nil {
+			return err
+		}
+		ws, wsRoot, wsLine = served, served.Root(), workspaceLine(served)
 	} else {
 		local, err := workspace.NewLocal(dir, toolsEnv(settings, m.KeyEnv, secrets...))
 		if err != nil {
@@ -447,7 +482,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}
 	var f front
@@ -480,20 +515,25 @@ func run(ctx context.Context, args []string, p program) error {
 }
 
 // runList prints the sessions of the project here: this directory's,
-// or with an executor configured (the -executor flag or the user's
-// file; a project's cannot name one), the project of the workspace the
-// latest session reached at that address recorded. Nothing is started
-// or dialed. A session whose tools ran elsewhere than this machine says
-// where at the end of its line.
+// or with an executor or a served workspace configured (the -executor
+// or -workspace flag or the user's file; a project's can name neither),
+// the project of the workspace the latest session reached at that
+// address recorded. Nothing is started or dialed. A session whose tools
+// ran elsewhere than this machine says where at the end of its line.
 func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f config.Flags) error {
-	var user config.Layer
-	if f.Executor == nil {
-		var err error
-		if user, err = loadUser(cfgPath); err != nil {
-			return err
-		}
+	// Where the tools act is resolved as a run resolves it (config's
+	// Resolve: the executor, the workspace, then the box, from your file
+	// and the flags), with the same refusals of two together, so -list
+	// lists the project a run with these flags would act in.
+	user, err := loadUser(cfgPath)
+	if err != nil {
+		return err
 	}
 	argv, url, err := config.ExecutorOf(user, f)
+	if err != nil {
+		return err
+	}
+	served, err := config.WorkspaceOf(user, f)
 	if err != nil {
 		return err
 	}
@@ -511,6 +551,8 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		ws   = workspace.Descriptor{Kind: workspace.KindLocal, Root: dir}
 	)
 	switch {
+	case served != nil:
+		ws, sums, err = agent.ListWorkspaceURL(ctx, root, served.URL)
 	case url != "":
 		ws, sums, err = agent.ListExecutorURL(ctx, root, url)
 	case len(argv) > 0:
@@ -543,13 +585,14 @@ func loadUser(userPath string) (config.Layer, error) {
 }
 
 // loadSettings folds the user's layer, the project's read through the
-// workspace the project is in, and the flags. With an executor, which
-// only the user's layer and the flags can name, the project is where
-// the executor runs and not this directory, so project is not read:
-// executorSettings reads it through the executor once it is connected.
+// workspace the project is in, and the flags. With an executor or a
+// served workspace, which only the user's layer and the flags can name,
+// the project is there and not this directory, so project is not read:
+// projectSettings reads it through the executor once it is connected,
+// or through the workspace once it is dialed.
 func loadSettings(project workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	var proj config.Layer
-	if !config.HasExecutor(user, flags) {
+	if !config.HasExecutor(user, flags) && !config.HasWorkspace(user, flags) {
 		var err error
 		if proj, err = config.LoadProject(project); err != nil {
 			return config.Settings{}, err
@@ -567,13 +610,20 @@ func loadSettings(project workspace.Workspace, user config.Layer, flags config.F
 // executor gone or too slow) fails the session's start: leaving it out
 // would drop rules that only tighten.
 func executorSettings(view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
+	return projectSettings("-executor", view, user, flags)
+}
+
+// projectSettings are the settings with the project's .dax/config.json
+// read through view, the workspace the project is in elsewhere, folded
+// in, as executorSettings says; from names the flag that put it there.
+func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
 	if err != nil {
-		return config.Settings{}, fmt.Errorf("-executor: %w", err)
+		return config.Settings{}, fmt.Errorf("%s: %w", from, err)
 	}
 	s, err := config.Resolve([]config.Layer{user, proj}, flags, filepath.Join(agent.DefaultUserDir(), "memory"))
 	if err != nil {
-		return config.Settings{}, fmt.Errorf("-executor: %w", err)
+		return config.Settings{}, fmt.Errorf("%s: %w", from, err)
 	}
 	return s, nil
 }

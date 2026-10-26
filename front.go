@@ -59,7 +59,11 @@ type frontInfo struct {
 	// Executor names the executor the tools run in and where it acts;
 	// empty when they run in this process.
 	Executor string
-	Think    bool
+	// Workspace names the served workspace the tools act in (-workspace)
+	// and its root; empty when they act in this process's or the
+	// executor's.
+	Workspace string
+	Think     bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
@@ -237,8 +241,8 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
-	if f.info.Executor != "" {
-		fmt.Println(render.Clean(executorBanner(f.info.Executor)))
+	if l := elsewhereBanner(f.info); l != "" {
+		fmt.Println(render.Clean(l))
 	}
 	if info.Recorded {
 		fmt.Printf("session %s\n", info.ID)

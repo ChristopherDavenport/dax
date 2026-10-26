@@ -5,6 +5,60 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `dax workspace`, a mode with flags of its own that reads no
+  config, serves a directory over HTTP as a whole workspace
+  (agentworkspace's `remote`): its files, writes, environment, commands
+  and processes, for a session elsewhere to run its tools in. One
+  bearer token, `$DAX_WORKSPACE_TOKEN` or one made and written to a
+  private file whose path alone is printed, may read, write and run;
+  authentication is always on. `-dir` (default the current directory),
+  `-listen` (default `127.0.0.1:7779`, loopback unless `-tls-cert` and
+  `-tls-key` are given), `-pass-env`. A signal ends every process a
+  session started there before it stops. It serves `workspace.Local`
+  alone: a workspace's offered MCP servers are not carried yet.
+- Added: `-workspace URL` and the config's `workspace` (`url`,
+  `token_env`, default `DAX_WORKSPACE_TOKEN`, and `tls_ca`): the
+  session's tools, their checks and the policy run here and act in the
+  served workspace; the project's `AGENTS.md`, `.dax/skills` and
+  `.dax/config.json` are read through it, and stdio MCP servers start
+  there when the token holds `exec`; without it your own run here and
+  a project's are refused, never moved to this machine, and the MCP
+  trust records where a project's servers run, so a trust given while
+  they ran there does not hold here. The URL is https, or http to a
+  loopback host, with no user, password, query or fragment; the token
+  is never printed or recorded, and its variable is taken out of dax's
+  environment before dax starts any process, the key command first. Your config only: a project's file may not
+  set `workspace`, and it is refused beside an executor or a box. The
+  header records the workspace as `remote` with the URL as ref (its
+  host in lower case, no default port), and `-list` finds its sessions
+  by the URL without connecting. See
+  docs/sandbox.md, "A served workspace".
+- Changed: `dax serve` and `dax execute` stop as cleanly on a hangup
+  (SIGHUP, as when the ssh session they ran in drops) and on SIGQUIT as
+  on SIGINT and SIGTERM, ending what they started, where a hangup
+  killed them before; and their HTTP servers close a keep-alive
+  connection left idle for two minutes. `dax workspace` does the same.
+- Changed: `dax serve` refuses a `$DAX_SERVE_TOKEN` or
+  `$DAX_SERVE_A2A_TOKEN` shorter than 32 bytes, which could be guessed;
+  leave it unset and serve makes one, as before. `dax workspace` takes
+  the same rule for `$DAX_WORKSPACE_TOKEN`, refuses a `-pass-env` that
+  names it, and `workspace.token_env` may not be `api_key_env`, an MCP
+  server's or a peer's `token_env`.
+- Changed: dax checks the bearer tokens of `dax serve` (its control,
+  its record and A2A) and `dax workspace` itself, and its clients
+  (`dax attach`, `-workspace`) send them through an HTTP client of its
+  own (`internal/authn`), held to the server's origin; the libraries'
+  `BearerTokens` and `WithBearerToken` helpers are no longer used. The
+  tokens accepted, the scopes, the principals and the refusals are as
+  before.
+- Added: `agent.ListWorkspaceURL`, the sessions of a workspace served
+  at a URL, without dialing it.
+- Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,
+  up from v0.0.4, whose new `remote` package serves a workspace over
+  HTTP and dials one.
+
 ## v0.0.27 - 2026-10-25
 
 - Fixed: a rewind (the head move) on a session whose store reported
