@@ -42,6 +42,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
@@ -434,15 +435,15 @@ func makeToken(env, dir, name string) (token, file string, cleanup func(), err e
 // is not token. closeStore ends the record's follows.
 func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
 	ctl := control.Handler(viewed{sess},
-		control.WithAuthenticator(control.BearerTokens(map[string]control.Principal{
+		control.WithAuthenticator(authn.New(map[string]control.Principal{
 			token: {Name: servePrincipal, Scopes: control.AllScopes},
-		})),
+		}).Authenticator(control.ErrUnauthenticated)),
 		control.WithCommands(serveCommands(sess, sess, dir)),
 	)
 	store := remote.NewHandler(sess.Recorder().Store(),
-		remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+		remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
-		})),
+		}).Authenticator(remote.ErrUnauthenticated)),
 		remote.WithErrorLog(logf),
 	)
 	mux := http.NewServeMux()

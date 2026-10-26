@@ -226,6 +226,14 @@ before changing the shape.
   wants it. The design is
   `docs/plans/proposals/box-host.md`.
 - `internal/config`: the JSON config layers, validation, `Resolve`.
+- `internal/authn`: dax's own bearer-token check, which the libraries
+  leave to their program: `Tokens`, static tokens compared through
+  SHA-256 in constant time, its `Authenticator` the shape of every
+  library's hook (agentworkspace's and agentsession's `remote`,
+  front/control) and `Principal` front/a2a's; `Client`, an
+  `http.Client` that sends one token to one origin, for each library's
+  `WithHTTPClient`. Standard library only; no dax code uses a
+  library's `BearerTokens` or `WithBearerToken`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every
   command dax runs from a line (`-executor`, MCP servers, the key

@@ -46,6 +46,13 @@ versions may break flags and the config file.
   the same rule for `$DAX_WORKSPACE_TOKEN`, refuses a `-pass-env` that
   names it, and `workspace.token_env` may not be `api_key_env`, an MCP
   server's or a peer's `token_env`.
+- Changed: dax checks the bearer tokens of `dax serve` (its control,
+  its record and A2A) and `dax workspace` itself, and its clients
+  (`dax attach`, `-workspace`) send them through an HTTP client of its
+  own (`internal/authn`), held to the server's origin; the libraries'
+  `BearerTokens` and `WithBearerToken` helpers are no longer used. The
+  tokens accepted, the scopes, the principals and the refusals are as
+  before.
 - Added: `agent.ListWorkspaceURL`, the sessions of a workspace served
   at a URL, without dialing it.
 - Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,

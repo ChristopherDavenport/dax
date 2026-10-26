@@ -34,6 +34,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -594,7 +595,7 @@ func TestAMoveTheServedSessionRefusesComesBack(t *testing.T) {
 	g.let()
 	s := startServeWith(t, g.steps, policy.Rules{Allow: []string{"bash(touch:*)"}}, func(o *agent.Options) { o.Streamer = g })
 	ctx := t.Context()
-	ctl, err := control.Dial(ctx, s.url+controlPrefix, control.WithBearerToken(s.token))
+	ctl, err := control.Dial(ctx, s.url+controlPrefix, control.WithHTTPClient(bearerClient(t, s.url, s.token)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,4 +801,15 @@ func TestServeTakesAnyAddressOnlyWithTLS(t *testing.T) {
 			t.Errorf("%s with cert %q key %q: %v, want ok=%v", tc.addr, tc.cert, tc.key, err, tc.ok)
 		}
 	}
+}
+
+// bearerClient is a client that sends token to url's origin, as dax's
+// own clients do (internal/authn).
+func bearerClient(t *testing.T, url, token string) *http.Client {
+	t.Helper()
+	c, err := authn.Client(nil, url, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

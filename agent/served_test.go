@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/remote"
 
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -32,9 +34,9 @@ func serveDir(t *testing.T, dir string, env []string) (url, token string) {
 	}
 	t.Cleanup(func() { local.Close() })
 	token = "the-served-token"
-	h, err := remote.NewHandler(local, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	h, err := remote.NewHandler(local, remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 		token: {Name: "dax", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec}},
-	})))
+	}).Authenticator(remote.ErrUnauthenticated)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestASessionOverAServedWorkspace(t *testing.T) {
 	write(t, filepath.Join(servedDir, "AGENTS.md"), "Served instructions.\n")
 	write(t, filepath.Join(servedDir, ".dax", "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: How to deploy the served project.\n---\nRun make deploy.\n")
 	url, token := serveDir(t, servedDir, append(tool.DefaultEnv(nil), "DAX_TEST_MCP_SERVER=1", "PLAIN=the workspace"))
-	ws, err := remote.Dial(ctx, url+"/", remote.WithBearerToken(token))
+	ws, err := remote.Dial(ctx, url+"/", remote.WithHTTPClient(bearer(t, url+"/", token)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,16 +181,16 @@ func TestAServedWorkspaceWithoutExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	h, err := remote.NewHandler(local, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	h, err := remote.NewHandler(local, remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 		"tok": {Name: "dax", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
-	})))
+	}).Authenticator(remote.ErrUnauthenticated)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	defer h.Close()
-	ws, err := remote.Dial(ctx, srv.URL, remote.WithBearerToken("tok"))
+	ws, err := remote.Dial(ctx, srv.URL, remote.WithHTTPClient(bearer(t, srv.URL, "tok")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,16 +227,16 @@ func TestAProjectsServersDoNotMoveHere(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	h, err := remote.NewHandler(local, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	h, err := remote.NewHandler(local, remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 		"tok": {Name: "dax", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
-	})))
+	}).Authenticator(remote.ErrUnauthenticated)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	defer h.Close()
-	ws, err := remote.Dial(ctx, srv.URL, remote.WithBearerToken("tok"))
+	ws, err := remote.Dial(ctx, srv.URL, remote.WithHTTPClient(bearer(t, srv.URL, "tok")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,4 +278,15 @@ func TestAProjectsServersDoNotMoveHere(t *testing.T) {
 	if serverSetHash(urls, true) != serverSetHash(urls, false) {
 		t.Error("a URL's placement changed with the workspace's")
 	}
+}
+
+// bearer is a client that sends token to url's origin, as dax's own
+// clients do (internal/authn).
+func bearer(t *testing.T, url, token string) *http.Client {
+	t.Helper()
+	c, err := authn.Client(nil, url, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

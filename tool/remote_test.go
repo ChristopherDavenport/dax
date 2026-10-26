@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 )
 
 // mapped stands in for a container: its processes and its files see
@@ -88,16 +90,16 @@ func (m *mapped) Exec(ctx context.Context, c workspace.Command) (*workspace.Outp
 // tools and the policy's checks run on this side.
 func served(t *testing.T, ws workspace.Workspace) workspace.Workspace {
 	t.Helper()
-	h, err := remote.NewHandler(ws, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+	h, err := remote.NewHandler(ws, remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 		"tok": {Name: "test", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec}},
-	})))
+	}).Authenticator(remote.ErrUnauthenticated)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { h.Close() })
-	c, err := remote.Dial(t.Context(), srv.URL, remote.WithBearerToken("tok"))
+	c, err := remote.Dial(t.Context(), srv.URL, remote.WithHTTPClient(bearer(t, srv.URL, "tok")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,4 +408,15 @@ func TestAGlobThroughALinkOutIsRefused(t *testing.T) {
 	if !an.Check(context.Background(), "ls src/*").Auto {
 		t.Error("ls src/* asks; a glob that stays inside should run")
 	}
+}
+
+// bearer is a client that sends token to url's origin, as dax's own
+// clients do (internal/authn).
+func bearer(t *testing.T, url, token string) *http.Client {
+	t.Helper()
+	c, err := authn.Client(nil, url, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

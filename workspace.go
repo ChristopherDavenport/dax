@@ -30,6 +30,7 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -146,9 +147,9 @@ func (w *workspaceServer) run(ctx context.Context) error {
 		return err
 	}
 	defer cleanup()
-	h, err := wsremote.NewHandler(ws, wsremote.WithAuthenticator(wsremote.BearerTokens(map[string]wsremote.Principal{
+	h, err := wsremote.NewHandler(ws, wsremote.WithAuthenticator(authn.New(map[string]wsremote.Principal{
 		token: {Name: workspacePrincipal, Scopes: []wsremote.Scope{wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec}},
-	})))
+	}).Authenticator(wsremote.ErrUnauthenticated)))
 	if err != nil {
 		return err
 	}
@@ -298,9 +299,14 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 	if err != nil {
 		return nil, err
 	}
+	// The token goes in the header of every request to the workspace's
+	// origin, from dax's own client, and nowhere else.
+	if hc, err = authn.Client(hc, s.URL, token); err != nil {
+		return nil, fmt.Errorf("-workspace: %w", err)
+	}
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	ws, err := wsremote.Dial(dctx, s.URL, wsremote.WithBearerToken(token), wsremote.WithHTTPClient(hc))
+	ws, err := wsremote.Dial(dctx, s.URL, wsremote.WithHTTPClient(hc))
 	if err != nil {
 		return nil, fmt.Errorf("-workspace %s: %w", s.URL, err)
 	}

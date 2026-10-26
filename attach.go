@@ -38,6 +38,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 )
 
 // runAttach is dax attach, a mode with flags of its own that reads no
@@ -169,11 +170,17 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	ctl, err := control.Dial(ctx, base+controlPrefix, control.WithBearerToken(token), control.WithHTTPClient(hc))
+	// The token goes with every request to the served origin, from
+	// dax's own client, and nowhere else.
+	hc, err := authn.Client(hc, base, token)
 	if err != nil {
 		return fmt.Errorf("attach: %w", err)
 	}
-	store, err := remote.Dial(base+storePrefix, remote.WithBearerToken(token), remote.WithHTTPClient(hc))
+	ctl, err := control.Dial(ctx, base+controlPrefix, control.WithHTTPClient(hc))
+	if err != nil {
+		return fmt.Errorf("attach: %w", err)
+	}
+	store, err := remote.Dial(base+storePrefix, remote.WithHTTPClient(hc))
 	if err != nil {
 		return fmt.Errorf("attach: %w", err)
 	}

@@ -40,6 +40,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
 )
 
@@ -110,7 +111,13 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 	p.stop, p.endRuns = context.WithCancel(o.stop)
 	opts := []fronta2a.Option{
 		fronta2a.WithConversationStore(store),
-		fronta2a.WithAuthenticator(fronta2a.BearerTokens(o.tokens)),
+		// The scheme is named on the card explicitly, whatever front/a2a's
+		// default name.
+		fronta2a.WithAuthenticator(fronta2a.Authenticator{
+			Name:      "bearer",
+			Scheme:    a2a.HTTPAuthSecurityScheme{Scheme: "Bearer"},
+			Principal: authn.New(o.tokens).Principal,
+		}),
 		fronta2a.WithRecorderFor(p.recorderFor),
 	}
 	if o.escalate {

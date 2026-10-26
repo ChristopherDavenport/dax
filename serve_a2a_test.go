@@ -634,7 +634,7 @@ func TestAQuestionQuotesTheCallersContextID(t *testing.T) {
 func TestAnA2AQuestionNeedsAnAttachedView(t *testing.T) {
 	t.Run("a view attached over the wire answers", func(t *testing.T) {
 		s := startA2A(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, false)
-		ctl, err := control.Dial(t.Context(), s.url+controlPrefix, control.WithBearerToken(serveTok))
+		ctl, err := control.Dial(t.Context(), s.url+controlPrefix, control.WithHTTPClient(bearerClient(t, s.url, serveTok)))
 		if err != nil {
 			t.Fatal(err)
 		}
