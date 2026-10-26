@@ -117,6 +117,20 @@ type Options struct {
 	// scrubbed of credentials (PassEnv, KeyEnv), which the session
 	// closes; one given here is the caller's to close.
 	Workspace workspace.Workspace
+	// ServersWorkspace is a second workspace beside Workspace (or the
+	// executor's), whose offered servers (workspace.ServerProvider) the
+	// session connects and nothing else: a served or tunnelled one
+	// granted servers alone (config.ServersOnly), so a server holding a
+	// secret of another machine's is used while the tools act in the
+	// session's own workspace. Its servers are connected as the
+	// workspace's offered ones are, through mcpStart, under the same
+	// names, collisions, rules and restarts; no tool acts in it, no file
+	// of it is read, and its servers are recorded under its identity in
+	// the session's header. One that offers none, that is the
+	// workspace, or that grants more than servers (exec, which reads a
+	// running server's environment, or write, which changes its code)
+	// fails the session. It is the caller's to close, after the session.
+	ServersWorkspace workspace.Workspace
 	// Executor runs the extensions' tools elsewhere, in `dax execute`
 	// (DialExecutor), in place of building them in this process over a
 	// workspace: their calls, facts and stamps are the executor's, and
@@ -257,10 +271,11 @@ type MCPServer struct {
 	// Description says what the server is for, for a person reading a
 	// list of servers.
 	Description string
-	// offered says the workspace offers the server of its own
-	// (workspace.ServerProvider): it is started by name there, and the
-	// session sets it, never a caller.
-	offered bool
+	// offeredBy is the workspace that offers the server of its own
+	// (workspace.ServerProvider), the session's or the servers
+	// workspace: it is started by name there, and the session sets it,
+	// never a caller.
+	offeredBy workspace.ServerProvider
 	// SecretEnv names variables a command's server is given from this
 	// process's environment, which every other child of the session
 	// loses (Secrets): it is started as a workspace's offered server is
@@ -296,6 +311,10 @@ type Session struct {
 	live    live
 	env     []string // what an MCP server outside the workspace starts with
 	offered []string // the MCP servers the workspace offers, connected at open
+	// served are the MCP servers the servers workspace offers,
+	// connected at open, and sw that workspace's descriptor.
+	served []string
+	sw     *workspace.Descriptor
 	// reserved are the names no other server may take: the offered
 	// servers' and a box host's units'.
 	reserved []string
@@ -479,7 +498,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
 	// for its AGENTS.md.
-	if serversOnly(ws) {
+	if config.ServersOnly(ctx, ws) {
 		if _, err := fs.Stat(ws.FS(), "."); errors.Is(err, remote.ErrForbidden) {
 			s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 		}
@@ -581,19 +600,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// for it.
 	var offered []MCPServer
 	if sp, ok := ws.(workspace.ServerProvider); ok {
-		list, err := sp.Servers(ctx)
+		list, err := offeredServers(ctx, sp, "the workspace")
 		if err != nil {
-			return nil, fmt.Errorf("the workspace's MCP servers: %w", err)
+			return nil, err
 		}
-		for _, u := range list {
-			// One name offered twice would be two servers under one
-			// prefix, and one's rules the other's.
-			if slices.Contains(s.offered, u.Name) {
-				return nil, fmt.Errorf("the workspace offers two MCP servers called %s", u.Name)
-			}
-			s.offered = append(s.offered, u.Name)
-			offered = append(offered, MCPServer{Name: u.Name, Description: u.Description, offered: true})
+		for _, m := range list {
+			s.offered = append(s.offered, m.Name)
 		}
+		offered = append(offered, list...)
 	}
 	s.reserved = slices.Clone(s.offered)
 	if o.Executor != nil {
@@ -605,6 +619,30 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 				s.reserved = append(s.reserved, u)
 			}
 		}
+	}
+	// The servers workspace's, beside them under the same rules: a name
+	// the workspace offers, or a box host's unit, is refused, since the
+	// two servers' tools would be one name and box.confine claims a
+	// unit's by its name.
+	if sw := o.ServersWorkspace; sw != nil {
+		sp, err := checkServersWorkspace(ctx, sw, ws)
+		if err != nil {
+			return nil, err
+		}
+		d := sw.Descriptor()
+		s.sw = &d
+		list, err := offeredServers(ctx, sp, "the servers workspace "+where(d))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range list {
+			if slices.ContainsFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }) {
+				return nil, fmt.Errorf("mcp %s: the workspace and the servers workspace %s both offer a server by that name; offer it from one", m.Name, where(d))
+			}
+			s.served = append(s.served, m.Name)
+		}
+		s.reserved = append(s.reserved, s.served...)
+		offered = append(offered, list...)
 	}
 	if o.Policy != nil {
 		settings := *o.Policy
@@ -872,7 +910,29 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
 	}
+	// So is the servers workspace: the header keeps the one the session
+	// started with, which -list names.
+	if w := serversResumed(sess.Header(), s.sw); w != "" {
+		fmt.Fprintf(warnings{}, "dax: %s\n", w)
+	}
 	return s, nil
+}
+
+// serversResumed is what to say when a session whose header h records
+// one servers workspace, or none, continues with another, or none (now,
+// nil for none); "" when they are one.
+func serversResumed(h agentsession.Header, now *workspace.Descriptor) string {
+	name := func(d workspace.Descriptor) string { return d.Kind + " " + d.Ref }
+	was, _, had := ServersWorkspaceOf(h)
+	switch {
+	case had && now == nil:
+		return "session's servers were recorded from servers workspace " + name(was) + ", continuing without one"
+	case !had && now != nil:
+		return "session was recorded without a servers workspace, continuing with " + name(*now)
+	case had && (was.Kind != now.Kind || was.Ref != now.Ref):
+		return "session's servers were recorded from servers workspace " + name(was) + ", continuing with " + name(*now)
+	}
+	return ""
 }
 
 // ID is the session ID, empty when not recording.
@@ -1189,6 +1249,61 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 // ended (mcpclient.WithReconnect).
 type mcpDial func(context.Context) (mcp.Transport, error)
 
+// offeredServers are the servers sp offers, by says who, as the session
+// connects them: each started by name there. One name offered twice is
+// refused, since it would be two servers under one prefix, and one's
+// rules the other's; so is a name agentworkspace does not allow a
+// server (workspace.ValidServerName: no underscore), which remote's
+// client already refuses but a provider given in Options need not: "u_"
+// would have tools mcp__u___<tool>, which box.confine takes for unit
+// u's.
+func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string) ([]MCPServer, error) {
+	list, err := sp.Servers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s's MCP servers: %w", by, err)
+	}
+	var out []MCPServer
+	for _, u := range list {
+		if !workspace.ValidServerName(u.Name) {
+			return nil, fmt.Errorf("%s offers an MCP server called %q, which is not a server's name: 1 to 32 lowercase letters, digits and inner hyphens", by, u.Name)
+		}
+		if slices.ContainsFunc(out, func(m MCPServer) bool { return m.Name == u.Name }) {
+			return nil, fmt.Errorf("%s offers two MCP servers called %s", by, u.Name)
+		}
+		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp})
+	}
+	return out, nil
+}
+
+// checkServersWorkspace is the servers workspace sw as the server
+// provider it must be, beside ws, the session's: one that offers
+// servers, that is not ws, and whose grant is servers alone
+// (config.ServersAlone): no exec, with which the session runs commands
+// as its servers' user and reads a running server's environment from
+// /proc; no write, with which it changes a server's code or config to
+// print its secret past the redaction; and no read, with which it reads
+// what a server keeps in the directory, and /proc too when the host
+// serves its root. That grant is the point of the seam: a secret holder
+// is safe under it alone (agentworkspace's remote.ScopeServers). The
+// probes are bounded by ctx, the session's start.
+func checkServersWorkspace(ctx context.Context, sw, ws workspace.Workspace) (workspace.ServerProvider, error) {
+	d := sw.Descriptor()
+	sp, offers := sw.(workspace.ServerProvider)
+	if !offers {
+		return nil, fmt.Errorf("the servers workspace %s offers no MCP servers: its grant lacks servers, or it is not a served workspace", where(d))
+	}
+	if wd := ws.Descriptor(); wd.Kind == d.Kind && wd.Ref == d.Ref && (d.Ref != "" || wd.Root == d.Root) {
+		return nil, fmt.Errorf("the servers workspace %s is the session's workspace; it stands beside it, so name another or leave it out", where(d))
+	}
+	if !config.ServersAlone(ctx, sw) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("the servers workspace %s grants more than servers (read, write or exec), with which the session could read or change what its servers hold, their secrets among it; serve it with dax workspace -scopes servers", where(d))
+	}
+	return sp, nil
+}
+
 // mcpServer is the dial of an MCP server started from a command line,
 // split as a shell splits words with nothing expanded (cmdline.Split),
 // with its diagnostics on dax's stderr. In a workspace that can start a
@@ -1256,12 +1371,8 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 // rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
 	switch {
-	case m.offered:
-		sp, ok := s.ws.(workspace.ServerProvider)
-		if !ok {
-			return nil, errors.New("the workspace offers no servers")
-		}
-		return mcpOffered(sp, m.Name), nil
+	case m.offeredBy != nil:
+		return mcpOffered(m.offeredBy, m.Name), nil
 	case m.URL != "":
 		return mcpURL(m.URL, m.TokenEnv)
 	case len(m.SecretEnv) > 0:
@@ -1365,7 +1476,7 @@ func checkSecretEnv(o Options) error {
 				why = "is not a variable name"
 			case v == o.KeyEnv:
 				why = "holds the model's key"
-			case v == config.WorkspaceTokenEnv || v == config.TunnelTokenEnv:
+			case config.IsTokenVariable(v):
 				why = "is a served workspace's token"
 			case slices.Contains(o.PassEnv, v):
 				why = "is in PassEnv, which hands it to every child"

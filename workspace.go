@@ -204,11 +204,12 @@ func readOffered(file string) ([]offer.Server, error) {
 // exec without read, under which the session would act on files whose
 // project rules it cannot read; and a secret holder offered beside
 // another server, which runs as its user beside it. A server
-// that holds secrets (secret_env) is offered only to a grant holding
-// neither exec nor write: with exec the session reads a running
-// server's environment through /proc, and with write it changes the
-// server's code, config or PATH in the directory to print its secret
-// past the filter (agentworkspace's remote says why).
+// that holds secrets (secret_env) is offered only to a grant of servers
+// alone: with exec the session reads a running server's environment
+// through /proc, with write it changes the server's code, config or
+// PATH in the directory to print its secret past the filter, and with
+// read it reads what the server keeps in the directory, and /proc when
+// the directory is / (agentworkspace's remote.ScopeServers says why).
 func (w *workspaceServer) settle() error {
 	if w.scopes == nil {
 		w.scopes = []wsremote.Scope{wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec}
@@ -241,13 +242,19 @@ func (w *workspaceServer) settle() error {
 			// session the secret through /proc or the holder's code.
 			return fmt.Errorf("workspace: -servers: server %s holds secrets (secret_env), and a secret holder is offered alone, as the box host offers each unit in a container of its own: the others run beside it as its user, and one that runs a command or writes a file reads its secret; give it a -servers file and a dax workspace of its own", o.Name)
 		}
-		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite} {
+		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite, wsremote.ScopeRead} {
 			if slices.Contains(w.scopes, sc) {
-				return fmt.Errorf("workspace: server %s holds secrets (secret_env), which a session granted %s could take: with exec it reads the running server's environment through /proc, and with write it changes the server's code or config to print them past the redaction; offer a secret-holding server with -scopes servers (and read, if the session should read the files) on a workspace of its own", o.Name, sc)
+				return fmt.Errorf("workspace: server %s holds secrets (secret_env), which a session granted %s could take: with exec it reads the running server's environment through /proc, with write it changes the server's code or config to print them past the redaction, and with read it reads what the server keeps in the directory (and /proc too, with / served); offer a secret-holding server with -scopes servers alone, on a workspace of its own, as a session's servers_workspace", o.Name, sc)
 			}
 		}
 	}
 	return nil
+}
+
+// serversOnly reports whether the grant is the servers workspace's: the
+// offered servers alone.
+func (w *workspaceServer) serversOnly() bool {
+	return len(w.scopes) == 1 && w.scopes[0] == wsremote.ScopeServers
 }
 
 // open is the workspace served: the directory as a workspace.Local
@@ -366,14 +373,20 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	if scheme == "https" {
 		ca = `, "tls_ca": "<the certificate's CA, unless the system trusts it>"`
 	}
+	// A grant of servers alone is for a session's servers
+	// workspace, beside the workspace its tools act in.
+	env, flag, field := config.WorkspaceTokenEnv, "-workspace", "workspace"
+	if w.serversOnly() {
+		env, flag, field = config.ServersWorkspaceTokenEnv, "-servers-workspace", config.ServersField
+	}
 	if tokenFile != "" {
 		fmt.Fprintln(out, "token: "+render.Clean(tokenFile))
-		fmt.Fprintln(out, "connect: "+config.WorkspaceTokenEnv+"=\"$(cat "+render.Clean(tokenFile)+")\" "+render.Clean(w.name)+" -workspace "+render.Clean(url))
+		fmt.Fprintln(out, "connect: "+env+"=\"$(cat "+render.Clean(tokenFile)+")\" "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
 	} else {
 		fmt.Fprintln(out, "token: $"+config.WorkspaceTokenEnv)
-		fmt.Fprintln(out, "connect: "+config.WorkspaceTokenEnv+"=... "+render.Clean(w.name)+" -workspace "+render.Clean(url))
+		fmt.Fprintln(out, "connect: "+env+"=... "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
 	}
-	fmt.Fprintln(out, `or in your config: {"workspace": {"url": "`+render.Clean(url)+`", "token_env": "`+config.WorkspaceTokenEnv+`"`+ca+`}}`)
+	fmt.Fprintln(out, `or in your config: {"`+field+`": {"url": "`+render.Clean(url)+`", "token_env": "`+env+`"`+ca+`}}`)
 	if w.ready != nil {
 		w.ready(url)
 	}
@@ -478,10 +491,10 @@ func listenWorkspace(addr string, cfg *tls.Config) (net.Listener, string, error)
 // inherits it whatever its name: the run takes it as soon as its
 // settings are resolved, before the key command or anything else
 // starts a process.
-func takeWorkspaceToken(env string) (string, error) {
+func takeWorkspaceToken(flag, env string) (string, error) {
 	token := os.Getenv(env)
 	if token == "" {
-		return "", fmt.Errorf("-workspace: no token: set $%s to the token dax workspace took or wrote (the file it printed)", env)
+		return "", fmt.Errorf("%s: no token: set $%s to the token dax workspace took or wrote (the file it printed)", flag, env)
 	}
 	os.Unsetenv(env)
 	return token, nil
@@ -494,22 +507,67 @@ func takeWorkspaceToken(env string) (string, error) {
 // nothing skips the verification, and no redirect is followed. The
 // settings checked the URL: https, or http to a loopback host.
 func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string) (wsremote.Workspace, error) {
-	hc, err := workspaceHTTPClient(s.URL, s.TLSCA)
+	hc, err := workspaceHTTPClient(s.Name(), s.URL, s.TLSCA)
 	if err != nil {
 		return nil, err
 	}
+	// Every request can be given up at once (abandon), as a hub's are
+	// when it is closed under the session.
+	actx, abandon := context.WithCancel(context.Background())
+	hc.Transport = abandonable{rt: hc.Transport, ctx: actx}
 	// The token goes in the header of every request to the workspace's
 	// origin, from dax's own client, and nowhere else.
 	if hc, err = authn.Client(hc, s.URL, token); err != nil {
-		return nil, fmt.Errorf("-workspace: %w", err)
+		abandon()
+		return nil, fmt.Errorf("%s: %w", s.Flag(), err)
 	}
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ws, err := wsremote.Dial(dctx, s.URL, wsremote.WithHTTPClient(hc))
 	if err != nil {
-		return nil, fmt.Errorf("-workspace %s: %w", s.URL, err)
+		abandon()
+		return nil, fmt.Errorf("%s %s: %w", s.Flag(), s.URL, err)
 	}
-	return identify(ws), nil
+	return identifyWith(ws, abandon), nil
+}
+
+// abandoner is a dialed workspace whose requests can all be given up at
+// once, those in flight and any later: closeSession does so past its
+// deadline, so a host that stopped answering (asleep, its network gone
+// without a reset) does not hold the exit for remote's request timeout.
+type abandoner interface{ Abandon() }
+
+// abandonable is a RoundTripper whose every request, its body included,
+// ends when ctx does.
+type abandonable struct {
+	rt  http.RoundTripper
+	ctx context.Context
+}
+
+func (a abandonable) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(r.Context())
+	stop := context.AfterFunc(a.ctx, cancel)
+	done := func() { stop(); cancel() }
+	resp, err := a.rt.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		done()
+		return nil, err
+	}
+	resp.Body = &abandonableBody{ReadCloser: resp.Body, done: done}
+	return resp, nil
+}
+
+// abandonableBody releases its request's ties to the abandon context
+// when it is closed.
+type abandonableBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *abandonableBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
 }
 
 // identify is ws under the identity dax records (config.WorkspaceRef):
@@ -519,8 +577,11 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 // servers the served workspace offers, under the servers scope) when ws
 // is, both when ws is both, so each type assertion tells the truth; and
 // its FS is ws's, an fs.ReadLinkFS when that is.
-func identify(ws wsremote.Workspace) wsremote.Workspace {
-	w := identified{ws}
+func identify(ws wsremote.Workspace) wsremote.Workspace { return identifyWith(ws, nil) }
+
+// identifyWith is identify, its Abandon abandon (nil for none).
+func identifyWith(ws wsremote.Workspace, abandon func()) wsremote.Workspace {
+	w := identified{Workspace: ws, abandon: abandon}
 	st, starts := ws.(workspace.Starter)
 	sp, offers := ws.(workspace.ServerProvider)
 	switch {
@@ -534,7 +595,25 @@ func identify(ws wsremote.Workspace) wsremote.Workspace {
 	return w
 }
 
-type identified struct{ wsremote.Workspace }
+type identified struct {
+	wsremote.Workspace
+	abandon func()
+}
+
+// Abandon gives up every request of the workspace's, in flight and
+// later, when it was dialed (dialWorkspace); otherwise it does nothing.
+func (w identified) Abandon() {
+	if w.abandon != nil {
+		w.abandon()
+	}
+}
+
+// Close closes the workspace, then releases what Abandon would.
+func (w identified) Close() error {
+	err := w.Workspace.Close()
+	w.Abandon()
+	return err
+}
 
 func (w identified) Descriptor() workspace.Descriptor {
 	d := w.Workspace.Descriptor()
@@ -577,14 +656,14 @@ func (w identifiedStarterServers) StartServer(ctx context.Context, name string, 
 	return w.sp.StartServer(ctx, name, stderr)
 }
 
-// workspaceHTTPClient is the client -workspace reaches base with: no
-// Timeout, which would cut the streams, no redirect followed, and for
-// https TLS 1.2 at least, verified against the system's roots or the CA
-// in caFile.
-func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
+// workspaceHTTPClient is the client -workspace (or the setting field
+// names, servers_workspace) reaches base with: no Timeout, which would
+// cut the streams, no redirect followed, and for https TLS 1.2 at
+// least, verified against the system's roots or the CA in caFile.
+func workspaceHTTPClient(field, base, caFile string) (*http.Client, error) {
 	u, err := neturl.Parse(base)
 	if err != nil {
-		return nil, errors.New("-workspace: the URL does not parse")
+		return nil, fmt.Errorf("%s: the URL does not parse", field)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	if u.Scheme == "https" {
@@ -592,11 +671,11 @@ func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
 		if caFile != "" {
 			pem, err := os.ReadFile(caFile)
 			if err != nil {
-				return nil, fmt.Errorf("workspace.tls_ca: %w", err)
+				return nil, fmt.Errorf("%s.tls_ca: %w", field, err)
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				return nil, fmt.Errorf("workspace.tls_ca %s holds no PEM certificate", caFile)
+				return nil, fmt.Errorf("%s.tls_ca %s holds no PEM certificate", field, caFile)
 			}
 			cfg.RootCAs = pool
 		}

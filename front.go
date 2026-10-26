@@ -63,7 +63,10 @@ type frontInfo struct {
 	// and its root; empty when they act in this process's or the
 	// executor's.
 	Workspace string
-	Think     bool
+	// Servers names the servers workspace beside it (servers_workspace),
+	// whose offered servers alone the session connects; empty for none.
+	Servers string
+	Think   bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
@@ -241,7 +244,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
-	if l := elsewhereBanner(f.info); l != "" {
+	for _, l := range elsewhereLines(f.info) {
 		fmt.Println(render.Clean(l))
 	}
 	if info.Recorded {

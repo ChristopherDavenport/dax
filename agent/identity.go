@@ -40,7 +40,24 @@ const (
 	// envelope (its files, internet, and its secrets' names, never their
 	// values), as the box host told the session.
 	headerBox = "dax.box"
+	// headerServers is the header member holding, for a session with a
+	// servers workspace beside its own (Options.ServersWorkspace), that
+	// workspace as its servers were offered by: {"kind", "ref",
+	// "servers"}, its identity (a served workspace's URL as
+	// config.WorkspaceRef writes it, a hub's workspace's
+	// config.TunnelRef of its name) and the names of the servers it
+	// offered, which the session connected. Its root is not kept: a
+	// servers-only grant is told the served directory's last name
+	// alone, and nothing of the session acts there.
+	headerServers = "dax.servers_workspace"
 )
+
+// recordedServers is a servers workspace as the header holds it.
+type recordedServers struct {
+	Kind    string   `json:"kind"`
+	Ref     string   `json:"ref,omitempty"`
+	Servers []string `json:"servers"`
+}
 
 // recordedWorkspace is a workspace as the header holds it.
 type recordedWorkspace struct {
@@ -115,7 +132,31 @@ func (s *Session) extras() map[string]json.RawMessage {
 			out[headerBox] = raw
 		}
 	}
+	if sw := s.sw; sw != nil {
+		servers := s.served
+		if servers == nil {
+			servers = []string{}
+		}
+		if raw, err := json.Marshal(recordedServers{Kind: sw.Kind, Ref: sw.Ref, Servers: servers}); err == nil {
+			out[headerServers] = raw
+		}
+	}
 	return out
+}
+
+// ServersWorkspaceOf is the servers workspace a session's header
+// records (Options.ServersWorkspace), by its kind and ref, and the
+// servers it offered; false for a session that had none.
+func ServersWorkspaceOf(h agentsession.Header) (workspace.Descriptor, []string, bool) {
+	raw, ok := h.Extra[headerServers]
+	if !ok {
+		return workspace.Descriptor{}, nil, false
+	}
+	var r recordedServers
+	if err := json.Unmarshal(raw, &r); err != nil || r.Kind == "" {
+		return workspace.Descriptor{}, nil, false
+	}
+	return workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, r.Servers, true
 }
 
 // recordedIn is the workspace a header records, and whether it records

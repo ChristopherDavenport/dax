@@ -275,6 +275,8 @@ func TestOfferingServersRefuses(t *testing.T) {
 		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["DAX_SHORT_SECRET"]}}}`), "-scopes", "servers", "-listen", "127.0.0.1:0"}, "server p: secret_env DAX_SHORT_SECRET is shorter than 8 bytes"},
 		{[]string{"-servers", holding, "-scopes", "read,servers,exec"}, "granted exec could take"},
 		{[]string{"-servers", holding, "-scopes", "read,write,servers"}, "granted write could take"},
+		{[]string{"-servers", holding, "-scopes", "read,servers"}, "granted read could take"},
+		{append([]string{"-servers", holding, "-scopes", "read,servers"}, hub...), "granted read could take"},
 		{append([]string{"-servers", holding}, hub...), "server p holds secrets"},
 		{append([]string{"-servers", holding, "-scopes", "read,servers,exec"}, hub...), "granted exec could take"},
 		{[]string{"-servers", holding, "-scopes", "servers", "-pass-env", testSecretEnv}, "-pass-env: " + testSecretEnv + " is server p's secret (secret_env)"},

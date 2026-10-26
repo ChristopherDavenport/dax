@@ -5,6 +5,47 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `servers_workspace` and `-servers-workspace URL`, a second
+  served workspace beside wherever the tools act (this directory,
+  `workspace`, an executor or a box), whose offered MCP servers the
+  session connects and nothing else, so a secret-holding server another
+  machine offers under `-scopes servers` is used while the file tools
+  and bash act in the session's own workspace (#118). It takes a `url`
+  or a `hub` as `workspace` does, dialed or hosted the same way, its
+  token from `DAX_SERVERS_WORKSPACE_TOKEN` or, for a hub,
+  `DAX_SERVERS_TUNNEL_TOKEN` by default, taken before anything starts.
+  Its servers go through the same path as every other server, under
+  the same names, collisions, rules, restarts and redaction. The session
+  refuses one whose grant is more than `servers` (`read`, `write` or
+  `exec`, learned by probing), one that offers no servers, one that is
+  its own workspace, one token for both connections whatever their
+  kinds, and two hubs on one port; a project's config may not name
+  one. The header records it as `dax.servers_workspace` (its kind, its
+  identity, the servers it offered), `-list` names it after a session's
+  line, every front's start line says `servers: ...` with or without
+  `-v`, and `-resume` with another or none warns. A drop of it shows as
+  a server that stopped; the session goes on, and at exit a dialed one
+  is given up after the 3 seconds a hub is.
+- Added: `agent.Options.ServersWorkspace` and `agent.ServersWorkspaceOf`,
+  the servers workspace a session connects and the one its header
+  records.
+- Changed: `dax workspace` granted servers alone says to connect with
+  `-servers-workspace` and `DAX_SERVERS_WORKSPACE_TOKEN`, and a session's
+  `servers_workspace.hub` says to run `dax workspace -connect` with
+  `-scopes servers -servers FILE`.
+- Changed: `dax workspace` refuses to offer a secret-holding server
+  under a grant with `read` too, as agentworkspace's `servers` scope
+  says: `read` reaches what the server keeps in the directory, and
+  `/proc` with `/` served. Offer one with `-scopes servers` alone.
+- Changed: an offered server whose name agentworkspace does not allow
+  (`ValidServerName`) is refused from any provider, and a `-workspace
+  URL` whose host stops answering no longer holds the exit past the
+  3 seconds a hub's does.
+- Changed: `secret_env` may not name `DAX_SERVERS_WORKSPACE_TOKEN`,
+  `DAX_SERVERS_TUNNEL_TOKEN` or a `servers_workspace` token variable.
+
 ## v0.0.31 - 2026-10-26
 
 - Added: a served or tunnelled workspace's offered MCP servers reach

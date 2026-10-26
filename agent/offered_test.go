@@ -195,7 +195,9 @@ func servedLocal(t *testing.T) remote.Workspace {
 // placements are the places one MCP server called p runs: configured as
 // a command on this machine, configured as a command in a served
 // workspace, offered by a served workspace (-servers) over -workspace
-// URL, and offered through a hub (workspace.hub).
+// URL, offered through a hub (workspace.hub), and offered by a servers
+// workspace beside the session's own (servers_workspace), at an address
+// or through a hub.
 func placements() []placement {
 	scopes := []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec, remote.ScopeServers}
 	return []placement{
@@ -212,6 +214,12 @@ func placements() []placement {
 		{"offered through a hub", func(t *testing.T, o *Options) {
 			o.Workspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), scopes...)
 		}},
+		{"offered by a servers workspace", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeServers)
+		}},
+		{"offered by a servers workspace through a hub", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeServers)
+		}},
 	}
 }
 
@@ -219,10 +227,11 @@ func placements() []placement {
 // secret stays on the machine whose environment holds it, so the
 // session's own runs on this machine (in: host), beside a workspace
 // here or a served one, and a workspace's runs where that workspace's
-// host offers it, under servers and read alone, as dax workspace
-// requires.
+// host offers it, under servers alone, as dax workspace requires,
+// whether that workspace is the session's or a servers workspace beside
+// a workspace of the session's own.
 func secretPlacements(secret string) []placement {
-	scopes := []remote.Scope{remote.ScopeRead, remote.ScopeServers}
+	scopes := []remote.Scope{remote.ScopeServers}
 	return []placement{
 		{"on this machine", func(t *testing.T, o *Options) {
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0], Host: true, SecretEnv: []string{secret}}}
@@ -236,6 +245,13 @@ func secretPlacements(secret string) []placement {
 		}},
 		{"offered through a hub", func(t *testing.T, o *Options) {
 			o.Workspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), scopes...)
+		}},
+		{"offered by a servers workspace beside a served one", func(t *testing.T, o *Options) {
+			o.Workspace = servedLocal(t)
+			o.ServersWorkspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), remote.ScopeServers)
+		}},
+		{"offered by a servers workspace through a hub", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), scopes...)
 		}},
 	}
 }

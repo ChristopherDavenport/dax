@@ -361,17 +361,24 @@ func (h *hostedHub) close() error {
 	return h.srv.Close()
 }
 
-// closeSession closes sess, and with a hub hosted (h), it and the
-// hub's Close after it within hubCloseWait in all: past it the hub is closed under the session, which
-// fails at once what still waits for a workspace that went away (the
-// MCP servers' closes in it among them), and the close finishes on
-// that, the record's included.
-func closeSession(sess io.Closer, h *hostedHub) error {
-	if h == nil {
+// closeSession closes sess, and with hubs hosted (the workspace's, the
+// servers workspace's; nil for none) or workspaces dialed, it and the
+// hubs' Close after it within hubCloseWait in all: past it each hub is
+// closed under the session, and each dialed workspace's requests given
+// up (abandoner), which fails at once what still waits for a workspace
+// that went away (the MCP servers' closes in it among them), and the
+// close finishes on that, the record's included.
+func closeSession(sess io.Closer, hubs []*hostedHub, dialed ...abandoner) error {
+	hubs = slices.DeleteFunc(slices.Clone(hubs), func(h *hostedHub) bool { return h == nil })
+	dialed = slices.DeleteFunc(slices.Clone(dialed), func(a abandoner) bool { return a == nil })
+	if len(hubs) == 0 && len(dialed) == 0 {
 		return sess.Close()
 	}
-	// One deadline for the session's close and the hub's after it.
-	h.closeBy = time.Now().Add(hubCloseWait)
+	// One deadline for the session's close and the hubs' after it.
+	by := time.Now().Add(hubCloseWait)
+	for _, h := range hubs {
+		h.closeBy = by
+	}
 	done := make(chan error, 1)
 	go func() { done <- sess.Close() }()
 	t := time.NewTimer(hubCloseWait)
@@ -381,7 +388,12 @@ func closeSession(sess io.Closer, h *hostedHub) error {
 		return err
 	case <-t.C:
 	}
-	h.hub.Close()
+	for _, h := range hubs {
+		h.hub.Close()
+	}
+	for _, a := range dialed {
+		a.Abandon()
+	}
 	return <-done
 }
 
@@ -468,7 +480,7 @@ func (p *pin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // connection does (connected, dropped, refused): dax's warnings, which a
 // front that has the screen holds and shows, never raw standard error
 // under it.
-func hubLogger() *slog.Logger {
+func hubLogger(setting string) *slog.Logger {
 	return slog.New(slog.NewTextHandler(render.CleanWriter(agent.Warnings()), &slog.HandlerOptions{
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) == 0 && a.Key == slog.TimeKey {
@@ -476,7 +488,7 @@ func hubLogger() *slog.Logger {
 			}
 			return a
 		},
-	})).With("dax", "workspace.hub")
+	})).With("dax", setting)
 }
 
 // hostHub hosts the hub s says and waits up to s.Wait for the
@@ -500,18 +512,18 @@ func hostHub(ctx context.Context, s config.HubSettings, token, prog string, out 
 // and what to run on the workspace's host (prog, this program's name,
 // with -connect), never the token.
 func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedHub, error) {
-	cfg, err := loadTLSFiles("workspace.hub", "tls_cert", "tls_key", s.TLSCert, s.TLSKey)
+	cfg, err := loadTLSFiles(s.Setting(), "tls_cert", "tls_key", s.TLSCert, s.TLSKey)
 	if err != nil {
 		return nil, err
 	}
-	ln, scheme, err := listenHub(s.Listen, cfg)
+	ln, scheme, err := listenHub(s.Setting(), s.Listen, cfg)
 	if err != nil {
 		return nil, err
 	}
 	// The one token names the one workspace (the Authenticator's shape
 	// is the tunnel's Enrollment: a request's name, or a refusal), held
 	// by the first instance it enrolls.
-	lg := hubLogger()
+	lg := hubLogger(s.Setting())
 	p := &pin{name: s.Name, tokens: authn.New(map[string]string{token: s.Name}).Authenticator(errNotEnrolled), log: lg}
 	hub, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithMaxWorkspaces(1), wstunnel.WithLogger(lg))
 	if err != nil {
@@ -528,7 +540,12 @@ func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedH
 	go srv.Serve(ln)
 	h := &hostedHub{URL: scheme + "://" + servedHost(ln.Addr()) + config.TunnelPath, s: s, hub: hub, srv: srv}
 	h.connect = config.TunnelTokenEnv + "=... " + render.Clean(prog) + " workspace -connect " + render.Clean(h.URL)
-	fmt.Fprintf(out, "workspace.hub: waiting up to %s for workspace %s at %s; on its host run: %s\n", s.Wait, s.Name, render.Clean(h.URL), h.connect)
+	if s.Field == config.ServersField+".hub" {
+		// A servers workspace is granted its servers alone, which the
+		// session requires.
+		h.connect += " -scopes servers -servers FILE"
+	}
+	fmt.Fprintf(out, "%s: waiting up to %s for workspace %s at %s; on its host run: %s\n", s.Setting(), s.Wait, s.Name, render.Clean(h.URL), h.connect)
 	return h, nil
 }
 
@@ -542,9 +559,9 @@ func (h *hostedHub) await(ctx context.Context) error {
 	ws, err := h.hub.Workspace(wctx, h.s.Name, wsremote.WithTimeout(hubRequestTimeout))
 	if err != nil {
 		if errors.Is(err, wstunnel.ErrNotConnected) && ctx.Err() == nil {
-			return fmt.Errorf("workspace.hub: workspace %s did not connect to %s within %s; on its host run: %s", h.s.Name, render.Clean(h.URL), h.s.Wait, h.connect)
+			return fmt.Errorf("%s: workspace %s did not connect to %s within %s; on its host run: %s", h.s.Setting(), h.s.Name, render.Clean(h.URL), h.s.Wait, h.connect)
 		}
-		return fmt.Errorf("workspace.hub: %w", err)
+		return fmt.Errorf("%s: %w", h.s.Setting(), err)
 	}
 	h.Workspace = identify(ws)
 	return nil
@@ -553,28 +570,28 @@ func (h *hostedHub) await(ctx context.Context) error {
 // listenHub is where a session's hub listens: wss on addr with cfg,
 // which may then be any address, and ws on a loopback address
 // otherwise. It returns the URL scheme.
-func listenHub(addr string, cfg *tls.Config) (net.Listener, string, error) {
+func listenHub(setting, addr string, cfg *tls.Config) (net.Listener, string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, "", fmt.Errorf("workspace.hub.listen %q: %w", addr, err)
+		return nil, "", fmt.Errorf("%s.listen %q: %w", setting, addr, err)
 	}
 	if cfg != nil {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			return nil, "", fmt.Errorf("workspace.hub.listen: %w", err)
+			return nil, "", fmt.Errorf("%s.listen: %w", setting, err)
 		}
 		return tls.NewListener(ln, cfg), "wss", nil
 	}
 	if port == "" || port == "0" {
 		port = "7780"
 	}
-	refuse := fmt.Errorf("workspace.hub.listen %q: without tls_cert and tls_key the hub listens on loopback only (127.0.0.1, ::1 or localhost); the workspace's host reaches it through a tunnel (ssh -o ExitOnForwardFailure=yes -R %s:127.0.0.1:%s <that host>), or give the hub a certificate", addr, port, port)
+	refuse := fmt.Errorf("%s.listen %q: without tls_cert and tls_key the hub listens on loopback only (127.0.0.1, ::1 or localhost); the workspace's host reaches it through a tunnel (ssh -o ExitOnForwardFailure=yes -R %s:127.0.0.1:%s <that host>), or give the hub a certificate", setting, addr, port, port)
 	if !isLoopbackHost(strings.ToLower(host)) {
 		return nil, "", refuse
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, "", fmt.Errorf("workspace.hub.listen: %w", err)
+		return nil, "", fmt.Errorf("%s.listen: %w", setting, err)
 	}
 	if a, ok := ln.Addr().(*net.TCPAddr); !ok || !a.IP.IsLoopback() {
 		ln.Close()

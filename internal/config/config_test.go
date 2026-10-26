@@ -1359,3 +1359,127 @@ func TestWorkspaceRef(t *testing.T) {
 		}
 	}
 }
+
+// servers_workspace is checked as workspace is, under its own name, and
+// stands beside wherever the tools act: with a workspace, an executor
+// or a box. A project may not name one.
+func TestServersWorkspaceValidation(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{`{"servers_workspace":{}}`, "servers_workspace.url is required"},
+		{`{"servers_workspace":{"url":"http://box.example:7781"}}`, "servers_workspace.url \"http://box.example:7781\": http only to a loopback host"},
+		{`{"servers_workspace":{"url":"https://me:pw@box.example"}}`, "carries credentials"},
+		{`{"servers_workspace":{"url":"https://box.example/?t=x"}}`, "a query or fragment"},
+		{`{"servers_workspace":{"url":"https://box.example","token_env":"MY-TOKEN"}}`, `servers_workspace.token_env: "MY-TOKEN" is not a variable name`},
+		{`{"servers_workspace":{"url":"http://127.0.0.1:7781","tls_ca":"/ca.pem"}}`, "servers_workspace.tls_ca is for an https url"},
+		{`{"servers_workspace":{"url":"https://box.example","hub":{"listen":"127.0.0.1:7781","name":"gh"}}}`, "servers_workspace: give url (dax dials the workspace) or hub"},
+		{`{"servers_workspace":{"hub":{"listen":"0.0.0.0:7781","name":"gh"}}}`, "servers_workspace.hub.listen \"0.0.0.0:7781\": without tls_cert and tls_key"},
+		{`{"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"GH"}}}`, `servers_workspace.hub.name "GH"`},
+	} {
+		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
+		}
+	}
+	for _, ok := range []string{
+		`{"servers_workspace":{"url":"http://127.0.0.1:7781"}}`,
+		`{"servers_workspace":{"url":"https://gh.example/ws","token_env":"GH_WS_TOKEN","tls_ca":"/u/ca.pem"}}`,
+		`{"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"gh"}}}`,
+		`{"servers_workspace":{"url":"http://127.0.0.1:7781"},"workspace":{"url":"https://box.example"}}`,
+		`{"servers_workspace":{"url":"http://127.0.0.1:7781"},"executor":{"command":"ssh host dax execute"}}`,
+		`{"servers_workspace":{"url":"http://127.0.0.1:7781"},"box":{}}`,
+	} {
+		if _, err := Parse([]byte(ok), "/u/config.json", false); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	// A repository may not choose a machine the session's tool calls go
+	// to, however it is written.
+	for _, file := range []string{`{"servers_workspace":{"url":"https://evil.example"}}`, `{"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"evil"}}}`} {
+		if _, err := Parse([]byte(file), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "servers_workspace: a project file may only tighten") {
+			t.Errorf("a project's servers_workspace %s: %v", file, err)
+		}
+	}
+}
+
+// The flag's URL replaces the file's, keeping its token_env and tls_ca,
+// and "" clears it; the token's variables default to the servers
+// workspace's own, not the session workspace's; a project's layer
+// names none; and its token is held to the rules the workspace's is,
+// against every other credential's and the workspace's own.
+func TestServersWorkspacePrecedence(t *testing.T) {
+	user := parse(t, `{"servers_workspace":{"url":"https://gh.example:7781","token_env":"GH_WS_TOKEN","tls_ca":"ca.pem"}}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	want := &WorkspaceSettings{URL: "https://gh.example:7781", TokenEnv: "GH_WS_TOKEN", TLSCA: "/home/u/.config/dax/ca.pem", Field: ServersField}
+	if err != nil || !reflect.DeepEqual(s.ServersWorkspace, want) || s.Workspace != nil {
+		t.Fatalf("file: %+v %+v, %v", s.ServersWorkspace, s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{ServersWorkspace: ptr(" https://other.example ")}, ""); err != nil || !reflect.DeepEqual(s.ServersWorkspace, &WorkspaceSettings{URL: "https://other.example", TokenEnv: "GH_WS_TOKEN", TLSCA: want.TLSCA, Field: ServersField}) {
+		t.Fatalf("the flag over the file: %+v, %v", s.ServersWorkspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{ServersWorkspace: ptr("")}, ""); err != nil || s.ServersWorkspace != nil {
+		t.Fatalf("the empty flag clears it: %+v, %v", s.ServersWorkspace, err)
+	}
+	if s, err = Resolve(nil, Flags{ServersWorkspace: ptr("http://127.0.0.1:7781")}, ""); err != nil || !reflect.DeepEqual(s.ServersWorkspace, &WorkspaceSettings{URL: "http://127.0.0.1:7781", TokenEnv: ServersWorkspaceTokenEnv, Field: ServersField}) {
+		t.Fatalf("the flag alone: %+v, %v", s.ServersWorkspace, err)
+	}
+	if got := s.ServersWorkspace; got.Name() != "servers_workspace" || got.Flag() != "-servers-workspace" {
+		t.Errorf("named %s, %s", got.Name(), got.Flag())
+	}
+	hub := parse(t, `{"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"gh"}}}`, false)
+	if s, err = Resolve([]Layer{hub}, Flags{}, ""); err != nil || !reflect.DeepEqual(s.ServersWorkspace, &WorkspaceSettings{TokenEnv: ServersWorkspaceTokenEnv, Field: ServersField,
+		Hub: &HubSettings{Listen: "127.0.0.1:7781", Name: "gh", TokenEnv: ServersTunnelTokenEnv, Wait: DefaultHubWait, Field: "servers_workspace.hub"}}) {
+		t.Fatalf("the hub: %+v %+v, %v", s.ServersWorkspace, s.ServersWorkspace.Hub, err)
+	}
+	if got := s.ServersWorkspace.Ref(); got != TunnelRef("gh") {
+		t.Errorf("the hub's ref %q", got)
+	}
+	// Beside the session's own workspace, executor or box.
+	both := parse(t, `{"workspace":{"url":"https://box.example"},"servers_workspace":{"url":"https://gh.example"}}`, false)
+	if s, err = Resolve([]Layer{both}, Flags{}, ""); err != nil || s.Workspace == nil || s.ServersWorkspace == nil {
+		t.Fatalf("both: %+v %+v, %v", s.Workspace, s.ServersWorkspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Executor: ptr("ssh host dax execute")}, ""); err != nil || s.ServersWorkspace == nil || len(s.Executor) == 0 {
+		t.Fatalf("beside an executor: %+v %q, %v", s.ServersWorkspace, s.Executor, err)
+	}
+	proj := Layer{Project: true, Path: "/work/proj/.dax/config.json", Config: Config{ServersWorkspace: &Workspace{URL: "https://evil.example"}}}
+	if s, err = Resolve([]Layer{proj}, Flags{}, ""); err != nil || s.ServersWorkspace != nil {
+		t.Errorf("a project's servers_workspace was taken: %+v, %v", s.ServersWorkspace, err)
+	}
+	if s, err = Resolve([]Layer{user, proj}, Flags{}, ""); err != nil || s.ServersWorkspace.URL != "https://gh.example:7781" {
+		t.Errorf("a project's servers_workspace replaced the user's: %+v, %v", s.ServersWorkspace, err)
+	}
+	sw := `"servers_workspace":{"url":"https://gh.example"}`
+	for _, tc := range []struct {
+		name  string
+		user  string
+		flags Flags
+		want  string
+	}{
+		{"pass_env names the token", `{` + sw + `,"pass_env":["DAX_SERVERS_WORKSPACE_TOKEN"]}`, Flags{}, "pass_env: DAX_SERVERS_WORKSPACE_TOKEN holds the workspace's token"},
+		{"the model's key's variable", `{"provider":"openresponses","model":"m","base_url":"https://x","api_key_env":"DAX_SERVERS_WORKSPACE_TOKEN",` + sw + `}`, Flags{}, "servers_workspace.token_env: DAX_SERVERS_WORKSPACE_TOKEN is api_key_env too"},
+		{"an MCP server's token", `{"mcp_servers":{"docs":{"url":"https://docs.example/mcp","token_env":"DAX_SERVERS_WORKSPACE_TOKEN"}},` + sw + `}`, Flags{}, "servers_workspace.token_env: DAX_SERVERS_WORKSPACE_TOKEN is MCP server docs's token_env too"},
+		{"a server's secret", `{"mcp_servers":{"gh":{"command":"gh-mcp","in":"host","secret_env":["GH_WS"]}},"servers_workspace":{"url":"https://gh.example","token_env":"GH_WS"}}`, Flags{}, "mcp_servers.gh: secret_env: GH_WS is servers_workspace.token_env, the workspace's token"},
+		{"the workspace's token", `{"workspace":{"url":"https://box.example","token_env":"SHARED"},"servers_workspace":{"url":"https://gh.example","token_env":"SHARED"}}`, Flags{}, "servers_workspace.token_env: SHARED is workspace.token_env too"},
+		{"the workspace's hub's token", `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","token_env":"SHARED"}},"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"gh","token_env":"SHARED"}}}`, Flags{}, "servers_workspace.hub.token_env: SHARED is workspace.hub.token_env too"},
+		{"its hub's own token_env", `{"servers_workspace":{"token_env":"SHARED","hub":{"listen":"127.0.0.1:7781","name":"gh","token_env":"SHARED"}}}`, Flags{}, "servers_workspace.hub.token_env: SHARED is servers_workspace.token_env too"},
+		{"the session's workspace", `{"workspace":{"url":"https://box.example"},"servers_workspace":{"url":"https://BOX.example:443/"}}`, Flags{}, "servers_workspace https://box.example is the session's workspace too"},
+		{"the session's hub", `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"gh"}},"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"gh"}}}`, Flags{}, "is the session's workspace too"},
+		{"two hubs on one port", `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}},"servers_workspace":{"hub":{"listen":"localhost:7780","name":"gh"}}}`, Flags{}, `servers_workspace.hub.listen "localhost:7780": port 7780 is workspace.hub's too`},
+		{"a flag over http elsewhere", `{}`, Flags{ServersWorkspace: ptr("http://gh.example")}, "-servers-workspace \"http://gh.example\": http only to a loopback host"},
+		{"a flag over http and the file's tls_ca", `{"servers_workspace":{"url":"https://gh.example","tls_ca":"/ca.pem"}}`, Flags{ServersWorkspace: ptr("http://127.0.0.1:7781")}, "servers_workspace.tls_ca is for an https URL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Resolve([]Layer{parse(t, tc.user, false)}, tc.flags, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Resolve: err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	// Two hubs each on a port the system picks are two ports.
+	if _, err := Resolve([]Layer{parse(t, `{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build"}},"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh"}}}`, false)}, Flags{}, ""); err != nil {
+		t.Errorf("two hubs on port 0: %v", err)
+	}
+	// A server's secret may not be a servers workspace's default token
+	// variable either.
+	if _, err := Parse([]byte(`{"mcp_servers":{"gh":{"command":"gh-mcp","in":"host","secret_env":["DAX_SERVERS_TUNNEL_TOKEN"]}}}`), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), "is a served workspace's token") {
+		t.Errorf("secret_env DAX_SERVERS_TUNNEL_TOKEN: %v", err)
+	}
+}

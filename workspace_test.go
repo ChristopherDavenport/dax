@@ -201,11 +201,11 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 	// The token is taken from its variable, which then leaves the
 	// environment; none set is refused.
 	t.Setenv(config.WorkspaceTokenEnv, "")
-	if _, err := takeWorkspaceToken(config.WorkspaceTokenEnv); err == nil || !strings.Contains(err.Error(), "no token: set $DAX_WORKSPACE_TOKEN") {
+	if _, err := takeWorkspaceToken("-workspace", config.WorkspaceTokenEnv); err == nil || !strings.Contains(err.Error(), "no token: set $DAX_WORKSPACE_TOKEN") {
 		t.Errorf("no token: %v", err)
 	}
 	t.Setenv("MY_WS_TOKEN", token)
-	if got, err := takeWorkspaceToken("MY_WS_TOKEN"); err != nil || got != token {
+	if got, err := takeWorkspaceToken("-workspace", "MY_WS_TOKEN"); err != nil || got != token {
 		t.Fatalf("takeWorkspaceToken: %v", err)
 	}
 	if _, ok := os.LookupEnv("MY_WS_TOKEN"); ok {
@@ -375,11 +375,11 @@ func TestAServedWorkspaceOverTLS(t *testing.T) {
 	if ws.Root() != dir {
 		t.Errorf("root %s, want %s", ws.Root(), dir)
 	}
-	if _, err := workspaceHTTPClient(url, filepath.Join(dir, "missing.pem")); err == nil {
+	if _, err := workspaceHTTPClient("workspace", url, filepath.Join(dir, "missing.pem")); err == nil {
 		t.Error("a CA file that is not there")
 	}
 	write(t, filepath.Join(dir, "junk.pem"), "not a certificate")
-	if _, err := workspaceHTTPClient(url, filepath.Join(dir, "junk.pem")); err == nil || !strings.Contains(err.Error(), "holds no PEM certificate") {
+	if _, err := workspaceHTTPClient("workspace", url, filepath.Join(dir, "junk.pem")); err == nil || !strings.Contains(err.Error(), "holds no PEM certificate") {
 		t.Errorf("a CA file with no certificate: %v", err)
 	}
 }
