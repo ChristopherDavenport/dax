@@ -5,6 +5,14 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentworkspace, agentworkspace/mcpworkspace and
+  agentworkspace/tunnel v0.0.7, up from v0.0.6, whose `remote` and
+  `tunnel` carry a workspace's offered MCP servers under a new
+  `servers` scope, and whose `Offer` takes the secrets a server holds
+  and a filter for its output (`WithOutputFilter`).
+
 ## v0.0.29 - 2026-10-26
 
 - Added: `dax workspace -connect URL`, the served workspace for a host
