@@ -31,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	workspace "github.com/ChristopherDavenport/agentworkspace"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	wstunnel "github.com/ChristopherDavenport/agentworkspace/tunnel"
 
@@ -39,7 +38,6 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/render"
-	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // checkConnectURL refuses a hub URL -connect would send its token or
@@ -64,8 +62,8 @@ func checkConnectURL(s string) error {
 	return nil
 }
 
-// parseScopes is -scopes: read, write and exec, comma-separated, each
-// once; none, or one of another name, is refused.
+// parseScopes is -scopes: read, write, exec and servers,
+// comma-separated, each once; none, or one of another name, is refused.
 func parseScopes(list string) ([]wsremote.Scope, error) {
 	var scopes []wsremote.Scope
 	for v := range strings.SplitSeq(list, ",") {
@@ -73,16 +71,16 @@ func parseScopes(list string) ([]wsremote.Scope, error) {
 		switch s {
 		case "":
 			continue
-		case wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec:
+		case wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec, wsremote.ScopeServers:
 		default:
-			return nil, fmt.Errorf("workspace: -scopes: no scope %q; want read, write and exec, comma-separated", s)
+			return nil, fmt.Errorf("workspace: -scopes: no scope %q; want read, write, exec and servers, comma-separated", s)
 		}
 		if !slices.Contains(scopes, s) {
 			scopes = append(scopes, s)
 		}
 	}
 	if len(scopes) == 0 {
-		return nil, errors.New("workspace: -scopes: none given; want read, write and exec, comma-separated")
+		return nil, errors.New("workspace: -scopes: none given; want read, write, exec and servers, comma-separated")
 	}
 	return scopes, nil
 }
@@ -213,23 +211,14 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 		u, _ := neturl.Parse(w.connect)
 		fmt.Fprintln(out, "dax workspace: warning: ws:// is neither encrypted nor authenticated: whoever holds "+render.Clean(u.Host)+" on this host gets the token and the workspace; on a host others share, use wss:// with -tls-ca")
 	}
-	dir := w.dir
-	if dir == "" {
-		if dir, err = os.Getwd(); err != nil {
-			return err
-		}
-	}
-	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(w.pass))
+	ws, err := w.open()
 	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
+		return err
 	}
 	closed := make(chan struct{})
 	closeWS := func() { ws.Close(); close(closed) }
-	scopes := make([]string, len(w.scopes))
-	for i, s := range w.scopes {
-		scopes[i] = string(s)
-	}
-	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" to the hub at "+render.Clean(w.connect)+", which may "+strings.Join(scopes, ", "))
+	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" to the hub at "+render.Clean(w.connect)+", which may "+scopeList(w.scopes))
+	w.sayOffered(out)
 	fmt.Fprintln(out, "token: $"+config.TunnelTokenEnv)
 
 	stop := ctx
