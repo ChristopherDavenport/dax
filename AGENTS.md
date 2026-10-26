@@ -45,19 +45,25 @@ before changing the shape.
   flags of its own and no config read. `workspace.go`: the served
   workspace, both ends: `dax workspace`, a directory served as a
   `workspace.Local` through agentworkspace's `remote` behind one bearer
-  token (read, write, exec; `$DAX_WORKSPACE_TOKEN` or a private file,
-  as serve's), loopback unless `-tls-cert`/`-tls-key`, flags of its own
+  token (`$DAX_WORKSPACE_TOKEN` or a private file, as serve's) granting
+  `-scopes` (read, write, exec by default; servers too with
+  `-servers`), an `Offering` of the servers a `-servers` file names in
+  the config's own shape (`config.ParseOffered`, `internal/offer`), a
+  grant that would give a secret-holding server's secret away refused
+  (`settle`), loopback unless `-tls-cert`/`-tls-key`, flags of its own
   and no config read; and `dialWorkspace`, `-workspace`'s client
   (https verified against the system's roots or `workspace.tls_ca`, no
   redirect followed, the token taken and its variable unset, by `takeWorkspaceToken`, as
   soon as the settings are resolved, before the key command runs), whose
-  `remote.Workspace` is the session's `Options.Workspace`.
+  `remote.Workspace` is the session's `Options.Workspace`, under
+  `identify`, which keeps what the client is (a `Starter`, a
+  `ServerProvider`, both) so each assertion tells the truth.
   `tunnel.go`: the served workspace turned around, both ends of
   agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
   -connect`, the directory served through `tunnel.Serve` to a session's
   hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN` in the
   upgrade's header, taken from the environment first, with the run's
-  instance id; `-scopes`; `-tls-ca` in place of the system's roots;
+  instance id; `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
   `dialWatch`, which ends the run before it connects at a certificate
   not verified or a 404); and `hostHub`, the config's
   `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless
@@ -114,10 +120,13 @@ before changing the shape.
   extensions and their checks (`agent/extension.go`), the policy built
   from them, the sub-agents' policy hook, the MCP servers it connects,
   each started again by the next call after it ends, with a warning and
-  a `dax.mcp.restart` entry (`mcpStart`): a command's in the workspace
-  or here, one placed on the host, one at a URL (`agent/mcpurl.go`, its
-  token held to the URL's origin), and those the workspace offers of
-  its own (`workspace.ServerProvider`, a box host's units); a project's
+  a `dax.mcp.restart` entry (`mcpStart`, the one path every placement
+  takes): a command's in the workspace or here, one placed on the host,
+  one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
+  those the workspace offers of its own (`workspace.ServerProvider`, a
+  box host's units, a served or tunnelled workspace's `-servers`), and
+  a command holding secrets (`secret_env`) started through
+  `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
   `~/.dax/mcp-trust.json`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
@@ -242,7 +251,14 @@ before changing the shape.
   itself), so it can move to agentworkspace once a second product
   wants it. The design is
   `docs/plans/proposals/box-host.md`.
-- `internal/config`: the JSON config layers, validation, `Resolve`.
+- `internal/config`: the JSON config layers, validation, `Resolve`,
+  and `ParseOffered`, `dax workspace -servers`' file in the layers'
+  `mcp_servers` shape.
+- `internal/offer`: an MCP server that holds secrets, and the servers
+  `dax workspace -servers` offers: commands in a workspace offered
+  through agentworkspace's `Offer`, given their `secret_env` from the
+  starting process's environment, their output read through
+  agentredact's `secrets` filter (`Filter`).
 - `internal/authn`: dax's own bearer-token check, which the libraries
   leave to their program: `Tokens`, static tokens compared through
   SHA-256 in constant time, its `Authenticator` the shape of every
@@ -304,7 +320,8 @@ an `Unreleased` changelog line:
 - A project config field is refused unless it can only tighten. The one
   exception is `mcp_servers`: a project's servers start only once the
   user trusts that project's exact set (`-trust-mcp`), and a project's
-  server may name no `token_env` and no name the user's config gives.
+  server may name no `token_env`, no `secret_env` and no name the
+  user's config gives.
 - Tools, dax's and any extension's, act through `tool.Files` over the
   session's `workspace.Workspace` (`ReadFile`, `WriteFile`, `Update`,
   `Stat`, `ReadDir`) and its `Exec`; never `os` or `os/exec` on a
