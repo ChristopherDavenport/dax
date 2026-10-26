@@ -111,7 +111,7 @@ func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Confi
 		Description: "Delegate a read-only investigation of the project to a sub-agent. " +
 			"Give it one clear question; it reads files and runs read-only commands and returns a written answer. " +
 			"Use it for broad searches so their output stays out of this conversation.",
-		Model:     env.Model(),
+		Model:     env.SubagentModel(),
 		ModelName: model,
 		Instructions: "You are a read-only explorer working in " + env.ToolEnv().Workspace.Root() + ". Answer the question using the " + list(names) + " tools; " +
 			"never modify files. End with a concise written answer that stands on its own.",

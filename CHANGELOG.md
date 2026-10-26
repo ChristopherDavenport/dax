@@ -5,6 +5,32 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: requests to Claude, with `-provider anthropic` or a `claude-`
+  model on `vertex`, opt into Claude's automatic prompt caching (5
+  minutes), so each turn reads the conversation so far from the cache
+  instead of resending all of it at the full input price. Each request
+  carries its run's session ID as `prompt_cache_key`, which is how the
+  anthropic adapter opts in; a request made outside a run carries a
+  fixed key. Gemini requests and the openresponses-client providers are
+  unchanged.
+- Added: `cache_ttl` and `subagent_cache_ttl` in the user's config
+  (`-cache-ttl`, `-subagent-cache-ttl`), `5m` or `1h`: how long Claude's
+  prompt cache keeps the main conversation's requests and the
+  sub-agents'. One hour costs twice the input price to write against
+  1.25 times for five minutes, and pays when you come back to a session
+  after 5 to 60 minutes. For the `anthropic` and `vertex` providers
+  only; a project's config cannot set them.
+- Changed: `extension.Env` has `SubagentModel()`, the model a
+  sub-agent's requests go through: `Model()`, unless the session was
+  given one of its own for them in the new
+  `agent.Options.SubagentStreamer`. dax-agents' explore and task use it.
+  A program that implements `extension.Env` itself must add it.
+- Dependencies: openresponses, openresponses/providers/anthropic and
+  openresponses/providers/gemini v0.0.16, up from v0.0.15, for
+  `anthropic.WithCacheTTL`; anthropic-sdk-go v1.78.0, up from v1.74.0.
+
 ## v0.0.29 - 2026-10-26
 
 - Added: `dax workspace -connect URL`, the served workspace for a host

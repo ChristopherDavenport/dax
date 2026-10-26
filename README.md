@@ -141,6 +141,31 @@ They are not for `vertex`.
 Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
 client; Anthropic and Gemini use its provider adapters.
 
+Requests to Claude, with `anthropic` or a `claude-` model on `vertex`,
+use Claude's prompt caching: each turn reads the conversation so far
+from the cache at a fraction of the input price instead of paying for
+all of it again. Claude matches the cache on the prompt's prefix; the
+session ID each request carries as `prompt_cache_key` only opts it in.
+The cache lasts 5 minutes from its last use, and each hit starts the 5
+minutes again, so it stays warm while a run goes on.
+
+`cache_ttl` (`-cache-ttl`) keeps the main conversation's cache for `1h`
+in place of `5m`, and `subagent_cache_ttl` (`-subagent-cache-ttl`) does
+the same for the sub-agents' requests. A one-hour cache costs more to
+write, twice the input price against 1.25 times for five minutes (a read
+costs the same either way), so it pays when you come back to a session
+after 5 to 60 minutes, and not while a run keeps the cache warm anyway.
+That is why the two are apart: the main conversation is the long prefix
+you come back to, while a sub-agent's short run is rarely read again
+once it ends. For a session you return to:
+
+```json
+{
+  "provider": "anthropic",
+  "cache_ttl": "1h"
+}
+```
+
 `vertex` is Google Vertex AI, which serves Claude and Gemini behind one
 project and login. Each request goes to the Anthropic adapter for a
 `claude-` model and to the Gemini adapter for a `gemini-` model, so the
@@ -331,7 +356,7 @@ Settings come from three layers, each overriding the one before:
 }
 ```
 
-`model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header` and `client_header` belong to the provider in force
+`model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl` and `subagent_cache_ttl` belong to the provider in force
 where they are set. A later layer that switches the provider leaves them
 behind, so with `"model": "qwen3-coder:30b"` in your config,
 `dax -provider openrouter` runs OpenRouter's default model rather than
@@ -351,6 +376,7 @@ names the file and the field.
 | `api_key_login` | how to sign in again, a URL or a command, shown when `api_key_command` fails or its key is refused; one line, at most 500 bytes |
 | `session_header` | the header each model call carries its session's ID in, for a server that groups calls by session (see above) |
 | `client_header` | the header each model call carries `dax/<version>` in, for a server that records which client called |
+| `cache_ttl`, `subagent_cache_ttl` | how long Claude's prompt cache keeps the main conversation's and the sub-agents' requests: `5m` (the default) or `1h`; `anthropic` and `vertex` only (see above) |
 | `instructions_file` | your own instructions, added to the system prompt after dax's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
@@ -375,7 +401,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 `"fallback"` to `ask` or `deny` when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `think`, `effort`, `agents`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
 `instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace` or `peers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -403,6 +429,7 @@ no other account could have written it.
 | `-api-key-command 'program arg ...'` | overrides `api_key_command`, split as a shell splits words with nothing expanded; `""` turns it off, and `api_key_login` with it |
 | `-api-key-login hint` | overrides `api_key_login` |
 | `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
+| `-cache-ttl 5m\|1h`, `-subagent-cache-ttl 5m\|1h` | override `cache_ttl` and `subagent_cache_ttl`; `""` turns one off |
 | `-config path` | the user config file |
 | `-memory dir` | memory directory; `off` or empty disables it |
 | `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |

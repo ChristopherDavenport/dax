@@ -81,6 +81,13 @@ type Config struct {
 	// ClientHeader names the request header that carries dax's name
 	// and version, for a server that records which client called.
 	ClientHeader string `json:"client_header,omitempty"`
+	// CacheTTL is how long Claude's prompt cache keeps the main
+	// conversation's prefix: 5m (the default) or 1h, which costs more to
+	// write and pays when you come back to a session after 5 to 60
+	// minutes. Only for the anthropic and vertex providers.
+	CacheTTL string `json:"cache_ttl,omitempty"`
+	// SubagentCacheTTL is CacheTTL for the sub-agents' requests.
+	SubagentCacheTTL string `json:"subagent_cache_ttl,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
 	// Effort is the reasoning effort Think asks for: minimal, low (the
@@ -630,6 +637,12 @@ func (l *Layer) validate() error {
 	if err := checkHeaderName("client_header", c.ClientHeader); err != nil {
 		return err
 	}
+	if err := checkCacheTTL("cache_ttl", c.CacheTTL); err != nil {
+		return err
+	}
+	if err := checkCacheTTL("subagent_cache_ttl", c.SubagentCacheTTL); err != nil {
+		return err
+	}
 	if l.Project {
 		for _, f := range []struct {
 			name string
@@ -638,6 +651,7 @@ func (l *Layer) validate() error {
 			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
+			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
@@ -1340,6 +1354,18 @@ var reservedHeaders = []string{
 	"Connection", "Accept", "Accept-Encoding", "Anthropic-Version", "Anthropic-Beta", "Openai-Beta",
 }
 
+// CacheTTLs are the lifetimes Claude's prompt cache offers.
+var CacheTTLs = []string{"5m", "1h"}
+
+// checkCacheTTL refuses a cache_ttl or subagent_cache_ttl that is not
+// one of CacheTTLs; empty is unset.
+func checkCacheTTL(field, ttl string) error {
+	if ttl != "" && !slices.Contains(CacheTTLs, ttl) {
+		return fmt.Errorf("%s %q: want one of %s", field, ttl, strings.Join(CacheTTLs, ", "))
+	}
+	return nil
+}
+
 // checkHeaderName refuses a session_header or client_header that is not
 // a header name, or that names a header the client sets itself.
 func checkHeaderName(field, name string) error {
@@ -1430,6 +1456,7 @@ type Flags struct {
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
 	SessionHeader, ClientHeader      *string
+	CacheTTL, SubagentCacheTTL       *string
 	// Executor replaces the config's executor: a command line split as
 	// a shell splits words, or an http or https URL where it serves; ""
 	// clears it.
@@ -1468,6 +1495,8 @@ type Settings struct {
 	APIKeyLogin      string   // empty: no sign-in hint with a key error
 	SessionHeader    string   // empty: no session header on model calls
 	ClientHeader     string   // empty: no client header on model calls
+	CacheTTL         string   // empty: Claude's default, 5m
+	SubagentCacheTTL string   // empty: Claude's default, 5m
 	Think            bool
 	Effort           string // the effort Think asks for
 	Agents           bool
@@ -1492,8 +1521,9 @@ type Settings struct {
 	MaxReadBytes int64
 	Policy       PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
-	// api_key_env, api_key_command, api_key_login, session_header and
-	// client_header: "default", the file's path, or "flag".
+	// api_key_env, api_key_command, api_key_login, session_header,
+	// client_header, cache_ttl and subagent_cache_ttl: "default", the
+	// file's path, or "flag".
 	Sources map[string]string
 }
 
@@ -1517,14 +1547,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
-		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default"},
+		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
 	servers := map[string]MCP{}
 	peers := map[string]a2a.Remote{}
 	// model, subagent_model, base_url, api_key_env, api_key_command,
-	// api_key_login, session_header and client_header belong to the
-	// provider in force where they were set; setFor records which one
-	// that was.
+	// api_key_login, session_header, client_header, cache_ttl and
+	// subagent_cache_ttl belong to the provider in force where they were
+	// set; setFor records which one that was.
 	setFor := map[string]string{}
 	for _, l := range layers {
 		if l.Provider != "" {
@@ -1553,6 +1583,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.ClientHeader != "" {
 			s.ClientHeader, s.Sources["client_header"], setFor["client_header"] = l.ClientHeader, l.Path, s.Provider
+		}
+		if l.CacheTTL != "" {
+			s.CacheTTL, s.Sources["cache_ttl"], setFor["cache_ttl"] = l.CacheTTL, l.Path, s.Provider
+		}
+		if l.SubagentCacheTTL != "" {
+			s.SubagentCacheTTL, s.Sources["subagent_cache_ttl"], setFor["subagent_cache_ttl"] = l.SubagentCacheTTL, l.Path, s.Provider
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -1666,6 +1702,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.ClientHeader != nil {
 		s.ClientHeader, s.Sources["client_header"], setFor["client_header"] = *f.ClientHeader, "flag", s.Provider
 	}
+	if f.CacheTTL != nil {
+		s.CacheTTL, s.Sources["cache_ttl"], setFor["cache_ttl"] = *f.CacheTTL, "flag", s.Provider
+	}
+	if f.SubagentCacheTTL != nil {
+		s.SubagentCacheTTL, s.Sources["subagent_cache_ttl"], setFor["subagent_cache_ttl"] = *f.SubagentCacheTTL, "flag", s.Provider
+	}
 	// A later layer that switched the provider leaves the earlier
 	// provider's model, endpoint and key variable behind: the user's
 	// "model": "qwen3-coder:30b" is Ollama's, and -provider openrouter
@@ -1691,6 +1733,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.SessionHeader = ""
 		case "client_header":
 			s.ClientHeader = ""
+		case "cache_ttl":
+			s.CacheTTL = ""
+		case "subagent_cache_ttl":
+			s.SubagentCacheTTL = ""
 		}
 		s.Sources[name] = "default"
 	}
@@ -1864,6 +1910,17 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if s.SessionHeader != "" && strings.EqualFold(s.SessionHeader, s.ClientHeader) {
 		return s, fmt.Errorf("session_header and client_header both name %s; name two headers", s.SessionHeader)
+	}
+	for _, t := range []struct{ field, ttl string }{{"cache_ttl", s.CacheTTL}, {"subagent_cache_ttl", s.SubagentCacheTTL}} {
+		if t.ttl == "" {
+			continue
+		}
+		if err := checkCacheTTL(t.field, t.ttl); err != nil {
+			return s, err
+		}
+		if s.Provider != "anthropic" && s.Provider != "vertex" {
+			return s, fmt.Errorf("%s is for Claude's prompt cache, on the anthropic or vertex provider, not %s (%s)", t.field, s.Provider, s.Sources[t.field])
+		}
 	}
 	if s.APIKeyLogin != "" {
 		if err := checkKeyLogin(s.APIKeyLogin); err != nil {

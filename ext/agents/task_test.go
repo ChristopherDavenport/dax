@@ -538,3 +538,34 @@ func TestTheSubagentsTakeEveryExtensionsTools(t *testing.T) {
 		t.Errorf("task's prompt does not name the program:\n%s", tk.Instructions)
 	}
 }
+
+// Given a model of their own (agent.Options.SubagentStreamer, such as
+// one whose prompt cache lives for another time), both sub-agents ask
+// it, and the main model hears only the main conversation.
+func TestTheSubagentsAskTheirOwnModel(t *testing.T) {
+	main := &childModels{parent: scripted{calls: [][2]string{
+		{"explore", `{"input":"where is main?"}`},
+		{"task", `{"input":"write nothing"}`},
+	}}}
+	sub := &childModels{}
+	o := options(t, main, &agents.Options{})
+	o.SubagentStreamer = sub
+	s, err := agent.New(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := prompt(context.Background(), s, "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	main.mu.Lock()
+	defer main.mu.Unlock()
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if len(main.explore)+len(main.task) != 0 {
+		t.Errorf("the main model was asked by explore %d times, by task %d", len(main.explore), len(main.task))
+	}
+	if len(sub.explore) == 0 || len(sub.task) == 0 {
+		t.Errorf("the sub-agents' model was asked by explore %d times, by task %d; want both", len(sub.explore), len(sub.task))
+	}
+}

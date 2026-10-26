@@ -59,15 +59,23 @@ func TestSelection(t *testing.T) {
 				t.Fatal(err)
 			}
 			var got string
-			switch m.Streamer.(type) {
+			// A Claude adapter is behind claudeCache, on its own and
+			// on vertex's Claude route; Gemini's is not.
+			switch s := m.Streamer.(type) {
 			case *openresponses.ClientAdapter:
 				got = "client"
-			case *anthropic.Adapter:
-				got = "anthropic"
+			case claudeCache:
+				if _, ok := s.Adapter.(*anthropic.Adapter); ok {
+					got = "anthropic"
+				}
 			case *gemini.Adapter:
 				got = "gemini"
 			case vertexModels:
-				got = "vertex"
+				c, cached := s.claude.(claudeCache)
+				_, plain := s.gemini.(*gemini.Adapter)
+				if _, ok := c.Adapter.(*anthropic.Adapter); ok && cached && plain {
+					got = "vertex"
+				}
 			}
 			if got != tc.wantType {
 				t.Errorf("streamer is %T, want %s", m.Streamer, tc.wantType)
