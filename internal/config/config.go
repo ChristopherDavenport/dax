@@ -127,6 +127,12 @@ type Config struct {
 	// presence is -box's default. The user sets it; a project cannot,
 	// for the reason it cannot set executor.
 	Box *Box `json:"box,omitempty"`
+	// Workspace runs the tools here against a workspace served
+	// elsewhere (`dax workspace`): every file operation and process
+	// crosses the wire, and the tools and the policy stay here. The user
+	// sets it; a project cannot, since it would send the session's
+	// files and commands to another machine.
+	Workspace *Workspace `json:"workspace,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
@@ -146,6 +152,31 @@ type Peer struct {
 	// token sent to the agent; the token itself never goes in a config
 	// file.
 	TokenEnv string `json:"token_env,omitempty"`
+}
+
+// Workspace is a workspace served over HTTP (agentworkspace's remote),
+// which the session's tools act in.
+type Workspace struct {
+	// URL is where `dax workspace` serves: https, or http to a
+	// loopback host, with no user, password, query or fragment.
+	URL string `json:"url"`
+	// TokenEnv names the variable holding the bearer token sent with
+	// every request; default DAX_WORKSPACE_TOKEN. The token itself never
+	// goes in a config file.
+	TokenEnv string `json:"token_env,omitempty"`
+	// TLSCA, for an https URL, is a CA certificate (PEM) to verify the
+	// server's certificate against, in place of the system's roots.
+	TLSCA string `json:"tls_ca,omitempty"`
+}
+
+// WorkspaceTokenEnv is the variable a workspace's token is read from
+// when token_env names none, the one `dax workspace` takes.
+const WorkspaceTokenEnv = "DAX_WORKSPACE_TOKEN"
+
+// WorkspaceSettings is the served workspace the session's tools act
+// in: Workspace with its defaults filled in.
+type WorkspaceSettings struct {
+	URL, TokenEnv, TLSCA string
 }
 
 // Box runs the tools in a box a box host makes: `dax box serve`, here
@@ -545,7 +576,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"peers", len(c.Peers) > 0},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"peers", len(c.Peers) > 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -585,6 +616,17 @@ func (l *Layer) validate() error {
 			return errors.New("box and executor both say where the tools run; give one (executor.pass_env alone may stay: it is the box's docker command's)")
 		}
 		if err := b.check("box"); err != nil {
+			return err
+		}
+	}
+	if w := c.Workspace; w != nil {
+		if x := c.Executor; x != nil && (x.Command.Given() || x.URL != "") {
+			return errors.New("workspace and executor both say where the tools act; give one")
+		}
+		if c.Box != nil {
+			return errors.New("workspace and box both say where the tools act; give one")
+		}
+		if err := w.check("workspace"); err != nil {
 			return err
 		}
 	}
@@ -633,6 +675,44 @@ func (l *Layer) validate() error {
 // remote is p as dax-a2a takes it.
 func (p Peer) remote(name string) a2a.Remote {
 	return a2a.Remote{Name: name, URL: p.URL, Relation: p.Relation, TokenEnv: p.TokenEnv}
+}
+
+// check refuses a workspace setting that is not one.
+func (w Workspace) check(field string) error {
+	if w.URL == "" {
+		return fmt.Errorf("%s.url is required: where dax workspace serves", field)
+	}
+	if err := CheckWorkspaceURL(field+".url", w.URL); err != nil {
+		return err
+	}
+	if w.TokenEnv != "" && !envName.MatchString(w.TokenEnv) {
+		return fmt.Errorf("%s.token_env: %q is not a variable name", field, w.TokenEnv)
+	}
+	if w.TLSCA != "" && !strings.HasPrefix(strings.ToLower(w.URL), "https://") {
+		return fmt.Errorf("%s.tls_ca is for an https url", field)
+	}
+	return nil
+}
+
+// CheckWorkspaceURL refuses a URL a workspace's token and the
+// session's files should not go to: one that is not https, unless it
+// is http to this machine, and one carrying credentials, a query or a
+// fragment, which the workspace's descriptor would otherwise hold.
+func CheckWorkspaceURL(field, s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return fmt.Errorf("%s %q: want the https:// or http:// URL dax workspace serves at", field, s)
+	}
+	if u.User != nil {
+		return fmt.Errorf("%s %q carries credentials; the token goes in the variable token_env names", field, u.Redacted())
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("%s %q: a query or fragment; give the workspace's address alone", field, s)
+	}
+	if u.Scheme == "http" && !loopbackHost(u.Hostname()) {
+		return fmt.Errorf("%s %q: http only to a loopback host, since the token and the session's files would cross the network in the clear; serve with -tls-cert and -tls-key, or tunnel (ssh -L) and give 127.0.0.1", field, s)
+	}
+	return nil
 }
 
 // checkExecutor refuses an executor command, written as line and split
@@ -769,6 +849,67 @@ func checkExecutorEnv(field string, names []string, keyEnv string) error {
 		}
 	}
 	return nil
+}
+
+// HasWorkspace reports whether the user's layer and the flags set a
+// served workspace: what decides, as HasExecutor does, whether the
+// project is this machine's directory. A project's layer cannot set
+// one.
+func HasWorkspace(user Layer, f Flags) bool {
+	if f.Workspace != nil {
+		return strings.TrimSpace(*f.Workspace) != ""
+	}
+	return user.Workspace != nil
+}
+
+// WorkspaceOf is the served workspace the user's layer and the flags
+// name, nil for none: the flag's URL in place of the config's, which
+// keeps its token_env and tls_ca, and "" clears it. A workspace with an
+// executor or a box is refused, whichever layer or flag names each,
+// since each says where the tools act.
+func WorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
+	if !HasWorkspace(user, f) {
+		return nil, nil
+	}
+	var w Workspace
+	if user.Workspace != nil {
+		w = *user.Workspace
+	}
+	field := "workspace"
+	if f.Workspace != nil {
+		w.URL, field = strings.TrimSpace(*f.Workspace), "-workspace"
+		if err := CheckWorkspaceURL("-workspace", w.URL); err != nil {
+			return nil, err
+		}
+		if w.TLSCA != "" && !strings.HasPrefix(strings.ToLower(w.URL), "https://") {
+			return nil, errors.New("-workspace: your config's workspace.tls_ca is for an https URL")
+		}
+	}
+	argv, url, err := ExecutorOf(user, f)
+	if err != nil {
+		return nil, err
+	}
+	// Each pair says which to clear: the flag given wins over the
+	// config's, and two flags are refused together.
+	switch {
+	case BoxOn(user, f) && f.Box != nil && f.Workspace != nil:
+		return nil, errors.New("-box and -workspace both say where the tools act; give one")
+	case BoxOn(user, f) && f.Box != nil:
+		return nil, errors.New(`-box: your config's workspace says where the tools act; give -workspace "" to use a box instead`)
+	case BoxOn(user, f):
+		return nil, fmt.Errorf("%s: your config's box says where the tools run; give -box=false to use this workspace instead", field)
+	case (len(argv) > 0 || url != "") && f.Executor != nil && f.Workspace != nil:
+		return nil, errors.New("-executor and -workspace both say where the tools act; give one")
+	case (len(argv) > 0 || url != "") && f.Executor != nil:
+		return nil, errors.New(`-executor: your config's workspace says where the tools act; give -workspace "" to use this executor instead`)
+	case len(argv) > 0 || url != "":
+		return nil, fmt.Errorf(`%s: your config's executor says where the tools run; give -executor "" to use this workspace instead`, field)
+	}
+	s := &WorkspaceSettings{URL: w.URL, TokenEnv: w.TokenEnv, TLSCA: w.TLSCA}
+	if s.TokenEnv == "" {
+		s.TokenEnv = WorkspaceTokenEnv
+	}
+	return s, nil
 }
 
 // HasExecutor reports whether the user's layer and the flags set an
@@ -1093,6 +1234,9 @@ func (l *Layer) resolvePaths() {
 		l.MemoryDir = &m
 	}
 	l.PricingFile = fix(l.PricingFile)
+	if l.Workspace != nil {
+		l.Workspace.TLSCA = fix(l.Workspace.TLSCA)
+	}
 }
 
 // resolvePath expands a leading ~ to the home directory and makes p
@@ -1144,7 +1288,10 @@ type Flags struct {
 	Box                              *bool
 	BoxHost, BoxProfile, BoxInternet *string
 	// BoxConfine replaces box.confine for the run.
-	BoxConfine    *string
+	BoxConfine *string
+	// Workspace replaces workspace.url: the URL where dax workspace
+	// serves; "" clears the config's workspace.
+	Workspace     *string
 	Think, Agents *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
@@ -1180,7 +1327,10 @@ type Settings struct {
 	// Box is the box the tools run in, nil for none; the caller starts
 	// its box host and sets Executor to that command, since nothing here
 	// runs one.
-	Box          *BoxSettings
+	Box *BoxSettings
+	// Workspace is the served workspace the tools act in, nil for none;
+	// the caller dials it, and reads the project's layer through it.
+	Workspace    *WorkspaceSettings
 	MCP          []MCP
 	Peers        []a2a.Remote // the user's, sorted by name
 	PassEnv      []string
@@ -1408,8 +1558,8 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if s.Executor, s.ExecutorURL, err = executorOf(layers, f); err != nil {
 		return s, err
 	}
-	// A project's layer can name neither a box nor an executor, so the
-	// others', the last of each, decide.
+	// A project's layer can name neither a box, an executor nor a
+	// workspace, so the others', the last of each, decide.
 	var user Layer
 	for _, l := range layers {
 		if !l.Project && l.Box != nil {
@@ -1418,6 +1568,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if !l.Project && l.Executor != nil {
 			user.Executor = l.Executor
 		}
+		if !l.Project && l.Workspace != nil {
+			user.Workspace = l.Workspace
+		}
+	}
+	if s.Workspace, err = WorkspaceOf(user, f); err != nil {
+		return s, err
 	}
 	if s.Box, err = BoxOf(user, f); err != nil {
 		return s, err
@@ -1472,6 +1628,18 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if err := checkExecutorEnv("executor.pass_env", s.ExecutorPassEnv, s.APIKeyEnv); err != nil {
 		return s, err
+	}
+	// The workspace's token is sent to it alone: no command, server or
+	// launcher here may be handed it.
+	if w := s.Workspace; w != nil {
+		for _, list := range []struct {
+			field string
+			names []string
+		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
+			if slices.Contains(list.names, w.TokenEnv) {
+				return s, fmt.Errorf("%s: %s holds the workspace's token, which only the workspace is sent; take it out of %s", list.field, w.TokenEnv, list.field)
+			}
+		}
 	}
 	// A peer's token is the peer's alone: no command, server or
 	// launcher may be handed it.
