@@ -120,19 +120,19 @@ func TestAServersWorkspaceIsRefused(t *testing.T) {
 	}{
 		{"exec", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeExec, remote.ScopeServers)
-		}, "grants more than servers (read, write or exec)"},
+		}, "grants more than servers (read,exec,servers)"},
 		{"write", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeWrite, remote.ScopeServers)
-		}, "grants more than servers (read, write or exec)"},
+		}, "grants more than servers (read,write,servers)"},
 		{"exec through a hub", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeRead, remote.ScopeExec, remote.ScopeServers)
-		}, "grants more than servers (read, write or exec)"},
+		}, "grants more than servers (read,exec,servers)"},
 		{"read", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeServers)
-		}, "grants more than servers (read, write or exec)"},
+		}, "grants more than servers (read,servers)"},
 		{"read through a hub", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeRead, remote.ScopeServers)
-		}, "grants more than servers (read, write or exec)"},
+		}, "grants more than servers (read,servers)"},
 		{"no servers", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead)
 		}, "offers no MCP servers: its grant lacks servers"},
@@ -259,9 +259,10 @@ func TestAServersWorkspaceThatDrops(t *testing.T) {
 	}
 }
 
-// The servers workspace's grant is learned as a served workspace's
-// is (config.ServersOnly): a workspace that is a Starter grants exec.
-func TestAServersWorkspaceThatStartsIsRefused(t *testing.T) {
+// The servers workspace's grant is the scopes a served workspace's
+// client reports (config.ServersAlone): a workspace that is not served
+// reports none, and is refused even when it offers servers.
+func TestAServersWorkspaceThatIsNotServedIsRefused(t *testing.T) {
 	o := options(t, &scripted{})
 	local, err := workspace.NewLocal(t.TempDir(), nil)
 	if err != nil {
@@ -269,14 +270,14 @@ func TestAServersWorkspaceThatStartsIsRefused(t *testing.T) {
 	}
 	defer local.Close()
 	o.ServersWorkspace = startingOffer{local}
-	if s, err := New(t.Context(), o); err == nil || !strings.Contains(err.Error(), "grants more than servers") {
+	if s, err := New(t.Context(), o); err == nil || !strings.Contains(err.Error(), "is not a served workspace") {
 		if s != nil {
 			s.Close()
 		}
 		t.Errorf("err = %v", err)
 	}
-	if config.ServersOnly(t.Context(), o.ServersWorkspace) {
-		t.Error("ServersOnly of a Starter")
+	if config.ServersOnly(o.ServersWorkspace) || config.ServersAlone(o.ServersWorkspace) {
+		t.Error("a workspace that is not served is servers-only")
 	}
 }
 

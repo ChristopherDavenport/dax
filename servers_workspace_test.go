@@ -83,7 +83,7 @@ func TestAServersWorkspaceOnTheCommandLine(t *testing.T) {
 	}
 	t.Setenv(config.ServersWorkspaceTokenEnv, wide.token(t))
 	err = run(context.Background(), []string{"-servers-workspace", wide.url, "-sessions", "", "-p", "hi"}, p)
-	if err == nil || !strings.Contains(err.Error(), "the servers workspace remote "+config.WorkspaceRef(wide.url)) || !strings.Contains(err.Error(), "grants more than servers (read, write or exec)") {
+	if err == nil || !strings.Contains(err.Error(), "the servers workspace remote "+config.WorkspaceRef(wide.url)) || !strings.Contains(err.Error(), "grants more than servers (read,write,exec,servers)") {
 		t.Errorf("a servers workspace granting exec and write: %v", err)
 	}
 }

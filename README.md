@@ -948,28 +948,40 @@ DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7
 | `-tls-ca FILE` | for a `wss://` hub, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots, as `workspace.tls_ca` and `attach -tls-ca` do; refused with `ws://` |
 | `-dir`, `-pass-env`, `-scopes`, `-servers` | as without `-connect`; `-scopes` is the grant the hub's session gets |
 
-The token is `$DAX_TUNNEL_TOKEN` at both ends, at least 32 bytes:
-`dax workspace -connect` sends it in the upgrade's `Authorization`
-header, takes it out of its environment before it starts anything,
-never prints it, and refuses `-pass-env` naming it; the hub takes the
-one token from `workspace.hub.token_env` and refuses any other. The
+The token is `$DAX_TUNNEL_TOKEN` at both ends, at least 32 bytes, and
+neither end sends it: each upgrade carries a fresh nonce and an HMAC of
+it under the token, which the hub checks (refusing a nonce more than 5
+minutes from its clock, or one it has seen), and the hub's answer
+carries its own HMAC of the nonce, which `dax workspace -connect`
+checks before it serves anything. A hub that cannot answer is not the
+session's: `-connect` serves it nothing and stops, saying so.
+`-connect` takes the token out of its environment before it starts
+anything, never prints it, and refuses `-pass-env` naming it; the hub
+takes the one token from `workspace.hub.token_env` and refuses any
+other. The
 hub holds its workspace to the first `dax workspace -connect` run that
 connects: another, on another host or in another directory, is refused
 for the session's life and stops, saying the workspace is held. The
 host dials again whenever the connection drops, and a session's
 processes there outlive a drop shorter than their lease; it stops at
-once on what no redial would change (a token refused, a certificate
-`-tls-ca` does not verify, no hub at the path). The session shows the
+once on what no redial would change (a token refused, a hub that fails
+the proof, a certificate `-tls-ca` does not verify, no hub at the
+path). The session shows the
 hub's connects, drops and refusals among its warnings, and a request
 made while the host is away fails after 10 seconds.
 
 Without a certificate the hub listens on loopback only, and the host
 reaches it through a tunnel of its own (`ssh -o ExitOnForwardFailure=yes -R 7780:127.0.0.1:7780 host`, then
-`-connect ws://127.0.0.1:7780/tunnel` there). **A `ws://` URL
-authenticates no hub: whoever holds that port on the workspace's host
-gets the token and the workspace, with every scope you gave it.** On a
-host others share, give the hub a certificate and dial `wss://` with
-`-tls-ca`; `-connect` warns on standard error whenever it dials
+`-connect ws://127.0.0.1:7780/tunnel` there). Over `ws://` the hub's
+proof is what keeps a user of the workspace's host who binds that port
+first from getting the workspace: the upgrade carries nothing they can
+use again, and nothing is served to them. **The proof does not bind the
+connection**: someone on that host who can also reach the hub another
+way can relay the upgrade to it and sit in the middle of a plain
+connection. It covers the `ssh -R` case (with `ExitOnForwardFailure`,
+whoever takes the port cannot reach the hub); where the hub is
+reachable otherwise, give it a certificate and dial `wss://` with
+`-tls-ca`. `-connect` says so on standard error whenever it dials
 `ws://`. The session's record names
 the workspace `remote` at `http://build.tunnel.invalid`, and
 `-list` with the config's hub lists its sessions without listening.

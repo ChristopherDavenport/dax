@@ -714,7 +714,7 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
 	if errors.Is(err, wsremote.ErrForbidden) {
-		if !config.ServersOnly(context.Background(), view) {
+		if !config.ServersOnly(view) {
 			// The session would act there under none of the project's
 			// rules, which only tighten.
 			return config.Settings{}, fmt.Errorf("%s: the workspace lets the session act in it but not read its project's config, whose rules would then not apply; grant read too (dax workspace refuses write or exec without it): %w", from, err)

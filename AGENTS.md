@@ -63,14 +63,17 @@ before changing the shape.
   `tunnel.go`: the served workspace turned around, both ends of
   agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
   -connect`, the directory served through `tunnel.Serve` to a session's
-  hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN` in the
-  upgrade's header, taken from the environment first, with the run's
-  instance id; `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
+  hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN`, taken
+  from the environment first, never sent: the upgrade carries a nonce
+  and its MAC under the token with the run's instance id, and nothing
+  is served to a hub whose 101 lacks its own MAC (`internal/authn`'s
+  `Prover`; a hub that fails ends the run); `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
   `dialWatch`, which ends the run before it connects at a certificate
   not verified or a 404); and `hostHub`, the config's
   `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless
-  `tls_cert`/`tls_key`) whose enrollment is `internal/authn`'s one
-  token for the one name, held by `pin` to the first instance that
+  `tls_cert`/`tls_key`) whose enrollment is `internal/authn`'s
+  `Proofs` of the one token for the one name (a stale or replayed nonce
+  refused), its 101 carrying the hub's MAC, held by `pin` to the first instance that
   connects (any other 403 for the session's life), its log among
   dax's warnings (`agent.Warnings`), and whose `Hub.Workspace`, waited
   for up to `wait`, with a 10-second request timeout, is the session's
@@ -270,10 +273,14 @@ before changing the shape.
   leave to their program: `Tokens`, static tokens compared through
   SHA-256 in constant time, its `Authenticator` the shape of every
   library's hook (agentworkspace's and agentsession's `remote`,
-  front/control, and the tunnel's `Enrollment` with a name for its
-  principal) and `Principal` front/a2a's; `Client`, an
+  front/control) and `Principal` front/a2a's; `Challenge`, the
+  `Bearer realm="dax"` every handler behind them names on a 401
+  (each library's `WithChallenge`); `Client`, an
   `http.Client` that sends one token to one origin, for each library's
-  `WithHTTPClient`. Standard library only; no dax code uses a
+  `WithHTTPClient`; and `proof.go`, the tunnel's proof both ways
+  (`Prover` at `-connect`, `Proofs` at the hub: an HMAC-SHA256 of a
+  fresh nonce and the instance id under the token, labelled per
+  direction, the token never sent). Standard library only; no dax code uses a
   library's `BearerTokens` or `WithBearerToken`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every

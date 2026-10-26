@@ -354,7 +354,7 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	defer cleanup()
 	h, err := wsremote.NewHandler(ws, wsremote.WithAuthenticator(authn.New(map[string]wsremote.Principal{
 		token: {Name: workspacePrincipal, Scopes: w.scopes},
-	}).Authenticator(wsremote.ErrUnauthenticated)))
+	}).Authenticator(wsremote.ErrUnauthenticated)), wsremote.WithChallenge(authn.Challenge))
 	if err != nil {
 		return err
 	}

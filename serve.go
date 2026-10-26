@@ -444,12 +444,14 @@ func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf 
 		control.WithAuthenticator(authn.New(map[string]control.Principal{
 			token: {Name: servePrincipal, Scopes: control.AllScopes},
 		}).Authenticator(control.ErrUnauthenticated)),
+		control.WithChallenge(authn.Challenge),
 		control.WithCommands(serveCommands(sess, sess, dir)),
 	)
 	store := remote.NewHandler(sess.Recorder().Store(),
 		remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
 		}).Authenticator(remote.ErrUnauthenticated)),
+		remote.WithChallenge(authn.Challenge),
 		remote.WithErrorLog(logf),
 	)
 	mux := http.NewServeMux()

@@ -301,7 +301,8 @@ func TestTwoAttachedViewsDriveOneConversation(t *testing.T) {
 	a.quit()
 }
 
-// Nothing is served without the token, on either prefix.
+// Nothing is served without the token, on either prefix, and each
+// refusal names dax's Bearer challenge.
 func TestServingNeedsTheToken(t *testing.T) {
 	s := startServe(t, &steps{}, policy.Rules{})
 	id := s.rig.sess.ID()
@@ -328,6 +329,10 @@ func TestServingNeedsTheToken(t *testing.T) {
 			resp.Body.Close()
 			if resp.StatusCode != tc.want {
 				t.Errorf("GET %s with %s: %d, want %d", path, tc.name, resp.StatusCode, tc.want)
+			}
+			// A refusal names dax's scheme (RFC 9110 §15.5.2).
+			if got := resp.Header.Get("WWW-Authenticate"); tc.want == http.StatusUnauthorized && got != authn.Challenge {
+				t.Errorf("GET %s with %s: WWW-Authenticate %q, want %q", path, tc.name, got, authn.Challenge)
 			}
 		}
 	}
