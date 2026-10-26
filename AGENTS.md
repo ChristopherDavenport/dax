@@ -56,13 +56,19 @@ before changing the shape.
   agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
   -connect`, the directory served through `tunnel.Serve` to a session's
   hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN` in the
-  upgrade's header, taken from the environment first; `-scopes`;
-  `-tls-ca` beside the system's roots); and `hostHub`, the config's
+  upgrade's header, taken from the environment first, with the run's
+  instance id; `-scopes`; `-tls-ca` in place of the system's roots;
+  `dialWatch`, which ends the run before it connects at a certificate
+  not verified or a 404); and `hostHub`, the config's
   `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless
   `tls_cert`/`tls_key`) whose enrollment is `internal/authn`'s one
-  token for the one name, and whose `Hub.Workspace`, waited for up to
-  `wait`, is the session's `Options.Workspace` as `-workspace`'s is,
-  recorded by `config.TunnelRef`.
+  token for the one name, held by `pin` to the first instance that
+  connects (any other 403 for the session's life), its log among
+  dax's warnings (`agent.Warnings`), and whose `Hub.Workspace`, waited
+  for up to `wait`, with a 10-second request timeout, is the session's
+  `Options.Workspace` as `-workspace`'s is, recorded by
+  `config.TunnelRef`; `closeSession`, the session's close and the
+  hub's within one deadline.
   `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
