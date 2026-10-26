@@ -5,6 +5,23 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: a rewind (the head move) on a session whose store reported
+  an append with `Reopen`, as a remote record or the cas store does
+  when the session it held could not follow an append, went on from
+  the session the store had replaced: the rewind's mark put the head
+  back where it started, or the move was refused. The recorder now
+  writes through the store's `agentsession.Writer` and opens the
+  session again on `Reopen` (agentturn#268), and agentkit's head move
+  follows it, and undoes a move cancelled partway in the store as
+  well as in the agent.
+- Dependencies: agentturn, agentturn/session, agentturn/front/a2a and
+  agentturn/tools/a2a v0.0.32, up from v0.0.31; agentkit v0.0.15, up
+  from v0.0.14; agentworkspace and agentworkspace/mcpworkspace v0.0.4,
+  up from v0.0.3, whose `Offer` takes an output filter for an offered
+  server's secrets, which dax does not use yet.
+
 ## v0.0.26 - 2026-10-25
 
 - Fixed: a unit's secret could reach the session when its server wrote
