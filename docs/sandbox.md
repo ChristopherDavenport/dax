@@ -5,7 +5,10 @@ session stays on your machine: start `dax execute` there, and start dax
 here with `-executor` set to the command that starts it, or to the URL
 where `dax execute -listen` serves. Or keep the tools here and serve
 only the directory they act in: `dax workspace` there, `-workspace`
-here (see [A served workspace](#a-served-workspace-dax-workspace)).
+here (see [A served workspace](#a-served-workspace-dax-workspace)),
+or for a host you cannot reach, `dax workspace -connect` there dialling
+the hub `workspace.hub` hosts here (see [A workspace that dials
+in](#a-workspace-that-dials-in)).
 These are recipes for daily use; what `dax execute` serves and how is in the
 README's [The tools in a sandbox](../README.md#the-tools-in-a-sandbox-dax-execute).
 
@@ -888,7 +891,7 @@ http://127.0.0.1:7777`) and runs until a signal. Here, tunnel to it and
 connect:
 
 ```sh
-ssh -N -L 7777:127.0.0.1:7777 build-host &
+ssh -N -o ExitOnForwardFailure=yes -L 7777:127.0.0.1:7777 build-host &
 dax -executor http://127.0.0.1:7777
 ```
 
@@ -1188,7 +1191,7 @@ Without a certificate it listens on loopback only (`127.0.0.1`, `::1`,
 `localhost`; port 0 picks one), and another machine tunnels:
 
 ```sh
-ssh -N -L 7779:127.0.0.1:7779 build-host &
+ssh -N -o ExitOnForwardFailure=yes -L 7779:127.0.0.1:7779 build-host &
 DAX_WORKSPACE_TOKEN=... dax -workspace http://127.0.0.1:7779
 ```
 
@@ -1260,8 +1263,149 @@ URL and the root alone, so two machines reached in turn through the
 same tunnel URL, each serving a directory at the same path (`/work`),
 are one workspace: one `-list`, one memory scope (what dax remembered
 of one project is offered in the other's prompt) and one MCP trust.
-Give each its own local port (`ssh -L 7780:127.0.0.1:7779 other-host`)
+Give each its own local port (`ssh -o ExitOnForwardFailure=yes -L 7780:127.0.0.1:7779 other-host`)
 to keep them apart.
+
+### A workspace that dials in
+
+A served workspace is dialled by the session, so the session must reach
+it. A host behind NAT or a firewall turns that around: the session
+hosts a hub, and the workspace's host dials out to it
+(agentworkspace's `tunnel`). One WebSocket carries everything, and
+inside it is `remote` unchanged, so the tools, their checks, the
+policy, the project's files, the MCP servers and the record work as
+over `-workspace`; only who dials whom differs.
+
+| | `-workspace` (`dax workspace -listen`) | `workspace.hub` (`dax workspace -connect`) |
+|---|---|---|
+| Who dials | the session dials the workspace | the workspace dials the session's hub |
+| Who listens, and needs a certificate off loopback | the workspace's host | the session's machine |
+| The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends; the workspace sends it, the hub checks it |
+| What the session may do | read, write and exec, always | `-scopes`, set at the workspace's end; all three by default |
+| Its identity | the URL | `http://<name>.tunnel.invalid` |
+
+The session's machine, in your config:
+
+```json
+{
+  "workspace": {
+    "hub": { "listen": ":7780", "name": "build", "tls_cert": "/home/me/.config/dax/hub.pem", "tls_key": "/home/me/.config/dax/hub-key.pem", "wait": "2m" }
+  }
+}
+```
+
+The session listens at `listen`, takes upgrades at the path `/tunnel`
+alone, and waits up to `wait` (default 60 seconds) for the workspace
+`name` to connect, printing on standard error what to run on its host:
+
+```
+workspace.hub: waiting up to 2m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel
+```
+
+On the host:
+
+```sh
+DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel
+```
+
+| `workspace.hub.` | |
+|---|---|
+| `listen` | the address the hub listens at; loopback (`127.0.0.1`, `::1`, `localhost`) unless `tls_cert` and `tls_key` are given. Port 0 picks one |
+| `name` | the workspace's name, a DNS label (lower-case letters, digits and hyphens, at most 63): the one name the token enrolls, and the workspace's identity |
+| `token_env` | the variable holding the token; default `DAX_TUNNEL_TOKEN`, at least 32 bytes. dax takes it out of its environment as soon as the settings are read, before it starts any process, and never prints or records it. `pass_env` and `executor.pass_env` may not name it, nor may it be `api_key_env`, an MCP server's or a peer's `token_env`, or `workspace.token_env` |
+| `tls_cert`, `tls_key` | the certificate and key (PEM) the hub serves `wss://` with, both or neither |
+| `wait` | how long to wait for the workspace to connect, a Go duration; default `60s`. Past it the session does not start, and the error says what to run on the host |
+
+`hub` is in place of `url`: give one. `-workspace URL` dials that URL
+instead, and `-workspace ""` clears the hub too. Only your config can
+name a hub; a project's `.dax/config.json` that sets one is refused,
+and so is `hub` beside an executor or a box. There is no flag form of
+the hub.
+
+`dax workspace -connect` dials `wss://`, verified against the system's
+roots or, with `-tls-ca`, that certificate in their place (as
+`workspace.tls_ca` and `attach -tls-ca`; `-tls-ca` with `ws://` is
+refused), or `ws://` to a loopback host alone, and follows no redirect. It sends `$DAX_TUNNEL_TOKEN` in
+the upgrade's `Authorization` header and nowhere else, takes it out of
+its environment before the workspace starts any process, refuses
+`-pass-env` naming it, and never prints it. `-scopes` (`read`, `write`,
+`exec`, comma-separated; default all three) is what the session may do
+there, decided at the workspace's end: without `exec` the workspace
+starts no process, so bash fails as forbidden, your MCP servers run on
+the session's machine and the project's not at all, as with a token
+without `exec` above. The hub enrolls the one token as the one name
+and refuses any other upgrade before it is answered, and a request from
+a web page.
+
+The hub holds its workspace to one `dax workspace -connect` run. Each
+run sends an instance id of its own on every upgrade (random, made once
+for the run, so its redials keep it), and the hub takes the first that
+connects with the token: an upgrade with the token and another id, a
+second host or a second run on the first in another directory, is
+refused 403 for the session's life, and that run stops, saying the
+hub's workspace is held by another host. The hub warns that it refused
+it. So the workspace the session describes (its root, environment and
+whether it starts processes) is the one every request goes to; a run
+of the first host that stopped and started again is refused too, and
+takes a new session.
+
+Without a certificate the hub is on loopback, which the host reaches
+through a tunnel of its own:
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -R 7780:127.0.0.1:7780 build-host &   # here
+DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:7780/tunnel   # there
+```
+
+`ExitOnForwardFailure` makes ssh stop when it cannot take the port
+there, rather than run on with a warning. **A `ws://` URL authenticates
+no hub: the token, and the workspace with every scope you gave it, go
+to whoever holds that port on the workspace's host.** Another user who
+binds `127.0.0.1:7780` there first gets both. On a host others share,
+give the hub `tls_cert` and `tls_key` and dial `wss://` with
+`-tls-ca` naming its CA, even through the ssh tunnel; `-connect` warns
+on standard error each time it dials `ws://`. (The hub proving that it
+knows the token is not in the tunnel yet.)
+
+The host dials again whenever the connection drops, with a growing,
+jittered wait, and the session's requests while it is away wait for it
+as long as their own bounds allow. One `remote` handler serves every
+connection, so the session's processes there, its MCP servers among
+them, outlive a drop shorter than their lease (30 seconds): a restarted
+hub or a token rotated at the session's end within the lease is dialled
+again, and past it `dax workspace -connect` stops with the refusal. A
+first upgrade refused stops it at once, saying so, and so does, before
+it has connected, an answer no redial would change: a certificate the
+roots (or `-tls-ca`) do not verify, or no hub at the path (404). A hub
+not up yet, a refused connection or a timeout are dialled again. A
+signal stops it, and every process the session started there ends
+first, each wait bounded as `-listen`'s are.
+
+On the session's side the hub's connects, drops and refusals are among
+dax's warnings, which the terminal client holds and shows with the
+others. A request that should be answered at once (a stat, a listing,
+a file's first answer, a process's start) waits up to 10 seconds for a
+host that is away, not remote's 30, then fails; streams, waits, Execs
+and writes are bounded by their own contexts alone.
+
+The session's header records the workspace as `remote`, with
+`http://<name>.tunnel.invalid` as its ref and the served root as its
+root, and `-list` with your config's hub lists its sessions by that
+name without listening. No `workspace.url` can name that ref (it is
+http to a host that is not loopback), so a served workspace cannot pass
+for one that dialled in. The identity is the name and the root alone:
+two hosts enrolled under one name, each serving a directory at the same
+path, are one workspace, one `-list`, one memory scope and one MCP
+trust, as two machines reached through one URL are, though in turn:
+within one session the hub takes no second host. Give each host a
+name, and a hub, of its own.
+
+When the session ends it closes itself (the MCP servers in the
+workspace with it), then the workspace, which ends its session and
+processes there, then the hub and every connection to it, then its
+server, all within one deadline of 3 seconds: with the host gone, the
+hub is closed under what still waits for it, and the processes there
+are left to the host's lease.
 
 ### Limits
 
@@ -1277,7 +1421,20 @@ to keep them apart.
   again.
 - No offered MCP servers: `dax workspace` serves a `workspace.Local`,
   and a workspace's own servers (`workspace.ServerProvider`, a box
-  host's units) are not carried over HTTP yet.
+  host's units) are not carried over HTTP yet, nor through a tunnel.
+- A hub is one session's: it holds one workspace, under the one name
+  its token enrolls, and ends with the session. `dax serve` does not
+  host a hub for several sessions yet.
+- Through a tunnel: a WebSocket message of at most 64 KiB (each end
+  writes under it), at most 1,024 requests at once, and `dax workspace
+  -connect` holds at most 4 sessions, 32 processes and 128 transfers,
+  so no number of open streams starves a renewal. Both ends ping after
+  15 seconds without a frame and close the tunnel 15 seconds after an
+  unanswered ping, and the host dials again. A process's pipes open
+  when the connection dropped fail and are not resumed.
+- `dax workspace -listen` serves at most 256 transfers at once (Execs
+  and file transfers, agentworkspace's `remote` default since v0.0.6);
+  past that a request fails as over its limit until one ends.
 - The server's bounds: a write of at most 32 MiB, a listing of at most
   10,000 entries (a directory with more fails to list, so `glob`,
   `grep` and `ls` over it fail), 16 MiB of each stream of a command
@@ -1306,10 +1463,10 @@ to keep them apart.
   from its directory finds no such file in the sandbox unless you put
   it there.
 - Memory stays on your machine; the sandbox cannot read or write it.
-- A served workspace (`-workspace`) reconnects only as its lease
-  allows, carries no MCP servers a workspace offers of its own, and
-  ends its processes when its session is lost (see [its
-  limits](#limits)).
+- A served workspace (`-workspace`, or `workspace.hub` for one that
+  dials in) reconnects only as its lease allows, carries no MCP servers
+  a workspace offers of its own, and ends its processes when its
+  session is lost (see [its limits](#limits)).
 - The terminal client's own screen does not name the executor: its
   line is printed above the client, and the client (agentconsole) has
   no header for it yet.

@@ -27,10 +27,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/tunnel"
 
 	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/internal/box"
@@ -155,11 +157,12 @@ type Peer struct {
 }
 
 // Workspace is a workspace served over HTTP (agentworkspace's remote),
-// which the session's tools act in.
+// which the session's tools act in: one the session dials at URL, or
+// one that dials the session's hub (Hub). Give one of the two.
 type Workspace struct {
 	// URL is where `dax workspace` serves: https, or http to a
 	// loopback host, with no user, password, query or fragment.
-	URL string `json:"url"`
+	URL string `json:"url,omitempty"`
 	// TokenEnv names the variable holding the bearer token sent with
 	// every request; default DAX_WORKSPACE_TOKEN. The token itself never
 	// goes in a config file.
@@ -167,16 +170,78 @@ type Workspace struct {
 	// TLSCA, for an https URL, is a CA certificate (PEM) to verify the
 	// server's certificate against, in place of the system's roots.
 	TLSCA string `json:"tls_ca,omitempty"`
+	// Hub, in place of URL, has the session host a hub that the
+	// workspace dials (`dax workspace -connect`, agentworkspace's
+	// tunnel), for a workspace on a host the session cannot reach.
+	Hub *WorkspaceHub `json:"hub,omitempty"`
+}
+
+// WorkspaceHub is the hub a session hosts for its workspace to dial
+// into: where it listens, the name the workspace is enrolled under, and
+// the variable holding the one token that enrolls it.
+type WorkspaceHub struct {
+	// Listen is the address the hub listens at: a loopback one unless
+	// TLSCert and TLSKey are given. Its upgrade path is TunnelPath.
+	Listen string `json:"listen"`
+	// Name is the workspace's name, a DNS label (agentworkspace's
+	// tunnel.ValidName): its identity in the record, -list and memory.
+	Name string `json:"name"`
+	// TokenEnv names the variable holding the token that enrolls the
+	// workspace as Name; default DAX_TUNNEL_TOKEN. The token itself
+	// never goes in a config file.
+	TokenEnv string `json:"token_env,omitempty"`
+	// TLSCert and TLSKey are the certificate and key (PEM) the hub
+	// serves wss:// with, both or neither.
+	TLSCert string `json:"tls_cert,omitempty"`
+	TLSKey  string `json:"tls_key,omitempty"`
+	// Wait is how long the session waits for the workspace to connect,
+	// a Go duration ("90s", "5m"); default 60s.
+	Wait string `json:"wait,omitempty"`
 }
 
 // WorkspaceTokenEnv is the variable a workspace's token is read from
 // when token_env names none, the one `dax workspace` takes.
 const WorkspaceTokenEnv = "DAX_WORKSPACE_TOKEN"
 
+// TunnelTokenEnv is the variable the token that enrolls a workspace at
+// a hub is read from: by `dax workspace -connect`, always, and by the
+// session's hub when workspace.hub.token_env names none.
+const TunnelTokenEnv = "DAX_TUNNEL_TOKEN"
+
+// TunnelPath is the path a session's hub takes its workspace's
+// upgrade at.
+const TunnelPath = "/tunnel"
+
+// DefaultHubWait is how long a session waits for its hub's workspace
+// to connect when workspace.hub.wait says nothing.
+const DefaultHubWait = 60 * time.Second
+
+// TunnelRef is the ref a workspace reached through a hub under name is
+// recorded by: agentworkspace's tunnel's, a host that resolves nowhere,
+// which no workspace.url may name (it is http to a host that is not
+// loopback).
+func TunnelRef(name string) string { return "http://" + name + ".tunnel.invalid" }
+
 // WorkspaceSettings is the served workspace the session's tools act
-// in: Workspace with its defaults filled in.
+// in: Workspace with its defaults filled in. With Hub, URL is empty.
 type WorkspaceSettings struct {
 	URL, TokenEnv, TLSCA string
+	Hub                  *HubSettings
+}
+
+// Ref is the identity the workspace is recorded and listed by: the
+// URL's, or a hub's TunnelRef.
+func (w WorkspaceSettings) Ref() string {
+	if w.Hub != nil {
+		return TunnelRef(w.Hub.Name)
+	}
+	return WorkspaceRef(w.URL)
+}
+
+// HubSettings is workspace.hub with its defaults filled in.
+type HubSettings struct {
+	Listen, Name, TokenEnv, TLSCert, TLSKey string
+	Wait                                    time.Duration
 }
 
 // Box runs the tools in a box a box host makes: `dax box serve`, here
@@ -679,19 +744,67 @@ func (p Peer) remote(name string) a2a.Remote {
 
 // check refuses a workspace setting that is not one.
 func (w Workspace) check(field string) error {
-	if w.URL == "" {
-		return fmt.Errorf("%s.url is required: where dax workspace serves", field)
-	}
-	if err := CheckWorkspaceURL(field+".url", w.URL); err != nil {
-		return err
+	if w.URL != "" && w.Hub != nil {
+		return fmt.Errorf("%s: give url (dax dials the workspace) or hub (the workspace dials dax), not both", field)
 	}
 	if w.TokenEnv != "" && !envName.MatchString(w.TokenEnv) {
 		return fmt.Errorf("%s.token_env: %q is not a variable name", field, w.TokenEnv)
+	}
+	if w.Hub != nil {
+		if w.TLSCA != "" {
+			return fmt.Errorf("%s.tls_ca is for an https url; a hub serves with tls_cert and tls_key", field)
+		}
+		_, err := w.Hub.settings(field + ".hub")
+		return err
+	}
+	if w.URL == "" {
+		return fmt.Errorf("%s.url is required: where dax workspace serves (or hub, for one that dials in)", field)
+	}
+	if err := CheckWorkspaceURL(field+".url", w.URL); err != nil {
+		return err
 	}
 	if w.TLSCA != "" && !strings.HasPrefix(strings.ToLower(w.URL), "https://") {
 		return fmt.Errorf("%s.tls_ca is for an https url", field)
 	}
 	return nil
+}
+
+// settings is h checked, with its defaults filled in. Without a
+// certificate the hub listens on a loopback address alone, as dax serve
+// does, since the workspace's every file and command would cross the
+// network in the clear.
+func (h WorkspaceHub) settings(field string) (*HubSettings, error) {
+	s := &HubSettings{Listen: strings.TrimSpace(h.Listen), Name: h.Name, TokenEnv: h.TokenEnv, TLSCert: h.TLSCert, TLSKey: h.TLSKey, Wait: DefaultHubWait}
+	if s.TokenEnv == "" {
+		s.TokenEnv = TunnelTokenEnv
+	}
+	if s.Listen == "" {
+		return nil, fmt.Errorf("%s.listen is required: the address the workspace dials", field)
+	}
+	host, _, err := net.SplitHostPort(s.Listen)
+	if err != nil {
+		return nil, fmt.Errorf("%s.listen %q: %w", field, s.Listen, err)
+	}
+	if (s.TLSCert == "") != (s.TLSKey == "") {
+		return nil, fmt.Errorf("%s: tls_cert and tls_key go together", field)
+	}
+	if s.TLSCert == "" && !loopbackHost(host) {
+		return nil, fmt.Errorf("%s.listen %q: without tls_cert and tls_key the hub listens on loopback only (127.0.0.1, ::1 or localhost), since the workspace's files and commands would cross the network in the clear", field, s.Listen)
+	}
+	if !tunnel.ValidName(h.Name) {
+		return nil, fmt.Errorf("%s.name %q: want a DNS label, 1 to %d lower-case letters, digits and hyphens, not starting or ending with a hyphen", field, h.Name, tunnel.MaxNameBytes)
+	}
+	if !envName.MatchString(s.TokenEnv) {
+		return nil, fmt.Errorf("%s.token_env: %q is not a variable name", field, s.TokenEnv)
+	}
+	if h.Wait != "" {
+		d, err := time.ParseDuration(h.Wait)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("%s.wait %q: want a positive duration such as \"60s\" or \"5m\"", field, h.Wait)
+		}
+		s.Wait = d
+	}
+	return s, nil
 }
 
 // CheckWorkspaceURL refuses a URL a workspace's token and the
@@ -906,8 +1019,12 @@ func WorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
 		w = *user.Workspace
 	}
 	field := "workspace"
+	if w.Hub != nil {
+		field = "workspace.hub"
+	}
 	if f.Workspace != nil {
-		w.URL, field = strings.TrimSpace(*f.Workspace), "-workspace"
+		// The flag's URL is dialed, in place of the config's url or hub.
+		w.URL, w.Hub, field = strings.TrimSpace(*f.Workspace), nil, "-workspace"
 		if err := CheckWorkspaceURL("-workspace", w.URL); err != nil {
 			return nil, err
 		}
@@ -938,6 +1055,11 @@ func WorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
 	s := &WorkspaceSettings{URL: w.URL, TokenEnv: w.TokenEnv, TLSCA: w.TLSCA}
 	if s.TokenEnv == "" {
 		s.TokenEnv = WorkspaceTokenEnv
+	}
+	if w.Hub != nil {
+		if s.Hub, err = w.Hub.settings("workspace.hub"); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -1266,6 +1388,9 @@ func (l *Layer) resolvePaths() {
 	l.PricingFile = fix(l.PricingFile)
 	if l.Workspace != nil {
 		l.Workspace.TLSCA = fix(l.Workspace.TLSCA)
+		if h := l.Workspace.Hub; h != nil {
+			h.TLSCert, h.TLSKey = fix(h.TLSCert), fix(h.TLSKey)
+		}
 	}
 }
 
@@ -1659,32 +1784,40 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if err := checkExecutorEnv("executor.pass_env", s.ExecutorPassEnv, s.APIKeyEnv); err != nil {
 		return s, err
 	}
-	// The workspace's token is sent to it alone: no command, server or
-	// launcher here may be handed it.
+	// The workspace's token is sent to it alone, and a hub's is
+	// compared with the one its workspace sends: no command, server or
+	// launcher here may be handed either.
 	if w := s.Workspace; w != nil {
+		field, env, what := "workspace.token_env", w.TokenEnv, "the workspace's token, which only the workspace is sent"
+		if w.Hub != nil {
+			field, env, what = "workspace.hub.token_env", w.Hub.TokenEnv, "the token that enrolls the workspace at the hub"
+		}
 		for _, list := range []struct {
 			field string
 			names []string
 		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
-			if slices.Contains(list.names, w.TokenEnv) {
-				return s, fmt.Errorf("%s: %s holds the workspace's token, which only the workspace is sent; take it out of %s", list.field, w.TokenEnv, list.field)
+			if slices.Contains(list.names, env) {
+				return s, fmt.Errorf("%s: %s holds %s; take it out of %s", list.field, env, what, list.field)
 			}
 		}
 		// One variable for two credentials would send one where the
 		// other goes, and dax takes the workspace's out of its
 		// environment, so the other would find none.
-		if w.TokenEnv == s.APIKeyEnv {
-			return s, fmt.Errorf("workspace.token_env: %s is api_key_env too, the model's key; name a variable of the workspace's own", w.TokenEnv)
+		if env == s.APIKeyEnv {
+			return s, fmt.Errorf("%s: %s is api_key_env too, the model's key; name a variable of the workspace's own", field, env)
 		}
 		for _, m := range s.MCP {
-			if m.TokenEnv == w.TokenEnv {
-				return s, fmt.Errorf("workspace.token_env: %s is MCP server %s's token_env too; name a variable of the workspace's own", w.TokenEnv, m.Name)
+			if m.TokenEnv == env {
+				return s, fmt.Errorf("%s: %s is MCP server %s's token_env too; name a variable of the workspace's own", field, env, m.Name)
 			}
 		}
 		for _, p := range s.Peers {
-			if p.TokenEnv == w.TokenEnv {
-				return s, fmt.Errorf("workspace.token_env: %s is peer %s's token_env too; name a variable of the workspace's own", w.TokenEnv, p.Name)
+			if p.TokenEnv == env {
+				return s, fmt.Errorf("%s: %s is peer %s's token_env too; name a variable of the workspace's own", field, env, p.Name)
 			}
+		}
+		if w.Hub != nil && env == w.TokenEnv {
+			return s, fmt.Errorf("%s: %s is workspace.token_env too, a served workspace's token; name a variable of the hub's own", field, env)
 		}
 	}
 	// A peer's token is the peer's alone: no command, server or

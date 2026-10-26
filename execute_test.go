@@ -39,8 +39,12 @@ const executeListenEnv = "DAX_TEST_EXECUTE_LISTEN"
 
 // TestMain lets the test binary be `dax execute` over the directory in
 // DAX_TEST_EXECUTE_ROOT, with an extension whose tool prints to
-// standard output as a careless tool might.
+// standard output as a careless tool might; or, with
+// DAX_TEST_MCP_SERVER=1, a stdio MCP server (serveTestMCP).
 func TestMain(m *testing.M) {
+	if os.Getenv(testMCPServerEnv) == "1" {
+		os.Exit(serveTestMCP())
+	}
 	if dir := os.Getenv(executeRoot); dir != "" {
 		args := []string{"execute", "-root", dir, "-kind", "container", "-ref", "box"}
 		if addr := os.Getenv(executeListenEnv); addr != "" {

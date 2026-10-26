@@ -10,18 +10,19 @@ require (
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.17
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.1
-	github.com/ChristopherDavenport/agentsession v0.0.28
+	github.com/ChristopherDavenport/agentsession v0.0.29
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
 	github.com/ChristopherDavenport/agenttool v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.24
-	github.com/ChristopherDavenport/agentturn v0.0.32
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.32
-	github.com/ChristopherDavenport/agentturn/session v0.0.32
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.32
-	github.com/ChristopherDavenport/agentworkspace v0.0.5
-	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.5
+	github.com/ChristopherDavenport/agentturn v0.0.33
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.33
+	github.com/ChristopherDavenport/agentturn/session v0.0.33
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.33
+	github.com/ChristopherDavenport/agentworkspace v0.0.6
+	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.6
+	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.6
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
@@ -56,6 +57,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

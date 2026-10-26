@@ -30,6 +30,14 @@ func (warnings) Write(p []byte) (int, error) {
 	return w.Write(p)
 }
 
+// Warnings is where dax warns, at the time of each write: standard
+// error, or what CaptureWarnings sends them to while a front has the
+// screen. A program warns there about what it runs beside a session
+// (dax's own: the hub a session hosts for its workspace, whose
+// connects, drops and refusals it reports), so its lines are held and
+// shown with the session's and never written under a front.
+func Warnings() io.Writer { return warnings{} }
+
 // CaptureWarnings sends the warnings dax writes to w instead of
 // standard error until what it returns is called. A front that takes
 // the screen (the terminal client) collects them while it opens the

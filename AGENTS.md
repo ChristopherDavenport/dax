@@ -52,6 +52,23 @@ before changing the shape.
   redirect followed, the token taken and its variable unset, by `takeWorkspaceToken`, as
   soon as the settings are resolved, before the key command runs), whose
   `remote.Workspace` is the session's `Options.Workspace`.
+  `tunnel.go`: the served workspace turned around, both ends of
+  agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
+  -connect`, the directory served through `tunnel.Serve` to a session's
+  hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN` in the
+  upgrade's header, taken from the environment first, with the run's
+  instance id; `-scopes`; `-tls-ca` in place of the system's roots;
+  `dialWatch`, which ends the run before it connects at a certificate
+  not verified or a 404); and `hostHub`, the config's
+  `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless
+  `tls_cert`/`tls_key`) whose enrollment is `internal/authn`'s one
+  token for the one name, held by `pin` to the first instance that
+  connects (any other 403 for the session's life), its log among
+  dax's warnings (`agent.Warnings`), and whose `Hub.Workspace`, waited
+  for up to `wait`, with a 10-second request timeout, is the session's
+  `Options.Workspace` as `-workspace`'s is, recorded by
+  `config.TunnelRef`; `closeSession`, the session's close and the
+  hub's within one deadline.
   `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
@@ -107,7 +124,7 @@ before changing the shape.
   identity, the workspace and the executor's hashed address in the
   session's header, and the listings by it (`List`, `ListExecutor`,
   `ListWorkspaceURL`, a served workspace's by the URL its descriptor
-  records as ref).
+  records as ref, or a hub's workspace by its tunnel's ref).
   `agent/confine.go`: `box.confine`, the session's claim that a box's
   tools run confined (agentpolicy's `WithConfinement`), from the box
   host's envelopes and the user's opt-in alone, with the `dax:box`
@@ -230,7 +247,8 @@ before changing the shape.
   leave to their program: `Tokens`, static tokens compared through
   SHA-256 in constant time, its `Authenticator` the shape of every
   library's hook (agentworkspace's and agentsession's `remote`,
-  front/control) and `Principal` front/a2a's; `Client`, an
+  front/control, and the tunnel's `Enrollment` with a name for its
+  principal) and `Principal` front/a2a's; `Client`, an
   `http.Client` that sends one token to one origin, for each library's
   `WithHTTPClient`. Standard library only; no dax code uses a
   library's `BearerTokens` or `WithBearerToken`.
@@ -261,7 +279,9 @@ an `Unreleased` changelog line:
 - `../agentconsole`: the terminal client, a dependency.
 - `../agentworkspace`: where the tools act, `Workspace` and `Local`;
   its nested module `mcpworkspace`, a workspace's processes and files
-  over MCP, which the executor serves and the session reaches.
+  over MCP, which the executor serves and the session reaches; and
+  `tunnel`, `remote` through a connection the workspace dials, which
+  `dax workspace -connect` and `workspace.hub` use.
 
 ## Conventions
 
@@ -308,8 +328,9 @@ an `Unreleased` changelog line:
   refuses a key that is that field in another case, which the tool's
   decoder would take (package tool's `exactKeys`), and the tool refuses
   it again when it runs. The cross-workspace table in
-  `tool/remote_test.go` runs a new check on `Local` and on a stand-in
-  container.
+  `tool/remote_test.go` runs a new check on `Local`, on a stand-in
+  container, and on that container served over `remote` and through a
+  tunnel.
 - Nothing is special: a capability dax ships is an extension built only
   from what package `extension` offers any extension. If dax's own needs
   something more, add it to `extension` for everyone.

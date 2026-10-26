@@ -237,7 +237,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
 	abortOnInterrupt(t)
 	info := ctl.Info()
-	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, f.info.Dir)
+	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}

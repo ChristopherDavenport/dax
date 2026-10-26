@@ -14,12 +14,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/remote"
+	"github.com/ChristopherDavenport/agentworkspace/tunnel"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
@@ -107,6 +109,48 @@ func served(t *testing.T, ws workspace.Workspace) workspace.Workspace {
 	return c
 }
 
+// tunneled is ws served through agentworkspace's tunnel, as `dax
+// workspace -connect` serves a directory and a session's workspace.hub
+// takes it: a Hub in a test server, enrolling one token as "test", and
+// tunnel.Serve dialling it with every scope; the client is the Hub's
+// Workspace, remote's over the tunnel.
+func tunneled(t *testing.T, ws workspace.Workspace) workspace.Workspace {
+	t.Helper()
+	const token = "the-tunnel-token-of-at-least-32-bytes"
+	hub, err := tunnel.NewHub(tunnel.WithEnrollment(authn.New(map[string]string{token: "test"}).Authenticator(errors.New("no such token"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(hub)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { hub.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- tunnel.Serve(ctx, "ws"+strings.TrimPrefix(srv.URL, "http"), ws,
+			tunnel.WithScopes(remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec),
+			tunnel.WithHeader(func(context.Context) (http.Header, error) {
+				return http.Header{"Authorization": {"Bearer " + token}}, nil
+			}))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-served:
+		case <-time.After(10 * time.Second):
+			t.Error("tunnel.Serve did not stop")
+		}
+	})
+	wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+	defer wcancel()
+	c, err := hub.Workspace(wctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
 // noLinks is a workspace whose FS cannot tell a link from what it leads
 // to, as an FS over a plain file API may not.
 type noLinks struct{ *workspace.Local }
@@ -146,10 +190,16 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 	}
 	t.Cleanup(func() { local.Close() })
 	// The served one is the container stand-in, so its root is no path
-	// on this machine and a check that read this machine's disk fails.
-	for _, ws := range []workspace.Workspace{local, newMapped(t, dir), served(t, newMapped(t, dir))} {
-		root := ws.Root()
-		t.Run(ws.Descriptor().Kind, func(t *testing.T) {
+	// on this machine and a check that read this machine's disk fails;
+	// so is the one reached through a tunnel.
+	for _, tc := range []struct {
+		name string
+		ws   workspace.Workspace
+	}{
+		{"local", local}, {"container", newMapped(t, dir)}, {"remote", served(t, newMapped(t, dir))}, {"tunnel", tunneled(t, newMapped(t, dir))},
+	} {
+		ws, root := tc.ws, tc.ws.Root()
+		t.Run(tc.name, func(t *testing.T) {
 			f := NewFiles(ws)
 			ctx := context.Background()
 			abs := func(p string) string { return filepath.Join(root, p) }
@@ -338,6 +388,8 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 		// not when it does not.
 		{"remote", served(t, local), agentturn.Allow},
 		{"remote with no links", served(t, noLinks{local}), agentturn.Defer},
+		{"tunnel", tunneled(t, local), agentturn.Allow},
+		{"tunnel with no links", tunneled(t, noLinks{local}), agentturn.Defer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := NewFiles(tc.ws)

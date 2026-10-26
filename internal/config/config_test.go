@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/internal/box"
@@ -1068,6 +1069,118 @@ func TestWorkspacePrecedence(t *testing.T) {
 	}
 }
 
+// A hub the workspace dials: a listen address, loopback unless it has a
+// certificate and key, both or neither; a DNS label for the name; a
+// variable's name for the token; a positive wait. Never in a project's
+// file, never with url, and never beside an executor or a box.
+func TestWorkspaceHubValidation(t *testing.T) {
+	for _, tc := range []struct{ file, want string }{
+		{`{"workspace":{"hub":{}}}`, "workspace.hub.listen is required"},
+		{`{"workspace":{"hub":{"listen":"7780","name":"build"}}}`, `workspace.hub.listen "7780"`},
+		{`{"workspace":{"hub":{"listen":"0.0.0.0:7780","name":"build"}}}`, "without tls_cert and tls_key the hub listens on loopback only"},
+		{`{"workspace":{"hub":{"listen":"box.example:7780","name":"build"}}}`, "loopback only"},
+		{`{"workspace":{"hub":{"listen":":7780","name":"build","tls_cert":"c.pem"}}}`, "tls_cert and tls_key go together"},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780"}}}`, `workspace.hub.name "": want a DNS label`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"Build"}}}`, `workspace.hub.name "Build"`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"-build"}}}`, `workspace.hub.name "-build"`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build.example"}}}`, `workspace.hub.name "build.example"`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","token_env":"MY-TOKEN"}}}`, `workspace.hub.token_env: "MY-TOKEN" is not a variable name`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","wait":"soon"}}}`, `workspace.hub.wait "soon": want a positive duration`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","wait":"-1s"}}}`, `workspace.hub.wait "-1s"`},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","token":"x"}}}`, "unknown field"},
+		{`{"workspace":{"url":"https://box.example","hub":{"listen":"127.0.0.1:7780","name":"build"}}}`, "give url (dax dials the workspace) or hub (the workspace dials dax), not both"},
+		{`{"workspace":{"tls_ca":"/ca.pem","hub":{"listen":"127.0.0.1:7780","name":"build"}}}`, "workspace.tls_ca is for an https url; a hub serves with tls_cert and tls_key"},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}},"executor":{"command":"ssh host dax execute"}}`, "workspace and executor both"},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}},"executor":{"url":"http://127.0.0.1:7777"}}`, "workspace and executor both"},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}},"box":{}}`, "workspace and box both"},
+	} {
+		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
+		}
+	}
+	for _, ok := range []string{
+		`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}}}`,
+		`{"workspace":{"hub":{"listen":"localhost:0","name":"b-1"}}}`,
+		`{"workspace":{"hub":{"listen":"[::1]:7780","name":"build","wait":"5m"}}}`,
+		`{"workspace":{"hub":{"listen":":7780","name":"build","tls_cert":"c.pem","tls_key":"k.pem","token_env":"BUILD_TUNNEL"}}}`,
+		// workspace.token_env stays for a -workspace URL given over it.
+		`{"workspace":{"token_env":"BOX_TOKEN","hub":{"listen":"127.0.0.1:7780","name":"build"}}}`,
+	} {
+		if _, err := Parse([]byte(ok), "/u/config.json", false); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	// A repository may not have the session take a workspace from
+	// whoever dials in.
+	if _, err := Parse([]byte(`{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}}}`), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "workspace: a project file may only tighten") {
+		t.Errorf("a project's hub: %v", err)
+	}
+}
+
+// The hub's defaults: DAX_TUNNEL_TOKEN and 60 seconds, its certificate
+// and key relative to the file; -workspace URL dials that URL in its
+// place and "" clears it; a project's layer names none; the hub beside
+// an executor or a box is refused whichever names each; and its token's
+// variable is no other credential's and goes to no child.
+func TestWorkspaceHubPrecedence(t *testing.T) {
+	user := parse(t, `{"workspace":{"hub":{"listen":":7780","name":"build","tls_cert":"c.pem","tls_key":"/k.pem"}}}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	want := &WorkspaceSettings{TokenEnv: WorkspaceTokenEnv, Hub: &HubSettings{Listen: ":7780", Name: "build", TokenEnv: TunnelTokenEnv, TLSCert: "/home/u/.config/dax/c.pem", TLSKey: "/k.pem", Wait: DefaultHubWait}}
+	if err != nil || !reflect.DeepEqual(s.Workspace, want) {
+		t.Fatalf("file: %+v %+v, %v", s.Workspace, s.Workspace.Hub, err)
+	}
+	if got := s.Workspace.Ref(); got != "http://build.tunnel.invalid" || got != WorkspaceRef(got) {
+		t.Errorf("the hub's ref = %q", got)
+	}
+	if !HasWorkspace(user, Flags{}) || HasExecutor(user, Flags{}) {
+		t.Error("HasWorkspace or HasExecutor of the file's hub")
+	}
+	waited := parse(t, `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build","wait":"90s","token_env":"BUILD_TUNNEL"}}}`, false)
+	if s, err = Resolve([]Layer{waited}, Flags{}, ""); err != nil || s.Workspace.Hub.Wait != 90*time.Second || s.Workspace.Hub.TokenEnv != "BUILD_TUNNEL" {
+		t.Errorf("wait and token_env: %+v, %v", s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Workspace: ptr("https://other.example")}, ""); err != nil || !reflect.DeepEqual(s.Workspace, &WorkspaceSettings{URL: "https://other.example", TokenEnv: WorkspaceTokenEnv}) {
+		t.Fatalf("the flag over the hub: %+v, %v", s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user}, Flags{Workspace: ptr("")}, ""); err != nil || s.Workspace != nil {
+		t.Fatalf("the empty flag clears the hub: %+v, %v", s.Workspace, err)
+	}
+	proj := Layer{Project: true, Path: "/work/proj/.dax/config.json", Config: Config{Workspace: &Workspace{Hub: &WorkspaceHub{Listen: "127.0.0.1:7780", Name: "evil"}}}}
+	if s, err = Resolve([]Layer{proj}, Flags{}, ""); err != nil || s.Workspace != nil {
+		t.Errorf("a project's hub was taken: %+v, %v", s.Workspace, err)
+	}
+	if s, err = Resolve([]Layer{user, proj}, Flags{}, ""); err != nil || s.Workspace.Hub.Name != "build" {
+		t.Errorf("a project's hub replaced the user's: %+v, %v", s.Workspace, err)
+	}
+
+	executor := parse(t, `{"executor":{"command":"ssh host dax execute"}}`, false)
+	boxed := parse(t, `{"box":{}}`, false)
+	hub := `"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}}`
+	for _, tc := range []struct {
+		name  string
+		user  []Layer
+		flags Flags
+		want  string
+	}{
+		{"-executor and the file's hub", []Layer{user}, Flags{Executor: ptr("http://127.0.0.1:7777")}, `-executor: your config's workspace says where the tools act; give -workspace ""`},
+		{"-box and the file's hub", []Layer{user}, Flags{Box: ptr(true)}, `-box: your config's workspace says where the tools act; give -workspace ""`},
+		{"the hub and an executor in another file", []Layer{executor, user}, Flags{}, `workspace.hub: your config's executor says where the tools run`},
+		{"the hub and a box in another file", []Layer{boxed, user}, Flags{}, `workspace.hub: your config's box says where the tools run`},
+		{"pass_env names the token", []Layer{parse(t, `{`+hub+`,"pass_env":["DAX_TUNNEL_TOKEN"]}`, false)}, Flags{}, "pass_env: DAX_TUNNEL_TOKEN holds the token that enrolls the workspace at the hub"},
+		{"executor.pass_env names the token", []Layer{parse(t, `{`+hub+`,"executor":{"pass_env":["DAX_TUNNEL_TOKEN"]}}`, false)}, Flags{}, "executor.pass_env: DAX_TUNNEL_TOKEN holds the token"},
+		{"the model's key's variable", []Layer{parse(t, `{"provider":"openresponses","model":"m","base_url":"https://x","api_key_env":"DAX_TUNNEL_TOKEN",`+hub+`}`, false)}, Flags{}, "workspace.hub.token_env: DAX_TUNNEL_TOKEN is api_key_env too"},
+		{"an MCP server's token", []Layer{parse(t, `{"mcp_servers":{"docs":{"url":"https://docs.example/mcp","token_env":"DAX_TUNNEL_TOKEN"}},`+hub+`}`, false)}, Flags{}, "workspace.hub.token_env: DAX_TUNNEL_TOKEN is MCP server docs's token_env too"},
+		{"a peer's token", []Layer{parse(t, `{"peers":{"r":{"url":"https://r.example","token_env":"DAX_TUNNEL_TOKEN"}},`+hub+`}`, false)}, Flags{}, "workspace.hub.token_env: DAX_TUNNEL_TOKEN is peer r's token_env too"},
+		{"workspace.token_env", []Layer{parse(t, `{"workspace":{"token_env":"SHARED","hub":{"listen":"127.0.0.1:7780","name":"build","token_env":"SHARED"}}}`, false)}, Flags{}, "workspace.hub.token_env: SHARED is workspace.token_env too"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Resolve(tc.user, tc.flags, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Resolve: err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // A workspace's identity is its URL normalised: spellings of one
 // address are one.
 func TestWorkspaceRef(t *testing.T) {
@@ -1082,6 +1195,9 @@ func TestWorkspaceRef(t *testing.T) {
 		"http://[::1]:7779":             "http://[::1]:7779",
 		"https://[::1]:443":             "https://[::1]",
 		"https://me@box.example/?x=1#y": "https://box.example",
+		// A workspace reached through a hub, as the tunnel names it.
+		"http://build.tunnel.invalid":  "http://build.tunnel.invalid",
+		"http://build.tunnel.invalid/": "http://build.tunnel.invalid",
 	} {
 		if got := WorkspaceRef(in); got != want {
 			t.Errorf("WorkspaceRef(%q) = %q, want %q", in, got, want)

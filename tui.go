@@ -143,7 +143,9 @@ func elsewhereBanner(info frontInfo) string {
 
 // banner is the lines dax shows at start in every front.
 func banner(info frontInfo, si agent.Info) []string {
-	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, info.Dir)}
+	// The root is the workspace's to report, so it is cleaned as any
+	// text from elsewhere is.
+	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, render.Clean(info.Dir))}
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}

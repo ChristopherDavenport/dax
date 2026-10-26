@@ -5,6 +5,62 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `dax workspace -connect URL`, the served workspace for a host
+  the session cannot reach: in place of listening, it dials out to a
+  session's hub at a `wss://` URL (`ws://` to a loopback host alone)
+  and serves the directory through that connection (agentworkspace's
+  `tunnel`), dialling again whenever it drops; a session's processes
+  there outlive a drop shorter than their lease. The token is
+  `$DAX_TUNNEL_TOKEN`, at least 32 bytes, sent in the upgrade's header,
+  taken out of the environment before anything starts and never
+  printed; `-pass-env` may not name it. Each run sends an instance id
+  of its own, which the hub holds its workspace to. `-scopes` (default
+  `read,write,exec`) is what the session may do there, `-tls-ca` a CA
+  to verify a `wss://` hub with in place of the system's roots, as
+  `workspace.tls_ca` does. Not with `-listen`, `-tls-cert` or
+  `-tls-key`. It warns on standard error when it dials `ws://`, which
+  authenticates no hub, and stops at once on a refused token, a
+  workspace held by another host, a certificate not verified or no hub
+  at the path (404), and keeps dialling a hub not up yet. A signal ends
+  every process the session started there before it stops.
+- Added: the config's `workspace.hub` (`listen`, `name`, `token_env`,
+  default `DAX_TUNNEL_TOKEN`, `tls_cert`, `tls_key`, `wait`, default
+  `60s`), in place of `workspace.url`: the session hosts a hub at
+  `/tunnel`, on loopback unless it has a certificate, enrolls the one
+  token as the one name and refuses any other, waits up to `wait` for
+  that workspace to dial in, and then acts in it as in a served one
+  (tools, policy checks, the project's files, MCP servers). One that
+  never connects fails the start with the `dax workspace -connect` line
+  to run on its host. The hub holds the workspace to the first
+  `dax workspace -connect` run that connects and refuses any other
+  (403) for the session's life; its connects, drops and refusals are
+  among dax's warnings; a request to a host that is away fails after
+  10 seconds; and the session's close and the hub's are bounded by one
+  deadline. Your file only; not with `url`, `executor` or
+  `box`; its `token_env` is no other credential's variable. The record
+  names the workspace `remote` at `http://<name>.tunnel.invalid`, and
+  `-list` with the hub's config lists its sessions without listening.
+  `-workspace URL` dials that URL in the hub's place.
+- Added: `agent.Warnings`, where dax warns at the time of each write
+  (standard error, or what `CaptureWarnings` holds while a front has
+  the screen), for a program's own warnings beside a session.
+- Changed: `dax workspace -listen` serves at most 256 transfers (Execs
+  and file transfers) at once, agentworkspace `remote`'s new default;
+  past it a request fails as over its limit until one ends.
+- Changed: the start line cleans the workspace's root, which a served
+  workspace reports, as other text from elsewhere is cleaned.
+- Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.6,
+  up from v0.0.5, whose `remote` adds `WithMaxTransfers` and
+  `Handler.Lease()` and drops `BearerTokens` and `WithBearerToken`;
+  agentsession v0.0.29, up from v0.0.28, and agentturn,
+  agentturn/session, agentturn/front/a2a and agentturn/tools/a2a
+  v0.0.33, up from v0.0.32, which drop their own bearer-token helpers
+  too (dax never used them: `internal/authn` is its check). front/a2a's
+  `New` now refuses an `Authenticator` with a scheme and no name; dax's
+  names it `bearer`.
+
 ## v0.0.28 - 2026-10-25
 
 - Added: `dax workspace`, a mode with flags of its own that reads no
