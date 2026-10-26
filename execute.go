@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -127,7 +126,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 		return fmt.Errorf("workspace: %w", err)
 	}
 	defer ws.Close()
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, stopSignals...)
 	defer stop()
 	// The processes started for the session end at a signal before
 	// the session's close waits for the requests reading them.
@@ -203,7 +202,7 @@ func executeListen(addr string, insecure bool) (net.Listener, error) {
 // processes end with ctx (ServeOptions.Done) before the server shuts
 // down.
 func serveExecute(ctx context.Context, ln net.Listener, srv *executor.Server, root string, insecure bool) error {
-	hs := &http.Server{Handler: executor.Handler(srv, ctx.Done()), ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Handler: executor.Handler(srv, ctx.Done()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	served := make(chan error, 1)
 	go func() { served <- hs.Serve(ln) }()
 	url := "http://" + servedHost(ln.Addr())

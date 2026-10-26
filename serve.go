@@ -46,6 +46,16 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
+// stopSignals stop dax serve, dax execute and dax workspace cleanly:
+// an interrupt, a termination, a hangup (the terminal or the ssh
+// session it ran in went away) and a quit, each ending what they
+// started before they exit.
+var stopSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
+// serveIdle is how long a server of dax's keeps a keep-alive
+// connection no request is on; it never cuts a stream.
+const serveIdle = 2 * time.Minute
+
 // serveTokenEnv names the variable that holds the token dax serve
 // takes and dax attach sends. Without it, dax serve makes one and
 // writes it to a file only the user can read.
@@ -162,7 +172,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	// as the session is served.
 	defer sess.Answering()()
 
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 
@@ -206,7 +216,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	stop := ctx
 	if f.signals {
 		var cancel context.CancelFunc
-		stop, cancel = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		stop, cancel = signal.NotifyContext(ctx, stopSignals...)
 		defer cancel()
 	}
 	var serveErr error

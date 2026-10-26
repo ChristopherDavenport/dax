@@ -31,6 +31,11 @@ versions may break flags and the config file.
   header records the workspace as `remote` with the URL as ref, and
   `-list` finds its sessions by the URL without connecting. See
   docs/sandbox.md, "A served workspace".
+- Changed: `dax serve` and `dax execute` stop as cleanly on a hangup
+  (SIGHUP, as when the ssh session they ran in drops) and on SIGQUIT as
+  on SIGINT and SIGTERM, ending what they started, where a hangup
+  killed them before; and their HTTP servers close a keep-alive
+  connection left idle for two minutes. `dax workspace` does the same.
 - Added: `agent.ListWorkspaceURL`, the sessions of a workspace served
   at a URL, without dialing it.
 - Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,

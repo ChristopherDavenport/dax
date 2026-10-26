@@ -24,7 +24,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"syscall"
 	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -100,6 +99,9 @@ type workspaceServer struct {
 	signals bool
 	// ready is told the base URL once the listener is up; tests set it.
 	ready func(url string)
+	// drain bounds each wait for the handler's close at a stop; zero is
+	// three seconds.
+	drain time.Duration
 }
 
 func (w *workspaceServer) run(ctx context.Context) error {
@@ -147,8 +149,10 @@ func (w *workspaceServer) run(ctx context.Context) error {
 		return err
 	}
 	// No ReadTimeout or WriteTimeout: they would cut Exec's frames and a
-	// process's pipes, which stream for as long as the process runs.
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	// process's pipes, which stream for as long as the process runs. An
+	// idle connection is closed, so a client that only holds one open
+	// holds no descriptor for long.
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 
@@ -173,7 +177,7 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	stop := ctx
 	if w.signals {
 		var cancel context.CancelFunc
-		stop, cancel = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		stop, cancel = signal.NotifyContext(ctx, stopSignals...)
 		defer cancel()
 	}
 	var serveErr error
@@ -181,14 +185,51 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	case <-stop.Done():
 	case serveErr = <-served:
 	}
+	// A second signal while stopping cuts the waits short: run returns
+	// at once, and its deferred cleanup still removes the token file.
+	again := make(chan os.Signal, 1)
+	if w.signals {
+		signal.Notify(again, stopSignals...)
+		defer signal.Stop(again)
+	}
+	drain := w.drain
+	if drain == 0 {
+		drain = 3 * time.Second
+	}
 	// Every session's processes and every Exec end first, which ends the
-	// streams reading them, so the server's shutdown has nothing left
-	// to wait for.
-	h.Close()
-	sctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	srv.Shutdown(sctx)
-	srv.Close()
+	// streams reading them. An Exec whose client stopped reading is
+	// blocked writing its output to the connection, which only closing
+	// the connections ends: the handler's close is given drain, then the
+	// connections are closed, and it is given drain again.
+	closed := make(chan struct{})
+	go func() { h.Close(); close(closed) }()
+	hurried := false
+	wait := func() bool {
+		if hurried {
+			return false
+		}
+		t := time.NewTimer(drain)
+		defer t.Stop()
+		select {
+		case <-closed:
+			return true
+		case <-t.C:
+		case <-again:
+			hurried = true
+		}
+		return false
+	}
+	if wait() {
+		sctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		srv.Shutdown(sctx)
+		cancel()
+		srv.Close()
+	} else {
+		srv.Close()
+		if !wait() && !hurried {
+			fmt.Fprintln(out, "dax workspace: stopped with a request still ending")
+		}
+	}
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return fmt.Errorf("workspace: %w", serveErr)
 	}

@@ -3,6 +3,9 @@ package dax
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -270,6 +273,46 @@ func TestStoppingAServedWorkspaceEndsItsProcesses(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("a process outlived dax workspace")
 		}
+	}
+}
+
+// A client that streams a command's output and stops reading holds
+// that Exec blocked writing to its connection; stopping still returns
+// within its bounded waits, the connections closed under it, and the
+// token file is removed.
+func TestStoppingAServedWorkspaceUnderAStalledStream(t *testing.T) {
+	home(t)
+	s := serveWorkspace(t, t.TempDir(), func(w *workspaceServer) { w.drain = 500 * time.Millisecond })
+	body := `{"args":["yes"],"stream":true}`
+	conn, err := net.Dial("tcp", strings.TrimPrefix(s.url, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST /v1/exec HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+		strings.TrimPrefix(s.url, "http://"), s.token(t), len(body), body)
+	// Read the first of the reply, so the command runs, then nothing.
+	buf := make([]byte, 512)
+	if _, err := io.ReadAtLeast(conn, buf, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond) // the socket's buffers fill
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- s.stop() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("dax workspace did not stop under a stalled stream")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("stopping took %v", took)
+	}
+	if _, err := os.Stat(s.tokenFile); !os.IsNotExist(err) {
+		t.Errorf("the token file outlived dax workspace: %v", err)
 	}
 }
 
