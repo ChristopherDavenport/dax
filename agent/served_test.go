@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -207,5 +208,71 @@ func TestAServedWorkspaceWithoutExec(t *testing.T) {
 	defer s.Close()
 	if got := leak(t, s, "mcp__ws__leak"); got != "key=[] token=[] plain=[this machine]" {
 		t.Errorf("the server's environment: %s", got)
+	}
+}
+
+// A project's command servers start in its workspace or not at all: in
+// a served workspace that cannot start a process, a trusted one fails
+// the session, saying why, where your own still runs here; and a trust
+// given while they ran there does not hold for running here.
+func TestAProjectsServersDoNotMoveHere(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	dir := t.TempDir()
+	local, err := workspace.NewLocal(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	h, err := remote.NewHandler(local, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+		"tok": {Name: "dax", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite}},
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	defer h.Close()
+	ws, err := remote.Dial(ctx, srv.URL, remote.WithBearerToken("tok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+
+	o := options(t, &scripted{})
+	o.Workspace = ws
+	o.MCPTrustFile = filepath.Join(t.TempDir(), "trust", "mcp-trust.json")
+	o.TrustMCP = true
+	o.MCP = []MCPServer{{Name: "mine", Command: os.Args[0]}, {Name: "theirs", Command: os.Args[0], Project: true}}
+	if s, err := New(ctx, o); err == nil {
+		s.Close()
+		t.Fatal("a project's server started on this machine")
+	} else if !strings.Contains(err.Error(), "mcp theirs: the project's server would run on this machine") || !strings.Contains(err.Error(), "cannot start a process") {
+		t.Errorf("err = %v", err)
+	}
+	o.MCP = o.MCP[:1]
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(toolNames(s), "mcp__mine__leak") {
+		t.Errorf("your own server did not start here: %v", toolNames(s))
+	}
+	s.Close()
+
+	theirs := []MCPServer{{Name: "theirs", Command: "lint --serve", Project: true}}
+	file := filepath.Join(t.TempDir(), "trust", "mcp-trust.json")
+	d := ws.Descriptor()
+	trusted(theirs, d, false, file, true)
+	if got := trusted(theirs, d, false, file, false); len(got) != 1 {
+		t.Fatalf("the trust given does not hold where it was given: %v", got)
+	}
+	if got := trusted(theirs, d, true, file, false); len(got) != 0 {
+		t.Errorf("a trust given while the servers ran in the workspace holds for running them here: %v", got)
+	}
+	// A server at a URL is called from here either way.
+	urls := []MCPServer{{Name: "docs", URL: "https://docs.example/mcp", Project: true}}
+	if serverSetHash(urls, true) != serverSetHash(urls, false) {
+		t.Error("a URL's placement changed with the workspace's")
 	}
 }

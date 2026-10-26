@@ -745,7 +745,9 @@ or a box. The session's header records the workspace as `remote`, the
 URL as its ref and the served root, and `-list -workspace URL` lists
 its sessions without connecting. The project's `AGENTS.md`,
 `.dax/skills` and `.dax/config.json` are the served directory's, read
-through it; your MCP servers start there, through the workspace. It
+through it; your MCP servers start there, through the workspace (a
+token without `exec` cannot start them, and then your own run here and
+the project's not at all). It
 serves this machine's directory alone: MCP servers a workspace offers
 of its own (a box host's units) do not cross the wire yet.
 

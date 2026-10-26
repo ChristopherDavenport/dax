@@ -42,17 +42,22 @@ type trustedProject struct {
 
 // serverSetHash is the SHA-256 of servers' canonical JSON: each server's
 // name, command, URL and placement, in name order. A change to any of
-// them is another set.
-func serverSetHash(servers []MCPServer) string {
+// them is another set. here says the workspace cannot start a process,
+// so a command placed in it would run on this machine: that is a
+// placement of its own, so a set trusted while it ran in the workspace
+// is not trusted to run here. (A workspace that can start one leaves
+// the hash as it was before here was kept.)
+func serverSetHash(servers []MCPServer, here bool) string {
 	type canon struct {
 		Name    string `json:"name"`
 		Command string `json:"command,omitempty"`
 		URL     string `json:"url,omitempty"`
 		Host    bool   `json:"host,omitempty"`
+		Here    bool   `json:"here,omitempty"`
 	}
 	set := make([]canon, 0, len(servers))
 	for _, m := range servers {
-		set = append(set, canon{m.Name, m.Command, m.URL, m.Host})
+		set = append(set, canon{m.Name, m.Command, m.URL, m.Host, here && m.URL == "" && !m.Host})
 	}
 	slices.SortFunc(set, func(a, b canon) int { return strings.Compare(a.Name, b.Name) })
 	b, _ := json.Marshal(set)
@@ -61,10 +66,11 @@ func serverSetHash(servers []MCPServer) string {
 }
 
 // trusted is servers less the project's, unless the user trusts the
-// project's set for the project in d: given trust, the set is recorded
-// as the project's in file; otherwise it must be the set file holds for
-// the project. What is left out is said once, with how to trust it.
-func trusted(servers []MCPServer, d workspace.Descriptor, file string, trust bool) []MCPServer {
+// project's set for the project in d, placed as here says
+// (serverSetHash): given trust, the set is recorded as the project's in
+// file; otherwise it must be the set file holds for the project. What
+// is left out is said once, with how to trust it.
+func trusted(servers []MCPServer, d workspace.Descriptor, here bool, file string, trust bool) []MCPServer {
 	var mine, project []MCPServer
 	for _, m := range servers {
 		if m.Project {
@@ -77,7 +83,7 @@ func trusted(servers []MCPServer, d workspace.Descriptor, file string, trust boo
 		return servers
 	}
 	key := recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root}
-	h := serverSetHash(project)
+	h := serverSetHash(project, here)
 	if trust {
 		if err := recordTrust(file, key, h); err != nil {
 			fmt.Fprintf(warnings{}, "dax: the project's MCP servers are trusted for this session, but the trust could not be kept: %v\n", err)

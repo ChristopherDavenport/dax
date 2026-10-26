@@ -336,12 +336,13 @@ func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
 
 // workspaceLine is the banner's line about a served workspace: where it
 // is and its root, and when it cannot start a process (its token lacks
-// exec, so bash fails too), that the session's MCP servers run here.
+// exec, so bash fails too), that your MCP servers run here and the
+// project's are refused.
 func workspaceLine(ws workspace.Workspace) string {
 	d := ws.Descriptor()
 	line := d.Kind + " " + d.Ref + " · " + d.Root
 	if _, ok := ws.(workspace.Starter); !ok {
-		line += " · starts no process there: its MCP servers run here"
+		line += " · starts no process there: your MCP servers run here, the project's not at all"
 	}
 	return line
 }

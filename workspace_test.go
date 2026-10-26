@@ -211,7 +211,7 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 	if lines := banner(frontInfo{Name: "dax", Workspace: line}, agent.Info{}); !strings.Contains(strings.Join(lines, "\n"), "\nworkspace: "+line) {
 		t.Errorf("the banner %q does not name the workspace", lines)
 	}
-	if l := workspaceLine(struct{ workspace.Workspace }{ws}); !strings.HasSuffix(l, "starts no process there: its MCP servers run here") {
+	if l := workspaceLine(struct{ workspace.Workspace }{ws}); !strings.HasSuffix(l, "starts no process there: your MCP servers run here, the project's not at all") {
 		t.Errorf("the line of a workspace that cannot start a process: %q", l)
 	}
 	ws.Close()

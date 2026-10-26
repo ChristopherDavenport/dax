@@ -23,7 +23,10 @@ versions may break flags and the config file.
   session's tools, their checks and the policy run here and act in the
   served workspace; the project's `AGENTS.md`, `.dax/skills` and
   `.dax/config.json` are read through it, and stdio MCP servers start
-  there when the token holds `exec`. The URL is https, or http to a
+  there when the token holds `exec`; without it your own run here and
+  a project's are refused, never moved to this machine, and the MCP
+  trust records where a project's servers run, so a trust given while
+  they ran there does not hold here. The URL is https, or http to a
   loopback host, with no user, password, query or fragment; the token
   is never printed or recorded, and its variable is taken out of dax's
   environment before dax starts any process, the key command first. Your config only: a project's file may not

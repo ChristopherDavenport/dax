@@ -1228,11 +1228,16 @@ the config's layer can only tighten, as anywhere.
 
 A token whose principal lacks `exec` (a program serving `remote` with
 read and write alone) still connects: reads and writes work, and
-`bash`, the git-config check and every command fail as forbidden,
-while the MCP servers, which the workspace cannot start, run on this
+`bash`, the git-config check and every command fail as forbidden.
+Your own MCP servers, which the workspace cannot start, run on this
 machine with its environment scrubbed, as in any workspace that cannot
-start a process. The start line says so (`starts no process there`).
-`dax workspace`'s own token always holds `exec`.
+start a process. The project's command servers do not: they run in
+its workspace or not at all, so a trusted one fails the session's start,
+saying so, as with an executor that cannot start a process. The MCP
+trust records where the servers run, so a set trusted while they ran
+in the workspace is not trusted to run here. The start line says so
+(`starts no process there`). `dax workspace`'s own token always holds
+`exec`.
 
 ### Sessions and memory
 
