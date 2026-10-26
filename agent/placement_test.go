@@ -346,9 +346,9 @@ func TestServersNamedAlikeAreRefused(t *testing.T) {
 }
 
 // Info lists the session's MCP servers as they were connected: a
-// configured one on this machine with its description, a URL's without
-// what credentials it carries, and one /mcp add started in the
-// workspace with the label /mcp remove takes, until it is removed.
+// configured one on this machine with its description, a URL's by its
+// origin alone, and one /mcp add started in the workspace with the
+// label /mcp remove takes, until it is removed.
 func TestInfoListsTheMCPServers(t *testing.T) {
 	t.Setenv("DAX_TEST_MCP_SERVER", "1")
 	ctx := context.Background()
@@ -378,11 +378,18 @@ func TestInfoListsTheMCPServers(t *testing.T) {
 		t.Error("removing a server never added")
 	}
 
-	_, info, err := s.mcpDialOf(MCPServer{Name: "u", URL: "https://user:pw@MCP.example:443/mcp/?key=k#f"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Placement != PlacedURL || info.Where != "https://mcp.example/mcp" {
-		t.Errorf("a URL's server listed as %+v", info)
+	// A URL's server is listed by its origin alone: a hosted server's
+	// key is often in its path, and the listing goes to every view.
+	for endpoint, want := range map[string]string{
+		"https://user:pw@MCP.example:443/api/s/sk-the-key/mcp/?key=k#f": "https://mcp.example",
+		"http://127.0.0.1:8080/mcp":                                     "http://127.0.0.1:8080",
+	} {
+		_, info, err := s.mcpDialOf(MCPServer{Name: "u", URL: endpoint})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Placement != PlacedURL || info.Where != want {
+			t.Errorf("%s listed as %+v, want at %s", endpoint, info, want)
+		}
 	}
 }

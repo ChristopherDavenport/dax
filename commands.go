@@ -129,7 +129,10 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
 	case "/mcp":
 		// The listing changes nothing, so it works during a run.
-		if sub, _, _ := strings.Cut(arg, " "); sub == "" || sub == "list" {
+		if sub, rest, _ := strings.Cut(arg, " "); sub == "" || sub == "list" {
+			if strings.TrimSpace(rest) != "" {
+				return commandResult{}, errors.New("usage: /mcp list, with nothing after it")
+			}
 			return commandResult{out: strings.Join(mcpLines(ctl.Info()), "\n")}, nil
 		}
 		if err := idle(); err != nil {

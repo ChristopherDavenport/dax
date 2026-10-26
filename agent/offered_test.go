@@ -196,10 +196,11 @@ func servedLocal(t *testing.T) remote.Workspace {
 
 // placements are the places one MCP server called p runs: configured as
 // a command on this machine, configured as a command in a served
-// workspace, offered by a served workspace (-servers) over -workspace
-// URL, offered through a hub (workspace.hub), and offered by a servers
-// workspace beside the session's own (servers_workspace), at an address
-// or through a hub.
+// workspace, or beside one that cannot run it (on this machine),
+// offered by a served workspace (-servers) over -workspace URL, offered
+// through a hub (workspace.hub), and offered by a servers workspace
+// beside the session's own (servers_workspace), at an address or
+// through a hub.
 func placements() []placement {
 	scopes := []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec, remote.ScopeServers}
 	return []placement{
@@ -208,6 +209,17 @@ func placements() []placement {
 		}},
 		{"a command in a served workspace", PlacedWorkspace, func(t *testing.T, o *Options) {
 			o.Workspace = servedLocal(t)
+			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0]}}
+		}},
+		{"a command beside a served workspace that cannot run one", PlacedHost, func(t *testing.T, o *Options) {
+			// Your own server runs on this machine when the workspace's
+			// grant lacks exec, and is listed where it runs.
+			local, err := workspace.NewLocal(t.TempDir(), servedEnv())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { local.Close() })
+			o.Workspace = serveWS(t, local, remote.ScopeRead, remote.ScopeWrite)
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0]}}
 		}},
 		{"offered by a served workspace", PlacedOffered, func(t *testing.T, o *Options) {

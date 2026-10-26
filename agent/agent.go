@@ -325,17 +325,20 @@ type MCPServerInfo struct {
 	// Name is the prefix of its tools, mcp__<name>__<tool>.
 	Name string
 	// Placement is where it runs, and Where names that place: the
-	// workspace, as a session's warnings name one, or the URL with no
-	// user, query or fragment (config.WorkspaceRef). Where is empty on
-	// this machine.
+	// workspace, as a session's warnings name one, or the URL's origin
+	// alone (urlPlace), since a hosted server's key is often in its
+	// path. Where is empty on this machine.
 	Placement Placement
 	Where     string
 	// Description is what the config, or the workspace that offers the
 	// server, says it is for: text from whoever wrote it, which a front
 	// cleans before it shows it.
 	Description string
-	// Secrets says it holds secrets (MCPServer.SecretEnv), redacted
-	// from what it writes.
+	// Secrets says this session gives it secrets (MCPServer.SecretEnv)
+	// and starts it on this machine, redacting them from what it
+	// writes. A server a workspace offers is never marked, even one
+	// that holds secrets there: agentworkspace does not tell a client
+	// that an offered server does (agentworkspace#23).
 	Secrets bool
 	// Added is the label RemoveMCP takes, for a server AddMCP started;
 	// empty for one the session opened with.
@@ -1117,23 +1120,20 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 // server it added before it closes it, so a close that fails still
 // leaves it unlisted.
 func (s *Session) RemoveMCP(label string) error {
-	s.serversMu.Lock()
-	listed := slices.ContainsFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
-	s.serversMu.Unlock()
 	err := s.Kit.RemoveMCP(label)
-	if listed {
-		s.serversMu.Lock()
-		s.servers = slices.DeleteFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
-		s.serversMu.Unlock()
-	}
+	s.serversMu.Lock()
+	s.servers = slices.DeleteFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
+	s.serversMu.Unlock()
 	return err
 }
 
-// mcpServers are the MCP servers connected, as Info.MCP lists them.
+// mcpServers are the MCP servers connected, as Info.MCP lists them:
+// never nil, so a session with none says so (an empty list in the
+// served info), where a nil list is a session that does not list them.
 func (s *Session) mcpServers() []MCPServerInfo {
 	s.serversMu.Lock()
 	defer s.serversMu.Unlock()
-	return slices.Clone(s.servers)
+	return append([]MCPServerInfo{}, s.servers...)
 }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
@@ -1468,7 +1468,7 @@ func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
 		return placed(m.offeredAs, m.offeredAt, mcpOffered(m.offeredBy, m.Name), nil)
 	case m.URL != "":
 		dial, err := mcpURL(m.URL, m.TokenEnv)
-		return placed(PlacedURL, config.WorkspaceRef(m.URL), dial, err)
+		return placed(PlacedURL, urlPlace(m.URL), dial, err)
 	case len(m.SecretEnv) > 0:
 		dial, err := s.mcpHolding(m)
 		return placed(PlacedHost, "", dial, err)

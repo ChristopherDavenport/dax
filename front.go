@@ -37,6 +37,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -595,23 +596,28 @@ func assemblyLines(info agent.Info) []string {
 }
 
 // mcpLines list the session's MCP servers, one a line: its name, where
-// it runs, and what it says it is for, the same for every placement. A
-// description, like the place's name, is text from whoever configured
-// or offered the server: it is cleaned, put on one line and cut short,
-// so it cannot pass for another line of the listing or act on the
-// terminal.
+// it runs, and what it says it is for, the same for every placement.
+// Each field, a description and a served workspace's root among them,
+// is text from whoever configured or offered the server or served the
+// session: it is cleaned, put on one line and cut short, so it cannot
+// pass for another line of the listing or act on the terminal. A nil
+// list is a served session whose dax lists none, older than /mcp, which
+// is not said to have none.
 func mcpLines(info agent.Info) []string {
-	if len(info.MCP) == 0 {
+	switch {
+	case info.MCP == nil:
+		return []string{"mcp servers: not listed; the served session's dax is older than /mcp"}
+	case len(info.MCP) == 0:
 		return []string{"mcp servers: none"}
 	}
 	lines := []string{"mcp servers:"}
 	for _, m := range info.MCP {
-		l := "  " + oneLine(m.Name, 0) + ": " + placedText(m)
+		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
 		if m.Secrets {
-			l += ", holding secrets"
+			l += ", given secrets (secret_env)"
 		}
 		if m.Added != "" {
-			l += ", added as " + oneLine(m.Added, 0)
+			l += ", added as " + oneLine(m.Added, maxField)
 		}
 		if d := oneLine(m.Description, maxDescription); d != "" {
 			l += " — " + d
@@ -621,13 +627,16 @@ func mcpLines(info agent.Info) []string {
 	return lines
 }
 
-// maxDescription is how many characters of a server's description a
-// listing shows.
-const maxDescription = 160
+// maxDescription is how many columns of a server's description a
+// listing shows, and maxField how many of each other field.
+const (
+	maxDescription = 160
+	maxField       = 80
+)
 
 // placedText says where m runs.
 func placedText(m agent.MCPServerInfo) string {
-	at := oneLine(m.Where, 0)
+	at := oneLine(m.Where, maxField)
 	switch m.Placement {
 	case agent.PlacedHost:
 		return "on this machine"
@@ -642,16 +651,16 @@ func placedText(m agent.MCPServerInfo) string {
 	}
 	// A placement this dax does not know, from a newer one it attached
 	// to: said as it is.
-	return strings.TrimSpace(oneLine(string(m.Placement), 0) + " " + at)
+	return strings.TrimSpace(oneLine(string(m.Placement), maxField) + " " + at)
 }
 
 // oneLine is s cleaned (render.Clean) with its runs of white space,
-// newlines and tabs among them, made one space, and, when limit is
-// more than zero, cut to limit characters.
+// newlines and tabs among them, made one space, and cut to limit
+// columns of the terminal, a wide character two, ending "…".
 func oneLine(s string, limit int) string {
 	s = strings.Join(strings.Fields(render.Clean(s)), " ")
-	if r := []rune(s); limit > 0 && len(r) > limit {
-		s = strings.TrimSpace(string(r[:limit-1])) + "…"
+	if ansi.StringWidth(s) > limit {
+		s = strings.TrimRight(ansi.Truncate(s, limit-1, ""), " ") + "…"
 	}
 	return s
 }

@@ -520,7 +520,7 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 	}
 	return map[string]control.Command{
 		cmdInfo: {
-			Description: "the session's ID, where it is kept, its tools and what was left out, and the directory its tools act in",
+			Description: "the session's ID, where it is kept, its tools and what was left out, its MCP servers (where each runs and what it is for), and the directory its tools act in",
 			Run: func(context.Context, json.RawMessage) (json.RawMessage, error) {
 				return json.Marshal(servedInfo{Info: ctl.Info(), Dir: dir})
 			},

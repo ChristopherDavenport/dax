@@ -7,12 +7,14 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -228,6 +230,57 @@ func TestAnAttachedViewListsTheServedSessionsMCPServers(t *testing.T) {
 	r.type_("/mcp\r")
 	r.waitOutput("docs: on this machine — the [31mdocs index")
 	r.quit()
+}
+
+// An attached view asks a served session's info for its MCP servers. A
+// dax serve older than /mcp sends info with no list in it, and the view
+// says the servers are not listed rather than that there are none; a
+// session with none sends an empty list, which the view calls none.
+func TestAnAttachedViewDoesNotSayNoneOfAnOlderServe(t *testing.T) {
+	s := startServe(t, &steps{}, policy.Rules{})
+	const token = "the-older-serve-token"
+	for _, c := range []struct {
+		name, info, want string
+	}{
+		{"an older serve", `{"info":{"ID":"s1"},"dir":"/"}`, "mcp servers: not listed; the served session's dax is older than /mcp"},
+		{"none", `{"info":{"ID":"s1","MCP":[]},"dir":"/"}`, "mcp servers: none"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cmds := serveCommands(s.rig.sess, s.rig.sess, s.rig.dir)
+			info := cmds[cmdInfo]
+			info.Run = func(context.Context, json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(c.info), nil
+			}
+			cmds[cmdInfo] = info
+			h := control.Handler(viewed{s.rig.sess},
+				control.WithAuthenticator(authn.New(map[string]control.Principal{
+					token: {Name: servePrincipal, Scopes: control.AllScopes},
+				}).Authenticator(control.ErrUnauthenticated)),
+				control.WithCommands(cmds),
+			)
+			srv := httptest.NewServer(h)
+			defer srv.Close()
+			ctl, err := control.Dial(t.Context(), srv.URL, control.WithHTTPClient(bearerClient(t, srv.URL, token)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := command(t.Context(), nil, &remoteControls{c: ctl}, "/mcp", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.out != c.want {
+				t.Errorf("/mcp = %q, want %q", r.out, c.want)
+			}
+		})
+	}
+	// The session's own info sends an empty list for none, never null.
+	raw, err := serveCommands(s.rig.sess, s.rig.sess, s.rig.dir)[cmdInfo].Run(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"MCP":[]`) {
+		t.Errorf("info for a session with no servers: %s", raw)
+	}
 }
 
 // Two views attached to one served session drive one conversation: what
