@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
 	github.com/ChristopherDavenport/agentconsole v0.0.14
 	github.com/ChristopherDavenport/agenteval v0.0.11
-	github.com/ChristopherDavenport/agentkit v0.0.14
+	github.com/ChristopherDavenport/agentkit v0.0.15
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.17
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.1
@@ -16,12 +16,12 @@ require (
 	github.com/ChristopherDavenport/agenttool v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.24
-	github.com/ChristopherDavenport/agentturn v0.0.31
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.31
-	github.com/ChristopherDavenport/agentturn/session v0.0.31
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.31
-	github.com/ChristopherDavenport/agentworkspace v0.0.3
-	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.3
+	github.com/ChristopherDavenport/agentturn v0.0.32
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.32
+	github.com/ChristopherDavenport/agentturn/session v0.0.32
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.32
+	github.com/ChristopherDavenport/agentworkspace v0.0.4
+	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.4
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
