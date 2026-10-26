@@ -125,8 +125,8 @@ before changing the shape.
   one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
   those the workspace offers of its own (`workspace.ServerProvider`, a
   box host's units, a served or tunnelled workspace's `-servers`), and
-  a command holding secrets (`secret_env`) started through
-  `internal/offer` as an offered one is (`mcpHolding`); a project's
+  a command holding secrets (`secret_env`, on the host alone) started
+  through `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
   `~/.dax/mcp-trust.json`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
@@ -317,6 +317,14 @@ an `Unreleased` changelog line:
   subset, package tool's unexported `safeWords` and `readOnlyArgs`;
   widening either needs a test with the review's exploit strings
   (ext/coding/exploit_test.go) and a reason.
+- A secret stays on the machine whose environment holds it, and its
+  server runs and is filtered there: a session's `secret_env` server
+  is `"in": "host"` alone (refused in validation, `Resolve` and
+  `agent.New` otherwise), and `dax workspace -servers` gives its own
+  servers their values on its own host, offers a secret holder alone,
+  under a grant without `exec` or `write`. No secret is sent to a
+  workspace; every other child (bash, the key command, the box host's
+  launcher) loses the variables.
 - A project config field is refused unless it can only tighten. The one
   exception is `mcp_servers`: a project's servers start only once the
   user trusts that project's exact set (`-trust-mcp`), and a project's

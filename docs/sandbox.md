@@ -214,7 +214,9 @@ reads the box host's own environment; `command:` runs the line with
 `sh` there and takes its output, trimmed; `file:` reads the file. A
 secret that cannot be resolved fails the unit's start, naming the
 secret and its reference, before anything is made. The workspace's
-bash never sees a unit's secret: they are in different containers.
+bash never sees a unit's secret: they are in different containers. Nor
+does it see your own: a server your config gives `secret_env` runs on
+your machine (`"in": "host"`), never in the box.
 
 A local box host is started from your session's environment less its
 credentials, so a variable an `env:` secret reads must be named for
@@ -1259,19 +1261,26 @@ only how the process is reached differs.
 |---|---|---|---|
 | at the control | your `mcp_servers` with `"in": "host"`, or any command when the workspace cannot start a process | on this machine, with its environment scrubbed | its pipes |
 | at a URL | `mcp_servers` with `url` | wherever it is served | streamable HTTP from this machine, its `token_env` sent to its origin alone |
-| a command in the workspace | `mcp_servers`' commands, `-mcp`, `/mcp add` | in the workspace (served, tunnelled, an executor's, a box's), at its root with its environment | the workspace's process, over whatever wire the workspace rides |
+| a command in the workspace | `mcp_servers`' commands, `-mcp`, `/mcp add`, none holding a secret | in the workspace (served, tunnelled, an executor's, a box's), at its root with its environment | the workspace's process, over whatever wire the workspace rides |
 | offered by the workspace | the workspace: `dax workspace -servers`, a box host's units | where the workspace runs it | started by name there (`workspace.ServerProvider`), over the same wire |
 
 One definition moves between them unchanged: an entry of your
 `mcp_servers` is an entry of a `-servers` file. Its `secret_env` means
-the same in both: the process that starts the server (dax, or `dax
-workspace`) gives it those variables from its own environment and no
-other child, and reads what it writes through agentredact's `secrets`
-filter (agentworkspace's `Offer` with `WithOutputFilter`, as the box
-host redacts a unit's), so the value is `[REDACTED NAME]` before the
-session, the model or the record sees it. For a command in a served
-workspace, the value crosses the wire to it with the command, and is
-redacted on the session's side.
+the same in both, under one rule: **a secret stays on the machine whose
+environment holds it, and its server runs and is filtered there.** The
+process that starts the server (dax, or `dax workspace`) gives it those
+variables from its own environment and no other child, and reads what
+it writes through agentredact's `secrets` filter (agentworkspace's
+`Offer` with `WithOutputFilter`, as the box host redacts a unit's;
+standard error cleaned of terminal controls, then redacted again), so
+the value is `[REDACTED NAME]` before the session, the model or the
+record sees it. In your config that means `"in": "host"`: a secret
+holder runs on this machine, never in a workspace, whatever the
+workspace, executor or box, since the session's own bash runs in a
+workspace as its user and reads a running process's environment from
+`/proc`; a `secret_env` server placed in one is refused. A secret
+another machine holds is that machine's to offer, with `dax workspace
+-servers` there, where the value never leaves it.
 
 ### Scopes
 
@@ -1287,16 +1296,27 @@ redacted on the session's side.
 
 The default is `read,write,exec`, and `servers` too when `-servers`
 offers any. `servers` is refused with nothing offered, and `-servers`
-without `servers` granted. No scope implies another. Under `servers`
-alone the session dials, reads no file (every file tool fails as
-forbidden, and the project's `AGENTS.md`, skills and config are not
-read: no layer of the project's applies, since nothing there can be
-touched), starts no command (bash fails as forbidden) and is told the
-directory's last name, not its path.
+without `servers` granted. No scope implies another, but `write` and
+`exec` each need `read`: a session that acts on the project must read
+its rules, which only tighten. Under `servers` alone the session
+dials, reads no file (every file tool fails as forbidden, and the
+project's `AGENTS.md`, skills and config are not read, each with an
+`omitted:` line: no layer of the project's applies, since nothing
+there can be touched), starts no command (bash fails as forbidden) and
+is told the directory's last name, not its path. A workspace another
+program serves that refuses the session its project's config but lets
+it run commands or write there fails the session's start.
+
+Your rules match an offered server by its name, whatever workspace
+offers it: a rule for `mcp__gh__*` covers the `gh` any workspace you
+connect to offers, a box host's units, a served workspace's or a hub's.
+A workspace that lists one name twice is refused.
 
 A server that holds secrets is offered only to a grant without `exec`
-and `write`, and `dax workspace` refuses any other before it serves or
-dials. The redaction covers what the server writes and nothing else:
+and `write`, and alone, beside no other server, and `dax workspace`
+refuses any other offer before it serves or dials: every server it
+offers runs as its user in its directory, so one that runs a command
+or writes a file would read the holder's secret too. The redaction covers what the server writes and nothing else:
 with `exec` the session runs commands as the server's user and reads a
 running server's environment from `/proc/<pid>/environ`; with `write`
 it changes the server's code, config or `PATH` in the directory and
