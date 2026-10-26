@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.27 - 2026-10-25
 
 - Fixed: a rewind (the head move) on a session whose store reported
   an append with `Reopen`, as a remote record or the cas store does
