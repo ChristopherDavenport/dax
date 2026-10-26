@@ -977,3 +977,30 @@ func TestBoxPullRefusedBehindTheGuard(t *testing.T) {
 		})
 	}
 }
+
+// The box host's launcher gets none of the session's credentials: not
+// the model's key, nor an MCP server's token_env or secret_env, nor a
+// peer's token, whatever their names look like; other variables pass.
+func TestTheBoxLauncherLosesTheCredentials(t *testing.T) {
+	home(t)
+	for k, v := range map[string]string{"LINEAR": "lin-value-1234", "MCPTOK": "tok-value-1234", "PEERTOK": "peer-value-1234", "PLAIN_SETTING": "kept"} {
+		t.Setenv(k, v)
+	}
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	write(t, cfg, `{"box":{"host":"ssh://me@build:2222","project":"/srv/app"},
+		"mcp_servers":{"lin":{"command":"lin-mcp","in":"host","secret_env":["LINEAR"]},"u":{"url":"https://mcp.example/","token_env":"MCPTOK"}},
+		"peers":{"reviewer":{"url":"https://reviewer.example","token_env":"PEERTOK"}}}`)
+	_, _, env, err := boxHostOf(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(env, "\n")
+	for _, gone := range []string{"LINEAR=", "MCPTOK=", "PEERTOK="} {
+		if strings.Contains(joined, gone) {
+			t.Errorf("the launcher's environment holds %s", gone)
+		}
+	}
+	if !strings.Contains(joined, "PLAIN_SETTING=kept") {
+		t.Error("the launcher lost a plain variable")
+	}
+}

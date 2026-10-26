@@ -338,7 +338,7 @@ func run(ctx context.Context, args []string, p program) error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: p.name + "/" + p.version})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, KeyScrub: settings.Credentials(), SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: p.name + "/" + p.version})
 	if err != nil {
 		return err
 	}

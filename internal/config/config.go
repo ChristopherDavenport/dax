@@ -2018,6 +2018,45 @@ func checkSecretEnv(s Settings) error {
 	return nil
 }
 
+// Credentials are the variables of the credentials s gives servers and
+// peers, besides the model's key: each MCP server's token_env and
+// secret_env and each peer's token_env. They are theirs alone, so a
+// child that is none of them (the key command, the box host's launcher)
+// loses them.
+func (s Settings) Credentials() []string {
+	var out []string
+	for _, m := range s.MCP {
+		if m.TokenEnv != "" {
+			out = append(out, m.TokenEnv)
+		}
+		out = append(out, m.SecretEnv...)
+	}
+	for _, p := range s.Peers {
+		if p.TokenEnv != "" {
+			out = append(out, p.TokenEnv)
+		}
+	}
+	return out
+}
+
+// Credentials are Settings.Credentials of the layer l alone.
+func (l Layer) Credentials() []string {
+	var out []string
+	for _, n := range sortedKeys(l.MCPServers) {
+		m := l.MCPServers[n]
+		if m.TokenEnv != "" {
+			out = append(out, m.TokenEnv)
+		}
+		out = append(out, m.SecretEnv...)
+	}
+	for _, n := range sortedKeys(l.Peers) {
+		if t := l.Peers[n].TokenEnv; t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // strictness orders the fallbacks; a project's may only raise it.
 var strictness = map[string]int{"allow": 0, "ask": 1, "deny": 2}
 

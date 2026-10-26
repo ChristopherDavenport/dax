@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -132,12 +133,13 @@ type fetch struct {
 	err  error
 }
 
-func newKeySource(argv []string, login string) *keySource {
+func newKeySource(argv []string, login string, scrub []string) *keySource {
 	s := &keySource{argv: argv, login: login, ttl: KeyTTL, now: time.Now}
 	var w io.Writer = os.Stderr
 	s.echo.Store(&w)
+	scrub = slices.Clone(scrub)
 	s.run = func(ctx context.Context, argv []string) (string, error) {
-		return runKeyCommand(ctx, argv, *s.echo.Load())
+		return runKeyCommand(ctx, argv, *s.echo.Load(), scrub)
 	}
 	return s
 }
@@ -204,15 +206,33 @@ func (s *keySource) fill(f *fetch) {
 	close(f.done)
 }
 
+// without is env less the variables names names.
+func without(env, names []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(names, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // runKeyCommand runs argv without a shell, standard input closed, and
 // returns its trimmed standard output, which must be one token of
 // printable ASCII. Standard error is kept for the error and also
 // written to echo, when it is not nil, so a command that prompts or
-// explains itself is seen.
-func runKeyCommand(ctx context.Context, argv []string, echo io.Writer) (string, error) {
+// explains itself is seen. It gets this process's environment less the
+// variables scrub names: other credentials' (an MCP server's token_env
+// and secret_env, a peer's token), which are theirs alone. The rest it
+// keeps, since a key helper may need its own session's variables.
+func runKeyCommand(ctx context.Context, argv []string, echo io.Writer, scrub []string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, keyCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if len(scrub) > 0 {
+		cmd.Env = without(os.Environ(), scrub)
+	}
 	var out bytes.Buffer
 	errTail := &tail{max: stderrTail}
 	cmd.Stdout = &out

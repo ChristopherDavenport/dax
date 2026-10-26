@@ -253,8 +253,9 @@ func boxHostOf(cfgPath, dir string) (*config.BoxSettings, []string, []string, er
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	key := user.APIKeyEnv
-	env := tool.ChildEnv(os.Environ(), pass, key)
+	// The launcher gets none of the session's credentials: not the
+	// key, nor a server's or a peer's, which are theirs alone.
+	env := tool.ChildEnv(os.Environ(), pass, append([]string{user.APIKeyEnv}, user.Credentials()...)...)
 	return bs, argv, env, nil
 }
 

@@ -125,6 +125,10 @@ type Spec struct {
 	// error when KeyCommand fails or its key is refused; empty leaves
 	// the error a general word about signing in.
 	KeyLogin string
+	// KeyScrub names the variables KeyCommand's environment loses: the
+	// session's other credentials (each MCP server's token_env and
+	// secret_env, each peer's token), which are theirs alone.
+	KeyScrub []string
 	// SessionHeader names the header each request carries the ID of
 	// its run's session in, for a server that groups calls or keys a
 	// prompt cache by session; empty sends none. A sub-agent's
@@ -230,7 +234,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		// The key comes from the command, so there is no variable for
 		// the children's environment to be kept free of.
 		m.KeyEnv = ""
-		keys = newKeySource(spec.KeyCommand, spec.KeyLogin)
+		keys = newKeySource(spec.KeyCommand, spec.KeyLogin, spec.KeyScrub)
 		m.KeyStderr = keys.setEcho
 		// Run it now, so a command that cannot print a key is an error
 		// before any request, as a missing variable is.
