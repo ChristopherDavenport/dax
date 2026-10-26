@@ -5,6 +5,18 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.6,
+  up from v0.0.5, whose `remote` adds `WithMaxTransfers` and
+  `Handler.Lease()` and drops `BearerTokens` and `WithBearerToken`;
+  agentsession v0.0.29, up from v0.0.28, and agentturn,
+  agentturn/session, agentturn/front/a2a and agentturn/tools/a2a
+  v0.0.33, up from v0.0.32, which drop their own bearer-token helpers
+  too (dax never used them: `internal/authn` is its check). front/a2a's
+  `New` now refuses an `Authenticator` with a scheme and no name; dax's
+  names it `bearer`.
+
 ## v0.0.28 - 2026-10-25
 
 - Added: `dax workspace`, a mode with flags of its own that reads no
