@@ -642,10 +642,14 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
 	if errors.Is(err, wsremote.ErrForbidden) {
-		// A served workspace that grants no read (its servers alone):
-		// the session reads no file there, its project's config
-		// among them, and its tools can touch none for a rule to
-		// tighten.
+		if !config.ServersOnly(view) {
+			// The session would act there under none of the project's
+			// rules, which only tighten.
+			return config.Settings{}, fmt.Errorf("%s: the workspace lets the session act in it but not read its project's config, whose rules would then not apply; grant read too (dax workspace refuses write or exec without it): %w", from, err)
+		}
+		// A served workspace granted its servers alone: the session
+		// reads no file there and its tools touch none for a rule to
+		// tighten; the session says the config was left out.
 		proj, err = config.Layer{Project: true}, nil
 	}
 	if err != nil {

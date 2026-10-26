@@ -336,6 +336,8 @@ func TestValidation(t *testing.T) {
 		{"mcp secret_env the workspace's token", `{"mcp_servers":{"a":{"command":"x","secret_env":["DAX_WORKSPACE_TOKEN"]}}}`, false, "DAX_WORKSPACE_TOKEN is a served workspace's token"},
 		{"mcp secret_env the hub's token", `{"mcp_servers":{"a":{"command":"x","secret_env":["DAX_TUNNEL_TOKEN"]}}}`, false, "DAX_TUNNEL_TOKEN is a served workspace's token"},
 		{"mcp description with a control character", `{"mcp_servers":{"a":{"command":"x","description":"one\u001b[2Jtwo"}}}`, false, "holds a control character"},
+		{"mcp secret_env in the workspace", `{"mcp_servers":{"a":{"command":"x","secret_env":["GH_TOKEN"]}}}`, false, `mcp_servers.a: secret_env: a secret is never sent to a workspace; set "in": "host"`},
+		{"mcp secret_env in the workspace, said", `{"mcp_servers":{"a":{"command":"x","in":"workspace","secret_env":["GH_TOKEN"]}}}`, false, "a secret is never sent to a workspace"},
 		{"mcp description too long", `{"mcp_servers":{"a":{"command":"x","description":"` + strings.Repeat("d", MaxDescriptionBytes+1) + `"}}}`, false, "description: 1025 bytes; at most 1024"},
 	}
 	for _, tc := range tests {
@@ -356,14 +358,14 @@ func TestValidation(t *testing.T) {
 // both and they reach the settings; a project's server may describe
 // itself, and name no secret (TestValidation).
 func TestMCPDescriptionAndSecretEnvPrecedence(t *testing.T) {
-	user := parse(t, `{"mcp_servers":{"gh":{"command":"gh-mcp","description":"GitHub","secret_env":["GH_TOKEN","GH_HOST_TOKEN"]}}}`, false)
+	user := parse(t, `{"mcp_servers":{"gh":{"command":"gh-mcp","in":"host","description":"GitHub","secret_env":["GH_TOKEN","GH_HOST_TOKEN"]}}}`, false)
 	proj := parse(t, `{"mcp_servers":{"lint":{"command":"lint-mcp","description":"the linter"}}}`, true)
 	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []MCP{
-		{Name: "gh", Command: "gh-mcp", Description: "GitHub", SecretEnv: []string{"GH_TOKEN", "GH_HOST_TOKEN"}},
+		{Name: "gh", Command: "gh-mcp", In: MCPInHost, Description: "GitHub", SecretEnv: []string{"GH_TOKEN", "GH_HOST_TOKEN"}},
 		{Name: "lint", Command: "lint-mcp", Description: "the linter", Project: true},
 	}
 	if !reflect.DeepEqual(s.MCP, want) {
@@ -371,10 +373,32 @@ func TestMCPDescriptionAndSecretEnvPrecedence(t *testing.T) {
 	}
 }
 
+// A layer built other than by Parse is held to secret_env's rules in
+// Resolve: a server on this machine alone, never a project's.
+func TestSecretEnvRefusedInResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		l    Layer
+		want string
+	}{
+		{"in the workspace", Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", SecretEnv: []string{"S"}}}}}, "a secret is never sent to a workspace"},
+		{"a url", Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {URL: "https://mcp.example/", SecretEnv: []string{"S"}}}}}, "secret_env is for a command"},
+		{"a project's", Layer{Project: true, Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", In: MCPInHost, SecretEnv: []string{"S"}}}}}, "a project file may not name your secrets"},
+	} {
+		if _, err := Resolve([]Layer{tc.l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	ok := Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", In: MCPInHost, SecretEnv: []string{"S"}}}}}
+	if _, err := Resolve([]Layer{ok}, Flags{}, ""); err != nil {
+		t.Errorf("on the host: %v", err)
+	}
+}
+
 // A server's secret_env is its own: no other credential's variable,
 // and none a pass list hands every child.
 func TestSecretEnvOverlaps(t *testing.T) {
-	gh := `"gh":{"command":"gh-mcp","secret_env":["S"]}`
+	gh := `"gh":{"command":"gh-mcp","in":"host","secret_env":["S"]}`
 	for _, tc := range []struct {
 		name, json, want string
 	}{
@@ -392,7 +416,7 @@ func TestSecretEnvOverlaps(t *testing.T) {
 			}
 		})
 	}
-	if _, err := Resolve([]Layer{parse(t, `{"mcp_servers":{`+gh+`,"other":{"command":"x","secret_env":["S"]}}}`, false)}, Flags{}, ""); err != nil {
+	if _, err := Resolve([]Layer{parse(t, `{"mcp_servers":{`+gh+`,"other":{"command":"x","in":"host","secret_env":["S"]}}}`, false)}, Flags{}, ""); err != nil {
 		t.Errorf("two servers given one secret: %v", err)
 	}
 }
@@ -426,6 +450,9 @@ func TestParseOffered(t *testing.T) {
 		{"a bad secret_env", `{"mcp_servers":{"gh":{"command":"x","secret_env":["A-B"]}}}`, `secret_env: "A-B" is not a variable name`},
 		{"the workspace's token", `{"mcp_servers":{"gh":{"command":"x","secret_env":["DAX_WORKSPACE_TOKEN"]}}}`, "a served workspace's token"},
 		{"trailing data", `{"mcp_servers":{"gh":{"command":"x"}}} {}`, "trailing data"},
+		{"a server twice", `{"mcp_servers":{"gh":{"command":"x","secret_env":["T"]},"gh":{"command":"y"}}}`, `"gh" is given twice`},
+		{"a field twice", `{"mcp_servers":{"gh":{"command":"x","command":"y"}}}`, `"command" is given twice`},
+		{"mcp_servers twice", `{"mcp_servers":{"gh":{"command":"x"}},"mcp_servers":{}}`, `"mcp_servers" is given twice`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := ParseOffered([]byte(tc.json), "servers.json"); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "servers.json") {

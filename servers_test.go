@@ -244,6 +244,7 @@ func TestAWorkspaceOffersItsServers(t *testing.T) {
 func TestOfferingServersRefuses(t *testing.T) {
 	home(t)
 	t.Setenv(testSecretEnv, testSecret)
+	t.Setenv("DAX_SHORT_SECRET", "a1b2c3")
 	t.Setenv(config.TunnelTokenEnv, tunnelToken)
 	plain, holding := writeServers(t), writeServers(t, testSecretEnv)
 	file := func(json string) string {
@@ -263,17 +264,29 @@ func TestOfferingServersRefuses(t *testing.T) {
 		{[]string{"-servers", "/nonexistent/servers.json"}, "workspace: -servers: open /nonexistent/servers.json"},
 		{[]string{"-scopes", "read,servers"}, "-scopes servers: the workspace offers none; name them with -servers FILE"},
 		{[]string{"-servers", plain, "-scopes", "read,exec"}, "-scopes does not grant servers"},
-		{[]string{"-servers", holding}, "server p holds secrets (secret_env), which a session granted exec could take"},
-		{[]string{"-servers", holding, "-scopes", "servers,exec"}, "granted exec could take"},
+		{[]string{"-servers", holding, "-listen", "127.0.0.1:0"}, "server p holds secrets (secret_env), which a session granted exec could take"},
+		{[]string{"-scopes", "write"}, "-scopes: write without read: the session would act on files it may not read"},
+		{[]string{"-scopes", "exec", "-listen", "127.0.0.1:0"}, "-scopes: exec without read"},
+		{[]string{"-servers", plain, "-scopes", "servers,exec"}, "-scopes: exec without read"},
+		{[]string{"-servers", plain, "-scopes", "servers,write"}, "-scopes: write without read"},
+		{append([]string{"-servers", plain, "-scopes", "servers,write"}, hub...), "-scopes: write without read"},
+		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["` + testSecretEnv + `"]},"sh":{"command":"sh-mcp"}}}`), "-scopes", "servers", "-listen", "127.0.0.1:0"}, "server p holds secrets (secret_env), and a secret holder is offered alone"},
+		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["` + testSecretEnv + `"]},"p":{"command":"y"}}}`), "-scopes", "servers"}, `"p" is given twice`},
+		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["DAX_SHORT_SECRET"]}}}`), "-scopes", "servers", "-listen", "127.0.0.1:0"}, "server p: secret_env DAX_SHORT_SECRET is shorter than 8 bytes"},
+		{[]string{"-servers", holding, "-scopes", "read,servers,exec"}, "granted exec could take"},
 		{[]string{"-servers", holding, "-scopes", "read,write,servers"}, "granted write could take"},
 		{append([]string{"-servers", holding}, hub...), "server p holds secrets"},
-		{append([]string{"-servers", holding, "-scopes", "servers,exec"}, hub...), "granted exec could take"},
+		{append([]string{"-servers", holding, "-scopes", "read,servers,exec"}, hub...), "granted exec could take"},
 		{[]string{"-servers", holding, "-scopes", "servers", "-pass-env", testSecretEnv}, "-pass-env: " + testSecretEnv + " is server p's secret (secret_env)"},
 		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["DAX_WORKSPACE_TOKEN"]}}}`), "-scopes", "servers"}, "DAX_WORKSPACE_TOKEN is a served workspace's token"},
 		{[]string{"-servers", file(`{"mcp_servers":{"p":{"command":"x","secret_env":["DAX_UNSET_SECRET"]}}}`), "-scopes", "servers", "-listen", "127.0.0.1:0"}, "server p: secret_env DAX_UNSET_SECRET is not set"},
 		{[]string{"-scopes", "read,admin"}, `-scopes: no scope "admin"; want read, write, exec and servers`},
 	} {
-		err := run(context.Background(), append([]string{"workspace"}, tc.args...), program{name: "dax"})
+		// Bounded, so a grant wrongly taken fails here rather than
+		// serving until the test's end.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := run(ctx, append([]string{"workspace"}, tc.args...), program{name: "dax"})
+		cancel()
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: err = %v, want %q", tc.args, err, tc.want)
 		}
@@ -315,5 +328,73 @@ func TestScopesApplyToListen(t *testing.T) {
 	d := serveWorkspace(t, t.TempDir(), nil)
 	if !strings.Contains(d.out.String(), ", which may read, write, exec\n") {
 		t.Errorf("the default start line: %q", d.out.String())
+	}
+}
+
+// A grant of exec or write without read would act on the project under
+// none of its rules, which only tighten: dax workspace refuses it, and a
+// session over another server granting it fails at the project's
+// config rather than starting without it; a servers-only grant, which
+// can touch nothing, starts with the config left out.
+func TestAGrantWithoutReadKeepsTheProjectsRules(t *testing.T) {
+	home(t)
+	t.Setenv(testMCPServerEnv, "1")
+	offered, err := readOffered(writeServers(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := loadUser("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		scopes []wsremote.Scope
+		want   string
+	}{
+		{[]wsremote.Scope{wsremote.ScopeServers, wsremote.ScopeExec}, "exec without read"},
+		{[]wsremote.Scope{wsremote.ScopeServers, wsremote.ScopeWrite}, "write without read"},
+		{[]wsremote.Scope{wsremote.ScopeServers}, ""},
+	} {
+		w := &workspaceServer{scopes: tc.scopes, offered: offered}
+		if err := w.settle(); (err == nil) != (tc.want == "") || err != nil && !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: settle = %v, want %q", tc.scopes, err, tc.want)
+		}
+		// The same grant from a server dax does not run.
+		dir := t.TempDir()
+		write(t, filepath.Join(dir, ".dax", "config.json"), `{"policy":{"deny":["bash"]}}`)
+		local, err := workspace.NewLocal(dir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := offer.Offer(local, offered, os.LookupEnv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const token = "the-served-token"
+		h, err := wsremote.NewHandler(o, wsremote.WithAuthenticator(authn.New(map[string]wsremote.Principal{
+			token: {Name: "dax", Scopes: tc.scopes},
+		}).Authenticator(wsremote.ErrUnauthenticated)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewServer(h)
+		ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: srv.URL}, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := projectSettings("-workspace", ws, user, config.Flags{})
+		switch {
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), "grant read too")):
+			t.Errorf("%v: the project's settings %v, %v; want refused", tc.scopes, st.Policy.Project.Deny, err)
+		case tc.want == "" && (err != nil || len(st.Policy.Project.Deny) != 0):
+			t.Errorf("%v: servers alone: %v, %v", tc.scopes, st.Policy.Project.Deny, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, ".dax", "config.json")); statErr != nil {
+			t.Errorf("%v: the probe touched the project: %v", tc.scopes, statErr)
+		}
+		ws.Close()
+		srv.Close()
+		h.Close()
+		o.Close()
 	}
 }

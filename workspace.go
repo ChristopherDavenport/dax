@@ -200,7 +200,10 @@ func readOffered(file string) ([]offer.Server, error) {
 // settle fills in the default grant, read, write and exec, and servers
 // too when the workspace offers any, and refuses a grant that would
 // give a secret away or that does not match what is offered: servers
-// granted with nothing offered, or offered and not granted. A server
+// granted with nothing offered, or offered and not granted; write or
+// exec without read, under which the session would act on files whose
+// project rules it cannot read; and a secret holder offered beside
+// another server, which runs as its user beside it. A server
 // that holds secrets (secret_env) is offered only to a grant holding
 // neither exec nor write: with exec the session reads a running
 // server's environment through /proc, and with write it changes the
@@ -214,6 +217,14 @@ func (w *workspaceServer) settle() error {
 		}
 	}
 	grants := slices.Contains(w.scopes, wsremote.ScopeServers)
+	reads := slices.Contains(w.scopes, wsremote.ScopeRead)
+	for _, sc := range []wsremote.Scope{wsremote.ScopeWrite, wsremote.ScopeExec} {
+		if slices.Contains(w.scopes, sc) && !reads {
+			// The session would act on the project unable to read its
+			// config, whose rules would then not apply.
+			return fmt.Errorf("workspace: -scopes: %s without read: the session would act on files it may not read, its project's rules among them; add read", sc)
+		}
+	}
 	switch {
 	case grants && len(w.offered) == 0:
 		return errors.New("workspace: -scopes servers: the workspace offers none; name them with -servers FILE")
@@ -223,6 +234,12 @@ func (w *workspaceServer) settle() error {
 	for _, o := range w.offered {
 		if len(o.SecretEnv) == 0 {
 			continue
+		}
+		if len(w.offered) > 1 {
+			// Every server runs as the same user, in the same directory:
+			// one that runs commands or writes files would hand the
+			// session the secret through /proc or the holder's code.
+			return fmt.Errorf("workspace: -servers: server %s holds secrets (secret_env), and a secret holder is offered alone, as the box host offers each unit in a container of its own: the others run beside it as its user, and one that runs a command or writes a file reads its secret; give it a -servers file and a dax workspace of its own", o.Name)
 		}
 		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite} {
 			if slices.Contains(w.scopes, sc) {

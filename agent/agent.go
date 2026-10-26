@@ -39,6 +39,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/mcpworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -255,13 +256,15 @@ type MCPServer struct {
 	// session sets it, never a caller.
 	offered bool
 	// SecretEnv names variables a command's server is given from this
-	// process's environment, wherever it is placed, which every other
-	// child of the session loses (Secrets): it is started as a
-	// workspace's offered server is (agentworkspace's Offer), its
-	// output, standard output and standard error, redacted of their
-	// values before the session reads any of it. Not for a project's
-	// server or a URL, and none may be KeyEnv, a TokenEnv, a pass list's
-	// or a served workspace's token variable.
+	// process's environment, which every other child of the session
+	// loses (Secrets): it is started as a workspace's offered server is
+	// (agentworkspace's Offer), its output, standard output and standard
+	// error, redacted of their values before the session reads any of
+	// it. A secret stays on the machine whose environment holds it, so
+	// such a server must be placed on this machine (Host), never in a
+	// workspace; not for a project's server or a URL; and none may be
+	// KeyEnv, a TokenEnv, an extension's secret, a pass list's or a
+	// served workspace's token variable.
 	SecretEnv []string
 }
 
@@ -467,6 +470,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		o.Description = "An agent built on dax."
 	}
 	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
+	// A servers-only workspace's project config was not read either
+	// (the program reading it leaves it out the same way); say so, as
+	// for its AGENTS.md.
+	if serversOnly(ws) {
+		if _, err := fs.Stat(ws.FS(), "."); errors.Is(err, remote.ErrForbidden) {
+			s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
+		}
+	}
 	s.live.think, s.live.main = o.Think, o.Model
 	ok := false
 	defer func() {
@@ -569,6 +580,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("the workspace's MCP servers: %w", err)
 		}
 		for _, u := range list {
+			// One name offered twice would be two servers under one
+			// prefix, and one's rules the other's.
+			if slices.Contains(s.offered, u.Name) {
+				return nil, fmt.Errorf("the workspace offers two MCP servers called %s", u.Name)
+			}
 			s.offered = append(s.offered, u.Name)
 			offered = append(offered, MCPServer{Name: u.Name, Description: u.Description, offered: true})
 		}
@@ -1261,30 +1277,32 @@ func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
 const heldServer = "server"
 
 // mcpHolding is the dial of a command's server that holds secrets
-// (MCPServer.SecretEnv), placed as any command is: in the workspace
-// when it can start a process and on this machine otherwise, or here
-// when it is placed on the host. It is started as a workspace's offered
-// server is, by internal/offer, the path dax workspace -servers offers
-// its servers through: given the variables from this process's
-// environment, which no other child gets, and read through the secrets
-// filter, so what it writes reaches the session, the model and the
-// record redacted of their values. A variable that is not set fails the
-// session before anything starts.
+// (MCPServer.SecretEnv), which runs on this machine alone, placed on
+// the host (checkSecretEnv): a secret stays on the machine whose
+// environment holds it, and is never sent to a workspace, where the
+// session's own bash would run beside the server as its user. It is
+// started as a workspace's offered server is, by internal/offer, the
+// path dax workspace -servers offers its servers through, in this
+// machine's working directory (hostStarter): given the variables from
+// this process's environment, which no other child gets, and read
+// through the secrets filter, so what it writes reaches the session,
+// the model and the record redacted of their values. A variable that
+// is not set, or is too short to redact, fails the session before
+// anything starts.
 func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
 	for _, v := range m.SecretEnv {
-		if os.Getenv(v) == "" {
+		switch value := os.Getenv(v); {
+		case value == "":
 			return nil, fmt.Errorf("secret_env %s is not set; the server is not started without it", v)
+		case len(value) < offer.MinSecretBytes:
+			return nil, fmt.Errorf("secret_env %s is shorter than %d bytes, too short to redact without breaking the server's own messages", v, offer.MinSecretBytes)
 		}
 	}
-	st, ok := s.ws.(workspace.Starter)
-	if m.Host || !ok {
-		h, err := s.hostStarter()
-		if err != nil {
-			return nil, err
-		}
-		st = h
+	h, err := s.hostStarter()
+	if err != nil {
+		return nil, err
 	}
-	o, err := offer.Offer(st, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, os.LookupEnv)
+	o, err := offer.Offer(h, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, os.LookupEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -1314,11 +1332,14 @@ func (s *Session) hostStarter() (*workspace.Local, error) {
 }
 
 // checkSecretEnv refuses a server's SecretEnv that a project's config
-// gave, that is for a URL, or that names another credential's variable
-// (the model's key, a server's token, a served workspace's or hub's
+// gave, that is for a URL, that is for a server not placed on this
+// machine (a secret is never sent to a workspace: config.SecretInWorkspace),
+// or that names another credential's variable (the model's key, a
+// server's token, an extension's secret, a served workspace's or hub's
 // token) or one PassEnv hands every child: each would give a secret to
 // what should not have it.
 func checkSecretEnv(o Options) error {
+	extSecrets := extension.SecretsOf(o.Extensions)
 	for _, m := range o.MCP {
 		if len(m.SecretEnv) == 0 {
 			continue
@@ -1328,6 +1349,8 @@ func checkSecretEnv(o Options) error {
 			return fmt.Errorf("mcp %s: secret_env: a project's server is given none of your secrets", m.Name)
 		case m.URL != "":
 			return fmt.Errorf("mcp %s: secret_env is for a command; a URL's token goes in token_env", m.Name)
+		case !m.Host:
+			return config.SecretInWorkspace(m.Name)
 		}
 		for _, v := range m.SecretEnv {
 			why := ""
@@ -1342,6 +1365,8 @@ func checkSecretEnv(o Options) error {
 				why = "is in PassEnv, which hands it to every child"
 			case slices.ContainsFunc(o.MCP, func(t MCPServer) bool { return t.TokenEnv == v }):
 				why = "is a server's token_env"
+			case slices.Contains(extSecrets, v):
+				why = "is an extension's secret"
 			}
 			if why != "" {
 				return fmt.Errorf("mcp %s: secret_env %s %s; name a variable of the server's own", m.Name, v, why)
