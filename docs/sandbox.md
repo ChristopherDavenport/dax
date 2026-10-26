@@ -214,7 +214,9 @@ reads the box host's own environment; `command:` runs the line with
 `sh` there and takes its output, trimmed; `file:` reads the file. A
 secret that cannot be resolved fails the unit's start, naming the
 secret and its reference, before anything is made. The workspace's
-bash never sees a unit's secret: they are in different containers.
+bash never sees a unit's secret: they are in different containers. Nor
+does it see your own: a server your config gives `secret_env` runs on
+your machine (`"in": "host"`), never in the box.
 
 A local box host is started from your session's environment less its
 credentials, so a variable an `env:` secret reads must be named for
@@ -1241,8 +1243,89 @@ its workspace or not at all, so a trusted one fails the session's start,
 saying so, as with an executor that cannot start a process. The MCP
 trust records where the servers run, so a set trusted while they ran
 in the workspace is not trusted to run here. The start line says so
-(`starts no process there`). `dax workspace`'s own token always holds
-`exec`.
+(`starts no process there`). `dax workspace`'s token holds what
+`-scopes` grants, `read`, `write` and `exec` by default (see
+[Scopes](#scopes)).
+
+### Where an MCP server runs
+
+An MCP server can run in four places, and its interface is one in all
+of them: the same tools, named `mcp__<name>__<tool>`, under the same
+rules, the same trust for a project's, restarted the same way when it
+ends, its standard error cleaned among the session's warnings, and its
+secrets (`secret_env`) given and redacted the same way. The session
+connects every one through one path (`mcpStart` in `agent/agent.go`);
+only how the process is reached differs.
+
+| Placement | Named by | Runs | Reached |
+|---|---|---|---|
+| at the control | your `mcp_servers` with `"in": "host"`, or any command when the workspace cannot start a process | on this machine, with its environment scrubbed | its pipes |
+| at a URL | `mcp_servers` with `url` | wherever it is served | streamable HTTP from this machine, its `token_env` sent to its origin alone |
+| a command in the workspace | `mcp_servers`' commands, `-mcp`, `/mcp add`, none holding a secret | in the workspace (served, tunnelled, an executor's, a box's), at its root with its environment | the workspace's process, over whatever wire the workspace rides |
+| offered by the workspace | the workspace: `dax workspace -servers`, a box host's units | where the workspace runs it | started by name there (`workspace.ServerProvider`), over the same wire |
+
+One definition moves between them unchanged: an entry of your
+`mcp_servers` is an entry of a `-servers` file. Its `secret_env` means
+the same in both, under one rule: **a secret stays on the machine whose
+environment holds it, and its server runs and is filtered there.** The
+process that starts the server (dax, or `dax workspace`) gives it those
+variables from its own environment and no other child, and reads what
+it writes through agentredact's `secrets` filter (agentworkspace's
+`Offer` with `WithOutputFilter`, as the box host redacts a unit's;
+standard error cleaned of terminal controls, then redacted again), so
+the value is `[REDACTED NAME]` before the session, the model or the
+record sees it. In your config that means `"in": "host"`: a secret
+holder runs on this machine, never in a workspace, whatever the
+workspace, executor or box, since the session's own bash runs in a
+workspace as its user and reads a running process's environment from
+`/proc`; a `secret_env` server placed in one is refused. A secret
+another machine holds is that machine's to offer, with `dax workspace
+-servers` there, where the value never leaves it.
+
+### Scopes
+
+`-scopes` is the grant of the one token, set the same way for
+`-listen` and `-connect`:
+
+| scope | the session may |
+|---|---|
+| `read` | read the files: the tools' reads, the checks' stats and globs, the project's `AGENTS.md`, skills and config |
+| `write` | write and remove files |
+| `exec` | run commands and start processes: bash, the git-config check, its own MCP servers there |
+| `servers` | list and start the servers `-servers` offers, and talk to them over their pipes, and nothing else |
+
+The default is `read,write,exec`, and `servers` too when `-servers`
+offers any. `servers` is refused with nothing offered, and `-servers`
+without `servers` granted. No scope implies another, but `write` and
+`exec` each need `read`: a session that acts on the project must read
+its rules, which only tighten. Under `servers` alone the session
+dials, reads no file (every file tool fails as forbidden, and the
+project's `AGENTS.md`, skills and config are not read, each with an
+`omitted:` line: no layer of the project's applies, since nothing
+there can be touched), starts no command (bash fails as forbidden) and
+is told the directory's last name, not its path. A workspace another
+program serves that refuses the session its project's config but lets
+it run commands or write there fails the session's start.
+
+Your rules match an offered server by its name, whatever workspace
+offers it: a rule for `mcp__gh__*` covers the `gh` any workspace you
+connect to offers, a box host's units, a served workspace's or a hub's.
+A workspace that lists one name twice is refused.
+
+A server that holds secrets is offered only to a grant without `exec`
+and `write`, and alone, beside no other server, and `dax workspace`
+refuses any other offer before it serves or dials: every server it
+offers runs as its user in its directory, so one that runs a command
+or writes a file would read the holder's secret too. The redaction covers what the server writes and nothing else:
+with `exec` the session runs commands as the server's user and reads a
+running server's environment from `/proc/<pid>/environ`; with `write`
+it changes the server's code, config or `PATH` in the directory and
+has it print the secret in an encoding the filter does not know. So
+offer a secret-holding server from a workspace of its own, with
+`-scopes servers` (and `read`, when the session should read what is
+there), beside the workspace the session's tools act in. (A session
+holds one workspace, so today that is the session's whole workspace:
+see [Limits](#limits).)
 
 ### Sessions and memory
 
@@ -1281,7 +1364,7 @@ over `-workspace`; only who dials whom differs.
 | Who dials | the session dials the workspace | the workspace dials the session's hub |
 | Who listens, and needs a certificate off loopback | the workspace's host | the session's machine |
 | The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends; the workspace sends it, the hub checks it |
-| What the session may do | read, write and exec, always | `-scopes`, set at the workspace's end; all three by default |
+| What the session may do | `-scopes`, set at the workspace's end; read, write and exec by default | the same |
 | Its identity | the URL | `http://<name>.tunnel.invalid` |
 
 The session's machine, in your config:
@@ -1328,9 +1411,10 @@ roots or, with `-tls-ca`, that certificate in their place (as
 refused), or `ws://` to a loopback host alone, and follows no redirect. It sends `$DAX_TUNNEL_TOKEN` in
 the upgrade's `Authorization` header and nowhere else, takes it out of
 its environment before the workspace starts any process, refuses
-`-pass-env` naming it, and never prints it. `-scopes` (`read`, `write`,
-`exec`, comma-separated; default all three) is what the session may do
-there, decided at the workspace's end: without `exec` the workspace
+`-pass-env` naming it, and never prints it. `-scopes` ([Scopes](#scopes),
+as `-listen`'s) is what the session may do there, decided at the
+workspace's end, and `-servers` offers servers through the hub as at
+an address: without `exec` the workspace
 starts no process, so bash fails as forbidden, your MCP servers run on
 the session's machine and the project's not at all, as with a token
 without `exec` above. The hub enrolls the one token as the one name
@@ -1419,9 +1503,12 @@ are left to the host's lease.
   connection drops, without what they held.
 - A call in flight when the connection breaks fails, and is not sent
   again.
-- No offered MCP servers: `dax workspace` serves a `workspace.Local`,
-  and a workspace's own servers (`workspace.ServerProvider`, a box
-  host's units) are not carried over HTTP yet, nor through a tunnel.
+- One workspace a session: a secret-holding server offered under
+  `servers` alone is the session's whole workspace, so its tools have
+  no files there to act on. A second connection beside the session's
+  workspace, for its offered servers alone, is not built yet.
+- A box host's units are offered through the box's executor alone;
+  `dax box serve` does not serve them over `remote` (dax#106).
 - A hub is one session's: it holds one workspace, under the one name
   its token enrolls, and ends with the session. `dax serve` does not
   host a hub for several sessions yet.

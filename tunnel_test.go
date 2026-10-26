@@ -33,8 +33,13 @@ import (
 // testMCPServerEnv set to 1 makes the test binary serveTestMCP.
 const testMCPServerEnv = "DAX_TEST_MCP_SERVER"
 
-// serveTestMCP is a stdio MCP server with one tool, where, which says
-// the directory it runs in and its process id.
+// testSecretEnv is the variable serveTestMCP's secret tool reports.
+const testSecretEnv = "DAX_TEST_SECRET"
+
+// serveTestMCP is a stdio MCP server with two tools: where, which says
+// the directory it runs in and its process id, and secret, which writes
+// testSecretEnv's value to its standard error, a line ending "end", and
+// returns it.
 func serveTestMCP() int {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
 	sdk.AddTool(srv, &sdk.Tool{Name: "where", Description: "report where the server runs"},
@@ -42,6 +47,12 @@ func serveTestMCP() int {
 			wd, _ := os.Getwd()
 			text := "dir=[" + wd + "] pid=[" + strconv.Itoa(os.Getpid()) + "]"
 			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}, struct{}{}, nil
+		})
+	sdk.AddTool(srv, &sdk.Tool{Name: "secret", Description: "report the secret"},
+		func(context.Context, *sdk.CallToolRequest, struct{}) (*sdk.CallToolResult, struct{}, error) {
+			v := os.Getenv(testSecretEnv)
+			os.Stderr.WriteString("stderr secret=[" + v + "] end\n")
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: "secret=[" + v + "]"}}}, struct{}{}, nil
 		})
 	if err := srv.Run(context.Background(), &sdk.StdioTransport{}); err != nil {
 		return 1
@@ -137,7 +148,6 @@ func TestConnectingAWorkspaceRefuses(t *testing.T) {
 		{[]string{"-connect", "wss://box.example/tunnel", "-pass-env", "DAX_TUNNEL_TOKEN"}, tunnelToken, "-pass-env: DAX_TUNNEL_TOKEN is this server's token"},
 		{[]string{"-connect", "ws://127.0.0.1:7780/tunnel", "-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca is for a wss:// hub"},
 		{[]string{"-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca goes with -connect"},
-		{[]string{"-scopes", "read"}, tunnelToken, "-scopes goes with -connect"},
 	} {
 		t.Setenv(config.TunnelTokenEnv, tc.token)
 		err := run(context.Background(), append([]string{"workspace"}, tc.args...), program{name: "dax"})

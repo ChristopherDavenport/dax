@@ -382,7 +382,9 @@ names the file and the field.
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
-| `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp` |
+| `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
+| `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
+| `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN` or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
@@ -492,7 +494,10 @@ them; unset one before starting dax to keep it from commands.
 
 A command that needs a scrubbed variable (`gh`, a private module proxy)
 gets it by name from your config: `"pass_env": ["GITHUB_TOKEN"]`. Only
-your own config can say that.
+your own config can say that. An MCP server that needs one names it in
+its own `secret_env` instead, with `"in": "host"`: that server alone
+is given it, on this machine, and its value is redacted from what the
+server writes.
 
 ## The tools in a sandbox: `dax execute`
 
@@ -751,10 +756,13 @@ DAX_WORKSPACE_TOKEN=... dax -workspace http://127.0.0.1:7779
 | `-dir DIR` | the directory to serve; default the current one |
 | `-listen ADDR` | where to serve; default `127.0.0.1:7779`, port 0 picks one. A loopback address unless `-tls-cert` and `-tls-key` are given |
 | `-tls-cert FILE`, `-tls-key FILE` | serve HTTPS with this certificate and key (PEM); then `-listen` may be any address |
-| `-pass-env NAME,NAME` | credential-looking variables the workspace's commands keep anyway, as `dax execute`'s |
+| `-pass-env NAME,NAME` | credential-looking variables the workspace's commands keep anyway, as `dax execute`'s; not a served server's `secret_env` |
+| `-scopes read,write,exec` | what the token's holder may do here, the same at an address and through a hub: `read` the files, `write` them, `exec` commands (bash and the session's own MCP servers), `servers` the MCP servers `-servers` offers. Default `read,write,exec`, and `servers` too with `-servers`. `write` and `exec` need `read`: the session must read the project's rules where it acts. Without `exec`, bash and every command fail as forbidden, and the session's own MCP servers run on its machine; without `read`, every file tool fails as forbidden, the project's `AGENTS.md`, skills and config are not read, and the session is told the directory's last name alone |
+| `-servers FILE` | MCP servers to offer the session, in your config's shape, `{"mcp_servers": {"<name>": {...}}}` (see [Offering MCP servers](#offering-mcp-servers-dax-workspace--servers)) |
 
 It reads no config. Every request needs its one token, whose holder may
-read and write the directory and run any command as its user there:
+do what `-scopes` grants, by default read and write the directory and
+run any command as its user there:
 `$DAX_WORKSPACE_TOKEN` (at least 32 bytes, and not one `-pass-env`
 may name), or one it makes and writes to a file only you can read
 under `~/.dax/serve`, removed when it stops; it prints the file's path,
@@ -777,9 +785,67 @@ its sessions without connecting. The project's `AGENTS.md`,
 `.dax/skills` and `.dax/config.json` are the served directory's, read
 through it; your MCP servers start there, through the workspace (a
 token without `exec` cannot start them, and then your own run here and
-the project's not at all). It
-serves this machine's directory alone: MCP servers a workspace offers
-of its own (a box host's units) do not cross the wire yet.
+the project's not at all). The servers the workspace offers of its
+own (`-servers`) are connected beside yours, as a box host's units
+are.
+
+### Offering MCP servers: `dax workspace -servers`
+
+An MCP server can run where the workspace is and be offered from
+there: `-servers FILE` names them in your config's own shape, each a
+command run in the served directory, at its root and with its
+environment. A session that dials the workspace, or whose hub it dials,
+connects each one it is granted (`servers`) beside its own, as
+`mcp__<name>__<tool>`, under your rules, restarted when it ends, its
+standard error among the session's warnings: the same server, with the
+same interface, as one your config names with a `command`. A name is 1
+to 32 lowercase letters, digits and inner hyphens, and no name of yours
+may be one the workspace offers. Your rules match an offered server by
+its name, whatever workspace offers it: an allow rule for
+`mcp__gh__*` covers the `gh` a served workspace or a hub's workspace
+offers, so allow an offered server's tools only for a workspace you
+trust to name its servers. An entry with a `url` or `"in":
+"host"` is refused: neither is the workspace's to run. The start line
+names each offered server and the variables it is given, never a value.
+
+A server that holds a token names it in `secret_env`. A secret stays on
+the machine whose environment holds it: `dax workspace` gives the
+server the value from its own environment, on its own host, no other
+process there gets it, and what the server writes is redacted of it
+there before a byte is served; the value itself never crosses the
+wire. Since a session that may run commands there could read a running
+server's environment (`/proc/<pid>/environ`), and one that may write
+could change the server's code or config to print the token past the
+redaction, `dax workspace` refuses to offer a secret-holding server
+under a grant with `exec` or `write`, and refuses to offer it beside
+any other server, which would run as its user beside it: serve it
+alone, from a `-servers` file and a `dax workspace` of its own, with
+`-scopes servers` (and `read`, if the session should read the files),
+as the box host gives each unit a container of its own.
+
+On the host that holds the token, `~/gh-servers.json`:
+
+```json
+{
+  "mcp_servers": {
+    "gh": { "command": "github-mcp-server stdio", "description": "GitHub, as me", "secret_env": ["GITHUB_PERSONAL_ACCESS_TOKEN"] }
+  }
+}
+```
+
+```sh
+GITHUB_PERSONAL_ACCESS_TOKEN=... dax workspace -dir ~/empty -listen 127.0.0.1:7781 -servers ~/gh-servers.json -scopes servers
+# dax workspace: serving /home/me/empty at http://127.0.0.1:7781, which may servers
+# dax workspace: offers MCP server gh: GitHub, as me (given $GITHUB_PERSONAL_ACCESS_TOKEN, redacted from its output)
+```
+
+A session started with `-workspace http://127.0.0.1:7781` (and its
+token) gets `mcp__gh__*` and nothing else there: the file tools fail as
+forbidden and bash has no process to start. The same entry, with
+`"in": "host"` added, in your own config's `mcp_servers` runs the
+server on your machine beside the session instead, with the token from
+your environment and the same redaction; and `-connect` offers it
+through a hub just the same.
 
 ### A workspace that dials in: `dax workspace -connect`
 
@@ -819,8 +885,7 @@ DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7
 |---|---|
 | `-connect URL` | dial the session's hub at this URL in place of `-listen`: `wss://`, or `ws://` to a loopback host alone, no user, password, query or fragment. Not with `-listen`, `-tls-cert` or `-tls-key` |
 | `-tls-ca FILE` | for a `wss://` hub, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots, as `workspace.tls_ca` and `attach -tls-ca` do; refused with `ws://` |
-| `-scopes read,write,exec` | what the session may do here; default all three, as `-listen`'s token grants. Without `exec`, bash and every command fail as forbidden, and the session's MCP servers run on its own machine |
-| `-dir`, `-pass-env` | as without `-connect` |
+| `-dir`, `-pass-env`, `-scopes`, `-servers` | as without `-connect`; `-scopes` is the grant the hub's session gets |
 
 The token is `$DAX_TUNNEL_TOKEN` at both ends, at least 32 bytes:
 `dax workspace -connect` sends it in the upgrade's `Authorization`

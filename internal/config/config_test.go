@@ -176,7 +176,7 @@ func TestMCPServersPlacementAndProject(t *testing.T) {
 		{Name: "gh", URL: "https://mcp.example/gh", TokenEnv: "GH_TOKEN"},
 		{Name: "lint", Command: "lint-mcp", Project: true},
 	}
-	if !slices.Equal(s.MCP, want) {
+	if !reflect.DeepEqual(s.MCP, want) {
 		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
 	}
 	for _, name := range []string{"gh", "gh_", "fs_"} {
@@ -333,6 +333,16 @@ func TestValidation(t *testing.T) {
 		{"peer bad relation", `{"peers":{"reviewer":{"url":"https://x.example","relation":"child"}}}`, false, `relation "child"`},
 		{"peer bad token_env", `{"peers":{"reviewer":{"url":"https://x.example","token_env":"MY-TOKEN"}}}`, false, `token_env: "MY-TOKEN" is not a variable name`},
 		{"peer token in the file", `{"peers":{"reviewer":{"url":"https://x.example","token":"abc"}}}`, false, `unknown field "token"`},
+		{"project mcp secret_env", `{"mcp_servers":{"a":{"command":"x","secret_env":["GH_TOKEN"]}}}`, true, "secret_env: a project file may not name your secrets"},
+		{"mcp secret_env with a url", `{"mcp_servers":{"a":{"url":"https://mcp.example/","secret_env":["GH_TOKEN"]}}}`, false, "secret_env is for a command; a url's token goes in token_env"},
+		{"mcp secret_env not a name", `{"mcp_servers":{"a":{"command":"x","secret_env":["GH-TOKEN"]}}}`, false, `secret_env: "GH-TOKEN" is not a variable name`},
+		{"mcp secret_env twice", `{"mcp_servers":{"a":{"command":"x","secret_env":["T","T"]}}}`, false, "secret_env: T is named twice"},
+		{"mcp secret_env the workspace's token", `{"mcp_servers":{"a":{"command":"x","secret_env":["DAX_WORKSPACE_TOKEN"]}}}`, false, "DAX_WORKSPACE_TOKEN is a served workspace's token"},
+		{"mcp secret_env the hub's token", `{"mcp_servers":{"a":{"command":"x","secret_env":["DAX_TUNNEL_TOKEN"]}}}`, false, "DAX_TUNNEL_TOKEN is a served workspace's token"},
+		{"mcp description with a control character", `{"mcp_servers":{"a":{"command":"x","description":"one\u001b[2Jtwo"}}}`, false, "holds a control character"},
+		{"mcp secret_env in the workspace", `{"mcp_servers":{"a":{"command":"x","secret_env":["GH_TOKEN"]}}}`, false, `mcp_servers.a: secret_env: a secret is never sent to a workspace; set "in": "host"`},
+		{"mcp secret_env in the workspace, said", `{"mcp_servers":{"a":{"command":"x","in":"workspace","secret_env":["GH_TOKEN"]}}}`, false, "a secret is never sent to a workspace"},
+		{"mcp description too long", `{"mcp_servers":{"a":{"command":"x","description":"` + strings.Repeat("d", MaxDescriptionBytes+1) + `"}}}`, false, "description: 1025 bytes; at most 1024"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -343,6 +353,114 @@ func TestValidation(t *testing.T) {
 			_, err := Parse([]byte(tc.json), path, tc.project)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// description and secret_env are the user's: the user's layer gives
+// both and they reach the settings; a project's server may describe
+// itself, and name no secret (TestValidation).
+func TestMCPDescriptionAndSecretEnvPrecedence(t *testing.T) {
+	user := parse(t, `{"mcp_servers":{"gh":{"command":"gh-mcp","in":"host","description":"GitHub","secret_env":["GH_TOKEN","GH_HOST_TOKEN"]}}}`, false)
+	proj := parse(t, `{"mcp_servers":{"lint":{"command":"lint-mcp","description":"the linter"}}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MCP{
+		{Name: "gh", Command: "gh-mcp", In: MCPInHost, Description: "GitHub", SecretEnv: []string{"GH_TOKEN", "GH_HOST_TOKEN"}},
+		{Name: "lint", Command: "lint-mcp", Description: "the linter", Project: true},
+	}
+	if !reflect.DeepEqual(s.MCP, want) {
+		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
+	}
+}
+
+// A layer built other than by Parse is held to secret_env's rules in
+// Resolve: a server on this machine alone, never a project's.
+func TestSecretEnvRefusedInResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		l    Layer
+		want string
+	}{
+		{"in the workspace", Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", SecretEnv: []string{"S"}}}}}, "a secret is never sent to a workspace"},
+		{"a url", Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {URL: "https://mcp.example/", SecretEnv: []string{"S"}}}}}, "secret_env is for a command"},
+		{"a project's", Layer{Project: true, Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", In: MCPInHost, SecretEnv: []string{"S"}}}}}, "a project file may not name your secrets"},
+	} {
+		if _, err := Resolve([]Layer{tc.l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+	ok := Layer{Config: Config{MCPServers: map[string]MCPServer{"gh": {Command: "x", In: MCPInHost, SecretEnv: []string{"S"}}}}}
+	if _, err := Resolve([]Layer{ok}, Flags{}, ""); err != nil {
+		t.Errorf("on the host: %v", err)
+	}
+}
+
+// A server's secret_env is its own: no other credential's variable,
+// and none a pass list hands every child.
+func TestSecretEnvOverlaps(t *testing.T) {
+	gh := `"gh":{"command":"gh-mcp","in":"host","secret_env":["S"]}`
+	for _, tc := range []struct {
+		name, json, want string
+	}{
+		{"the model's key", `{"provider":"openresponses","base_url":"https://x","api_key_env":"S","mcp_servers":{` + gh + `}}`, "secret_env: S is api_key_env, the model's key"},
+		{"a server's token_env", `{"mcp_servers":{` + gh + `,"u":{"url":"https://mcp.example/","token_env":"S"}}}`, "secret_env: S is MCP server u's token_env"},
+		{"a peer's token_env", `{"peers":{"reviewer":{"url":"https://x.example","token_env":"S"}},"mcp_servers":{` + gh + `}}`, "secret_env: S is peer reviewer's token_env"},
+		{"the workspace's token", `{"workspace":{"url":"https://box.example","token_env":"S"},"mcp_servers":{` + gh + `}}`, "secret_env: S is workspace.token_env"},
+		{"the hub's token", `{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","token_env":"S"}},"mcp_servers":{` + gh + `}}`, "secret_env: S is workspace.hub.token_env"},
+		{"pass_env", `{"pass_env":["S"],"mcp_servers":{` + gh + `}}`, "pass_env: S is MCP server gh's secret"},
+		{"executor.pass_env", `{"executor":{"command":"ssh host dax execute","pass_env":["S"]},"mcp_servers":{` + gh + `}}`, "executor.pass_env: S is MCP server gh's secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Resolve([]Layer{parse(t, tc.json, false)}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := Resolve([]Layer{parse(t, `{"mcp_servers":{`+gh+`,"other":{"command":"x","in":"host","secret_env":["S"]}}}`, false)}, Flags{}, ""); err != nil {
+		t.Errorf("two servers given one secret: %v", err)
+	}
+}
+
+// The -servers file is dax's own config shape holding mcp_servers
+// alone, each checked as the user's layer checks it, and refused where
+// a workspace cannot offer it: at a url, on the host, or under a name
+// it could not be offered by.
+func TestParseOffered(t *testing.T) {
+	got, err := ParseOffered([]byte(`{"mcp_servers":{"gh":{"command":"gh-mcp --stdio","description":"GitHub","secret_env":["GH_TOKEN"]},"fs":{"command":"fs-mcp","in":"workspace"}}}`), "servers.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]MCPServer{
+		"gh": {Command: "gh-mcp --stdio", Description: "GitHub", SecretEnv: []string{"GH_TOKEN"}},
+		"fs": {Command: "fs-mcp", In: MCPInWorkspace},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	for _, tc := range []struct{ name, json, want string }{
+		{"a url", `{"mcp_servers":{"gh":{"url":"https://mcp.example/"}}}`, "mcp_servers.gh: a server at a url is not the workspace's to offer"},
+		{"on the host", `{"mcp_servers":{"gh":{"command":"x","in":"host"}}}`, `mcp_servers.gh: in "host" places a server on the session's machine`},
+		{"an uppercase name", `{"mcp_servers":{"GitHub":{"command":"x"}}}`, "mcp_servers.GitHub: an offered server's name is 1 to 32 lowercase letters"},
+		{"an underscore", `{"mcp_servers":{"git_hub":{"command":"x"}}}`, "an offered server's name"},
+		{"a long name", `{"mcp_servers":{"` + strings.Repeat("a", 33) + `":{"command":"x"}}}`, "an offered server's name"},
+		{"another field", `{"model":"x","mcp_servers":{"gh":{"command":"x"}}}`, `unknown field "model"`},
+		{"none", `{"mcp_servers":{}}`, "no servers"},
+		{"nothing", `{}`, "no servers"},
+		{"no command", `{"mcp_servers":{"gh":{}}}`, "command or url is required"},
+		{"a bad secret_env", `{"mcp_servers":{"gh":{"command":"x","secret_env":["A-B"]}}}`, `secret_env: "A-B" is not a variable name`},
+		{"the workspace's token", `{"mcp_servers":{"gh":{"command":"x","secret_env":["DAX_WORKSPACE_TOKEN"]}}}`, "a served workspace's token"},
+		{"trailing data", `{"mcp_servers":{"gh":{"command":"x"}}} {}`, "trailing data"},
+		{"a server twice", `{"mcp_servers":{"gh":{"command":"x","secret_env":["T"]},"gh":{"command":"y"}}}`, `"gh" is given twice`},
+		{"a field twice", `{"mcp_servers":{"gh":{"command":"x","command":"y"}}}`, `"command" is given twice`},
+		{"mcp_servers twice", `{"mcp_servers":{"gh":{"command":"x"}},"mcp_servers":{}}`, `"mcp_servers" is given twice`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseOffered([]byte(tc.json), "servers.json"); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "servers.json") {
+				t.Fatalf("err = %v, want containing %q and the file", err, tc.want)
 			}
 		})
 	}

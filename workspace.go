@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
+	"github.com/ChristopherDavenport/dax/internal/offer"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -67,7 +69,8 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	tlsKey := fs.String("tls-key", "", "the private key (PEM) of -tls-cert")
 	connect := fs.String("connect", "", "in place of -listen, dial out to a session's hub (workspace.hub) at this wss:// URL, or ws:// to a loopback host, and serve the directory through that connection; the token from $"+config.TunnelTokenEnv)
 	tlsCA := fs.String("tls-ca", "", "with a wss:// -connect, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots")
-	scopes := fs.String("scopes", "read,write,exec", "with -connect, what the session may do here: a comma-separated list of read, write and exec")
+	scopes := fs.String("scopes", "read,write,exec", "what the session may do here: a comma-separated list of read, write, exec and servers; servers is added to the default with -servers, and a server that names secret_env is offered only to a grant without exec and write")
+	servers := fs.String("servers", "", `a file of MCP servers to offer the session, in dax's config shape, {"mcp_servers": {"<name>": {"command": "..."}}}: each a command run in the served directory, its secret_env given from this environment and redacted from its output`)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -89,11 +92,30 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 		}
 	}
 	w := &workspaceServer{name: p.name, dir: *dir, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, pass: pass, signals: true}
-	if !given["connect"] {
-		for _, f := range []string{"tls-ca", "scopes"} {
-			if given[f] {
-				return fmt.Errorf("workspace: -%s goes with -connect", f)
+	if given["servers"] {
+		if w.offered, err = readOffered(*servers); err != nil {
+			return err
+		}
+		for _, o := range w.offered {
+			for _, v := range o.SecretEnv {
+				if slices.Contains(pass, v) {
+					return fmt.Errorf("workspace: -pass-env: %s is server %s's secret (secret_env), which only that server is given", v, o.Name)
+				}
 			}
+		}
+	}
+	if given["scopes"] {
+		if w.scopes, err = parseScopes(*scopes); err != nil {
+			return err
+		}
+	}
+	// The grant is refused before a token is taken or anything served.
+	if err := w.settle(); err != nil {
+		return err
+	}
+	if !given["connect"] {
+		if given["tls-ca"] {
+			return errors.New("workspace: -tls-ca goes with -connect")
 		}
 		return w.run(ctx)
 	}
@@ -108,9 +130,6 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	}
 	if *tlsCA != "" && strings.HasPrefix(*connect, "ws://") {
 		return errors.New("workspace: -tls-ca is for a wss:// hub; ws:// has no certificate to verify")
-	}
-	if w.scopes, err = parseScopes(*scopes); err != nil {
-		return err
 	}
 	w.connect, w.tlsCA = *connect, *tlsCA
 	// The token leaves the environment before the workspace is made,
@@ -149,14 +168,149 @@ type workspaceServer struct {
 	drain time.Duration
 	// connect, in place of addr, is the hub it dials and serves the
 	// workspace through (-connect), with token, verified against the
-	// system's roots and tlsCA's certificate; scopes are what the
-	// session may do.
+	// system's roots and tlsCA's certificate.
 	connect, tlsCA string
 	token          string
-	scopes         []wsremote.Scope
+	// scopes are what the session may do, at addr or through the hub
+	// (-scopes); nil is the default (settle).
+	scopes []wsremote.Scope
+	// offered are the MCP servers the workspace offers (-servers).
+	offered []offer.Server
+}
+
+// readOffered is -servers: the file's servers, as config.ParseOffered
+// checks them, in name order.
+func readOffered(file string) ([]offer.Server, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: -servers: %w", err)
+	}
+	servers, err := config.ParseOffered(data, file)
+	if err != nil {
+		return nil, fmt.Errorf("workspace: -servers: %w", err)
+	}
+	var out []offer.Server
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		m := servers[name]
+		out = append(out, offer.Server{Name: name, Description: m.Description, Command: m.Command, SecretEnv: m.SecretEnv})
+	}
+	return out, nil
+}
+
+// settle fills in the default grant, read, write and exec, and servers
+// too when the workspace offers any, and refuses a grant that would
+// give a secret away or that does not match what is offered: servers
+// granted with nothing offered, or offered and not granted; write or
+// exec without read, under which the session would act on files whose
+// project rules it cannot read; and a secret holder offered beside
+// another server, which runs as its user beside it. A server
+// that holds secrets (secret_env) is offered only to a grant holding
+// neither exec nor write: with exec the session reads a running
+// server's environment through /proc, and with write it changes the
+// server's code, config or PATH in the directory to print its secret
+// past the filter (agentworkspace's remote says why).
+func (w *workspaceServer) settle() error {
+	if w.scopes == nil {
+		w.scopes = []wsremote.Scope{wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec}
+		if len(w.offered) > 0 {
+			w.scopes = append(w.scopes, wsremote.ScopeServers)
+		}
+	}
+	grants := slices.Contains(w.scopes, wsremote.ScopeServers)
+	reads := slices.Contains(w.scopes, wsremote.ScopeRead)
+	for _, sc := range []wsremote.Scope{wsremote.ScopeWrite, wsremote.ScopeExec} {
+		if slices.Contains(w.scopes, sc) && !reads {
+			// The session would act on the project unable to read its
+			// config, whose rules would then not apply.
+			return fmt.Errorf("workspace: -scopes: %s without read: the session would act on files it may not read, its project's rules among them; add read", sc)
+		}
+	}
+	switch {
+	case grants && len(w.offered) == 0:
+		return errors.New("workspace: -scopes servers: the workspace offers none; name them with -servers FILE")
+	case !grants && len(w.offered) > 0:
+		return errors.New("workspace: -servers: -scopes does not grant servers, so no session could start them; add servers to -scopes")
+	}
+	for _, o := range w.offered {
+		if len(o.SecretEnv) == 0 {
+			continue
+		}
+		if len(w.offered) > 1 {
+			// Every server runs as the same user, in the same directory:
+			// one that runs commands or writes files would hand the
+			// session the secret through /proc or the holder's code.
+			return fmt.Errorf("workspace: -servers: server %s holds secrets (secret_env), and a secret holder is offered alone, as the box host offers each unit in a container of its own: the others run beside it as its user, and one that runs a command or writes a file reads its secret; give it a -servers file and a dax workspace of its own", o.Name)
+		}
+		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite} {
+			if slices.Contains(w.scopes, sc) {
+				return fmt.Errorf("workspace: server %s holds secrets (secret_env), which a session granted %s could take: with exec it reads the running server's environment through /proc, and with write it changes the server's code or config to print them past the redaction; offer a secret-holding server with -scopes servers (and read, if the session should read the files) on a workspace of its own", o.Name, sc)
+			}
+		}
+	}
+	return nil
+}
+
+// open is the workspace served: the directory as a workspace.Local
+// whose processes get this machine's environment less its credentials
+// and the offered servers' secrets, but those -pass-env names; with
+// servers offered, an Offering over it (internal/offer), each server
+// given its secret_env from this process's environment and its output
+// redacted of their values here, before any of it is served.
+func (w *workspaceServer) open() (workspace.Workspace, error) {
+	dir := w.dir
+	if dir == "" {
+		var err error
+		if dir, err = os.Getwd(); err != nil {
+			return nil, err
+		}
+	}
+	var secrets []string
+	for _, o := range w.offered {
+		secrets = append(secrets, o.SecretEnv...)
+	}
+	local, err := workspace.NewLocal(dir, tool.DefaultEnv(w.pass, secrets...))
+	if err != nil {
+		return nil, fmt.Errorf("workspace: %w", err)
+	}
+	if len(w.offered) == 0 {
+		return local, nil
+	}
+	o, err := offer.Offer(local, w.offered, os.LookupEnv)
+	if err != nil {
+		local.Close()
+		return nil, fmt.Errorf("workspace: -servers: %w", err)
+	}
+	return o, nil
+}
+
+// scopeList is the grant as the start line says it.
+func scopeList(scopes []wsremote.Scope) string {
+	names := make([]string, len(scopes))
+	for i, s := range scopes {
+		names[i] = string(s)
+	}
+	return strings.Join(names, ", ")
+}
+
+// sayOffered tells out the servers offered, by name and description,
+// and the variables each is given as secrets, never their values.
+func (w *workspaceServer) sayOffered(out io.Writer) {
+	for _, o := range w.offered {
+		line := "dax workspace: offers MCP server " + o.Name
+		if o.Description != "" {
+			line += ": " + o.Description
+		}
+		if len(o.SecretEnv) > 0 {
+			line += " (given $" + strings.Join(o.SecretEnv, ", $") + ", redacted from its output)"
+		}
+		fmt.Fprintln(out, render.Clean(line))
+	}
 }
 
 func (w *workspaceServer) run(ctx context.Context) error {
+	if err := w.settle(); err != nil {
+		return err
+	}
 	if w.connect != "" {
 		return w.dial(ctx)
 	}
@@ -173,15 +327,9 @@ func (w *workspaceServer) run(ctx context.Context) error {
 		return err
 	}
 	defer ln.Close()
-	dir := w.dir
-	if dir == "" {
-		if dir, err = os.Getwd(); err != nil {
-			return err
-		}
-	}
-	ws, err := workspace.NewLocal(dir, tool.DefaultEnv(w.pass))
+	ws, err := w.open()
 	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
+		return err
 	}
 	defer ws.Close()
 	// A token made here is named for the port and a random part, so two
@@ -198,7 +346,7 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	}
 	defer cleanup()
 	h, err := wsremote.NewHandler(ws, wsremote.WithAuthenticator(authn.New(map[string]wsremote.Principal{
-		token: {Name: workspacePrincipal, Scopes: []wsremote.Scope{wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec}},
+		token: {Name: workspacePrincipal, Scopes: w.scopes},
 	}).Authenticator(wsremote.ErrUnauthenticated)))
 	if err != nil {
 		return err
@@ -212,7 +360,8 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	go func() { served <- srv.Serve(ln) }()
 
 	url := scheme + "://" + servedHost(ln.Addr())
-	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" at "+render.Clean(url))
+	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" at "+render.Clean(url)+", which may "+scopeList(w.scopes))
+	w.sayOffered(out)
 	ca := ""
 	if scheme == "https" {
 		ca = `, "tls_ca": "<the certificate's CA, unless the system trusts it>"`
@@ -366,11 +515,21 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 // identify is ws under the identity dax records (config.WorkspaceRef):
 // its descriptor's ref the URL normalised, so the record, -list, memory
 // and the MCP trust take spellings of one address as one workspace. It
-// is a Starter when ws is.
+// hides nothing ws is: a Starter when ws is, a ServerProvider (the MCP
+// servers the served workspace offers, under the servers scope) when ws
+// is, both when ws is both, so each type assertion tells the truth; and
+// its FS is ws's, an fs.ReadLinkFS when that is.
 func identify(ws wsremote.Workspace) wsremote.Workspace {
 	w := identified{ws}
-	if st, ok := ws.(workspace.Starter); ok {
+	st, starts := ws.(workspace.Starter)
+	sp, offers := ws.(workspace.ServerProvider)
+	switch {
+	case starts && offers:
+		return identifiedStarterServers{identifiedStarter{w, st}, sp}
+	case starts:
 		return identifiedStarter{w, st}
+	case offers:
+		return identifiedServers{w, sp}
 	}
 	return w
 }
@@ -390,6 +549,32 @@ type identifiedStarter struct {
 
 func (w identifiedStarter) Start(ctx context.Context, c workspace.Command) (workspace.Process, error) {
 	return w.st.Start(ctx, c)
+}
+
+type identifiedServers struct {
+	identified
+	sp workspace.ServerProvider
+}
+
+func (w identifiedServers) Servers(ctx context.Context) ([]workspace.Server, error) {
+	return w.sp.Servers(ctx)
+}
+
+func (w identifiedServers) StartServer(ctx context.Context, name string, stderr io.Writer) (workspace.Process, error) {
+	return w.sp.StartServer(ctx, name, stderr)
+}
+
+type identifiedStarterServers struct {
+	identifiedStarter
+	sp workspace.ServerProvider
+}
+
+func (w identifiedStarterServers) Servers(ctx context.Context) ([]workspace.Server, error) {
+	return w.sp.Servers(ctx)
+}
+
+func (w identifiedStarterServers) StartServer(ctx context.Context, name string, stderr io.Writer) (workspace.Process, error) {
+	return w.sp.StartServer(ctx, name, stderr)
 }
 
 // workspaceHTTPClient is the client -workspace reaches base with: no

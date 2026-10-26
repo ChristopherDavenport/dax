@@ -5,6 +5,66 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: a served or tunnelled workspace's offered MCP servers reach
+  the session. `-workspace URL` and `workspace.hub` keep what the
+  workspace is (a `Starter`, a `ServerProvider`, both), and the servers
+  it offers are connected beside yours, as a box host's units are,
+  under the same names, rules, restarts and secret handling. Every
+  server, configured or offered, is connected through one path.
+- Added: `dax workspace -servers FILE`, MCP servers the workspace
+  offers, in the config's own `{"mcp_servers": {...}}` shape, checked
+  by the same code: each a command run in the served directory, named
+  1 to 32 lowercase letters, digits and inner hyphens; an entry with a
+  `url` or `"in": "host"` is refused. The start line names each and the
+  variables it is given, never a value.
+- Added: `mcp_servers.<name>.description`, what the server is for,
+  shown where servers are listed, and `mcp_servers.<name>.secret_env`,
+  variables a command's server is given from the environment of the
+  process that starts it (dax, or `dax workspace` for its offered
+  ones), which every other child loses (bash, the other servers, the
+  key command, the box host's launcher), and whose values are redacted
+  from its standard output and standard error (agentredact's `secrets`,
+  through agentworkspace's `Offer`; standard error cleaned of terminal
+  controls, then redacted again) before the session sees any of it. A
+  secret stays on the machine whose environment holds it: in your
+  config `secret_env` needs `"in": "host"`, and a server that would
+  run in a workspace (this directory's, a served one, a hub's, an
+  executor's or a box's) is refused. Your file only; not for a `url`;
+  not the model's key's variable, a `token_env`, an extension's
+  secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN` or a variable
+  `pass_env` or `executor.pass_env` names; a value shorter than 8
+  bytes is refused at start.
+- Changed: `agent.MCPServer` has `Description` and `SecretEnv`, and
+  `agent.Secrets` counts each server's `SecretEnv`.
+- Changed: `dax workspace -scopes` applies to `-listen` as well as
+  `-connect`, and takes `servers`; the default stays `read,write,exec`,
+  with `servers` added when `-servers` offers any. `servers` with
+  nothing offered, and `-servers` without `servers` granted, are
+  refused, as are `write` or `exec` without `read`, a grant holding
+  `exec` or `write` beside a server that names `secret_env` (with
+  `exec` a session reads a running server's environment through
+  `/proc`, and with `write` it changes the server to print its secret
+  past the redaction), and a secret holder offered beside any other
+  server. `-servers` refuses a key given twice. The start line of
+  `-listen` names the grant too.
+- Changed: a served workspace granted its servers alone
+  (`-scopes servers`) starts a session: its project's `AGENTS.md` and
+  config are not read (an `omitted:` line says so for each), and the
+  file tools and bash fail as forbidden. One that refuses the session
+  its project's config while letting it run commands or write fails
+  the start. A workspace that offers one server name twice is refused.
+- Changed: the API-key command no longer inherits the session's other
+  credentials (each MCP server's `token_env` and `secret_env`, each
+  peer's token), and `dax box status|down|pull`'s launcher loses them
+  too.
+- Dependencies: agentworkspace, agentworkspace/mcpworkspace and
+  agentworkspace/tunnel v0.0.7, up from v0.0.6, whose `remote` and
+  `tunnel` carry a workspace's offered MCP servers under a new
+  `servers` scope, and whose `Offer` takes the secrets a server holds
+  and a filter for its output (`WithOutputFilter`).
+
 ## v0.0.30 - 2026-10-26
 
 - Added: requests to Claude, with `-provider anthropic` or a `claude-`

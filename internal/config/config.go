@@ -14,6 +14,9 @@ package config
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,9 +32,11 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/agentworkspace/tunnel"
 
 	"github.com/ChristopherDavenport/dax/ext/a2a"
@@ -466,7 +471,32 @@ type MCPServer struct {
 	// TokenEnv names the variable holding the bearer token sent to URL's
 	// origin only; empty sends none. Refused in a project's file.
 	TokenEnv string `json:"token_env,omitempty"`
+	// Description says what the server is for, shown where servers are
+	// listed (dax workspace -servers says it at start, and a served
+	// workspace lists it with the server's name).
+	Description string `json:"description,omitempty"`
+	// SecretEnv names variables a command's server is given from the
+	// environment of the process that starts it (dax, or dax workspace
+	// for the servers it offers), which every other child loses, and
+	// whose values are redacted from what the server writes. A secret
+	// stays on the machine whose environment holds it: in a session's
+	// config it is for a server placed on this machine ("in": "host")
+	// alone, never one sent to a workspace (SecretInWorkspace). Refused
+	// in a project's file, and for a url, whose token is token_env's.
+	SecretEnv []string `json:"secret_env,omitempty"`
 }
+
+// SecretInWorkspace is the refusal of a session's server that names
+// secret_env and is not placed on this machine: a secret stays on the
+// machine whose environment holds it, so it is never sent to a
+// workspace (served, tunnelled, an executor's, a box's, or this
+// machine's directory, where the session's bash runs beside it).
+func SecretInWorkspace(name string) error {
+	return fmt.Errorf(`mcp_servers.%s: secret_env: a secret is never sent to a workspace; set "in": "host" to run the server on this machine, or have the workspace's host offer it with dax workspace -servers`, name)
+}
+
+// MaxDescriptionBytes bounds an MCP server's description.
+const MaxDescriptionBytes = 1024
 
 // Where a command server runs (MCPServer.In).
 const (
@@ -526,6 +556,29 @@ func Load(path string, project, must bool) (Layer, error) {
 		return l, fmt.Errorf("config: %w", err)
 	}
 	return Parse(data, path, project)
+}
+
+// ServersOnly reports whether w is a workspace the session can only
+// start servers in (a served one granted its servers alone, with or
+// without read): it offers servers, starts no process, and may not
+// write, which a removal under a directory no workspace holds asks
+// (refused as remote.ErrForbidden without write, and otherwise not
+// found, touching nothing). A read such a workspace refuses leaves
+// nothing for a project's rule to tighten; from any other, a refused
+// read of the project's files is an error, since the session would
+// act there under none of their rules.
+func ServersOnly(w workspace.Workspace) bool {
+	_, starts := w.(workspace.Starter)
+	_, offers := w.(workspace.ServerProvider)
+	if !offers || starts {
+		return false
+	}
+	var b [16]byte
+	rand.Read(b[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := w.Remove(ctx, ".dax-no-such-"+hex.EncodeToString(b[:])+"/probe")
+	return errors.Is(err, remote.ErrForbidden)
 }
 
 // LoadProject reads the project's file through the workspace the
@@ -720,6 +773,9 @@ func (l *Layer) validate() error {
 		}
 		if err := s.check(name, l.Project); err != nil {
 			return err
+		}
+		if len(s.SecretEnv) > 0 && s.In != MCPInHost {
+			return SecretInWorkspace(name)
 		}
 	}
 	if p := c.Policy; p != nil {
@@ -933,6 +989,27 @@ func (s MCPServer) check(name string, project bool) error {
 	case !command && !url:
 		return fmt.Errorf("mcp_servers.%s: command or url is required", name)
 	}
+	if err := checkDescription(s.Description); err != nil {
+		return fmt.Errorf("mcp_servers.%s: description: %w", name, err)
+	}
+	if len(s.SecretEnv) > 0 {
+		switch {
+		case project:
+			return fmt.Errorf("mcp_servers.%s: secret_env: a project file may not name your secrets, which would hand them to a server the repository chose; put the server in your own config (%s)", name, Path())
+		case url:
+			return fmt.Errorf("mcp_servers.%s: secret_env is for a command; a url's token goes in token_env", name)
+		}
+		for i, v := range s.SecretEnv {
+			switch {
+			case !envName.MatchString(v):
+				return fmt.Errorf("mcp_servers.%s: secret_env: %q is not a variable name", name, v)
+			case slices.Contains(s.SecretEnv[:i], v):
+				return fmt.Errorf("mcp_servers.%s: secret_env: %s is named twice", name, v)
+			case v == WorkspaceTokenEnv || v == TunnelTokenEnv:
+				return fmt.Errorf("mcp_servers.%s: secret_env: %s is a served workspace's token, which no server is given", name, v)
+			}
+		}
+	}
 	if command {
 		if _, err := cmdline.Split(s.Command); err != nil {
 			return fmt.Errorf("mcp_servers.%s: command: %w", name, err)
@@ -962,6 +1039,110 @@ func (s MCPServer) check(name string, project bool) error {
 		}
 	}
 	return nil
+}
+
+// checkDescription refuses a description that is too long or holds a
+// control character: it is text a person reads in a listing.
+func checkDescription(d string) error {
+	if len(d) > MaxDescriptionBytes {
+		return fmt.Errorf("%d bytes; at most %d", len(d), MaxDescriptionBytes)
+	}
+	for _, r := range d {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return fmt.Errorf("%q holds a control character or invalid UTF-8", d)
+		}
+	}
+	return nil
+}
+
+// ParseOffered reads the file dax workspace -servers names: dax's own
+// config shape holding mcp_servers alone, {"mcp_servers": {"<name>":
+// {...}}}, each server checked as the user's config checks it, so one
+// definition moves between a session's config and a workspace's offer
+// unchanged. path is for the error messages. An offered server is a
+// command run in the served directory: one at a url or placed on the
+// host is refused, and so is a name agentworkspace.ValidServerName
+// refuses, since the session names its tools by it.
+func ParseOffered(data []byte, path string) (map[string]MCPServer, error) {
+	var f struct {
+		MCPServers map[string]MCPServer `json:"mcp_servers"`
+	}
+	// encoding/json takes the last of two keys alike; a file that names
+	// a server twice says two things about it, and is refused.
+	if key, ok := duplicateKey(data); ok {
+		return nil, fmt.Errorf("servers %s: %q is given twice", path, key)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return nil, fmt.Errorf("servers %s: %w (it holds mcp_servers alone)", path, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("servers %s: trailing data after the object", path)
+	}
+	if len(f.MCPServers) == 0 {
+		return nil, fmt.Errorf(`servers %s: no servers; want {"mcp_servers": {"<name>": {"command": "..."}}}`, path)
+	}
+	for _, name := range sortedKeys(f.MCPServers) {
+		s := f.MCPServers[name]
+		switch {
+		case !workspace.ValidServerName(name):
+			return nil, fmt.Errorf("servers %s: mcp_servers.%s: an offered server's name is 1 to 32 lowercase letters, digits and inner hyphens", path, name)
+		case s.URL != "":
+			return nil, fmt.Errorf("servers %s: mcp_servers.%s: a server at a url is not the workspace's to offer; the session calls it from where it runs, so put it in the session's config", path, name)
+		case s.In == MCPInHost:
+			return nil, fmt.Errorf(`servers %s: mcp_servers.%s: in "host" places a server on the session's machine; an offered server runs in the served directory, so leave in out`, path, name)
+		}
+		if err := s.check(name, false); err != nil {
+			return nil, fmt.Errorf("servers %s: %w", path, err)
+		}
+	}
+	return f.MCPServers, nil
+}
+
+// duplicateKey is the first key an object in data gives twice, at any
+// depth; false when there is none, or data does not parse (the decode
+// says why).
+func duplicateKey(data []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var walk func() (string, bool, error)
+	walk = func() (string, bool, error) {
+		t, err := dec.Token()
+		if err != nil {
+			return "", false, err
+		}
+		switch t {
+		case json.Delim('{'):
+			seen := map[string]bool{}
+			for dec.More() {
+				k, err := dec.Token()
+				if err != nil {
+					return "", false, err
+				}
+				key, _ := k.(string)
+				if seen[key] {
+					return key, true, nil
+				}
+				seen[key] = true
+				if key, dup, err := walk(); dup || err != nil {
+					return key, dup, err
+				}
+			}
+			_, err = dec.Token()
+			return "", false, err
+		case json.Delim('['):
+			for dec.More() {
+				if key, dup, err := walk(); dup || err != nil {
+					return key, dup, err
+				}
+			}
+			_, err = dec.Token()
+			return "", false, err
+		}
+		return "", false, nil
+	}
+	key, dup, _ := walk()
+	return key, dup
 }
 
 // checkMCPURL refuses a URL a server's requests, and a token, should
@@ -1531,6 +1712,8 @@ type Settings struct {
 // project's file named it.
 type MCP struct {
 	Name, Command, In, URL, TokenEnv string
+	Description                      string
+	SecretEnv                        []string
 	Project                          bool
 }
 
@@ -1637,7 +1820,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					}
 				}
 			}
-			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Project: l.Project}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer
@@ -1866,6 +2049,11 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			return s, fmt.Errorf("%s: %s is workspace.token_env too, a served workspace's token; name a variable of the hub's own", field, env)
 		}
 	}
+	// A server's secrets are its own: no other credential's variable,
+	// and no pass list that would hand them to every child.
+	if err := checkSecretEnv(s); err != nil {
+		return s, err
+	}
 	// A peer's token is the peer's alone: no command, server or
 	// launcher may be handed it.
 	for _, p := range s.Peers {
@@ -1931,6 +2119,103 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// checkSecretEnv refuses a server's secret_env that names another
+// credential's variable (the model's key, a token_env, the workspace's
+// or the hub's token), which would hand that credential to the server,
+// or that a pass list names, which would hand the secret to every
+// child.
+func checkSecretEnv(s Settings) error {
+	others := map[string]string{}
+	if s.APIKeyEnv != "" {
+		others[s.APIKeyEnv] = "api_key_env, the model's key"
+	}
+	for _, m := range s.MCP {
+		if m.TokenEnv != "" {
+			others[m.TokenEnv] = "MCP server " + m.Name + "'s token_env"
+		}
+	}
+	for _, p := range s.Peers {
+		if p.TokenEnv != "" {
+			others[p.TokenEnv] = "peer " + p.Name + "'s token_env"
+		}
+	}
+	if w := s.Workspace; w != nil {
+		if w.TokenEnv != "" {
+			others[w.TokenEnv] = "workspace.token_env, the workspace's token"
+		}
+		if w.Hub != nil && w.Hub.TokenEnv != "" {
+			others[w.Hub.TokenEnv] = "workspace.hub.token_env, the hub's token"
+		}
+	}
+	for _, m := range s.MCP {
+		if len(m.SecretEnv) > 0 {
+			// Refused when the file was read; a layer built some other
+			// way is held to the same rules.
+			switch {
+			case m.Project:
+				return fmt.Errorf("mcp_servers.%s: secret_env: a project file may not name your secrets", m.Name)
+			case m.URL != "":
+				return fmt.Errorf("mcp_servers.%s: secret_env is for a command; a url's token goes in token_env", m.Name)
+			case m.In != MCPInHost:
+				return SecretInWorkspace(m.Name)
+			}
+		}
+		for _, v := range m.SecretEnv {
+			if what, ok := others[v]; ok {
+				return fmt.Errorf("mcp_servers.%s: secret_env: %s is %s, which no server is given; name a variable of the server's own", m.Name, v, what)
+			}
+			for _, list := range []struct {
+				field string
+				names []string
+			}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
+				if slices.Contains(list.names, v) {
+					return fmt.Errorf("%s: %s is MCP server %s's secret (secret_env), which only that server is given; take it out of %s", list.field, v, m.Name, list.field)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Credentials are the variables of the credentials s gives servers and
+// peers, besides the model's key: each MCP server's token_env and
+// secret_env and each peer's token_env. They are theirs alone, so a
+// child that is none of them (the key command, the box host's launcher)
+// loses them.
+func (s Settings) Credentials() []string {
+	var out []string
+	for _, m := range s.MCP {
+		if m.TokenEnv != "" {
+			out = append(out, m.TokenEnv)
+		}
+		out = append(out, m.SecretEnv...)
+	}
+	for _, p := range s.Peers {
+		if p.TokenEnv != "" {
+			out = append(out, p.TokenEnv)
+		}
+	}
+	return out
+}
+
+// Credentials are Settings.Credentials of the layer l alone.
+func (l Layer) Credentials() []string {
+	var out []string
+	for _, n := range sortedKeys(l.MCPServers) {
+		m := l.MCPServers[n]
+		if m.TokenEnv != "" {
+			out = append(out, m.TokenEnv)
+		}
+		out = append(out, m.SecretEnv...)
+	}
+	for _, n := range sortedKeys(l.Peers) {
+		if t := l.Peers[n].TokenEnv; t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // strictness orders the fallbacks; a project's may only raise it.

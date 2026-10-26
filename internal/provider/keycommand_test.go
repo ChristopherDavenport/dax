@@ -29,11 +29,19 @@ import (
 // or a program on the PATH.
 const keyHelperEnv = "DAX_TEST_KEY_HELPER"
 
+// otherSecretEnv is another credential's variable, which the "env"
+// helper prints.
+const otherSecretEnv = "DAX_TEST_OTHER_SECRET"
+
 func TestMain(m *testing.M) {
 	if out, ok := os.LookupEnv(keyHelperEnv); ok {
 		if out == "fail" {
 			fmt.Fprintln(os.Stderr, "helper: refusing")
 			os.Exit(3)
+		}
+		if out == "env" {
+			fmt.Print("k-" + os.Getenv(otherSecretEnv) + "-end")
+			os.Exit(0)
 		}
 		fmt.Print(out)
 		os.Exit(0)
@@ -213,7 +221,7 @@ func TestRunKeyCommand(t *testing.T) {
 		{"failure", "fail", "", "exit status 3: helper: refusing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := runKeyCommand(context.Background(), helper(t, tc.out), io.Discard)
+			got, err := runKeyCommand(context.Background(), helper(t, tc.out), io.Discard, nil)
 			if tc.wantErr == "" {
 				if err != nil || got != tc.want {
 					t.Fatalf("%q, %v; want %q", got, err, tc.want)
@@ -228,7 +236,7 @@ func TestRunKeyCommand(t *testing.T) {
 			}
 		})
 	}
-	if _, err := runKeyCommand(context.Background(), []string{"/nonexistent/key-helper"}, nil); !errors.Is(err, ErrKeyCommand) {
+	if _, err := runKeyCommand(context.Background(), []string{"/nonexistent/key-helper"}, nil, nil); !errors.Is(err, ErrKeyCommand) {
 		t.Errorf("missing program: %v", err)
 	}
 }
@@ -236,7 +244,7 @@ func TestRunKeyCommand(t *testing.T) {
 func TestKeyCommandStderr(t *testing.T) {
 	// Echoed as it is written when there is somewhere to echo it...
 	var echo strings.Builder
-	_, err := runKeyCommand(context.Background(), helper(t, "fail"), &echo)
+	_, err := runKeyCommand(context.Background(), helper(t, "fail"), &echo, nil)
 	if echo.String() != "helper: refusing\n" {
 		t.Errorf("echoed %q", echo.String())
 	}
@@ -245,7 +253,7 @@ func TestKeyCommandStderr(t *testing.T) {
 		t.Fatalf("err = %#v", err)
 	}
 	// ...and kept for the error either way.
-	if _, err = runKeyCommand(context.Background(), helper(t, "fail"), nil); !errors.As(err, &ke) || ke.Detail != "helper: refusing" {
+	if _, err = runKeyCommand(context.Background(), helper(t, "fail"), nil, nil); !errors.As(err, &ke) || ke.Detail != "helper: refusing" {
 		t.Fatalf("not echoed: %#v", err)
 	}
 }
@@ -584,5 +592,29 @@ func TestWithKeyErrorsKeepsCompaction(t *testing.T) {
 	}
 	if _, ok := withKeyErrors(openresponses.NewClient("http://x").AsAdapter(), keys).(compactor); !ok {
 		t.Error("a model that compacts does not")
+	}
+}
+
+// The key command loses the variables KeyScrub names, the session's
+// other credentials, and keeps the rest of the environment.
+func TestTheKeyCommandLosesOtherCredentials(t *testing.T) {
+	t.Setenv(otherSecretEnv, "the-mcp-secret")
+	for _, tc := range []struct {
+		scrub []string
+		want  string
+	}{
+		{nil, "k-the-mcp-secret-end"},
+		{[]string{otherSecretEnv}, "k--end"},
+	} {
+		got, err := runKeyCommand(context.Background(), helper(t, "env"), io.Discard, tc.scrub)
+		if err != nil || got != tc.want {
+			t.Errorf("scrub %v: %q, %v; want %q", tc.scrub, got, err, tc.want)
+		}
+	}
+	// newKeySource passes its scrub list to every run.
+	s := newKeySource(helper(t, "env"), "", []string{otherSecretEnv})
+	s.setEcho(nil)
+	if got, err := s.run(context.Background(), s.argv); err != nil || got != "k--end" {
+		t.Errorf("the key source's run: %q, %v", got, err)
 	}
 }

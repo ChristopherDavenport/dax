@@ -8,10 +8,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"testing/fstest"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentsmd"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
+
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // What AGENTS.md files go into the prompt, and from where.
@@ -59,6 +63,16 @@ func within(dir, p string) bool {
 func omission(part, path, reason string) agentkit.Omission {
 	return agentkit.Omission{Part: part, Source: "dax", What: path, Reason: reason}
 }
+
+// noRead is the reason a served workspace's project files are left out
+// when its grant holds its servers alone.
+const noRead = "the workspace grants no read"
+
+// serversOnly reports whether ws is a workspace the session can only
+// start servers in (config.ServersOnly): a read it refuses
+// (remote.ErrForbidden) then leaves nothing for a project's rule to
+// tighten.
+func serversOnly(ws workspace.Workspace) bool { return config.ServersOnly(ws) }
 
 // agentsMDPath is where the chain is read from in the workspace: its
 // root, where the session starts.
@@ -183,6 +197,13 @@ func screened(ws workspace.Workspace) (fs.FS, []agentkit.Omission) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return fsys, nil
+	case errors.Is(err, remote.ErrForbidden) && serversOnly(ws):
+		// A served workspace the session may not read, and so not act
+		// in (granted its servers alone), has no chain of its own to
+		// read: the chain is the user's files alone. One that may run
+		// commands or write there but not read is refused below, and
+		// the session with it.
+		return fstest.MapFS{}, []agentkit.Omission{omission(agentsmd.PartID, shown, noRead)}
 	case errors.Is(err, workspace.ErrOutside):
 		return refuse("outside the workspace")
 	case err != nil:

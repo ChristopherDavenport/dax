@@ -22,6 +22,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentturn/session"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -341,7 +342,7 @@ func run(ctx context.Context, args []string, p program) error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, CacheTTL: settings.CacheTTL, SubagentCacheTTL: settings.SubagentCacheTTL, Client: p.name + "/" + p.version})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, KeyScrub: settings.Credentials(), SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, CacheTTL: settings.CacheTTL, SubagentCacheTTL: settings.SubagentCacheTTL, Client: p.name + "/" + p.version})
 	if err != nil {
 		return err
 	}
@@ -362,8 +363,8 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	// What no child of the session gets, whatever its name: the
 	// extensions' secrets, the key's variable and every MCP server's
-	// token variable. A project's servers name no token, so the user's
-	// settings, read before the executor, hold them all.
+	// token and secret variables. A project's servers name neither, so
+	// the user's settings, read before the executor, hold them all.
 	secrets := agent.Secrets(exts, m.KeyEnv, mcpServersOf(settings, *mcp))
 	// Where the tools act: this directory, or an executor elsewhere
 	// whose tools act where it runs. A container or a remote runtime
@@ -651,6 +652,17 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 // in, as executorSettings says; from names the flag that put it there.
 func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
+	if errors.Is(err, wsremote.ErrForbidden) {
+		if !config.ServersOnly(view) {
+			// The session would act there under none of the project's
+			// rules, which only tighten.
+			return config.Settings{}, fmt.Errorf("%s: the workspace lets the session act in it but not read its project's config, whose rules would then not apply; grant read too (dax workspace refuses write or exec without it): %w", from, err)
+		}
+		// A served workspace granted its servers alone: the session
+		// reads no file there and its tools touch none for a rule to
+		// tighten; the session says the config was left out.
+		proj, err = config.Layer{Project: true}, nil
+	}
 	if err != nil {
 		return config.Settings{}, fmt.Errorf("%s: %w", from, err)
 	}
@@ -674,6 +686,7 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
 			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+			Description: m.Description, SecretEnv: m.SecretEnv,
 		})
 	}
 	if flag != "" {
