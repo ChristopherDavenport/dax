@@ -7,6 +7,32 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax workspace -connect URL`, the served workspace for a host
+  the session cannot reach: in place of listening, it dials out to a
+  session's hub at a `wss://` URL (`ws://` to a loopback host alone)
+  and serves the directory through that connection (agentworkspace's
+  `tunnel`), dialling again whenever it drops; a session's processes
+  there outlive a drop shorter than their lease. The token is
+  `$DAX_TUNNEL_TOKEN`, at least 32 bytes, sent in the upgrade's header,
+  taken out of the environment before anything starts and never
+  printed; `-pass-env` may not name it. `-scopes` (default
+  `read,write,exec`) is what the session may do there, `-tls-ca` a CA
+  to verify the hub with besides the system's roots. Not with
+  `-listen`, `-tls-cert` or `-tls-key`. A signal ends every process the
+  session started there before it stops.
+- Added: the config's `workspace.hub` (`listen`, `name`, `token_env`,
+  default `DAX_TUNNEL_TOKEN`, `tls_cert`, `tls_key`, `wait`, default
+  `60s`), in place of `workspace.url`: the session hosts a hub at
+  `/tunnel`, on loopback unless it has a certificate, enrolls the one
+  token as the one name and refuses any other, waits up to `wait` for
+  that workspace to dial in, and then acts in it as in a served one
+  (tools, policy checks, the project's files, MCP servers). One that
+  never connects fails the start with the `dax workspace -connect` line
+  to run on its host. Your file only; not with `url`, `executor` or
+  `box`; its `token_env` is no other credential's variable. The record
+  names the workspace `remote` at `http://<name>.tunnel.invalid`, and
+  `-list` with the hub's config lists its sessions without listening.
+  `-workspace URL` dials that URL in the hub's place.
 - Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.6,
   up from v0.0.5, whose `remote` adds `WithMaxTransfers` and
   `Handler.Lease()` and drops `BearerTokens` and `WithBearerToken`;
