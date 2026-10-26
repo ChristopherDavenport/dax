@@ -57,7 +57,9 @@ before changing the shape.
   soon as the settings are resolved, before the key command runs), whose
   `remote.Workspace` is the session's `Options.Workspace`, under
   `identify`, which keeps what the client is (a `Starter`, a
-  `ServerProvider`, both) so each assertion tells the truth.
+  `ServerProvider`, both) so each assertion tells the truth; the
+  same dial (or `hostHub`) reaches `servers_workspace`, the
+  session's `Options.ServersWorkspace`, beside its own.
   `tunnel.go`: the served workspace turned around, both ends of
   agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
   -connect`, the directory served through `tunnel.Serve` to a session's
@@ -124,14 +126,17 @@ before changing the shape.
   takes): a command's in the workspace or here, one placed on the host,
   one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
   those the workspace offers of its own (`workspace.ServerProvider`, a
-  box host's units, a served or tunnelled workspace's `-servers`), and
+  box host's units, a served or tunnelled workspace's `-servers`) or a
+  servers workspace beside it offers (`Options.ServersWorkspace`,
+  refused unless its grant is servers alone, `checkServersWorkspace`), and
   a command holding secrets (`secret_env`, on the host alone) started
   through `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
   `~/.dax/mcp-trust.json`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
-  session's header, and the listings by it (`List`, `ListExecutor`,
+  session's header, a servers workspace's identity and servers beside
+  them (`ServersWorkspaceOf`), and the listings by it (`List`, `ListExecutor`,
   `ListWorkspaceURL`, a served workspace's by the URL its descriptor
   records as ref, or a hub's workspace by its tunnel's ref).
   `agent/confine.go`: `box.confine`, the session's claim that a box's

@@ -384,13 +384,14 @@ names the file and the field.
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
-| `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN` or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
+| `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN`, `DAX_SERVERS_WORKSPACE_TOKEN`, `DAX_SERVERS_TUNNEL_TOKEN`, a `token_env` of `workspace` or `servers_workspace`, or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
 | `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there) or `checkout` (`{"url", "ref"}`: a repository the box host clones and keeps, within its config's `checkouts.allow`; no credentials in the URL), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. `confine` (`off`, `units`, `workspace`) has the policy take the box's tools as confined where their envelope allows, so a bare ask for them does not ask; `workspace` also has the box host hold the repository's `.git` read-only in the box, the git guard (git that writes then fails there; commit outside it), and claims nothing for the workspace without it (docs/sandbox.md, "Fewer questions in a box"). Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `workspace` | `{"url": "https://box.example:7779", "token_env": "DAX_WORKSPACE_TOKEN", "tls_ca": "ca.pem"}`: run the tools here, in a workspace `dax workspace` serves there (see [A served workspace](#a-served-workspace-dax-workspace)). `url` is https, or http to a loopback host, with no user, password, query or fragment; `token_env` names the variable holding its token (default `DAX_WORKSPACE_TOKEN`), which only the workspace is sent and `pass_env` may not name; `tls_ca`, for https, a CA certificate to verify its certificate against in place of the system's. Your file only; not with `executor` or `box` |
 | `workspace.hub` | `{"listen": ":7780", "name": "build", "token_env": "DAX_TUNNEL_TOKEN", "tls_cert": "hub.pem", "tls_key": "hub-key.pem", "wait": "60s"}`, in place of `workspace.url`: host a hub for a workspace that dials in (`dax workspace -connect`, see [A workspace that dials in](#a-workspace-that-dials-in-dax-workspace--connect)), and act in it once it does. `listen` is a loopback address unless `tls_cert` and `tls_key` are given; the upgrade path is `/tunnel`. `name` is the workspace's name and identity, a DNS label; `token_env` the variable holding the one token that enrolls it (default `DAX_TUNNEL_TOKEN`, at least 32 bytes, taken out of the environment before any process starts, and no other credential's variable); `wait` how long to wait for it (default `60s`). Your file only; not with `url`, `executor` or `box` |
+| `servers_workspace` | `{"url": "http://127.0.0.1:7781", "token_env": "DAX_SERVERS_WORKSPACE_TOKEN"}`, or `{"hub": {...}}` as `workspace.hub`: a second served workspace, beside wherever the tools act (this directory, `workspace`, an executor or a box), whose offered MCP servers the session connects and nothing else (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). The same fields as `workspace`, checked the same way, with their own default variables, `DAX_SERVERS_WORKSPACE_TOKEN` and, for a hub, `DAX_SERVERS_TUNNEL_TOKEN` (no other connection's, nor any other credential's). The session refuses one whose grant is more than `servers` (and `read`): with `exec` or `write` its servers' secrets are not safe there. Not the session's own workspace. Your file only |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -404,7 +405,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace` or `peers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace` or `peers`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -437,6 +438,7 @@ no other account could have written it.
 | `-executor 'command ...'` | overrides `executor`: the command line that starts `dax execute` where the tools act, split as a shell splits words (`-root "/my work"`) with nothing expanded, or the `http://` or `https://` URL where `dax execute -listen` serves; `""` clears it |
 | `-executor-pass-env NAME,NAME` | overrides `executor.pass_env`; `""` clears it |
 | `-workspace URL` | overrides `workspace.url` (or `workspace.hub`, dialing the URL in its place): the URL where `dax workspace` serves, its token from `$DAX_WORKSPACE_TOKEN` or `workspace.token_env`; `""` clears the config's. Refused with an executor or a box: clear the config's with `-executor ""` or `-box=false` |
+| `-servers-workspace URL` | overrides `servers_workspace.url` (or its `hub`): a `dax workspace` granted servers alone, whose offered MCP servers the session connects beside wherever its tools act, its token from `$DAX_SERVERS_WORKSPACE_TOKEN` or `servers_workspace.token_env`; `""` clears the config's. Stands beside `-workspace`, `-executor` and `-box` |
 | `-box` | run the tools in this project's box (see below), with `box`'s settings or a local box host's default profile; `-box=false` runs here despite the config's `box`. Refused with an executor: clear the config's with `-executor ""` |
 | `-box-host local\|ssh://[user@]host[:port]`, `-box-profile NAME` | with `-box` or a `box` in your config, override `box.host` and `box.profile` |
 | `-box-confine off\|units\|workspace` | with `-box`, `box.confine` for this run |
@@ -787,7 +789,8 @@ through it; your MCP servers start there, through the workspace (a
 token without `exec` cannot start them, and then your own run here and
 the project's not at all). The servers the workspace offers of its
 own (`-servers`) are connected beside yours, as a box host's units
-are.
+are. A workspace that offers servers alone is better a servers
+workspace beside the session's own (`servers_workspace`, below).
 
 ### Offering MCP servers: `dax workspace -servers`
 
@@ -839,13 +842,59 @@ GITHUB_PERSONAL_ACCESS_TOKEN=... dax workspace -dir ~/empty -listen 127.0.0.1:77
 # dax workspace: offers MCP server gh: GitHub, as me (given $GITHUB_PERSONAL_ACCESS_TOKEN, redacted from its output)
 ```
 
-A session started with `-workspace http://127.0.0.1:7781` (and its
-token) gets `mcp__gh__*` and nothing else there: the file tools fail as
-forbidden and bash has no process to start. The same entry, with
+Its start line says how to reach it: since the grant is servers
+alone, as a servers workspace (below). The same entry, with
 `"in": "host"` added, in your own config's `mcp_servers` runs the
 server on your machine beside the session instead, with the token from
 your environment and the same redaction; and `-connect` offers it
 through a hub just the same.
+
+#### A secret another machine holds: `servers_workspace`
+
+A session's tools act in one workspace, and a secret holder is offered
+only under a grant of `servers` alone, so the workspace that offers it
+is not one the tools can act in. `servers_workspace` (or
+`-servers-workspace URL`) connects it as a second workspace beside the
+session's own, for its offered servers alone:
+
+```sh
+DAX_SERVERS_WORKSPACE_TOKEN="$(cat ~/.dax/serve/workspace-7781-....token)" dax -servers-workspace http://127.0.0.1:7781
+```
+
+or in your config `{"servers_workspace": {"url": "http://127.0.0.1:7781"}}`,
+or `{"servers_workspace": {"hub": {"listen": "127.0.0.1:7781", "name": "gh"}}}`
+for a host that dials in with `dax workspace -connect` (its token from
+`$DAX_SERVERS_TUNNEL_TOKEN` here, `$DAX_TUNNEL_TOKEN` there). The
+session gets `mcp__gh__*` as from any workspace that offers it, through
+the same path, names, rules, restarts and redaction, while the file
+tools, bash and the project's files are this directory's (or the
+`workspace`'s, the executor's or the box's). Nothing else of the servers
+workspace is used: no file of it is read, no tool acts there, and its
+project's config and `AGENTS.md` are not the session's.
+
+- **Its grant is checked.** The session refuses a servers workspace
+  that lets it run commands or write there (`exec` or `write`; `read`
+  is let through, and unused), since that is what makes a secret
+  holder safe; one that offers no servers; and one that is the
+  session's own workspace.
+- **Names.** A name it offers that your config gives, that the
+  session's workspace offers or that is a box host's unit is refused, as
+  between any two servers; `/mcp add` cannot take one either.
+- **Trust.** Like the servers the session's own workspace offers, its
+  servers start without `-trust-mcp`: that trust is for servers a
+  project's config names, and only your config and the flags name a
+  servers workspace. A project's trust stays keyed on the session's own
+  workspace, where its servers run.
+- **The record.** The session's header records it as
+  `dax.servers_workspace`, by its identity (a URL as `workspace`'s is
+  normalised, a hub's workspace by its name) and the servers it
+  offered, never its token; `-list` ends a session's line with
+  `servers remote <identity>`, and the start line says
+  `servers: ... · its servers alone`.
+- **A drop** is a server that stopped: the next call to one of its
+  tools tries to start it again, with the same warning and
+  `dax.mcp.restart` entry as any server's, and fails until the
+  workspace is back. The session, and its own workspace, go on.
 
 ### A workspace that dials in: `dax workspace -connect`
 

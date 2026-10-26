@@ -32,6 +32,7 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/dax/internal/provider"
+	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -121,6 +122,7 @@ func run(ctx context.Context, args []string, p program) error {
 	mcp := fs.String("mcp", "", "command line of one more stdio MCP server, offered as mcp__cli__<tool>; split as a shell splits words, nothing expanded")
 	executorCmd := fs.String("executor", "", "command line that starts dax execute where the tools are to act (docker exec -i box dax execute -root /work), split as a shell splits words with nothing expanded, or the http:// or https:// URL where dax execute -listen serves; the tools run there; \"\" clears the config's")
 	wsFlag := fs.String("workspace", "", "the https:// URL, or http:// to loopback, where dax workspace serves: the tools and the policy run here and act in that workspace, its token from $"+config.WorkspaceTokenEnv+" or the config's workspace.token_env; \"\" clears the config's")
+	serversWSFlag := fs.String("servers-workspace", "", "the https:// URL, or http:// to loopback, of a dax workspace granted servers alone (-scopes servers), whose offered MCP servers the session connects beside wherever its tools act, and nothing else: one holding a secret of that host's, say; its token from $"+config.ServersWorkspaceTokenEnv+" or the config's servers_workspace.token_env; \"\" clears the config's")
 	boxFlag := fs.Bool("box", false, "run the tools in this project's box: a container a box host (dax box serve, here or over ssh) makes or reuses from its config's profile, with the project at its own path, reached as the executor; -box=false runs here despite the config's box")
 	boxHost := fs.String("box-host", "", "with -box, where the box host runs, in place of box.host: local, or ssh://[user@]host[:port]")
 	boxProfile := fs.String("box-profile", "", "with -box, the box host's profile, in place of box.profile")
@@ -275,6 +277,7 @@ func run(ctx context.Context, args []string, p program) error {
 	flags.SubagentModel = str("subagent-model", subModel)
 	flags.Executor = str("executor", executorCmd)
 	flags.Workspace = str("workspace", wsFlag)
+	flags.ServersWorkspace = str("servers-workspace", serversWSFlag)
 	if given["box"] {
 		flags.Box = boxFlag
 	}
@@ -333,7 +336,22 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 	} else if w != nil {
-		if wsToken, err = takeWorkspaceToken(w.TokenEnv); err != nil {
+		if wsToken, err = takeWorkspaceToken("-workspace", w.TokenEnv); err != nil {
+			return err
+		}
+	}
+	// So does the servers workspace's.
+	var swToken string
+	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
+		if swToken, err = takeTunnelToken(w.Hub.Setting(), w.Hub.TokenEnv); err != nil {
+			return err
+		}
+		// One token at two hubs would enroll either host at either.
+		if h := settings.Workspace; h != nil && h.Hub != nil && swToken == wsToken {
+			return fmt.Errorf("%s: $%s is the token workspace.hub enrolls its workspace with; give each hub a token of its own", w.Hub.Setting(), w.Hub.TokenEnv)
+		}
+	} else if w != nil {
+		if swToken, err = takeWorkspaceToken(w.Flag(), w.TokenEnv); err != nil {
 			return err
 		}
 	}
@@ -446,10 +464,34 @@ func run(ctx context.Context, args []string, p program) error {
 		defer local.Close()
 		ws = local
 	}
+	// The servers workspace, beside wherever the tools act: dialed, or
+	// its hub hosted and waited for, as the session's own workspace is.
+	// The session connects its offered servers alone, and refuses one
+	// granted more than servers.
+	var (
+		sw       workspace.Workspace
+		swLine   string
+		swHosted *hostedHub
+	)
+	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
+		if swHosted, err = hostHub(ctx, *w.Hub, swToken, p.name, os.Stderr); err != nil {
+			return err
+		}
+		defer swHosted.Close()
+		sw, swLine = swHosted.Workspace, "remote "+w.Hub.Name+" through the hub at "+render.Clean(swHosted.URL)+" · its servers alone"
+	} else if w != nil {
+		served, err := dialWorkspace(ctx, *w, swToken)
+		if err != nil {
+			return err
+		}
+		defer served.Close()
+		d := served.Descriptor()
+		sw, swLine = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
+	}
 	opts := agent.Options{
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, Executor: ex, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, Executor: ex, Root: *root, Sync: policyMode,
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
@@ -512,7 +554,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}
 	var f front
@@ -539,7 +581,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	// With a hub hosted, the whole close is bounded, so a workspace that
 	// went away does not hold the exit.
-	defer closeSession(sess, hosted)
+	defer closeSession(sess, hosted, swHosted)
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
@@ -603,7 +645,13 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		at += ":" + ws.Root
 	}
 	for _, s := range sums {
-		fmt.Fprintf(w, "%s  %s  %7d B  %s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path, at)
+		// A session with a servers workspace beside its own names it
+		// after where its tools ran, by its identity, as the record does.
+		servers := ""
+		if d, _, ok := agent.ServersWorkspaceOf(s.Header); ok {
+			servers = "  servers " + render.Clean(d.Kind+" "+d.Ref)
+		}
+		fmt.Fprintf(w, "%s  %s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path, at, servers)
 	}
 	return err
 }

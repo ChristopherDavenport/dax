@@ -5,6 +5,35 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `servers_workspace` and `-servers-workspace URL`, a second
+  served workspace beside wherever the tools act (this directory,
+  `workspace`, an executor or a box), whose offered MCP servers the
+  session connects and nothing else, so a secret-holding server another
+  machine offers under `-scopes servers` is used while the file tools
+  and bash act in the session's own workspace (#118). It takes a `url`
+  or a `hub` as `workspace` does, dialed or hosted the same way, its
+  token from `DAX_SERVERS_WORKSPACE_TOKEN` or, for a hub,
+  `DAX_SERVERS_TUNNEL_TOKEN` by default, taken before anything starts.
+  Its servers go through the same path as every other server, under
+  the same names, collisions, rules, restarts and redaction. The session
+  refuses one whose grant has `exec` or `write` (learned as for a
+  servers-only workspace, `config.ServersOnly`), one that offers no
+  servers, and one that is its own workspace; a project's config may
+  not name one. The header records it as `dax.servers_workspace` (its
+  kind, its identity, the servers it offered), `-list` names it after a
+  session's line, and the start line says `servers: ...`. A drop of it
+  shows as a server that stopped; the session goes on.
+- Added: `agent.Options.ServersWorkspace` and `agent.ServersWorkspaceOf`,
+  the servers workspace a session connects and the one its header
+  records.
+- Changed: `dax workspace` granted servers alone (with or without
+  `read`) says to connect with `-servers-workspace` and
+  `DAX_SERVERS_WORKSPACE_TOKEN`.
+- Changed: `secret_env` may not name `DAX_SERVERS_WORKSPACE_TOKEN`,
+  `DAX_SERVERS_TUNNEL_TOKEN` or a `servers_workspace` token variable.
+
 ## v0.0.31 - 2026-10-26
 
 - Added: a served or tunnelled workspace's offered MCP servers reach

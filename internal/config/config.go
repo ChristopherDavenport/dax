@@ -147,6 +147,14 @@ type Config struct {
 	// sets it; a project cannot, since it would send the session's
 	// files and commands to another machine.
 	Workspace *Workspace `json:"workspace,omitempty"`
+	// ServersWorkspace is a second served workspace, beside wherever
+	// the tools act, whose offered MCP servers the session connects and
+	// nothing else: one granted servers alone (dax workspace -scopes
+	// servers), which may offer a server holding a secret of its host's.
+	// No tool acts in it and no file of it is read. The user sets it; a
+	// project cannot, since it chooses a machine the session's tool
+	// calls go to.
+	ServersWorkspace *Workspace `json:"servers_workspace,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
@@ -220,6 +228,24 @@ const WorkspaceTokenEnv = "DAX_WORKSPACE_TOKEN"
 // session's hub when workspace.hub.token_env names none.
 const TunnelTokenEnv = "DAX_TUNNEL_TOKEN"
 
+// ServersWorkspaceTokenEnv and ServersTunnelTokenEnv are
+// WorkspaceTokenEnv and TunnelTokenEnv for servers_workspace: the
+// variables its token is read from when servers_workspace.token_env and
+// servers_workspace.hub.token_env name none. They are not the session
+// workspace's, so the two connections take a token each by default.
+const (
+	ServersWorkspaceTokenEnv = "DAX_SERVERS_WORKSPACE_TOKEN"
+	ServersTunnelTokenEnv    = "DAX_SERVERS_TUNNEL_TOKEN"
+)
+
+// tokenVariables are the default variables of the served workspaces'
+// and hubs' tokens, which no server is given.
+var tokenVariables = []string{WorkspaceTokenEnv, TunnelTokenEnv, ServersWorkspaceTokenEnv, ServersTunnelTokenEnv}
+
+// IsTokenVariable reports whether v is the default variable of a served
+// workspace's or a hub's token, which no server is given.
+func IsTokenVariable(v string) bool { return slices.Contains(tokenVariables, v) }
+
 // TunnelPath is the path a session's hub takes its workspace's
 // upgrade at.
 const TunnelPath = "/tunnel"
@@ -235,10 +261,37 @@ const DefaultHubWait = 60 * time.Second
 func TunnelRef(name string) string { return "http://" + name + ".tunnel.invalid" }
 
 // WorkspaceSettings is the served workspace the session's tools act
-// in: Workspace with its defaults filled in. With Hub, URL is empty.
+// in, or with Field set the servers workspace beside it: Workspace with
+// its defaults filled in. With Hub, URL is empty.
 type WorkspaceSettings struct {
 	URL, TokenEnv, TLSCA string
 	Hub                  *HubSettings
+	// Field is what messages call the setting: empty for the session's
+	// workspace (workspace, -workspace), ServersField for the servers
+	// workspace.
+	Field string
+}
+
+// ServersField is servers_workspace's name in messages, and
+// WorkspaceSettings.Field of the settings it gives.
+const ServersField = "servers_workspace"
+
+// Name is what messages call the setting w came from: workspace, or
+// servers_workspace.
+func (w WorkspaceSettings) Name() string {
+	if w.Field != "" {
+		return w.Field
+	}
+	return "workspace"
+}
+
+// Flag is the flag that gives w's URL: -workspace, or
+// -servers-workspace.
+func (w WorkspaceSettings) Flag() string {
+	if w.Field == ServersField {
+		return "-servers-workspace"
+	}
+	return "-workspace"
 }
 
 // Ref is the identity the workspace is recorded and listed by: the
@@ -250,10 +303,23 @@ func (w WorkspaceSettings) Ref() string {
 	return WorkspaceRef(w.URL)
 }
 
-// HubSettings is workspace.hub with its defaults filled in.
+// HubSettings is workspace.hub, or servers_workspace.hub, with its
+// defaults filled in.
 type HubSettings struct {
 	Listen, Name, TokenEnv, TLSCert, TLSKey string
 	Wait                                    time.Duration
+	// Field is what messages call the setting: empty for workspace.hub,
+	// servers_workspace.hub for the servers workspace's.
+	Field string
+}
+
+// Setting is what messages call the setting h came from: workspace.hub,
+// or servers_workspace.hub.
+func (h HubSettings) Setting() string {
+	if h.Field != "" {
+		return h.Field
+	}
+	return "workspace.hub"
 }
 
 // Box runs the tools in a box a box host makes: `dax box serve`, here
@@ -708,7 +774,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"peers", len(c.Peers) > 0},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"peers", len(c.Peers) > 0},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -759,6 +825,11 @@ func (l *Layer) validate() error {
 			return errors.New("workspace and box both say where the tools act; give one")
 		}
 		if err := w.check("workspace"); err != nil {
+			return err
+		}
+	}
+	if w := c.ServersWorkspace; w != nil {
+		if err := w.check(ServersField); err != nil {
 			return err
 		}
 	}
@@ -824,7 +895,7 @@ func (w Workspace) check(field string) error {
 		if w.TLSCA != "" {
 			return fmt.Errorf("%s.tls_ca is for an https url; a hub serves with tls_cert and tls_key", field)
 		}
-		_, err := w.Hub.settings(field + ".hub")
+		_, err := w.Hub.settings(field+".hub", TunnelTokenEnv)
 		return err
 	}
 	if w.URL == "" {
@@ -839,14 +910,15 @@ func (w Workspace) check(field string) error {
 	return nil
 }
 
-// settings is h checked, with its defaults filled in. Without a
-// certificate the hub listens on a loopback address alone, as dax serve
-// does, since the workspace's every file and command would cross the
-// network in the clear.
-func (h WorkspaceHub) settings(field string) (*HubSettings, error) {
+// settings is h checked, with its defaults filled in, its token's
+// variable tokenEnv when it names none. Without a certificate the hub
+// listens on a loopback address alone, as dax serve does, since the
+// workspace's every file and command would cross the network in the
+// clear.
+func (h WorkspaceHub) settings(field, tokenEnv string) (*HubSettings, error) {
 	s := &HubSettings{Listen: strings.TrimSpace(h.Listen), Name: h.Name, TokenEnv: h.TokenEnv, TLSCert: h.TLSCert, TLSKey: h.TLSKey, Wait: DefaultHubWait}
 	if s.TokenEnv == "" {
-		s.TokenEnv = TunnelTokenEnv
+		s.TokenEnv = tokenEnv
 	}
 	if s.Listen == "" {
 		return nil, fmt.Errorf("%s.listen is required: the address the workspace dials", field)
@@ -1005,7 +1077,7 @@ func (s MCPServer) check(name string, project bool) error {
 				return fmt.Errorf("mcp_servers.%s: secret_env: %q is not a variable name", name, v)
 			case slices.Contains(s.SecretEnv[:i], v):
 				return fmt.Errorf("mcp_servers.%s: secret_env: %s is named twice", name, v)
-			case v == WorkspaceTokenEnv || v == TunnelTokenEnv:
+			case IsTokenVariable(v):
 				return fmt.Errorf("mcp_servers.%s: secret_env: %s is a served workspace's token, which no server is given", name, v)
 			}
 		}
@@ -1252,9 +1324,50 @@ func WorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
 		s.TokenEnv = WorkspaceTokenEnv
 	}
 	if w.Hub != nil {
-		if s.Hub, err = w.Hub.settings("workspace.hub"); err != nil {
+		if s.Hub, err = w.Hub.settings("workspace.hub", TunnelTokenEnv); err != nil {
 			return nil, err
 		}
+	}
+	return s, nil
+}
+
+// ServersWorkspaceOf is the servers workspace the user's layer and the
+// flags name, nil for none: -servers-workspace's URL in place of the
+// config's, which keeps its token_env and tls_ca, and "" clears it. It
+// stands beside wherever the tools act (this directory, a served
+// workspace, an executor or a box), so it conflicts with none of them.
+// Its token's variable defaults to ServersWorkspaceTokenEnv, and its
+// hub's to ServersTunnelTokenEnv.
+func ServersWorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
+	var w Workspace
+	switch {
+	case f.ServersWorkspace != nil && strings.TrimSpace(*f.ServersWorkspace) == "":
+		return nil, nil
+	case f.ServersWorkspace == nil && user.ServersWorkspace == nil:
+		return nil, nil
+	case user.ServersWorkspace != nil:
+		w = *user.ServersWorkspace
+	}
+	if f.ServersWorkspace != nil {
+		// The flag's URL is dialed, in place of the config's url or hub.
+		w.URL, w.Hub = strings.TrimSpace(*f.ServersWorkspace), nil
+		if err := CheckWorkspaceURL("-servers-workspace", w.URL); err != nil {
+			return nil, err
+		}
+		if w.TLSCA != "" && !strings.HasPrefix(strings.ToLower(w.URL), "https://") {
+			return nil, errors.New("-servers-workspace: your config's servers_workspace.tls_ca is for an https URL")
+		}
+	}
+	s := &WorkspaceSettings{URL: w.URL, TokenEnv: w.TokenEnv, TLSCA: w.TLSCA, Field: ServersField}
+	if s.TokenEnv == "" {
+		s.TokenEnv = ServersWorkspaceTokenEnv
+	}
+	if w.Hub != nil {
+		var err error
+		if s.Hub, err = w.Hub.settings(ServersField+".hub", ServersTunnelTokenEnv); err != nil {
+			return nil, err
+		}
+		s.Hub.Field = ServersField + ".hub"
 	}
 	return s, nil
 }
@@ -1593,9 +1706,12 @@ func (l *Layer) resolvePaths() {
 		l.MemoryDir = &m
 	}
 	l.PricingFile = fix(l.PricingFile)
-	if l.Workspace != nil {
-		l.Workspace.TLSCA = fix(l.Workspace.TLSCA)
-		if h := l.Workspace.Hub; h != nil {
+	for _, w := range []*Workspace{l.Workspace, l.ServersWorkspace} {
+		if w == nil {
+			continue
+		}
+		w.TLSCA = fix(w.TLSCA)
+		if h := w.Hub; h != nil {
 			h.TLSCert, h.TLSKey = fix(h.TLSCert), fix(h.TLSKey)
 		}
 	}
@@ -1654,8 +1770,11 @@ type Flags struct {
 	BoxConfine *string
 	// Workspace replaces workspace.url: the URL where dax workspace
 	// serves; "" clears the config's workspace.
-	Workspace     *string
-	Think, Agents *bool
+	Workspace *string
+	// ServersWorkspace replaces servers_workspace.url, as Workspace
+	// replaces workspace.url; "" clears the config's servers_workspace.
+	ServersWorkspace *string
+	Think, Agents    *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -1695,12 +1814,16 @@ type Settings struct {
 	Box *BoxSettings
 	// Workspace is the served workspace the tools act in, nil for none;
 	// the caller dials it, and reads the project's layer through it.
-	Workspace    *WorkspaceSettings
-	MCP          []MCP
-	Peers        []a2a.Remote // the user's, sorted by name
-	PassEnv      []string
-	MaxReadBytes int64
-	Policy       PolicySettings
+	Workspace *WorkspaceSettings
+	// ServersWorkspace is the servers workspace beside wherever the
+	// tools act, nil for none; the caller dials it (or hosts its hub),
+	// and the session connects its offered servers alone.
+	ServersWorkspace *WorkspaceSettings
+	MCP              []MCP
+	Peers            []a2a.Remote // the user's, sorted by name
+	PassEnv          []string
+	MaxReadBytes     int64
+	Policy           PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1955,8 +2078,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if !l.Project && l.Workspace != nil {
 			user.Workspace = l.Workspace
 		}
+		if !l.Project && l.ServersWorkspace != nil {
+			user.ServersWorkspace = l.ServersWorkspace
+		}
 	}
 	if s.Workspace, err = WorkspaceOf(user, f); err != nil {
+		return s, err
+	}
+	if s.ServersWorkspace, err = ServersWorkspaceOf(user, f); err != nil {
 		return s, err
 	}
 	if s.Box, err = BoxOf(user, f); err != nil {
@@ -2015,39 +2144,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	// The workspace's token is sent to it alone, and a hub's is
 	// compared with the one its workspace sends: no command, server or
-	// launcher here may be handed either.
-	if w := s.Workspace; w != nil {
-		field, env, what := "workspace.token_env", w.TokenEnv, "the workspace's token, which only the workspace is sent"
-		if w.Hub != nil {
-			field, env, what = "workspace.hub.token_env", w.Hub.TokenEnv, "the token that enrolls the workspace at the hub"
-		}
-		for _, list := range []struct {
-			field string
-			names []string
-		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
-			if slices.Contains(list.names, env) {
-				return s, fmt.Errorf("%s: %s holds %s; take it out of %s", list.field, env, what, list.field)
-			}
-		}
-		// One variable for two credentials would send one where the
-		// other goes, and dax takes the workspace's out of its
-		// environment, so the other would find none.
-		if env == s.APIKeyEnv {
-			return s, fmt.Errorf("%s: %s is api_key_env too, the model's key; name a variable of the workspace's own", field, env)
-		}
-		for _, m := range s.MCP {
-			if m.TokenEnv == env {
-				return s, fmt.Errorf("%s: %s is MCP server %s's token_env too; name a variable of the workspace's own", field, env, m.Name)
-			}
-		}
-		for _, p := range s.Peers {
-			if p.TokenEnv == env {
-				return s, fmt.Errorf("%s: %s is peer %s's token_env too; name a variable of the workspace's own", field, env, p.Name)
-			}
-		}
-		if w.Hub != nil && env == w.TokenEnv {
-			return s, fmt.Errorf("%s: %s is workspace.token_env too, a served workspace's token; name a variable of the hub's own", field, env)
-		}
+	// launcher here may be handed either, and the servers workspace's
+	// are held to the same.
+	if err := checkConnectionTokens(s); err != nil {
+		return s, err
 	}
 	// A server's secrets are its own: no other credential's variable,
 	// and no pass list that would hand them to every child.
@@ -2121,6 +2221,76 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	return s, nil
 }
 
+// connectionToken is the variable a served workspace's or a hub's token
+// is read from, what messages call it, and what it holds.
+type connectionToken struct {
+	field, env, what string
+}
+
+// tokenOf is the variable w's token is read from: its hub's when it
+// has one, and its URL's otherwise.
+func tokenOf(w *WorkspaceSettings) []connectionToken {
+	switch {
+	case w == nil:
+		return nil
+	case w.Hub != nil:
+		return []connectionToken{{w.Hub.Setting() + ".token_env", w.Hub.TokenEnv, "the token that enrolls the workspace at the hub"}}
+	}
+	return []connectionToken{{w.Name() + ".token_env", w.TokenEnv, "the workspace's token, which only the workspace is sent"}}
+}
+
+// checkConnectionTokens refuses a served workspace's or a hub's token
+// variable that a pass list hands every child, or that another
+// credential reads (the model's key, a server's or a peer's token, the
+// other connection's): one variable for two credentials would send one
+// where the other goes, and dax takes each connection's out of its
+// environment, so the other would find none. The servers workspace is
+// refused where it is the session's own workspace, under one identity.
+func checkConnectionTokens(s Settings) error {
+	var all []connectionToken
+	all = append(all, tokenOf(s.Workspace)...)
+	all = append(all, tokenOf(s.ServersWorkspace)...)
+	for i, t := range all {
+		for _, list := range []struct {
+			field string
+			names []string
+		}{{"pass_env", s.PassEnv}, {"executor.pass_env", s.ExecutorPassEnv}} {
+			if slices.Contains(list.names, t.env) {
+				return fmt.Errorf("%s: %s holds %s; take it out of %s", list.field, t.env, t.what, list.field)
+			}
+		}
+		if t.env == s.APIKeyEnv {
+			return fmt.Errorf("%s: %s is api_key_env too, the model's key; name a variable of the workspace's own", t.field, t.env)
+		}
+		for _, m := range s.MCP {
+			if m.TokenEnv == t.env {
+				return fmt.Errorf("%s: %s is MCP server %s's token_env too; name a variable of the workspace's own", t.field, t.env, m.Name)
+			}
+		}
+		for _, p := range s.Peers {
+			if p.TokenEnv == t.env {
+				return fmt.Errorf("%s: %s is peer %s's token_env too; name a variable of the workspace's own", t.field, t.env, p.Name)
+			}
+		}
+		for _, o := range all[:i] {
+			if o.env == t.env {
+				return fmt.Errorf("%s: %s is %s too, the other connection's token; name a variable of its own", t.field, t.env, o.field)
+			}
+		}
+	}
+	// A hub's token is not its workspace's token_env, which a flag's URL
+	// given over the hub is sent.
+	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+		if w != nil && w.Hub != nil && w.Hub.TokenEnv == w.TokenEnv {
+			return fmt.Errorf("%s.token_env: %s is %s.token_env too, a served workspace's token; name a variable of the hub's own", w.Hub.Setting(), w.TokenEnv, w.Name())
+		}
+	}
+	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Ref() == sw.Ref() {
+		return fmt.Errorf("servers_workspace %s is the session's workspace too; the servers workspace stands beside it, so name another or leave it out", sw.Ref())
+	}
+	return nil
+}
+
 // checkSecretEnv refuses a server's secret_env that names another
 // credential's variable (the model's key, a token_env, the workspace's
 // or the hub's token), which would hand that credential to the server,
@@ -2141,12 +2311,15 @@ func checkSecretEnv(s Settings) error {
 			others[p.TokenEnv] = "peer " + p.Name + "'s token_env"
 		}
 	}
-	if w := s.Workspace; w != nil {
+	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+		if w == nil {
+			continue
+		}
 		if w.TokenEnv != "" {
-			others[w.TokenEnv] = "workspace.token_env, the workspace's token"
+			others[w.TokenEnv] = w.Name() + ".token_env, the workspace's token"
 		}
 		if w.Hub != nil && w.Hub.TokenEnv != "" {
-			others[w.Hub.TokenEnv] = "workspace.hub.token_env, the hub's token"
+			others[w.Hub.TokenEnv] = w.Hub.Setting() + ".token_env, the hub's token"
 		}
 	}
 	for _, m := range s.MCP {

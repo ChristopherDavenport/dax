@@ -250,6 +250,12 @@ func (w *workspaceServer) settle() error {
 	return nil
 }
 
+// serversOnly reports whether the grant is the servers workspace's: the
+// offered servers, with or without read, and neither write nor exec.
+func (w *workspaceServer) serversOnly() bool {
+	return slices.Contains(w.scopes, wsremote.ScopeServers) && !slices.Contains(w.scopes, wsremote.ScopeWrite) && !slices.Contains(w.scopes, wsremote.ScopeExec)
+}
+
 // open is the workspace served: the directory as a workspace.Local
 // whose processes get this machine's environment less its credentials
 // and the offered servers' secrets, but those -pass-env names; with
@@ -366,14 +372,20 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	if scheme == "https" {
 		ca = `, "tls_ca": "<the certificate's CA, unless the system trusts it>"`
 	}
+	// A grant of servers alone (and read) is for a session's servers
+	// workspace, beside the workspace its tools act in.
+	env, flag, field := config.WorkspaceTokenEnv, "-workspace", "workspace"
+	if w.serversOnly() {
+		env, flag, field = config.ServersWorkspaceTokenEnv, "-servers-workspace", config.ServersField
+	}
 	if tokenFile != "" {
 		fmt.Fprintln(out, "token: "+render.Clean(tokenFile))
-		fmt.Fprintln(out, "connect: "+config.WorkspaceTokenEnv+"=\"$(cat "+render.Clean(tokenFile)+")\" "+render.Clean(w.name)+" -workspace "+render.Clean(url))
+		fmt.Fprintln(out, "connect: "+env+"=\"$(cat "+render.Clean(tokenFile)+")\" "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
 	} else {
 		fmt.Fprintln(out, "token: $"+config.WorkspaceTokenEnv)
-		fmt.Fprintln(out, "connect: "+config.WorkspaceTokenEnv+"=... "+render.Clean(w.name)+" -workspace "+render.Clean(url))
+		fmt.Fprintln(out, "connect: "+env+"=... "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
 	}
-	fmt.Fprintln(out, `or in your config: {"workspace": {"url": "`+render.Clean(url)+`", "token_env": "`+config.WorkspaceTokenEnv+`"`+ca+`}}`)
+	fmt.Fprintln(out, `or in your config: {"`+field+`": {"url": "`+render.Clean(url)+`", "token_env": "`+env+`"`+ca+`}}`)
 	if w.ready != nil {
 		w.ready(url)
 	}
@@ -478,10 +490,10 @@ func listenWorkspace(addr string, cfg *tls.Config) (net.Listener, string, error)
 // inherits it whatever its name: the run takes it as soon as its
 // settings are resolved, before the key command or anything else
 // starts a process.
-func takeWorkspaceToken(env string) (string, error) {
+func takeWorkspaceToken(flag, env string) (string, error) {
 	token := os.Getenv(env)
 	if token == "" {
-		return "", fmt.Errorf("-workspace: no token: set $%s to the token dax workspace took or wrote (the file it printed)", env)
+		return "", fmt.Errorf("%s: no token: set $%s to the token dax workspace took or wrote (the file it printed)", flag, env)
 	}
 	os.Unsetenv(env)
 	return token, nil
@@ -494,20 +506,20 @@ func takeWorkspaceToken(env string) (string, error) {
 // nothing skips the verification, and no redirect is followed. The
 // settings checked the URL: https, or http to a loopback host.
 func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string) (wsremote.Workspace, error) {
-	hc, err := workspaceHTTPClient(s.URL, s.TLSCA)
+	hc, err := workspaceHTTPClient(s.Name(), s.URL, s.TLSCA)
 	if err != nil {
 		return nil, err
 	}
 	// The token goes in the header of every request to the workspace's
 	// origin, from dax's own client, and nowhere else.
 	if hc, err = authn.Client(hc, s.URL, token); err != nil {
-		return nil, fmt.Errorf("-workspace: %w", err)
+		return nil, fmt.Errorf("%s: %w", s.Flag(), err)
 	}
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ws, err := wsremote.Dial(dctx, s.URL, wsremote.WithHTTPClient(hc))
 	if err != nil {
-		return nil, fmt.Errorf("-workspace %s: %w", s.URL, err)
+		return nil, fmt.Errorf("%s %s: %w", s.Flag(), s.URL, err)
 	}
 	return identify(ws), nil
 }
@@ -577,14 +589,14 @@ func (w identifiedStarterServers) StartServer(ctx context.Context, name string, 
 	return w.sp.StartServer(ctx, name, stderr)
 }
 
-// workspaceHTTPClient is the client -workspace reaches base with: no
-// Timeout, which would cut the streams, no redirect followed, and for
-// https TLS 1.2 at least, verified against the system's roots or the CA
-// in caFile.
-func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
+// workspaceHTTPClient is the client -workspace (or the setting field
+// names, servers_workspace) reaches base with: no Timeout, which would
+// cut the streams, no redirect followed, and for https TLS 1.2 at
+// least, verified against the system's roots or the CA in caFile.
+func workspaceHTTPClient(field, base, caFile string) (*http.Client, error) {
 	u, err := neturl.Parse(base)
 	if err != nil {
-		return nil, errors.New("-workspace: the URL does not parse")
+		return nil, fmt.Errorf("%s: the URL does not parse", field)
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	if u.Scheme == "https" {
@@ -592,11 +604,11 @@ func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
 		if caFile != "" {
 			pem, err := os.ReadFile(caFile)
 			if err != nil {
-				return nil, fmt.Errorf("workspace.tls_ca: %w", err)
+				return nil, fmt.Errorf("%s.tls_ca: %w", field, err)
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				return nil, fmt.Errorf("workspace.tls_ca %s holds no PEM certificate", caFile)
+				return nil, fmt.Errorf("%s.tls_ca %s holds no PEM certificate", field, caFile)
 			}
 			cfg.RootCAs = pool
 		}

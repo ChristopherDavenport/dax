@@ -488,7 +488,10 @@ What is not equal yet, and why:
   view is a Starter, so with `-executor` this machine runs none of
   these. The servers the workspace offers of its own
   (`workspace.ServerProvider`: a box host's units) are connected beside
-  them, by name (`mcpworkspace.ServerTransport`). A server placed on
+  them, by name (`mcpworkspace.ServerTransport`), and so are those a
+  servers workspace offers (`Options.ServersWorkspace`,
+  `servers_workspace`): a second workspace, granted servers alone,
+  beside the one the tools act in, which nothing else uses. A server placed on
   the host (`"in": "host"`) or at a `url` is called from this machine
   whatever the workspace, its tools never taken as confined.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is

@@ -152,6 +152,9 @@ func banner(info frontInfo, si agent.Info) []string {
 	if l := elsewhereBanner(info); l != "" {
 		lines = append(lines, l)
 	}
+	if info.Servers != "" {
+		lines = append(lines, "servers: "+info.Servers)
+	}
 	if si.Recorded {
 		lines = append(lines, "session "+si.ID)
 	}

@@ -1262,7 +1262,7 @@ only how the process is reached differs.
 | at the control | your `mcp_servers` with `"in": "host"`, or any command when the workspace cannot start a process | on this machine, with its environment scrubbed | its pipes |
 | at a URL | `mcp_servers` with `url` | wherever it is served | streamable HTTP from this machine, its `token_env` sent to its origin alone |
 | a command in the workspace | `mcp_servers`' commands, `-mcp`, `/mcp add`, none holding a secret | in the workspace (served, tunnelled, an executor's, a box's), at its root with its environment | the workspace's process, over whatever wire the workspace rides |
-| offered by the workspace | the workspace: `dax workspace -servers`, a box host's units | where the workspace runs it | started by name there (`workspace.ServerProvider`), over the same wire |
+| offered by the workspace | the workspace: `dax workspace -servers`, a box host's units; or a servers workspace beside it (`servers_workspace`) | where that workspace runs it | started by name there (`workspace.ServerProvider`), over the same wire |
 
 One definition moves between them unchanged: an entry of your
 `mcp_servers` is an entry of a `-servers` file. Its `secret_env` means
@@ -1322,10 +1322,19 @@ running server's environment from `/proc/<pid>/environ`; with `write`
 it changes the server's code, config or `PATH` in the directory and
 has it print the secret in an encoding the filter does not know. So
 offer a secret-holding server from a workspace of its own, with
-`-scopes servers` (and `read`, when the session should read what is
-there), beside the workspace the session's tools act in. (A session
-holds one workspace, so today that is the session's whole workspace:
-see [Limits](#limits).)
+`-scopes servers`, beside the workspace the session's tools act in:
+the session's `servers_workspace` (or `-servers-workspace URL`), a
+second connection, dialed or through a hub of its own as `workspace`'s
+is, whose offered servers it connects through the same path and nothing
+else. The session refuses a servers workspace that grants `exec` or
+`write` (it learns the grant as for a servers-only workspace of its own:
+no process starts, and a write is forbidden), one that offers none and
+one that is its own workspace; `read` is let through and unused. Its
+servers' names are held to the same rules as the workspace's offered
+ones, and they start without `-trust-mcp`, as those do, since only your
+config and the flags name it. A drop of it is a server that stopped:
+the next call tries to start it again, with the same warning and
+restart entry, and the session goes on in its own workspace.
 
 ### Sessions and memory
 
@@ -1348,6 +1357,14 @@ are one workspace: one `-list`, one memory scope (what dax remembered
 of one project is offered in the other's prompt) and one MCP trust.
 Give each its own local port (`ssh -o ExitOnForwardFailure=yes -L 7780:127.0.0.1:7779 other-host`)
 to keep them apart.
+
+A servers workspace is recorded beside the session's own, never as
+it: the header's `dax.servers_workspace` holds its kind, its identity
+(the URL normalised the same way, or a hub's workspace's ref by its
+name) and the names of the servers it offered, and no root or token.
+`-list` and `-resume`, the memory scope and the MCP trust key on the
+session's own workspace alone; `-list` ends a session's line with
+`servers remote <identity>` when it had one.
 
 ### A workspace that dials in
 
@@ -1503,10 +1520,9 @@ are left to the host's lease.
   connection drops, without what they held.
 - A call in flight when the connection breaks fails, and is not sent
   again.
-- One workspace a session: a secret-holding server offered under
-  `servers` alone is the session's whole workspace, so its tools have
-  no files there to act on. A second connection beside the session's
-  workspace, for its offered servers alone, is not built yet.
+- One servers workspace a session (`servers_workspace`), beside its own
+  workspace; servers from several hosts that each hold a secret need a
+  workspace each, and today only one is connected.
 - A box host's units are offered through the box's executor alone;
   `dax box serve` does not serve them over `remote` (dax#106).
 - A hub is one session's: it holds one workspace, under the one name

@@ -63,7 +63,10 @@ type frontInfo struct {
 	// and its root; empty when they act in this process's or the
 	// executor's.
 	Workspace string
-	Think     bool
+	// Servers names the servers workspace beside it (servers_workspace),
+	// whose offered servers alone the session connects; empty for none.
+	Servers string
+	Think   bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
