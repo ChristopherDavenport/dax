@@ -19,19 +19,24 @@ package authn
 // handed out, which no hub issued, so it is good for nothing later,
 // through the forward or at another hub (the name, and the hub's own
 // secret, bind it to one hub). What it does not prove: it does not
-// bind the connection. An impostor that can reach the hub while it
-// holds the port (another forward, the hub's host) relays the GET and
-// the upgrade at once and sits between the two on a plain connection;
-// and one that fetched a nonce from the hub while the forward was up,
-// then takes the port after a drop, can hand that nonce out and replay
-// the upgrade it gets within the nonce's lifetime. Only wss:// binds the
-// connection; where the hub is reachable otherwise, use it.
+// bind the connection. An impostor that can reach a hub while it holds
+// the port (another forward, the hub's host) relays the GET and the
+// upgrade at once and sits between the two on a plain connection, and
+// "a hub" there is any hub of this name and token, so each session's
+// hub wants a token (or a name) of its own. One that fetched nonces
+// from the hub while the forward was up, then takes the port after a
+// drop, can hand them out and replay each upgrade it gets within that
+// nonce's lifetime: waiting NonceLifetime, or restarting the hub (a new
+// secret), before the forward comes back defeats that, and the token
+// is not exposed. Only wss:// binds the connection; where the hub is
+// reachable otherwise, use it.
 
 import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -80,9 +85,14 @@ var (
 	// ErrHubProof is a hub whose answer does not prove it holds the
 	// token.
 	ErrHubProof = errors.New("authn: the hub's answer does not prove it holds the token")
-	// ErrNoNonce is a hub that answered the nonce's GET without one: not
-	// a dax hub, or one older than this proof.
+	// ErrNoNonce is a hub whose answer to the nonce's GET rules out a
+	// session's hub of this proof: 200 without a nonce, a redirect, or
+	// 401, 403 or 404. No redial changes it.
 	ErrNoNonce = errors.New("authn: the hub issued no nonce")
+	// ErrNonceLater is an answer to the nonce's GET that a hub may give
+	// for a while (a 5xx, 429 or 408, through a proxy or while the hub
+	// restarts): a failed dial, tried again.
+	ErrNonceLater = errors.New("authn: the hub gave no nonce yet")
 )
 
 // mac is the hex HMAC-SHA256 under key of label and parts, each ended
@@ -131,8 +141,9 @@ func proofOf(r *http.Request) (nonce, proof string, ok bool) {
 
 // FetchNonce asks the hub at hubURL (its ws:// or wss:// URL) for a
 // nonce, through hc: a GET of the same URL over http or https. A
-// failure to reach it is an error to try again on; an answer without a
-// nonce is ErrNoNonce.
+// failure to reach it, or an answer a hub gives for a while (5xx, 429,
+// 408; ErrNonceLater), is an error to try again on; an answer that
+// rules a session's hub out (ErrNoNonce) is one no redial changes.
 func FetchNonce(ctx context.Context, hc *http.Client, hubURL string) (string, error) {
 	u := hubURL
 	switch {
@@ -154,10 +165,23 @@ func FetchNonce(ctx context.Context, hc *http.Client, hubURL string) (string, er
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	nonce := resp.Header.Get(NonceHeader)
-	if resp.StatusCode != http.StatusOK || !validNonce(nonce) {
-		return "", fmt.Errorf("%w (it answered %s)", ErrNoNonce, resp.Status)
+	code := resp.StatusCode
+	switch {
+	case code == http.StatusOK && validNonce(nonce):
+		return nonce, nil
+	case code == http.StatusOK:
+		return "", fmt.Errorf("%w: it answered %s without one, which a session's hub never does", ErrNoNonce, resp.Status)
+	case code >= 300 && code < 400:
+		return "", fmt.Errorf("%w: it answered %s, a redirect, which is never followed", ErrNoNonce, resp.Status)
+	case code == http.StatusUnauthorized:
+		return "", fmt.Errorf("%w: it answered %s, as a dax hub older than this proof does, which takes the token itself", ErrNoNonce, resp.Status)
+	case code == http.StatusForbidden, code == http.StatusNotFound:
+		return "", fmt.Errorf("%w: it answered %s, which a session's hub never does", ErrNoNonce, resp.Status)
+	default:
+		// 5xx, 429, 408, or anything else no hub of this proof sends
+		// for good: tried again.
+		return "", fmt.Errorf("%w: it answered %s", ErrNonceLater, resp.Status)
 	}
-	return nonce, nil
 }
 
 // Prover is the workspace end's half: it proves each upgrade over the
@@ -218,11 +242,17 @@ type Hub struct {
 func NewHub(token, name string) *Hub {
 	secret := make([]byte, 32)
 	rand.Read(secret)
+	// The age a nonce carries starts at a random offset, so a nonce does
+	// not say when the hub started: up to 2^60 ns, far from overflow.
+	var b [8]byte
+	rand.Read(b[:])
+	offset := time.Duration(binary.BigEndian.Uint64(b[:]) >> 4)
 	start := time.Now()
-	return &Hub{key: []byte(token), name: name, secret: secret, since: func() time.Duration { return time.Since(start) }, taken: map[string]time.Duration{}}
+	return &Hub{key: []byte(token), name: name, secret: secret, since: func() time.Duration { return offset + time.Since(start) }, taken: map[string]time.Duration{}}
 }
 
-// Nonce issues a nonce: the hub's age in nanoseconds, 26 random base32
+// Nonce issues a nonce: the hub's age in nanoseconds (from a random
+// offset), 26 random base32
 // characters, and the hub's MAC of both under its secret, dot-separated.
 // It keeps nothing.
 func (h *Hub) Nonce() string {

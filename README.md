@@ -956,9 +956,11 @@ that nonce and the run's id, which the hub takes only for a nonce it
 issued within 30 seconds, once; the hub's answer carries its own HMAC
 of them, which `-connect` checks before it serves anything. A hub that
 cannot answer, at the first dial or after a drop, is not the session's:
-`-connect` serves it nothing and stops, saying so, and says to rotate
-the token ([Proving the hub](docs/sandbox.md#proving-the-hub) has the
-wire and what it does and does not prove).
+`-connect` serves it nothing and stops, saying so, and so it does after
+three upgrades in a row taken and dropped unanswered, which no hub
+does; a hub not up yet, or answering 5xx, 429 or 408 for a while, is
+dialled again ([Proving the hub](docs/sandbox.md#proving-the-hub) has
+the wire and what it does and does not prove).
 `-connect` takes the token out of its environment before it starts
 anything, never prints it, and refuses `-pass-env` naming it; the hub
 takes the one token from `workspace.hub.token_env` and refuses any
@@ -981,12 +983,15 @@ the hub's proof is what keeps a user of the workspace's host who binds
 that port first from getting the workspace: nothing is served to them,
 and the upgrade they capture is over a nonce they made up, which the
 hub refuses if they replay it through the forward later. **The proof
-does not bind the connection**: someone on that host who can reach the
-hub while holding the port can relay to it and sit in the middle of a
-plain connection, and one who fetched a nonce from the hub while the
-forward was up and takes the port after a drop can replay one upgrade
-within 30 seconds; so after `-connect` stops at a hub that failed the
-proof, rotate the token before bringing the forward back. Where the hub
+does not bind the connection**: someone on that host who can reach a
+hub of this name and token while holding the port can relay to it and
+sit in the middle of a plain connection (so give each session's hub
+its own token, or name), and one who fetched nonces from the hub while
+the forward was up and takes the port after a drop can replay up to
+three upgrades, each within its nonce's 30 seconds. The token is not
+exposed: after `-connect` stops at a hub that failed the proof, wait 30
+seconds, or restart the session's hub, before bringing the forward
+back, and rotate the token only if it may have leaked some other way. Where the hub
 is reachable other than through the forward, give it a certificate and
 dial `wss://` with `-tls-ca`. `-connect` says so on standard error
 whenever it dials `ws://`. The session's record names

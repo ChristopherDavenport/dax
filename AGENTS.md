@@ -69,8 +69,10 @@ before changing the shape.
   the hub (`authn.FetchNonce`), the upgrade carrying the MAC under the
   token of the name, that nonce and the run's instance id, and nothing
   served to a hub whose 101 lacks its own MAC (`internal/authn`'s
-  `Prover`; a hub that fails, or issues no nonce, ends the run in any
-  phase, through `dialWatch.halt`); `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
+  `Prover`; a hub that fails, answers the nonce's GET in a way that
+  rules a session's hub out, or drops three upgrades in a row
+  unanswered, ends the run in any phase, through `dialWatch`; a 5xx,
+  429 or 408 to the GET is dialled again); `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
   `dialWatch`, which ends the run before it connects at a certificate
   not verified or a 404); and `hostHub`, the config's
   `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless

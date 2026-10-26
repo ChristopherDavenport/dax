@@ -198,8 +198,14 @@ func TestTheWorkspaceChecksTheHub(t *testing.T) {
 	}
 }
 
-// FetchNonce asks the hub's URL over http for its nonce, and an answer
-// without one is ErrNoNonce.
+// status answers code.
+func status(code int) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) { w.WriteHeader(code) }
+}
+
+// FetchNonce asks the hub's URL over http for its nonce. An answer that
+// rules a session's hub out is ErrNoNonce; one a hub may give for a
+// while is ErrNonceLater, to try again on.
 func TestFetchNonce(t *testing.T) {
 	hub := NewHub(proofToken, "build")
 	for _, tc := range []struct {
@@ -209,8 +215,18 @@ func TestFetchNonce(t *testing.T) {
 	}{
 		{"a nonce", func(w http.ResponseWriter) { w.Header().Set(NonceHeader, hub.Nonce()) }, nil},
 		{"none", func(http.ResponseWriter) {}, ErrNoNonce},
-		{"a refusal", func(w http.ResponseWriter) { w.WriteHeader(http.StatusUnauthorized) }, ErrNoNonce},
 		{"not a nonce", func(w http.ResponseWriter) { w.Header().Set(NonceHeader, `a"b`) }, ErrNoNonce},
+		{"an older dax hub's 401", status(http.StatusUnauthorized), ErrNoNonce},
+		{"403", status(http.StatusForbidden), ErrNoNonce},
+		{"404", status(http.StatusNotFound), ErrNoNonce},
+		{"a redirect", func(w http.ResponseWriter) {
+			w.Header().Set("Location", "https://elsewhere.example/")
+			w.WriteHeader(http.StatusFound)
+		}, ErrNoNonce},
+		{"503, for a while", status(http.StatusServiceUnavailable), ErrNonceLater},
+		{"502", status(http.StatusBadGateway), ErrNonceLater},
+		{"429", status(http.StatusTooManyRequests), ErrNonceLater},
+		{"408", status(http.StatusRequestTimeout), ErrNonceLater},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,10 +237,31 @@ func TestFetchNonce(t *testing.T) {
 				tc.answer(w)
 			}))
 			defer srv.Close()
-			nonce, err := FetchNonce(t.Context(), srv.Client(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/tunnel")
+			hc := srv.Client()
+			hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			nonce, err := FetchNonce(t.Context(), hc, "ws"+strings.TrimPrefix(srv.URL, "http")+"/tunnel")
 			if !errors.Is(err, tc.want) || err == nil && !validNonce(nonce) {
 				t.Errorf("%q, %v; want %v", nonce, err, tc.want)
 			}
 		})
+	}
+}
+
+// A nonce's age starts at a random offset, so it does not say when the
+// hub started.
+func TestANonceDoesNotTellTheHubsStart(t *testing.T) {
+	ages := map[int64]bool{}
+	for range 4 {
+		age, err := strconv.ParseInt(strings.Split(NewHub(proofToken, "build").Nonce(), ".")[0], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if age < int64(time.Second) {
+			t.Errorf("a new hub's nonce says it is %v old", time.Duration(age))
+		}
+		ages[age/int64(time.Second)] = true
+	}
+	if len(ages) < 2 {
+		t.Errorf("four new hubs' nonces give one age: %v", ages)
 	}
 }

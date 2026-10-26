@@ -742,7 +742,7 @@ func TestAWorkspaceServesNoHubWithoutTheToken(t *testing.T) {
 			_, mac, _ := strings.Cut(r.Header.Get("Authorization"), `proof="`)
 			return http.Header{authn.HubProofHeader: {strings.TrimSuffix(mac, `"`)}}
 		}, "is not the session's hub", 1},
-		{"no nonce", "", func(*http.Request) http.Header { return nil }, "issued no nonce: it is not a session's hub, or it is a dax older than", 0},
+		{"no nonce", "", func(*http.Request) http.Header { return nil }, "issued no nonce: it answered 200 OK without one", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -788,12 +788,7 @@ func TestAWorkspaceServesNoHubWithoutTheToken(t *testing.T) {
 func TestAWorkspaceStopsAtAnImpostorAfterADrop(t *testing.T) {
 	home(t)
 	defer agent.CaptureWarnings(&syncBuffer{})()
-	p := &pin{name: "build", proof: authn.NewHub(tunnelToken, "build"), log: hubLogger("workspace.hub")}
-	genuine, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithProofHeader(p.hubProof))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.hub = genuine
+	p, genuine := genuineHub(t)
 	var mu sync.Mutex
 	var sent []string
 	imp := impostor(t, "1.AAAAAAAAAAAAAAAAAAAAAAAAAA.0123", func(*http.Request) http.Header { return nil }, &sent, &mu)
@@ -830,5 +825,112 @@ func TestAWorkspaceStopsAtAnImpostorAfterADrop(t *testing.T) {
 	defer mu.Unlock()
 	if len(sent) != 1 {
 		t.Errorf("the impostor was sent %d upgrades, want 1", len(sent))
+	}
+}
+
+// genuineHub is a session's hub as startHub makes it, for build under
+// tunnelToken, to mount on a server of the test's own: pin in front of
+// the tunnel's Hub.
+func genuineHub(t *testing.T) (*pin, *wstunnel.Hub) {
+	t.Helper()
+	p := &pin{name: "build", proof: authn.NewHub(tunnelToken, "build"), log: hubLogger("workspace.hub")}
+	h, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithProofHeader(p.hubProof))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	p.hub = h
+	return p, h
+}
+
+// awaitBuild waits for build to connect to h.
+func awaitBuild(t *testing.T, h *wstunnel.Hub, c *connecting) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	ws, err := h.Workspace(ctx, "build")
+	if err != nil {
+		t.Fatalf("the hub: %v; the workspace said %s", err, c.out)
+	}
+	ws.Close()
+}
+
+// What a hub may answer for a while is dialled again, not taken as an
+// impostor: a refused connection (the hub not up yet), and a nonce's
+// GET answered 503, 502, 429 or 408, as a proxy in front of a
+// restarting hub does.
+func TestAWorkspaceDialsAgainAtAHubNotReady(t *testing.T) {
+	home(t)
+	defer agent.CaptureWarnings(&syncBuffer{})()
+	t.Run("refused", func(t *testing.T) {
+		p, h := genuineHub(t)
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		ln.Close()
+		c := connectWorkspace(t, t.TempDir(), "ws://"+addr+config.TunnelPath, tunnelToken)
+		time.Sleep(700 * time.Millisecond) // a dial or two refused
+		ln, err = net.Listen("tcp", addr)
+		if err != nil {
+			t.Skipf("the port was taken meanwhile: %v", err)
+		}
+		srv := &http.Server{Handler: p}
+		go srv.Serve(ln)
+		defer srv.Close()
+		awaitBuild(t, h, c)
+	})
+	for _, code := range []int{http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusTooManyRequests, http.StatusRequestTimeout} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			p, h := genuineHub(t)
+			var answered atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Upgrade") == "" && answered.Add(1) == 1 {
+					w.WriteHeader(code)
+					return
+				}
+				p.ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+			c := connectWorkspace(t, t.TempDir(), "ws"+strings.TrimPrefix(srv.URL, "http")+config.TunnelPath, tunnelToken)
+			awaitBuild(t, h, c)
+			if n := answered.Load(); n < 2 {
+				t.Errorf("%d nonces asked for, want the GET tried again", n)
+			}
+		})
+	}
+}
+
+// An impostor that hands out a nonce (one it fetched from the hub while
+// it could) and drops every upgrade it takes, never answering, is sent
+// three, and the run stops.
+func TestAWorkspaceStopsAtAnImpostorThatDropsUpgrades(t *testing.T) {
+	home(t)
+	var upgrades atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "" {
+			w.Header().Set(authn.NonceHeader, authn.NewHub(tunnelToken, "build").Nonce())
+			return
+		}
+		upgrades.Add(1)
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c := connectWorkspace(t, t.TempDir(), "ws"+strings.TrimPrefix(srv.URL, "http")+config.TunnelPath, tunnelToken)
+	select {
+	case err := <-c.done:
+		if err == nil || !strings.Contains(err.Error(), "3 upgrades in a row") || !strings.Contains(err.Error(), "the token was not exposed") {
+			t.Errorf("-connect to an impostor dropping upgrades: %v", err)
+		}
+		c.done <- err
+	case <-time.After(60 * time.Second):
+		t.Fatal("dax workspace -connect kept dialling an impostor that drops its upgrades")
+	}
+	if n := upgrades.Load(); n != 3 {
+		t.Errorf("the impostor took %d upgrades, want 3", n)
 	}
 }

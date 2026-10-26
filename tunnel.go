@@ -165,26 +165,48 @@ func validInstance(id string) bool {
 	return err == nil && strings.ToLower(id) == id
 }
 
-// dialWatch is -connect's transport for the upgrades: it passes each
-// on, and until the first is answered it ends the run, by stop, at an
-// answer no redial would change, which the tunnel would otherwise try
-// again for ever: a hub's certificate the roots do not verify, or no
-// hub at the path (404). Not up yet, refused or timed out are tried
-// again, as the tunnel does; once connected, everything is.
+// dialWatch is -connect's transport for the nonce's GETs and the
+// upgrades: it passes each on, and until the first upgrade is answered
+// it ends the run, by stop, at an answer no redial would change, which
+// the tunnel would otherwise try again for ever: a hub's certificate
+// the roots do not verify, or no hub at the path (404). Not up yet,
+// refused or timed out are tried again, as the tunnel does. In any
+// phase it ends the run at the maxUnanswered-th upgrade in a row that
+// went out (so after a nonce the GET got) and came back with no answer
+// a session's hub gives (a 101, 401, 403 or 503): an impostor holding
+// the port that hands out nonces fetched from the hub and drops each
+// upgrade it takes. The run's halt (halt) ends it the same way.
 type dialWatch struct {
 	base http.RoundTripper
 	stop context.CancelFunc
 
-	mu        sync.Mutex
-	connected bool
-	fatal     error
+	mu         sync.Mutex
+	connected  bool
+	unanswered int // upgrades in a row with no answer a hub gives
+	fatal      error
 }
+
+// maxUnanswered is how many upgrades in a row may go unanswered after
+// a nonce before the run ends.
+const maxUnanswered = 3
 
 func (d *dialWatch) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := d.base.RoundTrip(r)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var cert *tls.CertificateVerificationError
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && d.fatal == nil {
+		switch {
+		case err == nil && slices.Contains([]int{http.StatusSwitchingProtocols, http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable}, resp.StatusCode):
+			d.unanswered = 0
+		default:
+			d.unanswered++
+			if d.unanswered >= maxUnanswered {
+				d.fatal = fmt.Errorf("%d upgrades in a row, each after a nonce the hub's URL gave, got no answer a session's hub gives: whatever holds the port takes upgrades and drops them. Nothing was served to it, the token was not exposed, and this run stops rather than dial it again; wait %s (the nonce's life), or restart the session's hub, before you bring the ssh -R forward back (%w)", d.unanswered, authn.NonceLifetime, wstunnel.ErrHubProof)
+				d.stop()
+			}
+		}
+	}
 	switch {
 	case err == nil && resp.StatusCode == http.StatusSwitchingProtocols:
 		d.connected = true
@@ -223,11 +245,16 @@ func (d *dialWatch) failure() error {
 // token is never sent: before each upgrade it asks the hub for a nonce,
 // and the upgrade carries the MAC of the hub's name (-name), that nonce
 // and the run's instance id under the token (authn.Prover); nothing is
-// served to a hub whose 101 does not carry its own MAC of them. A hub
-// that fails the proof, or that issues no nonce, ends the run in any
-// phase, first dial or redial: it is not the session's hub, and is not
-// dialled again, so an impostor that takes the port after a drop gets
-// one upgrade at most.
+// served to a hub whose 101 does not carry its own MAC of them. In any
+// phase, first dial or redial, the run ends at the first 101 that fails
+// the proof, at a nonce answer that rules a session's hub out, and at
+// the third upgrade in a row taken after a nonce and left without an
+// answer (dialWatch), none of which a session's hub does. So an
+// impostor that takes the port after a drop and hands out nonces it
+// fetched from the hub earlier gets at most three upgrades, each good
+// at the hub only until its nonce's 30 seconds run out; one that never
+// answers the GET is dialled again as any unreachable hub is, and gets
+// none.
 // At a stop every process the session started here ends before it
 // returns, each wait bounded as -listen's are.
 func (w *workspaceServer) dial(ctx context.Context) error {
@@ -271,7 +298,7 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 	watch := &dialWatch{base: hc.Transport, stop: cancelServe}
 	hc.Transport = watch
 	notTheHub := func(err error) error {
-		return fmt.Errorf("whatever answered %s is not the session's hub: it could not prove it holds $%s, so nothing was served to it, and this run stops rather than dial it again. Another user of this host may hold the port: rotate $%s (start the session's hub with a new token) before you bring the ssh -R forward back, since one who fetched a nonce from the hub while the forward was up can replay this upgrade within %s (%w: %w)", render.Clean(w.connect), config.TunnelTokenEnv, config.TunnelTokenEnv, authn.NonceLifetime, wstunnel.ErrHubProof, err)
+		return fmt.Errorf("whatever answered %s is not the session's hub: it could not prove it holds $%s, so nothing was served to it, the token was not exposed, and this run stops rather than dial it again. Another user of this host may hold the port: one who fetched a nonce from the hub while the forward was up can replay this upgrade within %s, so wait that long, or restart the session's hub, before you bring the ssh -R forward back; rotate $%s only if it may have leaked some other way (%w: %w)", render.Clean(w.connect), config.TunnelTokenEnv, authn.NonceLifetime, config.TunnelTokenEnv, wstunnel.ErrHubProof, err)
 	}
 	header := func(ctx context.Context) (http.Header, error) {
 		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -279,9 +306,10 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 		nonce, err := authn.FetchNonce(fctx, hc, w.connect)
 		switch {
 		case errors.Is(err, authn.ErrNoNonce):
-			// An answer, and not a dax hub's of this version: no redial
-			// changes it.
-			watch.halt(fmt.Errorf("the hub at %s issued no nonce: it is not a session's hub, or it is a dax older than %s, whose hub takes the token itself; upgrade both (%w)", render.Clean(w.connect), proofSince, err))
+			// An answer that rules a session's hub of this dax out: no
+			// redial changes it. One a hub gives for a while (5xx, 429,
+			// 408, ErrNonceLater) is a failed dial, tried again.
+			watch.halt(fmt.Errorf("asking %s for a nonce: %w; it is not a session's hub of dax %s or later (an older one: upgrade both)", render.Clean(w.connect), err, proofSince))
 			return nil, err
 		case err != nil:
 			return nil, err
@@ -293,8 +321,8 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 	proof := func(req *http.Request, resp *http.Response) error {
 		err := prover.CheckHub(req, resp, instance)
 		if err != nil {
-			// Whatever the phase: an impostor after a drop gets this
-			// one upgrade and no other.
+			// Whatever the phase: an impostor after a drop gets no
+			// upgrade after this one.
 			watch.halt(notTheHub(err))
 		}
 		return err

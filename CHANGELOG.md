@@ -133,10 +133,15 @@ versions may break flags and the config file.
   once; its 101 carries `Dax-Hub-Proof`, its own HMAC of the same under
   another label, which `-connect` checks before it serves anything.
   `-connect` now requires `-name`, the hub's workspace name, which the
-  hub's waiting line includes. A hub that fails the proof, or issues no
-  nonce, is served nothing and `-connect` stops, at the first dial or
-  after a drop, saying whatever answered is not the session's hub and
-  to rotate the token. Over `ws://` behind `ssh -R`, a local user who
+  hub's waiting line includes. A hub that fails the proof, answers the
+  nonce's GET in a way that rules a session's hub out (200 without a
+  nonce, a redirect, 401, 403, 404), or takes three upgrades in a row
+  and drops them unanswered, is served nothing and `-connect` stops, at
+  the first dial or after a drop, saying the token was not exposed and
+  to wait 30 seconds, or restart the session's hub, before bringing the
+  forward back; a 5xx, 429 or 408 to the GET is dialled again. The
+  nonce's age starts at a random offset, so it does not tell when the
+  hub started. Over `ws://` behind `ssh -R`, a local user who
   binds the port first now gets neither the token, nor a shell, nor an
   upgrade the hub would take later. The proof does not bind the
   connection, so the `ws://` line on standard error now says where it

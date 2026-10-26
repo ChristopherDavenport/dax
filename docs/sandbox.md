@@ -1527,11 +1527,15 @@ Neither end sends the token. Before each upgrade `dax workspace
 hub answers with
 
 ```
-Dax-Tunnel-Nonce: <its age in ns>.<26 random base32>.<32 hex>
+Dax-Tunnel-Nonce: <its age in ns, from a random offset>.<26 random base32>.<32 hex>
 ```
 
 the last part the hub's MAC of the rest under a secret it makes at its
-start (never the token), so it issues nonces without keeping any. The
+start (never the token), so it issues nonces without keeping any. An
+answer that rules a session's hub out (200 without a nonce, a redirect,
+401 as an older dax hub gives, 403, 404) ends the run; one a hub gives
+for a while (a 5xx, 429 or 408, as through a proxy while the hub
+restarts), or no answer at all, is dialled again. The
 upgrade then carries
 
 ```
@@ -1559,25 +1563,34 @@ they learn no token; they cannot answer with the MAC they were sent
 (the labels differ); and the upgrade they captured is over a nonce
 they made up, which the hub never issued, so it is refused when they
 replay it through the forward once it is back up (the hub warns of a
-nonce it did not issue). Nor does a proof for one hub pass at another
+nonce it did not issue). Nor does a proof for one hub replay at another
 that holds the same token: the name, and each hub's own secret, are in
-it. A hub that fails the proof, or answers with no nonce, is served
-nothing, and `-connect` stops, at the first dial or after a drop alike,
-so an impostor that takes the port after a drop gets one upgrade, not
-one per redial. A hub that refuses the proof (another token, another
-name, or a dax older than v0.0.31, whose hub takes the token itself)
-stops it too.
+it (a live relay to another hub of the same name and token is the
+relay case below; give each session's hub its own token, or name).
+Nothing is served to a hub that fails the proof, and `-connect` stops,
+at the first dial or after a drop alike, at the first 101 that fails
+it, at a nonce answer that rules a session's hub out, and at the third
+upgrade in a row it sent after a nonce that got no answer a hub gives
+(no 101, 401, 403 or 503: a real hub never takes an upgrade and drops
+it). So an impostor that takes the port after a drop gets at most three
+upgrades, and only if it hands out nonces it fetched from the hub
+earlier; one that never answers the nonce's `GET` is dialled again as
+an unreachable hub is, and gets none. A hub that refuses the proof
+(another token, another name, or a dax older than v0.0.31, whose hub
+takes the token itself) stops it too.
 
 **What it does not prove.** It does not bind the connection: an
-impostor on the workspace's host that can reach the hub while it holds
-the port (the hub's own host, another forward of its own) relays the
-`GET` and the upgrade at once, passes, and sits between the two on a
-plain connection. And one that fetched a nonce from the hub while the
-forward was up, then takes the port after a drop, can hand `-connect`
-that nonce and replay the upgrade it gets within the nonce's 30
-seconds. So when `-connect` stops at a hub that failed the proof,
-rotate `$DAX_TUNNEL_TOKEN` (start the session's hub with a new one)
-before you bring the forward back. Where the hub is reachable other
+impostor on the workspace's host that can reach a hub of this name and
+token while it holds the port (the hub's own host, another forward of
+its own) relays the `GET` and the upgrade at once, passes, and sits
+between the two on a plain connection. And one that fetched nonces
+from the hub while the forward was up, then takes the port after a
+drop, can hand them to `-connect` and replay each upgrade it gets (at
+most three, above) within that nonce's 30 seconds. The token is not
+exposed either way. So when `-connect` stops at a hub that failed the
+proof, wait 30 seconds, or restart the session's hub (a new secret, so
+every nonce it issued is unknown), before you bring the forward back;
+rotate `$DAX_TUNNEL_TOKEN` only if it may have leaked some other way. Where the hub is reachable other
 than through the forward, give it `tls_cert` and `tls_key` and dial
 `wss://` with `-tls-ca` naming its CA, whose TLS binds the connection.
 `-connect` says so on standard error each time it dials `ws://`.
