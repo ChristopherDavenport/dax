@@ -50,6 +50,8 @@ github.com/ChristopherDavenport/agentworkspace v0.0.6 h1:hKZUMdpkCe2ROHMty3ggWgx
 github.com/ChristopherDavenport/agentworkspace v0.0.6/go.mod h1:SvUSPNOIoOBhmtDKnGn1QBdgaDXTUwutX49JKjIkpQs=
 github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.6 h1:NSVN0rbNyoS4UpL7usXoGxk5EsmzuhzUSRZLGrxg67w=
 github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.6/go.mod h1:GtBd8a+wSeT7j/ShLIEUzMJzj5LSoQp6WFmgOzX1/xw=
+github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.6 h1:GVFgAEZ2zCAY4sZNcFaIApsfCZKAH/2UyaI24LusQQQ=
+github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.6/go.mod h1:mCgCZyhnTjpRxsvzwUmcXWHy3Z+XnlKiKi8oEV1SyIA=
 github.com/ChristopherDavenport/openresponses v0.0.15 h1:QdqIanhSw47FAMz4h6+dLL+RuTBPq3LBjcFb4Xb3AZM=
 github.com/ChristopherDavenport/openresponses v0.0.15/go.mod h1:oZT6GCySXw3+vL5LzrJrRI5qagBumqvwDZdp6Kr++a8=
 github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15 h1:oqfla3sdht63vHw0tpnacCzuu7xD6B1C2I0J7/pQchQ=
@@ -106,6 +108,8 @@ github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJ
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
 github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 h1:aBangftG7EVZoUb69Os8IaYg++6uMOdKK83QtkkvJik=
 github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2/go.mod h1:qwXFYgsP6T7XnJtbKlf1HP8AjxZZyzxMmc+Lq5GjlU4=
+github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
+github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxKI=

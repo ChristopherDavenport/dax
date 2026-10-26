@@ -22,6 +22,7 @@ require (
 	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.33
 	github.com/ChristopherDavenport/agentworkspace v0.0.6
 	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.6
+	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.6
 	github.com/ChristopherDavenport/openresponses v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
@@ -56,6 +57,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
