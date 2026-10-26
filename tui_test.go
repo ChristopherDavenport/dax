@@ -853,13 +853,15 @@ func TestAResumedHeldCallIsAskedOnTheScreen(t *testing.T) {
 
 // TestASlashLineInTheTUIIsDaxsCommand: the terminal client hands each
 // line to dax, which runs a slash line as the REPL does and shows what it
-// says over the input; the model never sees it. /quit leaves without an
-// error.
+// says over the input (/tools, /mcp's listing); the model never sees it.
+// /quit leaves without an error.
 func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
 	m := &steps{}
 	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("/tools\r")
 	r.waitOutput("tools: read, write, edit")
+	r.type_("/mcp\r")
+	r.waitOutput("mcp servers: none")
 	r.type_("/nope\r")
 	r.waitOutput("submit: unknown command /nope")
 	r.type_("\x15/think on\r") // ctrl+u clears the line given back

@@ -216,6 +216,20 @@ func TestASlashCommandRunsAgainstTheServedSession(t *testing.T) {
 	r.quit()
 }
 
+// /mcp in an attached view lists the served session's MCP servers, as
+// the session's own front would: the listing crosses the wire in its
+// Info and is cleaned where it is shown.
+func TestAnAttachedViewListsTheServedSessionsMCPServers(t *testing.T) {
+	t.Setenv(testMCPServerEnv, "1")
+	s := startServeWith(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
+		o.MCP = []agent.MCPServer{{Name: "docs", Command: os.Args[0], Host: true, Description: "the \x1b[31mdocs\nindex"}}
+	})
+	r := s.attach()
+	r.type_("/mcp\r")
+	r.waitOutput("docs: on this machine — the [31mdocs index")
+	r.quit()
+}
+
 // Two views attached to one served session drive one conversation: what
 // one asks, the other shows, and the other can go on with it.
 func TestTwoAttachedViewsDriveOneConversation(t *testing.T) {

@@ -344,3 +344,45 @@ func TestServersNamedAlikeAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// Info lists the session's MCP servers as they were connected: a
+// configured one on this machine with its description, a URL's without
+// what credentials it carries, and one /mcp add started in the
+// workspace with the label /mcp remove takes, until it is removed.
+func TestInfoListsTheMCPServers(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.MCP = []MCPServer{{Name: "here", Command: os.Args[0], Host: true, Description: "runs here"}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	label, err := s.AddMCP(ctx, "added", os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	here := MCPServerInfo{Name: "here", Placement: PlacedHost, Description: "runs here"}
+	added := MCPServerInfo{Name: "added", Placement: PlacedWorkspace, Where: where(s.Info().Workspace), Added: label}
+	if got := s.Info().MCP; !slices.Equal(got, []MCPServerInfo{here, added}) {
+		t.Errorf("Info.MCP = %+v", got)
+	}
+	if err := s.RemoveMCP(label); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Info().MCP; !slices.Equal(got, []MCPServerInfo{here}) {
+		t.Errorf("Info.MCP after /mcp remove = %+v", got)
+	}
+	if err := s.RemoveMCP("mcp:#9 nothing"); err == nil {
+		t.Error("removing a server never added")
+	}
+
+	_, info, err := s.mcpDialOf(MCPServer{Name: "u", URL: "https://user:pw@MCP.example:443/mcp/?key=k#f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Placement != PlacedURL || info.Where != "https://mcp.example/mcp" {
+		t.Errorf("a URL's server listed as %+v", info)
+	}
+}

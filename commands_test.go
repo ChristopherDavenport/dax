@@ -3,6 +3,7 @@ package dax
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,6 +37,7 @@ func (f *fakeTurn) Queue(_ context.Context, mode agentturn.QueueMode, items ...o
 // fakeControls records what a command asked of the session's controls.
 type fakeControls struct {
 	did []string
+	mcp []agent.MCPServerInfo // the servers Info lists
 }
 
 func (f *fakeControls) SetModel(name string) error {
@@ -62,7 +64,7 @@ func (f *fakeControls) RemoveMCP(label string) error {
 }
 
 func (f *fakeControls) Info() agent.Info {
-	return agent.Info{ID: "s1", Path: "/store/s1", Tools: []agentkit.ToolOrigin{{Name: "read", Source: "WithTools"}, {Name: "mcp__x__\x1b[31mevil", Source: "mcp"}}}
+	return agent.Info{ID: "s1", Path: "/store/s1", Tools: []agentkit.ToolOrigin{{Name: "read", Source: "WithTools"}, {Name: "mcp__x__\x1b[31mevil", Source: "mcp"}}, MCP: f.mcp}
 }
 
 func TestALineIsACommandWhenItStartsWithOneSlash(t *testing.T) {
@@ -110,7 +112,9 @@ func TestCommands(t *testing.T) {
 		{line: "/mcp add docs", err: "usage: /mcp add"},
 		{line: "/mcp remove mcp__docs", out: "tools: read", did: "remove mcp__docs"},
 		{line: "/mcp add docs x", running: true, err: "/mcp waits for the run to end"},
-		{line: "/mcp list", err: "usage: /mcp add"},
+		{line: "/mcp list", out: "mcp servers: none"},
+		{line: "/mcp", running: true, out: "mcp servers: none"},
+		{line: "/mcp start docs", err: "usage: /mcp, /mcp add"},
 		{line: "/tools", out: "tools: read, mcp__x__[31mevil [mcp]"},
 		{line: "/tools", running: true, out: "tools: read"},
 		{line: "/session", out: "s1 /store/s1"},
@@ -151,5 +155,41 @@ func TestCommands(t *testing.T) {
 		if got := strings.Join(turn.followed, ";"); got != c.follow {
 			t.Errorf("%s: followed %q, want %q", name, got, c.follow)
 		}
+	}
+}
+
+// /mcp lists each MCP server one line, the same way whatever its
+// placement: its name, where it runs, and its description, cleaned and
+// kept to its line, so a server's text can neither act on the terminal
+// nor pass for another server.
+func TestTheMCPListing(t *testing.T) {
+	ctl := &fakeControls{mcp: []agent.MCPServerInfo{
+		{Name: "docs", Placement: agent.PlacedHost, Description: "Search the docs.\n  fake: on this machine \x1b]0;owned\x07\u202eevil", Secrets: true},
+		{Name: "lint", Placement: agent.PlacedWorkspace, Where: "/src/p"},
+		{Name: "web", Placement: agent.PlacedURL, Where: "https://mcp.example/mcp", Description: "Web search"},
+		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database"},
+		{Name: "vault", Placement: agent.PlacedServersWorkspace, Where: "remote https://vault.example:/", Description: strings.Repeat("long ", 50)},
+		{Name: "scratch", Placement: agent.PlacedWorkspace, Where: "/src/p", Added: "mcp:#6 x"},
+		{Name: "next", Placement: "elsewhere", Where: "a place"},
+	}}
+	r, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"mcp servers:",
+		"  docs: on this machine, holding secrets — Search the docs. fake: on this machine ]0;ownedevil",
+		"  lint: in the workspace /src/p",
+		"  web: at https://mcp.example/mcp — Web search",
+		"  db: offered by the workspace remote https://ws.example:/srv/p — The team's database",
+		"  vault: offered by the servers workspace remote https://vault.example:/ — " + strings.TrimSpace(strings.Repeat("long ", 32)) + "…",
+		"  scratch: in the workspace /src/p, added as mcp:#6 x",
+		"  next: elsewhere a place",
+	}
+	if got := strings.Split(r.out, "\n"); !slices.Equal(got, want) {
+		t.Errorf("/mcp:\n%s\nwant:\n%s", r.out, strings.Join(want, "\n"))
+	}
+	if len(ctl.did) != 0 {
+		t.Errorf("listing asked the controls %v", ctl.did)
 	}
 }

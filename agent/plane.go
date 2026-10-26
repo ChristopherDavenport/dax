@@ -308,7 +308,8 @@ type Controls interface {
 	// RemoveMCP closes a server AddMCP started.
 	RemoveMCP(label string) error
 	// Info is what the session is: its ID, where it is kept, the tools
-	// it was assembled with and what its instruction layers left out.
+	// it was assembled with, what its instruction layers left out and
+	// its MCP servers.
 	Info() Info
 }
 
@@ -325,13 +326,16 @@ type Info struct {
 	// Workspace says where its tools act: the kind, the ref and the
 	// root.
 	Workspace workspace.Descriptor
+	// MCP are its MCP servers, each with where it runs and what it is
+	// for, listed the same wherever it runs.
+	MCP []MCPServerInfo
 }
 
 var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each
