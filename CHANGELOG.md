@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.31 - 2026-10-26
 
 - Added: a served or tunnelled workspace's offered MCP servers reach
   the session. `-workspace URL` and `workspace.hub` keep what the
