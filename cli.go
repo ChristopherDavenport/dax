@@ -86,7 +86,7 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	fs := flag.NewFlagSet(p.name, flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s workspace [flags]   (serve this directory over HTTP for -workspace; %[1]s workspace -h)\n       %[1]s box up|ls|down|serve   (the boxes -box runs the tools in, and the box host)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %[1]s [flags]   (REPL)\n       %[1]s -p \"prompt\" [flags]\n       %[1]s execute [flags]   (serve the tools over MCP, on stdio or with -listen over HTTP; %[1]s execute -h)\n       %[1]s workspace [flags]   (serve this directory over HTTP for -workspace, or with -connect through a session's workspace.hub; %[1]s workspace -h)\n       %[1]s box up|ls|down|serve   (the boxes -box runs the tools in, and the box host)\n\nflags override ~/.config/dax/config.json and .dax/config.json; see dax's README.\n", p.name)
 		fs.PrintDefaults()
 	}
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
@@ -323,8 +323,12 @@ func run(ctx context.Context, args []string, p program) error {
 	// A served workspace's token leaves the environment before anything
 	// here starts a process, the key command first among them.
 	var wsToken string
-	if settings.Workspace != nil {
-		if wsToken, err = takeWorkspaceToken(settings.Workspace.TokenEnv); err != nil {
+	if w := settings.Workspace; w != nil && w.Hub != nil {
+		if wsToken, err = takeTunnelToken("workspace.hub", w.Hub.TokenEnv); err != nil {
+			return err
+		}
+	} else if w != nil {
+		if wsToken, err = takeWorkspaceToken(w.TokenEnv); err != nil {
 			return err
 		}
 	}
@@ -402,6 +406,19 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 		wsRoot = ex.Workspace().Root()
+	} else if settings.Workspace != nil && settings.Workspace.Hub != nil {
+		// Served from a host that dials in: the session hosts the hub,
+		// waits for the workspace, then acts in it as in one it dials.
+		hub := *settings.Workspace.Hub
+		hosted, err := hostHub(ctx, hub, wsToken, p.name, os.Stderr)
+		if err != nil {
+			return err
+		}
+		defer hosted.Close()
+		if settings, err = projectSettings("workspace.hub", hosted.Workspace, user, flags); err != nil {
+			return err
+		}
+		ws, wsRoot, wsLine = hosted.Workspace, hosted.Workspace.Root(), hubLine(hosted, hub.Name)
 	} else if settings.Workspace != nil {
 		// Served elsewhere: the tools, their facts and the policy run
 		// here, and every file and process they touch is the served
@@ -552,7 +569,9 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 	)
 	switch {
 	case served != nil:
-		ws, sums, err = agent.ListWorkspaceURL(ctx, root, served.URL)
+		// A hub's workspace is listed by the ref its tunnel records,
+		// and nothing listens.
+		ws, sums, err = agent.ListWorkspaceURL(ctx, root, served.Ref())
 	case url != "":
 		ws, sums, err = agent.ListExecutorURL(ctx, root, url)
 	case len(argv) > 0:

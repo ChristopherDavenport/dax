@@ -6,7 +6,9 @@ package dax
 // primitive cut: every stat, read, write and process crosses the wire
 // on its own, and the tools, their facts and the policy stay with the
 // session. `dax execute` is the other cut, at the tool calls, where the
-// tools run where they act.
+// tools run where they act. tunnel.go turns it around, for a workspace
+// the session cannot dial: `dax workspace -connect` dials the session's
+// hub (workspace.hub).
 
 import (
 	"context"
@@ -54,7 +56,7 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	fs := flag.NewFlagSet(p.name+" workspace", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "usage: %s workspace [flags]\n\nserves a directory over HTTP as a workspace, for a session started elsewhere with -workspace to run its tools in; reads no config file.\n", p.name)
+		fmt.Fprintf(fs.Output(), "usage: %s workspace [flags]\n\nserves a directory over HTTP as a workspace, for a session started elsewhere with -workspace to run its tools in, or with -connect through a session's hub (workspace.hub) it dials; reads no config file.\n", p.name)
 		fs.PrintDefaults()
 	}
 	dir := fs.String("dir", "", "directory to serve; default the current directory")
@@ -62,6 +64,9 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	passEnv := fs.String("pass-env", "", "comma-separated variables that look like credentials to pass to the workspace's processes anyway")
 	tlsCert := fs.String("tls-cert", "", "serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "the private key (PEM) of -tls-cert")
+	connect := fs.String("connect", "", "in place of -listen, dial out to a session's hub (workspace.hub) at this wss:// URL, or ws:// to a loopback host, and serve the directory through that connection; the token from $"+config.TunnelTokenEnv)
+	tlsCA := fs.String("tls-ca", "", "with -connect, a CA certificate (PEM) to verify the hub's certificate against, besides the system's roots")
+	scopes := fs.String("scopes", "read,write,exec", "with -connect, what the session may do here: a comma-separated list of read, write and exec")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -71,14 +76,45 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("workspace: unexpected argument %q", fs.Arg(0))
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	pass, err := splitPassEnv("workspace", *passEnv)
 	if err != nil {
 		return err
 	}
-	if slices.Contains(pass, config.WorkspaceTokenEnv) {
-		return fmt.Errorf("workspace: -pass-env: %s is this server's token, which no command it runs may be given", config.WorkspaceTokenEnv)
+	for _, env := range []string{config.WorkspaceTokenEnv, config.TunnelTokenEnv} {
+		if slices.Contains(pass, env) {
+			return fmt.Errorf("workspace: -pass-env: %s is this server's token, which no command it runs may be given", env)
+		}
 	}
-	return (&workspaceServer{name: p.name, dir: *dir, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, pass: pass, signals: true}).run(ctx)
+	w := &workspaceServer{name: p.name, dir: *dir, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, pass: pass, signals: true}
+	if !given["connect"] {
+		for _, f := range []string{"tls-ca", "scopes"} {
+			if given[f] {
+				return fmt.Errorf("workspace: -%s goes with -connect", f)
+			}
+		}
+		return w.run(ctx)
+	}
+	switch {
+	case given["listen"]:
+		return errors.New("workspace: -listen and -connect are exclusive: one serves at an address, the other dials a session's hub")
+	case given["tls-cert"] || given["tls-key"]:
+		return errors.New("workspace: -tls-cert and -tls-key are -listen's; with -connect the hub has the certificate, which -tls-ca verifies")
+	}
+	if err := checkConnectURL(*connect); err != nil {
+		return err
+	}
+	if w.scopes, err = parseScopes(*scopes); err != nil {
+		return err
+	}
+	w.connect, w.tlsCA = *connect, *tlsCA
+	// The token leaves the environment before the workspace is made,
+	// whose processes inherit what is left of it.
+	if w.token, err = takeTunnelToken("workspace -connect", config.TunnelTokenEnv); err != nil {
+		return err
+	}
+	return w.run(ctx)
 }
 
 // workspaceServer is dax workspace's server.
@@ -107,9 +143,19 @@ type workspaceServer struct {
 	// drain bounds each wait for the handler's close at a stop; zero is
 	// three seconds.
 	drain time.Duration
+	// connect, in place of addr, is the hub it dials and serves the
+	// workspace through (-connect), with token, verified against the
+	// system's roots and tlsCA's certificate; scopes are what the
+	// session may do.
+	connect, tlsCA string
+	token          string
+	scopes         []wsremote.Scope
 }
 
 func (w *workspaceServer) run(ctx context.Context) error {
+	if w.connect != "" {
+		return w.dial(ctx)
+	}
 	out := w.out
 	if out == nil {
 		out = os.Stderr
@@ -379,9 +425,14 @@ func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
 // project's are refused.
 func workspaceLine(ws workspace.Workspace) string {
 	d := ws.Descriptor()
-	line := d.Kind + " " + d.Ref + " · " + d.Root
+	return d.Kind + " " + d.Ref + " · " + d.Root + startsNoProcess(ws)
+}
+
+// startsNoProcess is the banner's note on a served workspace that
+// cannot start a process, and "" for one that can.
+func startsNoProcess(ws workspace.Workspace) string {
 	if _, ok := ws.(workspace.Starter); !ok {
-		line += " · starts no process there: your MCP servers run here, the project's not at all"
+		return " · starts no process there: your MCP servers run here, the project's not at all"
 	}
-	return line
+	return ""
 }

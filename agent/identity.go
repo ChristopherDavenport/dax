@@ -199,6 +199,9 @@ func ListExecutorURL(ctx context.Context, root, endpoint string) (workspace.Desc
 // URLs are compared as config.WorkspaceRef writes them, the identity
 // -workspace records, so spellings of one address are one; a URL
 // stands for whatever serves there last, as an executor's address does.
+// A workspace that dialled a session's hub (workspace.hub) is listed by
+// the ref its tunnel records, config.TunnelRef of its name, which no
+// served workspace's URL can be.
 func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Descriptor, []agentsession.Summary, error) {
 	var none workspace.Descriptor
 	if !cas.IsStore(root) {
