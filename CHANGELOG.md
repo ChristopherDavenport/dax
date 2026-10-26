@@ -7,9 +7,35 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax workspace`, a mode with flags of its own that reads no
+  config, serves a directory over HTTP as a whole workspace
+  (agentworkspace's `remote`): its files, writes, environment, commands
+  and processes, for a session elsewhere to run its tools in. One
+  bearer token, `$DAX_WORKSPACE_TOKEN` or one made and written to a
+  private file whose path alone is printed, may read, write and run;
+  authentication is always on. `-dir` (default the current directory),
+  `-listen` (default `127.0.0.1:7779`, loopback unless `-tls-cert` and
+  `-tls-key` are given), `-pass-env`. A signal ends every process a
+  session started there before it stops. It serves `workspace.Local`
+  alone: a workspace's offered MCP servers are not carried yet.
+- Added: `-workspace URL` and the config's `workspace` (`url`,
+  `token_env`, default `DAX_WORKSPACE_TOKEN`, and `tls_ca`): the
+  session's tools, their checks and the policy run here and act in the
+  served workspace; the project's `AGENTS.md`, `.dax/skills` and
+  `.dax/config.json` are read through it, and stdio MCP servers start
+  there when the token holds `exec`. The URL is https, or http to a
+  loopback host, with no user, password, query or fragment; the token
+  is never printed or recorded, and its variable is taken out of dax's
+  environment once read. Your config only: a project's file may not
+  set `workspace`, and it is refused beside an executor or a box. The
+  header records the workspace as `remote` with the URL as ref, and
+  `-list` finds its sessions by the URL without connecting. See
+  docs/sandbox.md, "A served workspace".
+- Added: `agent.ListWorkspaceURL`, the sessions of a workspace served
+  at a URL, without dialing it.
 - Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,
   up from v0.0.4, whose new `remote` package serves a workspace over
-  HTTP and dials one (`dax workspace` and `-workspace`, below).
+  HTTP and dials one.
 
 ## v0.0.27 - 2026-10-25
 

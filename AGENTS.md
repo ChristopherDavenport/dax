@@ -42,7 +42,16 @@ before changing the shape.
   extensions' tools served over stdio MCP (`executor.NewServer`), or
   over HTTP with `-listen` (`executor.Handler`; loopback unless
   `-insecure-no-auth`, since nothing authenticates a client yet), with
-  flags of its own and no config read. `front.go`: the `front` interface,
+  flags of its own and no config read. `workspace.go`: the served
+  workspace, both ends: `dax workspace`, a directory served as a
+  `workspace.Local` through agentworkspace's `remote` behind one bearer
+  token (read, write, exec; `$DAX_WORKSPACE_TOKEN` or a private file,
+  as serve's), loopback unless `-tls-cert`/`-tls-key`, flags of its own
+  and no config read; and `dialWorkspace`, `-workspace`'s client
+  (https verified against the system's roots or `workspace.tls_ca`, no
+  redirect followed, the token's variable unset once read), whose
+  `remote.Workspace` is the session's `Options.Workspace`.
+  `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
   agentconsole's `console.Run`, the default front on a terminal: the
@@ -95,7 +104,9 @@ before changing the shape.
   `~/.dax/mcp-trust.json`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
-  session's header, and the listings by it (`List`, `ListExecutor`).
+  session's header, and the listings by it (`List`, `ListExecutor`,
+  `ListWorkspaceURL`, a served workspace's by the URL its descriptor
+  records as ref).
   `agent/confine.go`: `box.confine`, the session's claim that a box's
   tools run confined (agentpolicy's `WithConfinement`), from the box
   host's envelopes and the user's opt-in alone, with the `dax:box`

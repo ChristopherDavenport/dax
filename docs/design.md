@@ -30,7 +30,7 @@ makes no difference to the turn.
 | Plane | What it does | What the turn sees | In process | Elsewhere |
 |---|---|---|---|---|
 | AI | inference | `openresponses.Streamer` | Ollama on this host | any provider, any host |
-| Execution | acts on files, processes and the world, through the tools | the executor (`internal/executor`): the extensions' tools, their facts and their calls, over a `workspace.Workspace` | `executor.InProcess` over `workspace.Local` | `dax execute` in a container or on a host: the same tools served over stdio MCP (`executor.NewServer`), their facts, replay claims and stamps made there, reached by `-executor` (`executor.Remote`) |
+| Execution | acts on files, processes and the world, through the tools | the executor (`internal/executor`): the extensions' tools, their facts and their calls, over a `workspace.Workspace` | `executor.InProcess` over `workspace.Local` | `dax execute` in a container or on a host: the same tools served over stdio MCP (`executor.NewServer`), their facts, replay claims and stamps made there, reached by `-executor` (`executor.Remote`); or the tools here over a workspace served elsewhere, `dax workspace` (agentworkspace's `remote`), reached by `-workspace` |
 | Human or autonomous | prompts, steers, answers permissions and questions | agentturn's control contract (`agentturn.Control`), which the session implements over the kit's (`agentkit.Control`); a view follows the record and the events and sends intents (agentconsole) | the REPL, `-p` (`agent.Drive`), the terminal client | a front over a wire (`agentturn/front/control`, beside `front/a2a`), or a controller that answers by rule |
 | The record | what the planes agree happened | `agentsession.Store` | the local content-addressed store | a store over the wire (agentsession RFC 0003) |
 
@@ -418,7 +418,10 @@ can run a process for longer than one call, with pipes to it, is also
 a `workspace.Starter`. dax uses `workspace.Local`: this machine's
 directory as an `os.Root`, each command in its own process group,
 killed with it, and a `Starter`. A container or a remote runtime
-implements the same interface; agentworkspace has none yet.
+implements the same interface; agentworkspace's `remote` is one, a
+workspace served whole over HTTP, which `dax workspace` serves a
+`Local` through and `-workspace` dials (`workspace.go`): the cut at
+the primitives, where an executor is the cut at the tool calls.
 
 Equal means nothing in the session or in dax-coding asks which one it
 is:

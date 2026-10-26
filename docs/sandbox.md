@@ -3,8 +3,10 @@
 dax can run its tools in a container, a pod or another host while the
 session stays on your machine: start `dax execute` there, and start dax
 here with `-executor` set to the command that starts it, or to the URL
-where `dax execute -listen` serves. These are
-recipes for daily use; what `dax execute` serves and how is in the
+where `dax execute -listen` serves. Or keep the tools here and serve
+only the directory they act in: `dax workspace` there, `-workspace`
+here (see [A served workspace](#a-served-workspace-dax-workspace)).
+These are recipes for daily use; what `dax execute` serves and how is in the
 README's [The tools in a sandbox](../README.md#the-tools-in-a-sandbox-dax-execute).
 
 ## A box: `dax -box`
@@ -1125,6 +1127,151 @@ warning, and every
 call after fails, without connecting again, until you restart dax and
 resume the session (`dax -resume <id>`).
 
+## A served workspace: `dax workspace`
+
+An executor is one cut between the session and the place its tools
+act: at the tool calls. `dax execute` runs the tools there, makes their
+facts claims there, and the session sends it each call it allowed. A
+served workspace is the other cut: at the primitives. `dax workspace`
+serves a directory as a whole workspace over HTTP, every stat, read,
+write, command and process a request of its own (agentworkspace's
+`remote`), and the session runs the tools here over it.
+
+| | `-executor` (`dax execute`) | `-workspace` (`dax workspace`) |
+|---|---|---|
+| The tools and their facts claims | there | here |
+| What crosses the wire | one call, its facts, its output | every file operation and process the tools and the checks make |
+| The policy, the model, its key, the record, memory | here | here |
+| bash, git, the MCP servers' processes | there | there |
+| The project's `AGENTS.md`, `.dax/skills`, `.dax/config.json` | read through it | read through it |
+| Authentication | none yet (`-listen` is loopback only) | one bearer token, always |
+| TLS | no | `-tls-cert`, `-tls-key` |
+| A program's own extensions | must be the executor's too | run here, unchanged |
+
+A check that reads the project (a path rule following a link, the bash
+analyzer's stats and globs, the git-config check) is a few round trips
+over a served workspace where an executor's is one; a call that only
+runs a command costs the same. Pick the executor when the link is slow
+or the tools should never leave the sandbox; pick a served workspace
+when the session's own tools (a program's extensions) should act there
+unchanged, or when you want a token and TLS between the two.
+
+### Serving and connecting
+
+On the machine with the project:
+
+```sh
+dax workspace -dir ~/src/app
+```
+
+```
+dax workspace: serving /home/me/src/app at http://127.0.0.1:7779
+token: /home/me/.dax/serve/workspace-7779-1a2b3c4d.token
+connect: DAX_WORKSPACE_TOKEN="$(cat /home/me/.dax/serve/workspace-7779-1a2b3c4d.token)" dax -workspace http://127.0.0.1:7779
+or in your config: {"workspace": {"url": "http://127.0.0.1:7779", "token_env": "DAX_WORKSPACE_TOKEN"}}
+```
+
+It runs until a signal, reads no config, and says this on standard
+error. The token is `$DAX_WORKSPACE_TOKEN` when set; otherwise it makes
+one and writes it to a file only you can read, removed when it stops,
+and prints the file's path, never the token. Copy the token to the
+machine you run dax on, by whatever you trust, and put it in the
+variable there. The token's holder may read and write the directory
+and run any command as the user `dax workspace` runs as; there is no
+`-insecure-no-auth`. The served directory's commands get its
+environment less anything that looks like a credential, unless
+`-pass-env` names it, as `dax execute`'s do.
+
+Without a certificate it listens on loopback only (`127.0.0.1`, `::1`,
+`localhost`; port 0 picks one), and another machine tunnels:
+
+```sh
+ssh -N -L 7779:127.0.0.1:7779 build-host &
+DAX_WORKSPACE_TOKEN=... dax -workspace http://127.0.0.1:7779
+```
+
+With `-tls-cert` and `-tls-key` it serves HTTPS on any address, and the
+session verifies the certificate against the system's roots or the CA
+your config names:
+
+```json
+{
+  "workspace": { "url": "https://build-host:7779", "token_env": "BUILD_WS_TOKEN", "tls_ca": "/home/me/.config/dax/build-ca.pem" }
+}
+```
+
+| `workspace.` | |
+|---|---|
+| `url` | https, or http to a loopback host; no user, password, query or fragment. `-workspace URL` replaces it, `-workspace ""` clears it |
+| `token_env` | the variable holding the token; default `DAX_WORKSPACE_TOKEN`. dax takes it out of its own environment once read, so no child here inherits it, and never prints or records it. `pass_env` and `executor.pass_env` may not name it |
+| `tls_ca` | for https: a CA certificate (PEM) in place of the system's roots; nothing skips the verification |
+
+Only your config and the flags can name a workspace: a project's
+`.dax/config.json` that sets `workspace` is refused, since it would send
+the session's files and commands to a machine the repository chose.
+`workspace` with `executor` (a command or a URL) or `box` is refused,
+saying which to clear; `executor.pass_env` alone may stay.
+
+### What runs where
+
+Here: the model and its key, the policy and every decision, the
+questions you answer, dax-coding's tools and every extension's, their
+facts claims, memory, your own `~/.dax/AGENTS.md`, `agents_md_global`
+and skills, and the session record. There: every file the tools read,
+write or list, every command `bash` runs, every check's stat, glob and
+`git config`, and the MCP servers (`mcp_servers`, `-mcp`, `/mcp add`),
+started through the served workspace at its root with its environment
+(a server with `"in": "host"`, or a `url`, is called from here, as
+always). The project's `AGENTS.md`, `.dax/skills` and
+`.dax/config.json` are the served directory's, read through it, and
+the config's layer can only tighten, as anywhere.
+
+A token whose principal lacks `exec` (a program serving `remote` with
+read and write alone) still connects: reads and writes work, and
+`bash`, the git-config check and every command fail as forbidden,
+while the MCP servers, which the workspace cannot start, run on this
+machine with its environment scrubbed, as in any workspace that cannot
+start a process. The start line says so (`starts no process there`).
+`dax workspace`'s own token always holds `exec`.
+
+### Sessions and memory
+
+The session's header records the workspace as `remote`, with the URL
+(no query, fragment or trailing slash) as its ref and the served root
+as its root; the token is in no part of it. `-list -workspace URL` (or
+with your config's `workspace`) lists the sessions recorded in the
+workspace the latest session at that URL recorded, without connecting;
+like an executor's address, a URL stands for whatever served there
+last. `-resume` notes a session continuing in another workspace, and
+the memory scope is the workspace's, as for an executor: two served
+directories keep two memories.
+
+### Limits
+
+- No reconnect beyond the lease. Each file request stands alone, so a
+  restarted `dax workspace` answers the next one. A started process
+  lives in a session the client renews every 10 seconds on a 30-second
+  lease: a session that lapses (the server restarted, the network gone
+  for a whole lease) ends every process it started, and their reads
+  and waits fail with `no such session`. MCP servers among them start
+  again on the next call to one of their tools, as when an executor's
+  connection drops, without what they held.
+- A call in flight when the connection breaks fails, and is not sent
+  again.
+- No offered MCP servers: `dax workspace` serves a `workspace.Local`,
+  and a workspace's own servers (`workspace.ServerProvider`, a box
+  host's units) are not carried over HTTP yet.
+- The server's bounds: a write of at most 32 MiB, a listing of at most
+  10,000 entries (a directory with more fails to list, so `glob`,
+  `grep` and `ls` over it fail), 16 MiB of each stream of a command
+  whose output is not streamed, and at most 32 processes in a session.
+  A dax session opens its session there at its first MCP server, and
+  the one token is one principal, which holds at most 8 sessions at
+  once: a ninth dax session with an MCP server fails to start it until
+  another ends.
+- Your own skills are read here; a skill that runs a script from its
+  directory finds no such file there unless you put it there.
+
 ## Limits today
 
 - A `unix:` executor is refused ("not supported yet").
@@ -1142,6 +1289,10 @@ resume the session (`dax -resume <id>`).
   from its directory finds no such file in the sandbox unless you put
   it there.
 - Memory stays on your machine; the sandbox cannot read or write it.
+- A served workspace (`-workspace`) reconnects only as its lease
+  allows, carries no MCP servers a workspace offers of its own, and
+  ends its processes when its session is lost (see [its
+  limits](#limits)).
 - The terminal client's own screen does not name the executor: its
   line is printed above the client, and the client (agentconsole) has
   no header for it yet.
