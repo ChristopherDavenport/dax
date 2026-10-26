@@ -374,6 +374,8 @@ func run(ctx context.Context, args []string, p program) error {
 	var (
 		boxRequest json.RawMessage
 		wsLine     string
+		// hosted is the hub workspace.hub hosts, nil without one.
+		hosted *hostedHub
 	)
 	if settings.Box != nil {
 		// The box host, here or over ssh, makes the box when the session
@@ -410,8 +412,7 @@ func run(ctx context.Context, args []string, p program) error {
 		// Served from a host that dials in: the session hosts the hub,
 		// waits for the workspace, then acts in it as in one it dials.
 		hub := *settings.Workspace.Hub
-		hosted, err := hostHub(ctx, hub, wsToken, p.name, os.Stderr)
-		if err != nil {
+		if hosted, err = hostHub(ctx, hub, wsToken, p.name, os.Stderr); err != nil {
 			return err
 		}
 		defer hosted.Close()
@@ -524,7 +525,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		return err
 	}
-	defer sess.Close()
+	// With a hub hosted, the whole close is bounded, so a workspace that
+	// went away does not hold the exit.
+	defer closeSession(sess, hosted)
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.

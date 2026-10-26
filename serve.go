@@ -303,15 +303,21 @@ func serveTLS(certFile, keyFile string) (*tls.Config, error) {
 // loadTLS is the TLS mode serves with: the certificate and key files,
 // both or neither (nil: no TLS), at TLS 1.2 at least.
 func loadTLS(mode, certFile, keyFile string) (*tls.Config, error) {
+	return loadTLSFiles(mode, "-tls-cert", "-tls-key", certFile, keyFile)
+}
+
+// loadTLSFiles is loadTLS with the certificate's and key's settings
+// named as certName and keyName in its errors.
+func loadTLSFiles(mode, certName, keyName, certFile, keyFile string) (*tls.Config, error) {
 	switch {
 	case certFile == "" && keyFile == "":
 		return nil, nil
 	case certFile == "" || keyFile == "":
-		return nil, errors.New(mode + ": -tls-cert and -tls-key go together")
+		return nil, errors.New(mode + ": " + certName + " and " + keyName + " go together")
 	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("%s: -tls-cert, -tls-key: %w", mode, err)
+		return nil, fmt.Errorf("%s: %s, %s: %w", mode, certName, keyName, err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }

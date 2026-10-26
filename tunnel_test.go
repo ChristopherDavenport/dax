@@ -3,9 +3,18 @@ package dax
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,10 +24,30 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses/echo"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/config"
 )
+
+// testMCPServerEnv set to 1 makes the test binary serveTestMCP.
+const testMCPServerEnv = "DAX_TEST_MCP_SERVER"
+
+// serveTestMCP is a stdio MCP server with one tool, where, which says
+// the directory it runs in and its process id.
+func serveTestMCP() int {
+	srv := sdk.NewServer(&sdk.Implementation{Name: "t", Version: "1"}, nil)
+	sdk.AddTool(srv, &sdk.Tool{Name: "where", Description: "report where the server runs"},
+		func(context.Context, *sdk.CallToolRequest, struct{}) (*sdk.CallToolResult, struct{}, error) {
+			wd, _ := os.Getwd()
+			text := "dir=[" + wd + "] pid=[" + strconv.Itoa(os.Getpid()) + "]"
+			return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: text}}}, struct{}{}, nil
+		})
+	if err := srv.Run(context.Background(), &sdk.StdioTransport{}); err != nil {
+		return 1
+	}
+	return 0
+}
 
 // tunnelToken is a token long enough to enroll a workspace.
 const tunnelToken = "the-tunnel-token-of-at-least-32-bytes"
@@ -35,11 +64,17 @@ type connecting struct {
 
 func connectWorkspace(t *testing.T, dir, url, token string, scopes ...wsremote.Scope) *connecting {
 	t.Helper()
-	if scopes == nil {
-		scopes = allScopes
+	return connectWith(t, &workspaceServer{dir: dir, connect: url, token: token, scopes: scopes})
+}
+
+// connectWith runs w, its defaults filled in, as connectWorkspace does.
+func connectWith(t *testing.T, w *workspaceServer) *connecting {
+	t.Helper()
+	if w.scopes == nil {
+		w.scopes = allScopes
 	}
 	c := &connecting{out: &syncBuffer{}, done: make(chan error, 1)}
-	w := &workspaceServer{name: "dax", dir: dir, out: c.out, connect: url, token: token, scopes: scopes}
+	w.name, w.out = "dax", c.out
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { c.done <- w.run(ctx) }()
 	var err error
@@ -100,6 +135,7 @@ func TestConnectingAWorkspaceRefuses(t *testing.T) {
 		{[]string{"-connect", "wss://box.example/tunnel", "-scopes", " , "}, tunnelToken, "-scopes: none given"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-tls-ca", "/nonexistent/ca.pem"}, tunnelToken, "workspace: -tls-ca"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-pass-env", "DAX_TUNNEL_TOKEN"}, tunnelToken, "-pass-env: DAX_TUNNEL_TOKEN is this server's token"},
+		{[]string{"-connect", "ws://127.0.0.1:7780/tunnel", "-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca is for a wss:// hub"},
 		{[]string{"-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca goes with -connect"},
 		{[]string{"-scopes", "read"}, tunnelToken, "-scopes goes with -connect"},
 	} {
@@ -199,7 +235,8 @@ func TestAWorkspaceConnectsToTheSessionsHub(t *testing.T) {
 			t.Errorf("the token was printed: %s", out)
 		}
 	}
-	if out := c.out.String(); !strings.Contains(out, "dax workspace: serving "+dir+" to the hub at "+hub.URL+", which may read, write, exec") || !strings.Contains(out, "token: $DAX_TUNNEL_TOKEN") {
+	if out := c.out.String(); !strings.Contains(out, "dax workspace: serving "+dir+" to the hub at "+hub.URL+", which may read, write, exec") || !strings.Contains(out, "token: $DAX_TUNNEL_TOKEN") ||
+		!strings.Contains(out, "warning: ws:// is neither encrypted nor authenticated: whoever holds "+strings.TrimSuffix(strings.TrimPrefix(hub.URL, "ws://"), "/tunnel")+" on this host gets the token and the workspace") {
 		t.Errorf("the workspace's end said %q", out)
 	}
 	if out := hubOut.String(); !strings.Contains(out, "waiting up to 30s for workspace build at "+hub.URL+"; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect "+hub.URL) {
@@ -301,14 +338,17 @@ func TestASessionsHubOnTheCommandLine(t *testing.T) {
 	cfgPath := filepath.Join(h, ".config", "dax", "config.json")
 	for _, tc := range []struct {
 		cfg, token, want string
+		kept             bool // refused before the token is read
 	}{
-		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, "", "workspace.hub: no token: set $DAX_TUNNEL_TOKEN"},
-		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, "short", "workspace.hub: $DAX_TUNNEL_TOKEN is 5 bytes"},
-		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, tunnelToken, "workspace build did not connect to ws://127.0.0.1:"},
-		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, tunnelToken, "within 300ms; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:"},
-		// Refused with the config, before the token is read.
-		{`{"workspace":{"hub":{"listen":"0.0.0.0:0","name":"build"}}}`, "", "the hub listens on loopback only"},
-		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","tls_cert":"/nonexistent/c.pem","tls_key":"/nonexistent/k.pem"}}}`, tunnelToken, "workspace.hub: -tls-cert, -tls-key"},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, "", "workspace.hub: no token: set $DAX_TUNNEL_TOKEN", false},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, "short", "workspace.hub: $DAX_TUNNEL_TOKEN is 5 bytes", false},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, tunnelToken, "workspace build did not connect to ws://127.0.0.1:", false},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","wait":"300ms"}}}`, tunnelToken, "within 300ms; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:", false},
+		// Refused with the config, before the token is read: it is
+		// still set after.
+		{`{"workspace":{"hub":{"listen":"0.0.0.0:0","name":"build"}}}`, tunnelToken, "the hub listens on loopback only", true},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"Build"}}}`, tunnelToken, `workspace.hub.name "Build"`, true},
+		{`{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build","tls_cert":"/nonexistent/c.pem","tls_key":"/nonexistent/k.pem"}}}`, tunnelToken, "workspace.hub: tls_cert, tls_key: open /nonexistent/c.pem", false},
 	} {
 		write(t, cfgPath, tc.cfg)
 		t.Setenv(config.TunnelTokenEnv, tc.token)
@@ -318,8 +358,225 @@ func TestASessionsHubOnTheCommandLine(t *testing.T) {
 		} else if tc.token != "" && strings.Contains(err.Error(), tc.token) {
 			t.Errorf("the error holds the token: %v", err)
 		}
-		if v := os.Getenv(config.TunnelTokenEnv); v != "" {
+		switch v := os.Getenv(config.TunnelTokenEnv); {
+		case tc.kept && v != tc.token:
+			t.Errorf("%s: refused before the token was read, yet $DAX_TUNNEL_TOKEN is %q", tc.cfg, v)
+		case !tc.kept && v != "":
 			t.Errorf("%s: $DAX_TUNNEL_TOKEN is still %q", tc.cfg, v)
+		}
+	}
+}
+
+// A second host with the token is refused for the session's life: the
+// hub holds its workspace to the first instance that connected, so
+// every read lands on the first host's directory. The second run stops
+// at once, saying the workspace is held; the hub warns that it refused
+// it, without either token.
+func TestASecondHostIsRefused(t *testing.T) {
+	home(t)
+	a, b := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(a, "who"), "A")
+	write(t, filepath.Join(b, "who"), "B")
+	warned := &syncBuffer{}
+	defer agent.CaptureWarnings(warned)()
+	hub, _ := startTestHub(t, tunnelToken, 30*time.Second)
+	connectWorkspace(t, a, hub.URL, tunnelToken)
+	if err := hub.await(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second := connectWorkspace(t, b, hub.URL, tunnelToken)
+	select {
+	case err := <-second.done:
+		if err == nil || !strings.Contains(err.Error(), "the hub's workspace is held by another host") || !strings.Contains(err.Error(), "403") {
+			t.Errorf("the second host: %v", err)
+		}
+		second.done <- err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the second host kept dialling")
+	}
+	for i := range 20 {
+		got, err := workspace.Read(hub.Workspace, "who", 10)
+		if err != nil || string(got) != "A" {
+			t.Fatalf("read %d: %q, %v; want the first host's", i, got, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if root := hub.Workspace.Root(); root != a {
+		t.Errorf("root %s, want %s", root, a)
+	}
+	// The first host's own redials keep its instance: the hub still
+	// takes it.
+	if out := warned.String(); !strings.Contains(out, "refused a host for workspace build: the workspace is held by another host") || strings.Contains(out, tunnelToken) {
+		t.Errorf("the hub's warnings: %q", out)
+	}
+	if !strings.Contains(warned.String(), "tunnel: connected") {
+		t.Errorf("the hub did not say the first host connected: %q", warned.String())
+	}
+}
+
+// The hub's enrollment refuses an upgrade with the token and no
+// instance id, or one not as -connect makes it, before the hub sees it.
+func TestTheSessionsHubRefusesAnUpgradeWithNoInstance(t *testing.T) {
+	home(t)
+	defer agent.CaptureWarnings(&syncBuffer{})()
+	hub, _ := startTestHub(t, tunnelToken, 30*time.Second)
+	for _, id := range []string{"", "not-an-id", strings.Repeat("A", 32)} {
+		req, _ := http.NewRequest(http.MethodGet, "http"+strings.TrimPrefix(hub.URL, "ws"), nil)
+		req.Header.Set("Authorization", "Bearer "+tunnelToken)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Sec-WebSocket-Version", "13")
+		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		if id != "" {
+			req.Header.Set(instanceHeader, id)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("instance %q: %s, want 403", id, resp.Status)
+		}
+	}
+}
+
+// testCA makes a self-signed CA certificate for 127.0.0.1, and its key,
+// in dir.
+func testCA(t *testing.T, dir string) (certFile, keyFile string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "hub"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kd, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certFile, keyFile = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	write(t, certFile, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	write(t, keyFile, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kd})))
+	return certFile, keyFile
+}
+
+// Over wss: a hub serving tls_cert and tls_key takes a workspace that
+// verifies it with -tls-ca, which replaces the system's roots; one
+// whose -tls-ca did not sign the hub's certificate stops at once,
+// saying so, as does one dialling a path where no hub is (404), and
+// neither prints the token. No ws:// warning is printed.
+func TestAWorkspaceOverWSS(t *testing.T) {
+	home(t)
+	cert, key := testCA(t, t.TempDir())
+	other, _ := testCA(t, t.TempDir())
+	defer agent.CaptureWarnings(&syncBuffer{})()
+	h, err := startHub(config.HubSettings{Listen: "127.0.0.1:0", Name: "build", TokenEnv: config.TunnelTokenEnv, TLSCert: cert, TLSKey: key, Wait: 30 * time.Second}, tunnelToken, "dax", &syncBuffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	if !regexp.MustCompile(`^wss://127\.0\.0\.1:\d+/tunnel$`).MatchString(h.URL) {
+		t.Fatalf("the hub's URL: %s", h.URL)
+	}
+	for _, tc := range []struct {
+		name, url, ca, want string
+	}{
+		{"another CA", h.URL, other, "the hub's certificate is not one the roots verify"},
+		{"the system's roots", h.URL, "", "the hub's certificate is not one the roots verify"},
+		{"no hub at the path", strings.TrimSuffix(h.URL, "/tunnel") + "/elsewhere", cert, "the hub answered 404 Not Found: no hub at that path"},
+	} {
+		c := connectWith(t, &workspaceServer{dir: t.TempDir(), connect: tc.url, token: tunnelToken, tlsCA: tc.ca})
+		select {
+		case err := <-c.done:
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), tunnelToken) {
+				t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
+			}
+			c.done <- err
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s: dax workspace -connect kept dialling", tc.name)
+		}
+	}
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "who"), "A")
+	c := connectWith(t, &workspaceServer{dir: dir, connect: h.URL, token: tunnelToken, tlsCA: cert})
+	if err := h.await(t.Context()); err != nil {
+		t.Fatalf("await: %v; the workspace said %s", err, c.out)
+	}
+	if got, err := workspace.Read(h.Workspace, "who", 10); err != nil || string(got) != "A" {
+		t.Errorf("read over wss: %q, %v", got, err)
+	}
+	if out := c.out.String(); strings.Contains(out, "ws:// is neither") || strings.Contains(out, tunnelToken) {
+		t.Errorf("the workspace's end said %q", out)
+	}
+}
+
+// With the host gone mid-session, a request fails within the hub's
+// request timeout, and the session's close, its MCP servers in the
+// workspace among what it closes, and the hub's close after it end
+// within the one deadline.
+func TestClosingASessionWithTheHostGone(t *testing.T) {
+	home(t)
+	t.Setenv(testMCPServerEnv, "1")
+	defer agent.CaptureWarnings(&syncBuffer{})()
+	dir := t.TempDir()
+	hub, _ := startTestHub(t, tunnelToken, 30*time.Second)
+	c := connectWorkspace(t, dir, hub.URL, tunnelToken)
+	if err := hub.await(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := agent.New(t.Context(), agent.Options{
+		Streamer: &echo.Adapter{}, Model: "echo", Dir: t.TempDir(), Root: filepath.Join(t.TempDir(), "sessions"), UserDir: t.TempDir(),
+		Workspace: hub.Workspace, MCP: []agent.MCPServer{{Name: "ws", Command: os.Args[0]}, {Name: "ws2", Command: os.Args[0]}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.stop(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := workspace.Read(hub.Workspace, "who", 10); err == nil {
+		t.Error("a read with the host gone succeeded")
+	}
+	if took := time.Since(start); took > hubRequestTimeout+5*time.Second {
+		t.Errorf("a read with the host gone took %v", took)
+	}
+	start = time.Now()
+	closeSession(sess, hub)
+	hub.Close()
+	if took := time.Since(start); took > hubCloseWait+3*time.Second {
+		t.Errorf("closing with the host gone took %v, want about %v", took, hubCloseWait)
+	}
+}
+
+// oddRoot is a workspace whose reported root holds terminal controls,
+// as a host may report.
+type oddRoot struct{ *workspace.Local }
+
+func (o oddRoot) Root() string { return "/work\x1b]0;pwned\x07\x1b[2J" }
+func (o oddRoot) Descriptor() workspace.Descriptor {
+	return workspace.Descriptor{Kind: workspace.KindRemote, Ref: "http://build.tunnel.invalid", Root: o.Root()}
+}
+
+// The start line cleans the root a served workspace reports.
+func TestTheBannerCleansTheReportedRoot(t *testing.T) {
+	l, err := workspace.NewLocal(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	for _, line := range []string{workspaceLine(oddRoot{l}), elsewhereBanner(frontInfo{Workspace: workspaceLine(oddRoot{l})})} {
+		if strings.ContainsAny(line, "\x1b\x07") {
+			t.Errorf("the line holds controls: %q", line)
 		}
 	}
 }

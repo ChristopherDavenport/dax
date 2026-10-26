@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -65,7 +66,7 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	tlsCert := fs.String("tls-cert", "", "serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "the private key (PEM) of -tls-cert")
 	connect := fs.String("connect", "", "in place of -listen, dial out to a session's hub (workspace.hub) at this wss:// URL, or ws:// to a loopback host, and serve the directory through that connection; the token from $"+config.TunnelTokenEnv)
-	tlsCA := fs.String("tls-ca", "", "with -connect, a CA certificate (PEM) to verify the hub's certificate against, besides the system's roots")
+	tlsCA := fs.String("tls-ca", "", "with a wss:// -connect, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots")
 	scopes := fs.String("scopes", "read,write,exec", "with -connect, what the session may do here: a comma-separated list of read, write and exec")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -104,6 +105,9 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	}
 	if err := checkConnectURL(*connect); err != nil {
 		return err
+	}
+	if *tlsCA != "" && strings.HasPrefix(*connect, "ws://") {
+		return errors.New("workspace: -tls-ca is for a wss:// hub; ws:// has no certificate to verify")
 	}
 	if w.scopes, err = parseScopes(*scopes); err != nil {
 		return err
@@ -425,7 +429,7 @@ func workspaceHTTPClient(base, caFile string) (*http.Client, error) {
 // project's are refused.
 func workspaceLine(ws workspace.Workspace) string {
 	d := ws.Descriptor()
-	return d.Kind + " " + d.Ref + " · " + d.Root + startsNoProcess(ws)
+	return render.Clean(d.Kind+" "+d.Ref+" · "+d.Root) + startsNoProcess(ws)
 }
 
 // startsNoProcess is the banner's note on a served workspace that
