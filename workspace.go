@@ -300,7 +300,36 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 	if err != nil {
 		return nil, fmt.Errorf("-workspace %s: %w", s.URL, err)
 	}
-	return ws, nil
+	return identify(ws), nil
+}
+
+// identify is ws under the identity dax records (config.WorkspaceRef):
+// its descriptor's ref the URL normalised, so the record, -list, memory
+// and the MCP trust take spellings of one address as one workspace. It
+// is a Starter when ws is.
+func identify(ws wsremote.Workspace) wsremote.Workspace {
+	w := identified{ws}
+	if st, ok := ws.(workspace.Starter); ok {
+		return identifiedStarter{w, st}
+	}
+	return w
+}
+
+type identified struct{ wsremote.Workspace }
+
+func (w identified) Descriptor() workspace.Descriptor {
+	d := w.Workspace.Descriptor()
+	d.Ref = config.WorkspaceRef(d.Ref)
+	return d
+}
+
+type identifiedStarter struct {
+	identified
+	st workspace.Starter
+}
+
+func (w identifiedStarter) Start(ctx context.Context, c workspace.Command) (workspace.Process, error) {
+	return w.st.Start(ctx, c)
 }
 
 // workspaceHTTPClient is the client -workspace reaches base with: no

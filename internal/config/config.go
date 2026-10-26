@@ -715,6 +715,36 @@ func CheckWorkspaceURL(field, s string) error {
 	return nil
 }
 
+// WorkspaceRef is the identity of the workspace served at baseURL, the
+// ref dax records it by and lists, keys memory and trusts its MCP
+// servers under: the URL with its scheme and host in lower case, no
+// default port (80 for http, 443 for https), no user, query or
+// fragment, and no trailing slash on its path. Spellings of one address
+// are one workspace; two machines reached in turn at one URL are one
+// too.
+func WorkspaceRef(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return baseURL
+	}
+	u.User = nil
+	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
+	u.Path, u.RawPath = strings.TrimSuffix(u.Path, "/"), ""
+	u.Scheme = strings.ToLower(u.Scheme)
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port != "" {
+		host += ":" + port
+	}
+	u.Host = host
+	return u.String()
+}
+
 // checkExecutor refuses an executor command, written as line and split
 // into argv, that names no program, or that is an address rather than
 // a command: a URL, which goes in executor.url, or a unix socket, which

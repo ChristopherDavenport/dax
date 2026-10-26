@@ -12,6 +12,8 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // A session's project is its workspace: where its tools act, as the
@@ -194,9 +196,9 @@ func ListExecutorURL(ctx context.Context, root, endpoint string) (workspace.Desc
 // remote workspace at that URL names, its root the served root, and
 // every session recorded in that workspace, newest first. A URL no
 // recorded session used lists nothing, and the descriptor is zero.
-// The URL is the workspace's ref as its descriptor names it
-// (remoteRef), so it stands for whatever serves there last, as an
-// executor's address does.
+// URLs are compared as config.WorkspaceRef writes them, the identity
+// -workspace records, so spellings of one address are one; a URL
+// stands for whatever serves there last, as an executor's address does.
 func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Descriptor, []agentsession.Summary, error) {
 	var none workspace.Descriptor
 	if !cas.IsStore(root) {
@@ -207,7 +209,7 @@ func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Desc
 		return none, nil, err
 	}
 	defer store.Close()
-	ref := remoteRef(baseURL)
+	ref := config.WorkspaceRef(baseURL)
 	var (
 		ws      workspace.Descriptor
 		found   bool
@@ -219,7 +221,7 @@ func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Desc
 			scanErr = err
 			break
 		}
-		if d, ok := recordedIn(sum.Header); ok && d.Kind == workspace.KindRemote && d.Ref == ref {
+		if d, ok := recordedIn(sum.Header); ok && d.Kind == workspace.KindRemote && config.WorkspaceRef(d.Ref) == ref {
 			ws, found = d, true
 			break
 		}
@@ -229,20 +231,6 @@ func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Desc
 	}
 	sums, err := listIn(ctx, store, agentsession.ListFilter{CWD: ws.Root}, &ws)
 	return ws, sums, errors.Join(scanErr, err)
-}
-
-// remoteRef is the ref of the workspace agentworkspace's remote dials at
-// baseURL, as its Descriptor names it: the URL with no query or
-// fragment, and no trailing slash on its path.
-func remoteRef(baseURL string) string {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return baseURL
-	}
-	u.User = nil
-	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
-	u.Path, u.RawPath = strings.TrimSuffix(u.Path, "/"), ""
-	return u.String()
 }
 
 func listExecutor(ctx context.Context, root, id string) (workspace.Descriptor, []agentsession.Summary, error) {

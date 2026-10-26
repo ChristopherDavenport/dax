@@ -1064,3 +1064,24 @@ func TestWorkspacePrecedence(t *testing.T) {
 		t.Errorf("-workspace \"\" beside -executor: %+v %q, %v", s.Workspace, s.Executor, err)
 	}
 }
+
+// A workspace's identity is its URL normalised: spellings of one
+// address are one.
+func TestWorkspaceRef(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://127.0.0.1:7779":         "http://127.0.0.1:7779",
+		"http://127.0.0.1:7779/":        "http://127.0.0.1:7779",
+		" HTTP://LOCALHOST:7779/ ":      "http://localhost:7779",
+		"http://localhost:80":           "http://localhost",
+		"https://Box.Example:443/ws/":   "https://box.example/ws",
+		"https://box.example:8443":      "https://box.example:8443",
+		"http://box.example:443":        "http://box.example:443",
+		"http://[::1]:7779":             "http://[::1]:7779",
+		"https://[::1]:443":             "https://[::1]",
+		"https://me@box.example/?x=1#y": "https://box.example",
+	} {
+		if got := WorkspaceRef(in); got != want {
+			t.Errorf("WorkspaceRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -1242,14 +1242,24 @@ in the workspace is not trusted to run here. The start line says so
 ### Sessions and memory
 
 The session's header records the workspace as `remote`, with the URL
-(no query, fragment or trailing slash) as its ref and the served root
-as its root; the token is in no part of it. `-list -workspace URL` (or
+as its ref and the served root as its root; the token is in no part of
+it. The URL is normalised: its scheme and host in lower case, no
+default port (80 for http, 443 for https), no query, fragment or
+trailing slash, so `http://LOCALHOST:7779/` and `http://localhost:7779`
+are one workspace (`http://127.0.0.1:7779` is another: dax does not
+resolve names). `-list -workspace URL` (or
 with your config's `workspace`) lists the sessions recorded in the
 workspace the latest session at that URL recorded, without connecting;
 like an executor's address, a URL stands for whatever served there
 last. `-resume` notes a session continuing in another workspace, and
 the memory scope is the workspace's, as for an executor: two served
-directories keep two memories.
+directories keep two memories, and so do two URLs. The identity is the
+URL and the root alone, so two machines reached in turn through the
+same tunnel URL, each serving a directory at the same path (`/work`),
+are one workspace: one `-list`, one memory scope (what dax remembered
+of one project is offered in the other's prompt) and one MCP trust.
+Give each its own local port (`ssh -L 7780:127.0.0.1:7779 other-host`)
+to keep them apart.
 
 ### Limits
 

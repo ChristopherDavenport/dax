@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -204,6 +205,23 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 	if d := ws.Descriptor(); d.Kind != workspace.KindRemote || d.Ref != s.url || d.Root != dir || strings.Contains(d.Ref, token) {
 		t.Errorf("descriptor %+v", d)
 	}
+	// Spellings of one address are one workspace: the descriptor's ref
+	// is the URL normalised, and the workspace is still a Starter whose
+	// files read links.
+	spelled, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: strings.Replace(s.url, "127.0.0.1", "LOCALHOST", 1) + "/"}, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := spelled.Descriptor(); d.Ref != strings.Replace(s.url, "127.0.0.1", "localhost", 1) {
+		t.Errorf("the ref of another spelling: %q", d.Ref)
+	}
+	if _, ok := spelled.(workspace.Starter); !ok {
+		t.Error("the identified workspace is no Starter")
+	}
+	if _, ok := spelled.FS().(fs.ReadLinkFS); !ok {
+		t.Error("the identified workspace's files do not read links")
+	}
+	spelled.Close()
 	line := workspaceLine(ws)
 	if line != "remote "+s.url+" · "+dir {
 		t.Errorf("the banner's line %q", line)

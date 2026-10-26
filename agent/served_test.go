@@ -16,6 +16,7 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/remote"
 
+	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -148,10 +149,10 @@ func TestASessionOverAServedWorkspace(t *testing.T) {
 
 	// -list finds the session by the URL, however it is written, and
 	// not by this machine's directory or another URL.
-	if got := remoteRef(url + "/"); got != ws.Descriptor().Ref {
-		t.Errorf("remoteRef = %q, the client's ref %q", got, ws.Descriptor().Ref)
+	if got := config.WorkspaceRef(url + "/"); got != ws.Descriptor().Ref {
+		t.Errorf("WorkspaceRef = %q, the client's ref %q", got, ws.Descriptor().Ref)
 	}
-	for _, u := range []string{url, url + "/", " " + url + "/ "} {
+	for _, u := range []string{url, url + "/", " " + url + "/ ", strings.Replace(url, "http://", "HTTP://", 1)} {
 		d, sums, err := ListWorkspaceURL(ctx, o.Root, u)
 		if err != nil || d != ws.Descriptor() || len(sums) != 1 || sums[0].Header.ID != id {
 			t.Errorf("ListWorkspaceURL(%q) = %+v, %d sessions, %v", u, d, len(sums), err)
