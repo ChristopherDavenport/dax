@@ -286,6 +286,10 @@ func TestValidation(t *testing.T) {
 		{"api_key_login too long", `{"api_key_login":"` + strings.Repeat("x", 501) + `"}`, false, "api_key_login: want a URL or a command, at most 500 bytes"},
 		{"project session_header", `{"session_header":"X-Session-Id"}`, true, "session_header: a project file may only tighten"},
 		{"project client_header", `{"client_header":"X-Client"}`, true, "client_header: a project file may only tighten"},
+		{"project cache_ttl", `{"cache_ttl":"1h"}`, true, "cache_ttl: a project file may only tighten"},
+		{"project subagent_cache_ttl", `{"subagent_cache_ttl":"5m"}`, true, "subagent_cache_ttl: a project file may only tighten"},
+		{"cache_ttl not a TTL", `{"cache_ttl":"2h"}`, false, `cache_ttl "2h": want one of 5m, 1h`},
+		{"subagent_cache_ttl as a duration", `{"subagent_cache_ttl":"60m"}`, false, `subagent_cache_ttl "60m": want one of 5m, 1h`},
 		{"session_header not a name", `{"session_header":"X Session"}`, false, `session_header: "X Session" is not a header name`},
 		{"session_header with a colon", `{"session_header":"X-Session: evil"}`, false, "is not a header name"},
 		{"client_header too long", `{"client_header":"X-` + strings.Repeat("a", 63) + `"}`, false, "client_header"},
@@ -488,6 +492,9 @@ func TestResolveRefusals(t *testing.T) {
 		{"session_header with vertex", nil, Flags{Provider: ptr("vertex"), SessionHeader: ptr("X-Session-Id")}, "session_header is not supported by the vertex provider (flag)"},
 		{"client_header with vertex", []Layer{parse(t, `{"provider":"vertex","client_header":"X-Client"}`, false)}, Flags{}, "client_header is not supported by the vertex provider (/home/u/.config/dax/config.json)"},
 		{"bad session_header flag", nil, Flags{Provider: ptr("openai"), SessionHeader: ptr("Cookie")}, "session_header: Cookie is a header the client sets itself"},
+		{"cache_ttl with openrouter", []Layer{parse(t, `{"provider":"openrouter","cache_ttl":"1h"}`, false)}, Flags{}, "cache_ttl is for Claude's prompt cache, on the anthropic or vertex provider, not openrouter (/home/u/.config/dax/config.json)"},
+		{"subagent_cache_ttl flag with gemini", nil, Flags{Provider: ptr("gemini"), SubagentCacheTTL: ptr("1h")}, "subagent_cache_ttl is for Claude's prompt cache, on the anthropic or vertex provider, not gemini (flag)"},
+		{"bad cache_ttl flag", nil, Flags{Provider: ptr("anthropic"), CacheTTL: ptr("1d")}, `cache_ttl "1d": want one of 5m, 1h`},
 		{"one header for both", nil, Flags{Provider: ptr("openai"), SessionHeader: ptr("X-Id"), ClientHeader: ptr("x-id")}, "session_header and client_header both name X-Id"},
 		{"api_key_login without a command", []Layer{parse(t, `{"provider":"openai","api_key_login":"my-token-helper login"}`, false)}, Flags{}, "api_key_login (/home/u/.config/dax/config.json) is for api_key_command, which is not set"},
 	}
@@ -644,6 +651,36 @@ func TestSessionAndClientHeaders(t *testing.T) {
 	s, err = Resolve([]Layer{user}, Flags{Provider: ptr("ollama")}, "")
 	if err != nil || s.SessionHeader != "" || s.ClientHeader != "" || s.Sources["session_header"] != "default" || s.Sources["client_header"] != "default" {
 		t.Fatalf("provider switch: %q %q from %s %s, %v", s.SessionHeader, s.ClientHeader, s.Sources["session_header"], s.Sources["client_header"], err)
+	}
+}
+
+func TestCacheTTLs(t *testing.T) {
+	user := parse(t, `{"provider":"anthropic","cache_ttl":"1h","subagent_cache_ttl":"5m"}`, false)
+	for _, tc := range []struct {
+		name            string
+		layers          []Layer
+		flags           Flags
+		main, sub       string
+		mainSrc, subSrc string
+	}{
+		{"file", []Layer{user}, Flags{}, "1h", "5m", user.Path, user.Path},
+		{"flags over the file", []Layer{user}, Flags{CacheTTL: ptr("5m"), SubagentCacheTTL: ptr("1h")}, "5m", "1h", "flag", "flag"},
+		{"an empty flag turns the file's off", []Layer{user}, Flags{CacheTTL: ptr("")}, "", "5m", "flag", user.Path},
+		{"vertex takes them", nil, Flags{Provider: ptr("vertex"), CacheTTL: ptr("1h")}, "1h", "", "flag", "default"},
+		// They are the provider's that was in force where they were set.
+		{"provider switch", []Layer{user}, Flags{Provider: ptr("openrouter")}, "", "", "default", "default"},
+		{"set again after the switch", []Layer{user, parse(t, `{"provider":"vertex","subagent_cache_ttl":"1h"}`, false)}, Flags{}, "", "1h", "default", "/home/u/.config/dax/config.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Resolve(tc.layers, tc.flags, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.CacheTTL != tc.main || s.SubagentCacheTTL != tc.sub || s.Sources["cache_ttl"] != tc.mainSrc || s.Sources["subagent_cache_ttl"] != tc.subSrc {
+				t.Errorf("cache_ttl %q from %s, subagent_cache_ttl %q from %s; want %q from %s, %q from %s",
+					s.CacheTTL, s.Sources["cache_ttl"], s.SubagentCacheTTL, s.Sources["subagent_cache_ttl"], tc.main, tc.mainSrc, tc.sub, tc.subSrc)
+			}
+		})
 	}
 }
 

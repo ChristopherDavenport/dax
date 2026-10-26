@@ -86,6 +86,12 @@ type Options struct {
 	// Streamer is the model; dax's command line builds one from the
 	// configuration.
 	Streamer openresponses.Streamer
+	// SubagentStreamer is the model the sub-agents' requests go through
+	// (extension.Env's SubagentModel); nil is Streamer. dax's command
+	// line gives one of its own when the sub-agents' prompt cache lives
+	// for another time than the main conversation's (subagent_cache_ttl).
+	// Compaction and an A2A caller's conversation go through Streamer.
+	SubagentStreamer openresponses.Streamer
 	// Model is the model name the requests carry.
 	Model string
 	// Fit is the reasoning effort to ask a model for in place of the

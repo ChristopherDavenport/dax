@@ -210,6 +210,12 @@ type Env interface {
 	// while the session runs.
 	Model() openresponses.Streamer
 	Live() (model string, think bool)
+	// SubagentModel is the model a sub-agent's requests go through:
+	// Model, unless the session was given one of its own for them
+	// (agent.Options.SubagentStreamer), such as one whose prompt cache
+	// lives for another time. A sub-agent's configuration takes it in
+	// place of Model.
+	SubagentModel() openresponses.Streamer
 	// Reasoning is the reasoning a request to model asks for under
 	// think, fitted to what the model's vendor says it takes.
 	Reasoning(ctx context.Context, model string, think bool) openresponses.ReasoningConfig

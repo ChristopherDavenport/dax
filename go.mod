@@ -23,16 +23,16 @@ require (
 	github.com/ChristopherDavenport/agentworkspace v0.0.7
 	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.7
 	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.7
-	github.com/ChristopherDavenport/openresponses v0.0.15
-	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.15
-	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.15
+	github.com/ChristopherDavenport/openresponses v0.0.16
+	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.16
+	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.16
 	github.com/a2aproject/a2a-go v0.3.15
-	github.com/anthropics/anthropic-sdk-go v1.74.0
+	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.46.0
-	google.golang.org/genai v1.71.0
+	google.golang.org/genai v1.72.0
 )
 
 require (
@@ -40,7 +40,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.10 // indirect
 	charm.land/glamour/v2 v2.0.1 // indirect
 	charm.land/lipgloss/v2 v2.0.6 // indirect
-	cloud.google.com/go v0.116.0 // indirect
+	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.20.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.14.0 // indirect

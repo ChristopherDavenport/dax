@@ -99,6 +99,8 @@ func run(ctx context.Context, args []string, p program) error {
 	keyLogin := fs.String("api-key-login", "", "how to sign in again when the key command fails or its key is refused, a URL or a command; shown with the error")
 	sessionHeader := fs.String("session-header", "", "header that carries each model call's session ID, for a server that groups calls by session")
 	clientHeader := fs.String("client-header", "", "header that carries dax's name and version, for a server that records which client called")
+	cacheTTL := fs.String("cache-ttl", "", "how long Claude's prompt cache keeps the main conversation: 5m (the default) or 1h (anthropic and vertex)")
+	subCacheTTL := fs.String("subagent-cache-ttl", "", "how long Claude's prompt cache keeps a sub-agent's requests: 5m (the default) or 1h (anthropic and vertex)")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
@@ -253,6 +255,8 @@ func run(ctx context.Context, args []string, p program) error {
 	flags.APIKeyLogin = str("api-key-login", keyLogin)
 	flags.SessionHeader = str("session-header", sessionHeader)
 	flags.ClientHeader = str("client-header", clientHeader)
+	flags.CacheTTL = str("cache-ttl", cacheTTL)
+	flags.SubagentCacheTTL = str("subagent-cache-ttl", subCacheTTL)
 	if given["api-key-command"] {
 		if flags.APIKeyCommand, err = cmdline.Split(*keyCmd); err != nil {
 			return fmt.Errorf("-api-key-command: %w", err)
@@ -338,7 +342,7 @@ func run(ctx context.Context, args []string, p program) error {
 		return err
 	}
 
-	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, KeyScrub: settings.Credentials(), SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, Client: p.name + "/" + p.version})
+	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, KeyScrub: settings.Credentials(), SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, CacheTTL: settings.CacheTTL, SubagentCacheTTL: settings.SubagentCacheTTL, Client: p.name + "/" + p.version})
 	if err != nil {
 		return err
 	}
@@ -472,6 +476,13 @@ func run(ctx context.Context, args []string, p program) error {
 	// session records the effort that is sent.
 	if w := modelinfo.Of(opts.Streamer); w != nil {
 		opts.Fit = w.Fit
+		// The sub-agents' own streamer, when they have one, is checked
+		// against what the main one knows.
+		if m.SubagentStreamer != nil {
+			opts.SubagentStreamer = w.Over(m.SubagentStreamer)
+		}
+	} else {
+		opts.SubagentStreamer = m.SubagentStreamer
 	}
 	info, modelLine := describeModel(ctx, opts.Streamer, m)
 	if !given["compact"] {
