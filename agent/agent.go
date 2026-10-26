@@ -46,6 +46,7 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/executor"
+	"github.com/ChristopherDavenport/dax/internal/offer"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -246,6 +247,22 @@ type MCPServer struct {
 	// Project says the project's config named the server: it starts only
 	// when the user trusts the project's set (Options.TrustMCP).
 	Project bool
+	// Description says what the server is for, for a person reading a
+	// list of servers.
+	Description string
+	// offered says the workspace offers the server of its own
+	// (workspace.ServerProvider): it is started by name there, and the
+	// session sets it, never a caller.
+	offered bool
+	// SecretEnv names variables a command's server is given from this
+	// process's environment, wherever it is placed, which every other
+	// child of the session loses (Secrets): it is started as a
+	// workspace's offered server is (agentworkspace's Offer), its
+	// output, standard output and standard error, redacted of their
+	// values before the session reads any of it. Not for a project's
+	// server or a URL, and none may be KeyEnv, a TokenEnv, a pass list's
+	// or a served workspace's token variable.
+	SecretEnv []string
 }
 
 // DefaultUserDir is ~/.dax.
@@ -294,6 +311,11 @@ type Session struct {
 	// views counts the views attached to it (Viewing), which an A2A
 	// caller's conversation's questions need.
 	views views
+	// host is this machine's directory as a workspace, over env, made
+	// for the first secret-holding server that runs here (hostStarter);
+	// the session closes it.
+	host   *workspace.Local
+	hostMu sync.Mutex
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -425,6 +447,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("the executor's workspace cannot be read: %w", err)
 		}
 	}
+	if err := checkSecretEnv(o); err != nil {
+		return nil, err
+	}
 	if ws == nil {
 		local, err := workspace.NewLocal(o.Dir, tool.DefaultEnv(o.PassEnv, o.secrets()...))
 		if err != nil {
@@ -447,6 +472,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	defer func() {
 		if !ok {
 			s.closeTools()
+			s.closeHost()
 			if ownWS {
 				ws.Close()
 			}
@@ -536,7 +562,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// none, so its units would not start, and a server of another kind
 	// could take a unit's name and the confinement box.confine claims
 	// for it.
-	var offered workspace.ServerProvider
+	var offered []MCPServer
 	if sp, ok := ws.(workspace.ServerProvider); ok {
 		list, err := sp.Servers(ctx)
 		if err != nil {
@@ -544,8 +570,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		for _, u := range list {
 			s.offered = append(s.offered, u.Name)
+			offered = append(offered, MCPServer{Name: u.Name, Description: u.Description, offered: true})
 		}
-		offered = sp
 	}
 	s.reserved = slices.Clone(s.offered)
 	if o.Executor != nil {
@@ -616,10 +642,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
 	}
-	for _, name := range s.offered {
-		t, mopts, err := s.mcpConnect(ctx, name, mcpOffered(offered, name))
+	// The offered servers are connected as the configured ones are,
+	// through mcpStart, so a server's tools, their names, its restarts
+	// and how its output reaches the session are one wherever it runs.
+	for _, m := range offered {
+		t, mopts, err := s.mcpStart(ctx, m)
 		if err != nil {
-			return nil, fmt.Errorf("mcp %s: %w", name, err)
+			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
 	}
@@ -963,6 +992,7 @@ func (s *Session) Close() error {
 		s.set.ReleaseAll()
 	}
 	s.closeTools()
+	s.closeHost()
 	if s.ownWS {
 		s.ws.Close()
 	}
@@ -979,6 +1009,17 @@ func (s *Session) closeTools() {
 	if s.x != nil {
 		s.x.Close()
 		s.x = nil
+	}
+}
+
+// closeHost closes the workspace on this machine the session's
+// secret-holding servers placed here started in (hostStarter), once.
+func (s *Session) closeHost() {
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.host != nil {
+		s.host.Close()
+		s.host = nil
 	}
 }
 
@@ -1182,8 +1223,10 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 	}, nil
 }
 
-// mcpDialOf is the dial of m wherever it runs: at its URL, on this
-// machine, or as mcpServer places a command. A project's command
+// mcpDialOf is the dial of m wherever it runs: one the workspace
+// offers, by name there; at its URL; on this machine; or as mcpServer
+// places a command, through an Offering of its own when it holds
+// secrets (mcpHolding). A project's command
 // server is placed in the workspace or not at all: in a workspace
 // elsewhere that cannot start a process (a served one whose token
 // lacks exec), it is refused rather than moved to this machine, as an
@@ -1191,8 +1234,16 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 // rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
 	switch {
+	case m.offered:
+		sp, ok := s.ws.(workspace.ServerProvider)
+		if !ok {
+			return nil, errors.New("the workspace offers no servers")
+		}
+		return mcpOffered(sp, m.Name), nil
 	case m.URL != "":
 		return mcpURL(m.URL, m.TokenEnv)
+	case len(m.SecretEnv) > 0:
+		return s.mcpHolding(m)
 	case m.Host:
 		return mcpTransport(m.Command, s.env)
 	}
@@ -1202,6 +1253,102 @@ func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
 		}
 	}
 	return mcpServer(s.ws, m.Command, s.env)
+}
+
+// heldServer is the name a secret-holding server is offered under in
+// the one-server Offering that starts it (mcpHolding): its tools take
+// the configured name's prefix, never this.
+const heldServer = "server"
+
+// mcpHolding is the dial of a command's server that holds secrets
+// (MCPServer.SecretEnv), placed as any command is: in the workspace
+// when it can start a process and on this machine otherwise, or here
+// when it is placed on the host. It is started as a workspace's offered
+// server is, by internal/offer, the path dax workspace -servers offers
+// its servers through: given the variables from this process's
+// environment, which no other child gets, and read through the secrets
+// filter, so what it writes reaches the session, the model and the
+// record redacted of their values. A variable that is not set fails the
+// session before anything starts.
+func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
+	for _, v := range m.SecretEnv {
+		if os.Getenv(v) == "" {
+			return nil, fmt.Errorf("secret_env %s is not set; the server is not started without it", v)
+		}
+	}
+	st, ok := s.ws.(workspace.Starter)
+	if m.Host || !ok {
+		h, err := s.hostStarter()
+		if err != nil {
+			return nil, err
+		}
+		st = h
+	}
+	o, err := offer.Offer(st, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	return mcpOffered(o, heldServer), nil
+}
+
+// hostStarter is this machine's working directory as a workspace whose
+// processes start with the session's scrubbed environment, s.env: where
+// a secret-holding server placed here starts, as mcpTransport starts
+// any other.
+func (s *Session) hostStarter() (*workspace.Local, error) {
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.host != nil {
+		return s.host, nil
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	h, err := workspace.NewLocal(dir, s.env)
+	if err != nil {
+		return nil, fmt.Errorf("this machine's directory: %w", err)
+	}
+	s.host = h
+	return h, nil
+}
+
+// checkSecretEnv refuses a server's SecretEnv that a project's config
+// gave, that is for a URL, or that names another credential's variable
+// (the model's key, a server's token, a served workspace's or hub's
+// token) or one PassEnv hands every child: each would give a secret to
+// what should not have it.
+func checkSecretEnv(o Options) error {
+	for _, m := range o.MCP {
+		if len(m.SecretEnv) == 0 {
+			continue
+		}
+		switch {
+		case m.Project:
+			return fmt.Errorf("mcp %s: secret_env: a project's server is given none of your secrets", m.Name)
+		case m.URL != "":
+			return fmt.Errorf("mcp %s: secret_env is for a command; a URL's token goes in token_env", m.Name)
+		}
+		for _, v := range m.SecretEnv {
+			why := ""
+			switch {
+			case v == "":
+				why = "is not a variable name"
+			case v == o.KeyEnv:
+				why = "holds the model's key"
+			case v == config.WorkspaceTokenEnv || v == config.TunnelTokenEnv:
+				why = "is a served workspace's token"
+			case slices.Contains(o.PassEnv, v):
+				why = "is in PassEnv, which hands it to every child"
+			case slices.ContainsFunc(o.MCP, func(t MCPServer) bool { return t.TokenEnv == v }):
+				why = "is a server's token_env"
+			}
+			if why != "" {
+				return fmt.Errorf("mcp %s: secret_env %s %s; name a variable of the server's own", m.Name, v, why)
+			}
+		}
+	}
+	return nil
 }
 
 // mcpStart is what the session connects the MCP server m to, whether
@@ -1502,7 +1649,7 @@ func (o Options) secrets() []string { return Secrets(o.Extensions, o.KeyEnv, o.M
 
 // Secrets are the variables every child of a session loses whatever
 // their names: the extensions' Secrets, the model's key's variable
-// keyEnv, and each MCP server's TokenEnv. A program that builds the
+// keyEnv, and each MCP server's TokenEnv and SecretEnv. A program that builds the
 // session's workspace, or starts its executor, itself scrubs those
 // environments of these, as dax's command line does, since
 // Options.Workspace carries its own environment.
@@ -1515,6 +1662,8 @@ func Secrets(exts []extension.Extension, keyEnv string, servers []MCPServer) []s
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}
+		// A server's secrets are its own (MCPServer.SecretEnv).
+		out = append(out, m.SecretEnv...)
 	}
 	return out
 }

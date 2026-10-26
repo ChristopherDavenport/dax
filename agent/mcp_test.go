@@ -19,7 +19,7 @@ import (
 
 // TestMain lets the test binary be the MCP server the tests start: two
 // tools, leak, that says what its environment holds, and where, its
-// directory and process id; or, with
+// directory and process id, and addPlacementTools' ping and secret; or, with
 // executorRoot set, `dax execute` over that directory; or, with
 // restartableServer and a directory as its arguments, the server
 // serveRestartable makes of that directory.
@@ -51,6 +51,7 @@ func TestMain(m *testing.M) {
 				text := "dir=[" + wd + "] pid=[" + strconv.Itoa(os.Getpid()) + "]"
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, struct{}{}, nil
 			})
+		addPlacementTools(srv)
 		if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 			os.Exit(1)
 		}

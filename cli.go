@@ -22,6 +22,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentturn/session"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -358,8 +359,8 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	// What no child of the session gets, whatever its name: the
 	// extensions' secrets, the key's variable and every MCP server's
-	// token variable. A project's servers name no token, so the user's
-	// settings, read before the executor, hold them all.
+	// token and secret variables. A project's servers name neither, so
+	// the user's settings, read before the executor, hold them all.
 	secrets := agent.Secrets(exts, m.KeyEnv, mcpServersOf(settings, *mcp))
 	// Where the tools act: this directory, or an executor elsewhere
 	// whose tools act where it runs. A container or a remote runtime
@@ -640,6 +641,13 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 // in, as executorSettings says; from names the flag that put it there.
 func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
+	if errors.Is(err, wsremote.ErrForbidden) {
+		// A served workspace that grants no read (its servers alone):
+		// the session reads no file there, its project's config
+		// among them, and its tools can touch none for a rule to
+		// tighten.
+		proj, err = config.Layer{Project: true}, nil
+	}
 	if err != nil {
 		return config.Settings{}, fmt.Errorf("%s: %w", from, err)
 	}
@@ -663,6 +671,7 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
 			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+			Description: m.Description, SecretEnv: m.SecretEnv,
 		})
 	}
 	if flag != "" {

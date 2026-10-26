@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"testing/fstest"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentsmd"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
 )
 
 // What AGENTS.md files go into the prompt, and from where.
@@ -183,6 +185,11 @@ func screened(ws workspace.Workspace) (fs.FS, []agentkit.Omission) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return fsys, nil
+	case errors.Is(err, remote.ErrForbidden):
+		// A served workspace the session may not read (one granted its
+		// servers alone) has no chain of its own to read: the chain is
+		// the user's files alone.
+		return fstest.MapFS{}, []agentkit.Omission{omission(agentsmd.PartID, shown, "the workspace grants no read")}
 	case errors.Is(err, workspace.ErrOutside):
 		return refuse("outside the workspace")
 	case err != nil:
