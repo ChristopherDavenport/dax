@@ -174,10 +174,12 @@ func serversFile(t *testing.T, secrets ...string) string {
 	return file
 }
 
-// placement is one place a test's MCP server called p runs, set on o.
+// placement is one place a test's MCP server called p runs, set on o,
+// and how Info.MCP lists it.
 type placement struct {
-	name string
-	set  func(t *testing.T, o *Options)
+	name   string
+	placed Placement
+	set    func(t *testing.T, o *Options)
 }
 
 // servedLocal is a served workspace over a directory of its own, under
@@ -194,30 +196,42 @@ func servedLocal(t *testing.T) remote.Workspace {
 
 // placements are the places one MCP server called p runs: configured as
 // a command on this machine, configured as a command in a served
-// workspace, offered by a served workspace (-servers) over -workspace
-// URL, offered through a hub (workspace.hub), and offered by a servers
-// workspace beside the session's own (servers_workspace), at an address
-// or through a hub.
+// workspace, or beside one that cannot run it (on this machine),
+// offered by a served workspace (-servers) over -workspace URL, offered
+// through a hub (workspace.hub), and offered by a servers workspace
+// beside the session's own (servers_workspace), at an address or
+// through a hub.
 func placements() []placement {
 	scopes := []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec, remote.ScopeServers}
 	return []placement{
-		{"a command on this machine", func(t *testing.T, o *Options) {
+		{"a command on this machine", PlacedHost, func(t *testing.T, o *Options) {
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0], Host: true}}
 		}},
-		{"a command in a served workspace", func(t *testing.T, o *Options) {
+		{"a command in a served workspace", PlacedWorkspace, func(t *testing.T, o *Options) {
 			o.Workspace = servedLocal(t)
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0]}}
 		}},
-		{"offered by a served workspace", func(t *testing.T, o *Options) {
+		{"a command beside a served workspace that cannot run one", PlacedHost, func(t *testing.T, o *Options) {
+			// Your own server runs on this machine when the workspace's
+			// grant lacks exec, and is listed where it runs.
+			local, err := workspace.NewLocal(t.TempDir(), servedEnv())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { local.Close() })
+			o.Workspace = serveWS(t, local, remote.ScopeRead, remote.ScopeWrite)
+			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0]}}
+		}},
+		{"offered by a served workspace", PlacedOffered, func(t *testing.T, o *Options) {
 			o.Workspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t)), scopes...)
 		}},
-		{"offered through a hub", func(t *testing.T, o *Options) {
+		{"offered through a hub", PlacedOffered, func(t *testing.T, o *Options) {
 			o.Workspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), scopes...)
 		}},
-		{"offered by a servers workspace", func(t *testing.T, o *Options) {
+		{"offered by a servers workspace", PlacedServersWorkspace, func(t *testing.T, o *Options) {
 			o.ServersWorkspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeServers)
 		}},
-		{"offered by a servers workspace through a hub", func(t *testing.T, o *Options) {
+		{"offered by a servers workspace through a hub", PlacedServersWorkspace, func(t *testing.T, o *Options) {
 			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeServers)
 		}},
 	}
@@ -233,24 +247,24 @@ func placements() []placement {
 func secretPlacements(secret string) []placement {
 	scopes := []remote.Scope{remote.ScopeServers}
 	return []placement{
-		{"on this machine", func(t *testing.T, o *Options) {
+		{"on this machine", PlacedHost, func(t *testing.T, o *Options) {
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0], Host: true, SecretEnv: []string{secret}}}
 		}},
-		{"on this machine beside a served workspace", func(t *testing.T, o *Options) {
+		{"on this machine beside a served workspace", PlacedHost, func(t *testing.T, o *Options) {
 			o.Workspace = servedLocal(t)
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0], Host: true, SecretEnv: []string{secret}}}
 		}},
-		{"offered by a served workspace", func(t *testing.T, o *Options) {
+		{"offered by a served workspace", PlacedOffered, func(t *testing.T, o *Options) {
 			o.Workspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), scopes...)
 		}},
-		{"offered through a hub", func(t *testing.T, o *Options) {
+		{"offered through a hub", PlacedOffered, func(t *testing.T, o *Options) {
 			o.Workspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), scopes...)
 		}},
-		{"offered by a servers workspace beside a served one", func(t *testing.T, o *Options) {
+		{"offered by a servers workspace beside a served one", PlacedServersWorkspace, func(t *testing.T, o *Options) {
 			o.Workspace = servedLocal(t)
 			o.ServersWorkspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), remote.ScopeServers)
 		}},
-		{"offered by a servers workspace through a hub", func(t *testing.T, o *Options) {
+		{"offered by a servers workspace through a hub", PlacedServersWorkspace, func(t *testing.T, o *Options) {
 			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t, secret)), scopes...)
 		}},
 	}
@@ -288,6 +302,17 @@ func TestOneMCPServerInEveryPlacement(t *testing.T) {
 			if out := leak(t, s, "mcp__p__ping"); out != "pong" {
 				t.Errorf("ping = %q", out)
 			}
+			// And it is listed the one way, but for where it runs.
+			listed := s.Info().MCP
+			if len(listed) != 1 || listed[0].Name != "p" || listed[0].Placement != pl.placed {
+				t.Fatalf("Info.MCP = %+v, want p %s", listed, pl.placed)
+			}
+			if got := listed[0]; (got.Where == "") != (pl.placed == PlacedHost) {
+				t.Errorf("listed at %q, placed %s", got.Where, got.Placement)
+			}
+			if offered := pl.placed == PlacedOffered || pl.placed == PlacedServersWorkspace; offered != (listed[0].Description == "the test server") {
+				t.Errorf("listed with the description %q", listed[0].Description)
+			}
 		})
 	}
 }
@@ -322,6 +347,9 @@ func TestASecretHoldingServerIsRedactedInEveryPlacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
+			if listed := s.Info().MCP; len(listed) != 1 || listed[0].Placement != pl.placed {
+				t.Errorf("Info.MCP = %+v, want p %s", listed, pl.placed)
+			}
 			out := leak(t, s, "mcp__p__secret")
 			if out != "secret=[[REDACTED "+testSecretEnv+"]]" {
 				t.Errorf("the server's output: %q", out)

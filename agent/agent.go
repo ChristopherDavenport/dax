@@ -274,8 +274,11 @@ type MCPServer struct {
 	// offeredBy is the workspace that offers the server of its own
 	// (workspace.ServerProvider), the session's or the servers
 	// workspace: it is started by name there, and the session sets it,
-	// never a caller.
+	// never a caller. offeredAs and offeredAt are that placement as
+	// Info.MCP lists it.
 	offeredBy workspace.ServerProvider
+	offeredAs Placement
+	offeredAt string
 	// SecretEnv names variables a command's server is given from this
 	// process's environment, which every other child of the session
 	// loses (Secrets): it is started as a workspace's offered server is
@@ -287,6 +290,59 @@ type MCPServer struct {
 	// KeyEnv, a TokenEnv, an extension's secret, a pass list's or a
 	// served workspace's token variable.
 	SecretEnv []string
+}
+
+// Placement is where one of a session's MCP servers runs, as Info.MCP
+// lists it.
+type Placement string
+
+// The placements an MCP server has. Whichever it is, the server is
+// connected the one way (its tools mcp__<name>__<tool>, its restarts,
+// its output cleaned), so a listing differs only in this.
+const (
+	// PlacedHost is a command on this machine: placed on the host, one
+	// holding secrets, or one beside a workspace that cannot start a
+	// process.
+	PlacedHost Placement = "host"
+	// PlacedWorkspace is a command started in the session's workspace:
+	// this directory, an executor, a box, or a served or tunnelled
+	// workspace whose grant runs commands.
+	PlacedWorkspace Placement = "workspace"
+	// PlacedURL is a streamable HTTP server, called from this machine.
+	PlacedURL Placement = "url"
+	// PlacedOffered is a server the session's workspace offers of its
+	// own: a box host's unit, or a served or tunnelled workspace's
+	// -servers.
+	PlacedOffered Placement = "offered"
+	// PlacedServersWorkspace is a server the servers workspace offers
+	// (Options.ServersWorkspace).
+	PlacedServersWorkspace Placement = "servers workspace"
+)
+
+// MCPServerInfo is one of a session's MCP servers as Info.MCP lists
+// it: the same fields wherever it runs.
+type MCPServerInfo struct {
+	// Name is the prefix of its tools, mcp__<name>__<tool>.
+	Name string
+	// Placement is where it runs, and Where names that place: the
+	// workspace, as a session's warnings name one, or the URL's origin
+	// alone (urlPlace), since a hosted server's key is often in its
+	// path. Where is empty on this machine.
+	Placement Placement
+	Where     string
+	// Description is what the config, or the workspace that offers the
+	// server, says it is for: text from whoever wrote it, which a front
+	// cleans before it shows it.
+	Description string
+	// Secrets says this session gives it secrets (MCPServer.SecretEnv)
+	// and starts it on this machine, redacting them from what it
+	// writes. A server a workspace offers is never marked, even one
+	// that holds secrets there: agentworkspace does not tell a client
+	// that an offered server does (agentworkspace#23).
+	Secrets bool
+	// Added is the label RemoveMCP takes, for a server AddMCP started;
+	// empty for one the session opened with.
+	Added string
 }
 
 // DefaultUserDir is ~/.dax.
@@ -344,6 +400,10 @@ type Session struct {
 	// the session closes it.
 	host   *workspace.Local
 	hostMu sync.Mutex
+	// servers are the MCP servers connected, in the order they were,
+	// as Info.MCP lists them.
+	servers   []MCPServerInfo
+	serversMu sync.Mutex
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -600,7 +660,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// for it.
 	var offered []MCPServer
 	if sp, ok := ws.(workspace.ServerProvider); ok {
-		list, err := offeredServers(ctx, sp, "the workspace")
+		list, err := offeredServers(ctx, sp, "the workspace", PlacedOffered, where(ws.Descriptor()))
 		if err != nil {
 			return nil, err
 		}
@@ -631,7 +691,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		d := sw.Descriptor()
 		s.sw = &d
-		list, err := offeredServers(ctx, sp, "the servers workspace "+where(d))
+		list, err := offeredServers(ctx, sp, "the servers workspace "+where(d), PlacedServersWorkspace, where(d))
 		if err != nil {
 			return nil, err
 		}
@@ -696,21 +756,24 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		s.mcpNames = append(s.mcpNames, m.Name)
 	}
 	for _, m := range servers {
-		t, mopts, err := s.mcpStart(ctx, m)
+		t, mopts, info, err := s.mcpStart(ctx, m)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
+		s.servers = append(s.servers, info)
 	}
 	// The offered servers are connected as the configured ones are,
-	// through mcpStart, so a server's tools, their names, its restarts
-	// and how its output reaches the session are one wherever it runs.
+	// through mcpStart, so a server's tools, their names, its restarts,
+	// how its output reaches the session and how Info lists it are one
+	// wherever it runs.
 	for _, m := range offered {
-		t, mopts, err := s.mcpStart(ctx, m)
+		t, mopts, info, err := s.mcpStart(ctx, m)
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", m.Name, err)
 		}
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
+		s.servers = append(s.servers, info)
 	}
 	if o.Compact > 0 {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
@@ -1037,16 +1100,41 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 			return "", fmt.Errorf("mcp %s: the configured server %s offers tools under that name; pick another", name, m)
 		}
 	}
-	t, mopts, err := s.mcpStart(ctx, MCPServer{Name: name, Command: command})
+	t, mopts, info, err := s.mcpStart(ctx, MCPServer{Name: name, Command: command})
 	if err != nil {
 		return "", err
 	}
-	return s.Kit.AddMCPTransport(ctx, t, mopts...)
+	label, err := s.Kit.AddMCPTransport(ctx, t, mopts...)
+	if err != nil {
+		return "", err
+	}
+	info.Added = label
+	s.serversMu.Lock()
+	s.servers = append(s.servers, info)
+	s.serversMu.Unlock()
+	return label, nil
 }
 
 // RemoveMCP closes a server AddMCP started; its tools are not offered
-// from the next run.
-func (s *Session) RemoveMCP(label string) error { return s.Kit.RemoveMCP(label) }
+// from the next run, and Info no longer lists it. The kit drops a
+// server it added before it closes it, so a close that fails still
+// leaves it unlisted.
+func (s *Session) RemoveMCP(label string) error {
+	err := s.Kit.RemoveMCP(label)
+	s.serversMu.Lock()
+	s.servers = slices.DeleteFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
+	s.serversMu.Unlock()
+	return err
+}
+
+// mcpServers are the MCP servers connected, as Info.MCP lists them:
+// never nil, so a session with none says so (an empty list in the
+// served info), where a nil list is a session that does not list them.
+func (s *Session) mcpServers() []MCPServerInfo {
+	s.serversMu.Lock()
+	defer s.serversMu.Unlock()
+	return append([]MCPServerInfo{}, s.servers...)
+}
 
 // SetThink turns reasoning on or off for later runs, fitted to the
 // model in force, and keeps the setting for a later SetModel. The
@@ -1250,14 +1338,14 @@ func Repair(ctx context.Context, root, id string) (cas.RepairReport, error) {
 type mcpDial func(context.Context) (mcp.Transport, error)
 
 // offeredServers are the servers sp offers, by says who, as the session
-// connects them: each started by name there. One name offered twice is
-// refused, since it would be two servers under one prefix, and one's
-// rules the other's; so is a name agentworkspace does not allow a
+// connects them: each started by name there, and listed (Info.MCP) as
+// placed, at at. One name offered twice is refused, since it would be
+// two servers under one prefix, and one's rules the other's; so is a name agentworkspace does not allow a
 // server (workspace.ValidServerName: no underscore), which remote's
 // client already refuses but a provider given in Options need not: "u_"
 // would have tools mcp__u___<tool>, which box.confine takes for unit
 // u's.
-func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string) ([]MCPServer, error) {
+func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string, placed Placement, at string) ([]MCPServer, error) {
 	list, err := sp.Servers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%s's MCP servers: %w", by, err)
@@ -1270,7 +1358,7 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string)
 		if slices.ContainsFunc(out, func(m MCPServer) bool { return m.Name == u.Name }) {
 			return nil, fmt.Errorf("%s offers two MCP servers called %s", by, u.Name)
 		}
-		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp})
+		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp, offeredAs: placed, offeredAt: at})
 	}
 	return out, nil
 }
@@ -1360,32 +1448,47 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 	}, nil
 }
 
-// mcpDialOf is the dial of m wherever it runs: one the workspace
-// offers, by name there; at its URL; on this machine; or as mcpServer
-// places a command, through an Offering of its own when it holds
-// secrets (mcpHolding). A project's command
-// server is placed in the workspace or not at all: in a workspace
-// elsewhere that cannot start a process (a served one whose token
-// lacks exec), it is refused rather than moved to this machine, as an
-// executor that cannot start one fails it. Your own servers keep the
-// rule that they run here then.
-func (s *Session) mcpDialOf(m MCPServer) (mcpDial, error) {
+// mcpDialOf is the dial of m wherever it runs, and m as Info.MCP lists
+// it, placed by the same choice: one the workspace offers, by name
+// there; at its URL; on this machine; or as mcpServer places a command,
+// through an Offering of its own when it holds secrets (mcpHolding). A
+// project's command server is placed in the workspace or not at all:
+// in a workspace elsewhere that cannot start a process (a served one
+// whose token lacks exec), it is refused rather than moved to this
+// machine, as an executor that cannot start one fails it. Your own
+// servers keep the rule that they run here then.
+func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
+	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0}
+	placed := func(p Placement, at string, dial mcpDial, err error) (mcpDial, MCPServerInfo, error) {
+		info.Placement, info.Where = p, at
+		return dial, info, err
+	}
 	switch {
 	case m.offeredBy != nil:
-		return mcpOffered(m.offeredBy, m.Name), nil
+		return placed(m.offeredAs, m.offeredAt, mcpOffered(m.offeredBy, m.Name), nil)
 	case m.URL != "":
-		return mcpURL(m.URL, m.TokenEnv)
+		dial, err := mcpURL(m.URL, m.TokenEnv)
+		return placed(PlacedURL, urlPlace(m.URL), dial, err)
 	case len(m.SecretEnv) > 0:
-		return s.mcpHolding(m)
+		dial, err := s.mcpHolding(m)
+		return placed(PlacedHost, "", dial, err)
 	case m.Host:
-		return mcpTransport(m.Command, s.env)
+		dial, err := mcpTransport(m.Command, s.env)
+		return placed(PlacedHost, "", dial, err)
 	}
-	if _, ok := s.ws.(workspace.Starter); !ok && m.Project {
+	_, starts := s.ws.(workspace.Starter)
+	if !starts && m.Project {
 		if d := s.ws.Descriptor(); d.Kind != workspace.KindLocal {
-			return nil, fmt.Errorf("the project's server would run on this machine, since its workspace, %s, cannot start a process; a project's servers run in its workspace or not at all: serve the workspace with a token that may run commands (dax workspace's does), or leave this server out of the project's config", where(d))
+			return nil, info, fmt.Errorf("the project's server would run on this machine, since its workspace, %s, cannot start a process; a project's servers run in its workspace or not at all: serve the workspace with a token that may run commands (dax workspace's does), or leave this server out of the project's config", where(d))
 		}
 	}
-	return mcpServer(s.ws, m.Command, s.env)
+	// mcpServer starts it in the workspace when the workspace can start
+	// a process, and on this machine otherwise.
+	dial, err := mcpServer(s.ws, m.Command, s.env)
+	if !starts {
+		return placed(PlacedHost, "", dial, err)
+	}
+	return placed(PlacedWorkspace, where(s.ws.Descriptor()), dial, err)
 }
 
 // heldServer is the name a secret-holding server is offered under in
@@ -1498,13 +1601,14 @@ func checkSecretEnv(o Options) error {
 // and the client's options, which name its tools mcp__<name>__<tool>
 // and start it again when its session ends (a process that exited, or,
 // with -executor, the connection it was started over lost), each
-// restart reported (mcpRestarted).
-func (s *Session) mcpStart(ctx context.Context, m MCPServer) (mcp.Transport, []mcpclient.Option, error) {
-	dial, err := s.mcpDialOf(m)
+// restart reported (mcpRestarted); and m as Info.MCP lists it.
+func (s *Session) mcpStart(ctx context.Context, m MCPServer) (mcp.Transport, []mcpclient.Option, MCPServerInfo, error) {
+	dial, info, err := s.mcpDialOf(m)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, info, err
 	}
-	return s.mcpConnect(ctx, m.Name, dial)
+	t, opts, err := s.mcpConnect(ctx, m.Name, dial)
+	return t, opts, info, err
 }
 
 // mcpConnect is mcpStart's for a dial already made.

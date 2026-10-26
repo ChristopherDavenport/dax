@@ -37,6 +37,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -592,6 +593,76 @@ func assemblyLines(info agent.Info) []string {
 		lines = append(lines, fmt.Sprintf("omitted: %s", o))
 	}
 	return lines
+}
+
+// mcpLines list the session's MCP servers, one a line: its name, where
+// it runs, and what it says it is for, the same for every placement.
+// Each field, a description and a served workspace's root among them,
+// is text from whoever configured or offered the server or served the
+// session: it is cleaned, put on one line and cut short, so it cannot
+// pass for another line of the listing or act on the terminal. A nil
+// list is a served session whose dax lists none, older than /mcp, which
+// is not said to have none.
+func mcpLines(info agent.Info) []string {
+	switch {
+	case info.MCP == nil:
+		return []string{"mcp servers: not listed; the served session's dax is older than /mcp"}
+	case len(info.MCP) == 0:
+		return []string{"mcp servers: none"}
+	}
+	lines := []string{"mcp servers:"}
+	for _, m := range info.MCP {
+		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
+		if m.Secrets {
+			l += ", given secrets (secret_env)"
+		}
+		if m.Added != "" {
+			l += ", added as " + oneLine(m.Added, maxField)
+		}
+		if d := oneLine(m.Description, maxDescription); d != "" {
+			l += " — " + d
+		}
+		lines = append(lines, l)
+	}
+	return lines
+}
+
+// maxDescription is how many columns of a server's description a
+// listing shows, and maxField how many of each other field.
+const (
+	maxDescription = 160
+	maxField       = 80
+)
+
+// placedText says where m runs.
+func placedText(m agent.MCPServerInfo) string {
+	at := oneLine(m.Where, maxField)
+	switch m.Placement {
+	case agent.PlacedHost:
+		return "on this machine"
+	case agent.PlacedWorkspace:
+		return "in the workspace " + at
+	case agent.PlacedURL:
+		return "at " + at
+	case agent.PlacedOffered:
+		return "offered by the workspace " + at
+	case agent.PlacedServersWorkspace:
+		return "offered by the servers workspace " + at
+	}
+	// A placement this dax does not know, from a newer one it attached
+	// to: said as it is.
+	return strings.TrimSpace(oneLine(string(m.Placement), maxField) + " " + at)
+}
+
+// oneLine is s cleaned (render.Clean) with its runs of white space,
+// newlines and tabs among them, made one space, and cut to limit
+// columns of the terminal, a wide character two, ending "…".
+func oneLine(s string, limit int) string {
+	s = strings.Join(strings.Fields(render.Clean(s)), " ")
+	if ansi.StringWidth(s) > limit {
+		s = strings.TrimRight(ansi.Truncate(s, limit-1, ""), " ") + "…"
+	}
+	return s
 }
 
 func showAssembly(info agent.Info) {

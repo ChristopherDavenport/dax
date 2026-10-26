@@ -7,6 +7,22 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `/mcp` (or `/mcp list`) lists the session's MCP servers in the
+  terminal client, the REPL and `dax attach` alike: each server's name,
+  where it runs (on this machine, in the workspace, at a URL's origin,
+  never its path, offered by the workspace, or offered by the servers
+  workspace), whether this session gives it secrets (`secret_env`; an
+  offered server is never marked, since the workspace does not say),
+  the label `/mcp remove` takes for one `/mcp add` started, and its
+  description. Each field is cleaned, kept to one line and cut, a
+  description at 160 columns and the rest at 80. It works during a run,
+  and every placement is listed the same way, from the one path that
+  connects them; attached to an older `dax serve`, it says the servers
+  are not listed rather than that there are none (#119).
+- Added: `agent.Info.MCP`, `agent.MCPServerInfo` and `agent.Placement`
+  (`PlacedHost`, `PlacedWorkspace`, `PlacedURL`, `PlacedOffered`,
+  `PlacedServersWorkspace`): a session's MCP servers as it connected
+  them, for a front to list.
 - Added: `servers_workspace` and `-servers-workspace URL`, a second
   served workspace beside wherever the tools act (this directory,
   `workspace`, an executor or a box), whose offered MCP servers the

@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // mcpURL is the dial of the streamable HTTP server at endpoint. When
@@ -81,4 +83,16 @@ func originOf(u *url.URL) string {
 		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
 	}
 	return u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+}
+
+// urlPlace is how Info.MCP names a URL's server: its origin, the
+// scheme and host with no default port, as agentkit labels one, and
+// never its user, path, query or fragment, where a hosted server's key
+// is often put. The listing is shown to every view attached.
+func urlPlace(endpoint string) string {
+	u, err := url.Parse(config.WorkspaceRef(endpoint))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }

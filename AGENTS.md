@@ -132,7 +132,9 @@ before changing the shape.
   a command holding secrets (`secret_env`, on the host alone) started
   through `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
-  `~/.dax/mcp-trust.json`); and the session-store helpers. It names
+  `~/.dax/mcp-trust.json`); each listed in `Info.MCP` with its placement,
+  chosen where `mcpDialOf` chooses its dial, which `/mcp` shows (`mcpLines`
+  in `front.go`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
   identity, the workspace and the executor's hashed address in the
   session's header, a servers workspace's identity and servers beside

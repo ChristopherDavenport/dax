@@ -1338,6 +1338,20 @@ the input until the next line, and an error gives the line back to edit.
 
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/mcp` (or `/mcp list`) lists the session's MCP servers, one a line:
+  the name, where it runs (on this machine, in the workspace, at a URL's
+  origin, offered by the workspace, or offered by the servers
+  workspace), whether this session gives it secrets (`secret_env`), the
+  label `/mcp remove` takes for one `/mcp add` started, and its
+  description. The listing looks the same whatever the placement. A URL
+  is shown by its scheme and host alone, since a hosted server's key is
+  often in its path. A server a workspace offers is never marked as
+  given secrets, even one that holds them there: the workspace does not
+  say. Each field is the server's, its offerer's or a served
+  workspace's text, so it is cleaned, kept to one line and cut, a
+  description at 160 columns and the rest at 80. Attached to a `dax
+  serve` older than `/mcp`, the listing says the servers are not
+  listed.
 - `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has
   letters, digits, `-` and `_`, and no `__`), `/mcp remove <label>`.
 - `/tools`, `/session`, `/help`.
@@ -1345,8 +1359,9 @@ the input until the next line, and an error gives the line back to edit.
   stopped; `/abort` aborts the run; `/quit` leaves.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think` and `/mcp` wait for the run to
-end; the rest work during one. An unknown command is an error, not a
+the next model call. `/model`, `/think`, `/mcp add` and `/mcp remove`
+wait for the run to end; the rest, the `/mcp` listing among them, work
+during one. An unknown command is an error, not a
 prompt. `/compact` does not exist (use `-compact N`).
 
 ## Serving a session: `dax serve` and `dax attach`

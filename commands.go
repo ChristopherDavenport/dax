@@ -39,6 +39,7 @@ const commandHelp = `commands:
   /think on|off             reasoning from the next request
   /tools                    the tools offered and what was left out
   /session                  the session's ID and where it is kept
+  /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
   /follow <text>            a follow-up, taken when the model would stop
@@ -127,6 +128,13 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
 	case "/mcp":
+		// The listing changes nothing, so it works during a run.
+		if sub, rest, _ := strings.Cut(arg, " "); sub == "" || sub == "list" {
+			if strings.TrimSpace(rest) != "" {
+				return commandResult{}, errors.New("usage: /mcp list, with nothing after it")
+			}
+			return commandResult{out: strings.Join(mcpLines(ctl.Info()), "\n")}, nil
+		}
 		if err := idle(); err != nil {
 			return commandResult{}, err
 		}
@@ -135,7 +143,8 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 	return commandResult{}, fmt.Errorf("unknown command %s\n%s", name, commandHelp)
 }
 
-// mcpCommand is /mcp add and /mcp remove.
+// mcpCommand is /mcp add and /mcp remove; runCommand answers /mcp and
+// /mcp list.
 func mcpCommand(ctx context.Context, ctl agent.Controls, arg string) (commandResult, error) {
 	sub, rest, _ := strings.Cut(arg, " ")
 	rest = strings.TrimSpace(rest)
@@ -161,5 +170,5 @@ func mcpCommand(ctx context.Context, ctl agent.Controls, arg string) (commandRes
 		}
 		return commandResult{out: strings.Join(assemblyLines(ctl.Info()), "\n")}, nil
 	}
-	return commandResult{}, errors.New("usage: /mcp add <name> <command line>, or /mcp remove <label>")
+	return commandResult{}, errors.New("usage: /mcp, /mcp add <name> <command line>, or /mcp remove <label>")
 }
