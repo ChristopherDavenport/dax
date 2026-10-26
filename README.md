@@ -391,7 +391,7 @@ names the file and the field.
 | `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there) or `checkout` (`{"url", "ref"}`: a repository the box host clones and keeps, within its config's `checkouts.allow`; no credentials in the URL), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. `confine` (`off`, `units`, `workspace`) has the policy take the box's tools as confined where their envelope allows, so a bare ask for them does not ask; `workspace` also has the box host hold the repository's `.git` read-only in the box, the git guard (git that writes then fails there; commit outside it), and claims nothing for the workspace without it (docs/sandbox.md, "Fewer questions in a box"). Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `workspace` | `{"url": "https://box.example:7779", "token_env": "DAX_WORKSPACE_TOKEN", "tls_ca": "ca.pem"}`: run the tools here, in a workspace `dax workspace` serves there (see [A served workspace](#a-served-workspace-dax-workspace)). `url` is https, or http to a loopback host, with no user, password, query or fragment; `token_env` names the variable holding its token (default `DAX_WORKSPACE_TOKEN`), which only the workspace is sent and `pass_env` may not name; `tls_ca`, for https, a CA certificate to verify its certificate against in place of the system's. Your file only; not with `executor` or `box` |
 | `workspace.hub` | `{"listen": ":7780", "name": "build", "token_env": "DAX_TUNNEL_TOKEN", "tls_cert": "hub.pem", "tls_key": "hub-key.pem", "wait": "60s"}`, in place of `workspace.url`: host a hub for a workspace that dials in (`dax workspace -connect`, see [A workspace that dials in](#a-workspace-that-dials-in-dax-workspace--connect)), and act in it once it does. `listen` is a loopback address unless `tls_cert` and `tls_key` are given; the upgrade path is `/tunnel`. `name` is the workspace's name and identity, a DNS label; `token_env` the variable holding the one token that enrolls it (default `DAX_TUNNEL_TOKEN`, at least 32 bytes, taken out of the environment before any process starts, and no other credential's variable); `wait` how long to wait for it (default `60s`). Your file only; not with `url`, `executor` or `box` |
-| `servers_workspace` | `{"url": "http://127.0.0.1:7781", "token_env": "DAX_SERVERS_WORKSPACE_TOKEN"}`, or `{"hub": {...}}` as `workspace.hub`: a second served workspace, beside wherever the tools act (this directory, `workspace`, an executor or a box), whose offered MCP servers the session connects and nothing else (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). The same fields as `workspace`, checked the same way, with their own default variables, `DAX_SERVERS_WORKSPACE_TOKEN` and, for a hub, `DAX_SERVERS_TUNNEL_TOKEN` (no other connection's, nor any other credential's). The session refuses one whose grant is more than `servers` (and `read`): with `exec` or `write` its servers' secrets are not safe there. Not the session's own workspace. Your file only |
+| `servers_workspace` | `{"url": "http://127.0.0.1:7781", "token_env": "DAX_SERVERS_WORKSPACE_TOKEN"}`, or `{"hub": {...}}` as `workspace.hub`: a second served workspace, beside wherever the tools act (this directory, `workspace`, an executor or a box), whose offered MCP servers the session connects and nothing else (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). The same fields as `workspace`, checked the same way, with their own default variables, `DAX_SERVERS_WORKSPACE_TOKEN` and, for a hub, `DAX_SERVERS_TUNNEL_TOKEN` (no other connection's, nor any other credential's). The session refuses one whose grant is more than `servers`: with `read`, `write` or `exec` its servers' secrets are not safe there. Not the session's own workspace, and two hubs need two ports. Your file only |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
@@ -819,12 +819,13 @@ there before a byte is served; the value itself never crosses the
 wire. Since a session that may run commands there could read a running
 server's environment (`/proc/<pid>/environ`), and one that may write
 could change the server's code or config to print the token past the
-redaction, `dax workspace` refuses to offer a secret-holding server
-under a grant with `exec` or `write`, and refuses to offer it beside
-any other server, which would run as its user beside it: serve it
-alone, from a `-servers` file and a `dax workspace` of its own, with
-`-scopes servers` (and `read`, if the session should read the files),
-as the box host gives each unit a container of its own.
+redaction, and one that may read reads whatever the server keeps in
+the directory (and `/proc` too, with `/` served), `dax workspace`
+refuses to offer a secret-holding server under a grant with `exec`,
+`write` or `read`, and refuses to offer it beside any other server,
+which would run as its user beside it: serve it alone, from a
+`-servers` file and a `dax workspace` of its own, with `-scopes
+servers`, as the box host gives each unit a container of its own.
 
 On the host that holds the token, `~/gh-servers.json`:
 
@@ -873,10 +874,11 @@ workspace is used: no file of it is read, no tool acts there, and its
 project's config and `AGENTS.md` are not the session's.
 
 - **Its grant is checked.** The session refuses a servers workspace
-  that lets it run commands or write there (`exec` or `write`; `read`
-  is let through, and unused), since that is what makes a secret
+  that lets it read, write or run commands there (`read`, `write` or
+  `exec`), since a grant of `servers` alone is what makes a secret
   holder safe; one that offers no servers; and one that is the
-  session's own workspace.
+  session's own workspace. It refuses one token for both connections,
+  whatever their kinds: the servers workspace's host holds its token.
 - **Names.** A name it offers that your config gives, that the
   session's workspace offers or that is a box host's unit is refused, as
   between any two servers; `/mcp add` cannot take one either.
@@ -889,12 +891,22 @@ project's config and `AGENTS.md` are not the session's.
   `dax.servers_workspace`, by its identity (a URL as `workspace`'s is
   normalised, a hub's workspace by its name) and the servers it
   offered, never its token; `-list` ends a session's line with
-  `servers remote <identity>`, and the start line says
-  `servers: ... · its servers alone`.
+  `servers remote <identity>`, and every front's start line says
+  `servers: ... · its servers alone`, with or without `-v`. The header
+  keeps the one the session started with: `-resume` with another, or
+  none, says so in a warning, as for the workspace.
 - **A drop** is a server that stopped: the next call to one of its
   tools tries to start it again, with the same warning and
   `dax.mcp.restart` entry as any server's, and fails until the
-  workspace is back. The session, and its own workspace, go on.
+  workspace is back. The session, and its own workspace, go on, and
+  the exit waits on it no longer than on a hub's (3 seconds). Through a
+  hub, "back" means the same `dax workspace -connect` run reconnecting:
+  the hub holds to the first instance that enrolled, so a restarted run
+  is refused (403) for the rest of the session; start the session again
+  to take a new one.
+- **Through a hub,** the session prints what to run on the servers'
+  host, with the grant it needs: `DAX_TUNNEL_TOKEN=... dax workspace
+  -connect <url> -scopes servers -servers FILE`.
 
 ### A workspace that dials in: `dax workspace -connect`
 

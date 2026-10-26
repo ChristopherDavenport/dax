@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -72,7 +73,9 @@ const noRead = "the workspace grants no read"
 // start servers in (config.ServersOnly): a read it refuses
 // (remote.ErrForbidden) then leaves nothing for a project's rule to
 // tighten.
-func serversOnly(ws workspace.Workspace) bool { return config.ServersOnly(ws) }
+func serversOnly(ws workspace.Workspace) bool {
+	return config.ServersOnly(context.Background(), ws)
+}
 
 // agentsMDPath is where the chain is read from in the workspace: its
 // root, where the session starts.

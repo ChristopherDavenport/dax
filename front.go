@@ -244,7 +244,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	if f.info.ModelInfo != "" {
 		fmt.Printf("model: %s\n", f.info.ModelInfo)
 	}
-	if l := elsewhereBanner(f.info); l != "" {
+	for _, l := range elsewhereLines(f.info) {
 		fmt.Println(render.Clean(l))
 	}
 	if info.Recorded {

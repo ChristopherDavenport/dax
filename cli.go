@@ -346,14 +346,17 @@ func run(ctx context.Context, args []string, p program) error {
 		if swToken, err = takeTunnelToken(w.Hub.Setting(), w.Hub.TokenEnv); err != nil {
 			return err
 		}
-		// One token at two hubs would enroll either host at either.
-		if h := settings.Workspace; h != nil && h.Hub != nil && swToken == wsToken {
-			return fmt.Errorf("%s: $%s is the token workspace.hub enrolls its workspace with; give each hub a token of its own", w.Hub.Setting(), w.Hub.TokenEnv)
-		}
 	} else if w != nil {
 		if swToken, err = takeWorkspaceToken(w.Flag(), w.TokenEnv); err != nil {
 			return err
 		}
+	}
+	// The servers workspace's host is another machine, and holds its
+	// token: one token for both connections, whatever their kinds, would
+	// let that host use the session's workspace's grant (dial it, or
+	// enroll at its hub first) and the session's workspace use its.
+	if swToken != "" && swToken == wsToken {
+		return errors.New("servers_workspace: its token is the session's workspace's too; give each connection a token of its own")
 	}
 	cost, err := pricing(settings.PricingFile)
 	if err != nil {
@@ -399,6 +402,10 @@ func run(ctx context.Context, args []string, p program) error {
 		wsLine     string
 		// hosted is the hub workspace.hub hosts, nil without one.
 		hosted *hostedHub
+		// dialed are the workspaces dialed at a URL, the session's and the
+		// servers workspace, whose requests its close gives up past its
+		// deadline.
+		dialed []abandoner
 	)
 	if settings.Box != nil {
 		// The box host, here or over ssh, makes the box when the session
@@ -456,6 +463,9 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 		ws, wsRoot, wsLine = served, served.Root(), workspaceLine(served)
+		if a, ok := served.(abandoner); ok {
+			dialed = append(dialed, a)
+		}
 	} else {
 		local, err := workspace.NewLocal(dir, toolsEnv(settings, m.KeyEnv, secrets...))
 		if err != nil {
@@ -487,6 +497,9 @@ func run(ctx context.Context, args []string, p program) error {
 		defer served.Close()
 		d := served.Descriptor()
 		sw, swLine = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
+		if a, ok := served.(abandoner); ok {
+			dialed = append(dialed, a)
+		}
 	}
 	opts := agent.Options{
 		Extensions: exts,
@@ -579,9 +592,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		return err
 	}
-	// With a hub hosted, the whole close is bounded, so a workspace that
-	// went away does not hold the exit.
-	defer closeSession(sess, hosted, swHosted)
+	// With a hub hosted or a workspace dialed, the whole close is
+	// bounded, so a workspace that went away does not hold the exit.
+	defer closeSession(sess, []*hostedHub{hosted, swHosted}, dialed...)
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
@@ -701,7 +714,7 @@ func executorSettings(view workspace.Workspace, user config.Layer, flags config.
 func projectSettings(from string, view workspace.Workspace, user config.Layer, flags config.Flags) (config.Settings, error) {
 	proj, err := config.LoadProject(view)
 	if errors.Is(err, wsremote.ErrForbidden) {
-		if !config.ServersOnly(view) {
+		if !config.ServersOnly(context.Background(), view) {
 			// The session would act there under none of the project's
 			// rules, which only tighten.
 			return config.Settings{}, fmt.Errorf("%s: the workspace lets the session act in it but not read its project's config, whose rules would then not apply; grant read too (dax workspace refuses write or exec without it): %w", from, err)

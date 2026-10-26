@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/remote"
@@ -103,7 +104,8 @@ func TestAServersWorkspaceBesideTheSessions(t *testing.T) {
 
 // A servers workspace whose grant is more than servers is refused, as
 // is the point of it: with exec the session reads a running server's
-// environment, with write it changes the server. So are one that offers
+// environment, with write it changes the server, with read it reads
+// what the server keeps. So are one that offers
 // no servers, one that is the session's own workspace, and one offering
 // a name the session's workspace offers or the user's config names.
 func TestAServersWorkspaceIsRefused(t *testing.T) {
@@ -118,13 +120,19 @@ func TestAServersWorkspaceIsRefused(t *testing.T) {
 	}{
 		{"exec", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeExec, remote.ScopeServers)
-		}, "grants more than servers (exec or write)"},
+		}, "grants more than servers (read, write or exec)"},
 		{"write", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeWrite, remote.ScopeServers)
-		}, "grants more than servers (exec or write)"},
+		}, "grants more than servers (read, write or exec)"},
 		{"exec through a hub", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeRead, remote.ScopeExec, remote.ScopeServers)
-		}, "grants more than servers (exec or write)"},
+		}, "grants more than servers (read, write or exec)"},
+		{"read", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = offered(t, remote.ScopeRead, remote.ScopeServers)
+		}, "grants more than servers (read, write or exec)"},
+		{"read through a hub", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = tunnelWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeRead, remote.ScopeServers)
+		}, "grants more than servers (read, write or exec)"},
 		{"no servers", func(t *testing.T, o *Options) {
 			o.ServersWorkspace = offered(t, remote.ScopeRead)
 		}, "offers no MCP servers: its grant lacks servers"},
@@ -222,11 +230,20 @@ func TestAServersWorkspaceThatDrops(t *testing.T) {
 	if err != nil || !strings.Contains(res.Output.Text, "Run go test") {
 		t.Errorf("read after the drop: %v, %v", res.Output.Text, err)
 	}
-	// Its close may fail at the server's process, there no longer; the
-	// record is kept whole either way.
+	// Its close may fail at the server's process, there no longer, and
+	// at nothing else; the record is kept whole either way. mcpclient's
+	// Remote.Close reports, depending on scheduling, the close error of a
+	// link the failed restart already ended (agenttool#88); once that is
+	// fixed this requires nil.
 	id := s.ID()
 	if err := s.Close(); err != nil {
-		t.Logf("close after the drop: %v", err)
+		// Each error joined is the process's close.
+		for _, line := range strings.Split(err.Error(), "\n") {
+			if !strings.Contains(line, "/processes/") {
+				t.Errorf("close after the drop: %v, want nil or the server's process's close", err)
+				break
+			}
+		}
 	}
 	path, err := Project(context.Background(), o.Root, id, t.TempDir())
 	if err != nil {
@@ -258,7 +275,7 @@ func TestAServersWorkspaceThatStartsIsRefused(t *testing.T) {
 		}
 		t.Errorf("err = %v", err)
 	}
-	if config.ServersOnly(o.ServersWorkspace) {
+	if config.ServersOnly(t.Context(), o.ServersWorkspace) {
 		t.Error("ServersOnly of a Starter")
 	}
 }
@@ -273,4 +290,88 @@ func (startingOffer) Servers(context.Context) ([]workspace.Server, error) {
 
 func (startingOffer) StartServer(context.Context, string, io.Writer) (workspace.Process, error) {
 	return nil, io.EOF
+}
+
+// namedOffer is a servers-only stand-in that offers one server by name.
+type namedOffer struct {
+	workspace.Workspace
+	name string
+}
+
+func (n namedOffer) Servers(context.Context) ([]workspace.Server, error) {
+	return []workspace.Server{{Name: n.name}}, nil
+}
+
+func (namedOffer) StartServer(context.Context, string, io.Writer) (workspace.Process, error) {
+	return nil, io.EOF
+}
+
+// A name agentworkspace does not allow a server is refused from any
+// provider given in Options, a servers workspace's or the session's
+// own: "u_" would have tools mcp__u___<tool>, which box.confine takes
+// for a unit u's.
+func TestAnOfferedNameThatIsNoServersIsRefused(t *testing.T) {
+	for _, name := range []string{"u_", "U", "a__b", ""} {
+		o := options(t, &scripted{})
+		local, err := workspace.NewLocal(o.Dir, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Workspace = namedOffer{struct{ workspace.Workspace }{local}, name}
+		s, err := New(t.Context(), o)
+		if err == nil {
+			s.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "which is not a server's name") {
+			t.Errorf("%q: err = %v", name, err)
+		}
+		local.Close()
+	}
+}
+
+// Resuming with another servers workspace, or none, or one where the
+// session had none, says so, as resuming in another workspace does; the
+// header keeps the one the session started with.
+func TestResumingWithAnotherServersWorkspaceSaysSo(t *testing.T) {
+	gh := &workspace.Descriptor{Kind: workspace.KindRemote, Ref: "http://127.0.0.1:7781"}
+	other := &workspace.Descriptor{Kind: workspace.KindRemote, Ref: "http://127.0.0.1:7782"}
+	with := agentsession.Header{Extra: map[string]json.RawMessage{headerServers: json.RawMessage(`{"kind":"remote","ref":"http://127.0.0.1:7781","servers":["gh"]}`)}}
+	for _, tc := range []struct {
+		name string
+		h    agentsession.Header
+		now  *workspace.Descriptor
+		want string
+	}{
+		{"the same", with, gh, ""},
+		{"none either time", agentsession.Header{}, nil, ""},
+		{"another", with, other, "session's servers were recorded from servers workspace remote http://127.0.0.1:7781, continuing with remote http://127.0.0.1:7782"},
+		{"none now", with, nil, "session's servers were recorded from servers workspace remote http://127.0.0.1:7781, continuing without one"},
+		{"none then", agentsession.Header{}, gh, "session was recorded without a servers workspace, continuing with remote http://127.0.0.1:7781"},
+	} {
+		if got := serversResumed(tc.h, tc.now); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// Through Resume.
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	o := options(t, &scripted{})
+	o.ServersWorkspace = serveWS(t, offeringOf(t, t.TempDir(), serversFile(t)), remote.ScopeServers)
+	s, err := New(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	s.Close()
+	var warned syncBuffer
+	defer CaptureWarnings(&warned)()
+	o.ServersWorkspace = nil
+	r, err := Resume(t.Context(), o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if got := warned.String(); !strings.Contains(got, "dax: session's servers were recorded from servers workspace remote http://127.0.0.1:") || !strings.Contains(got, ", continuing without one\n") {
+		t.Errorf("warnings %q", got)
+	}
 }

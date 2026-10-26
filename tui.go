@@ -141,6 +141,22 @@ func elsewhereBanner(info frontInfo) string {
 	return ""
 }
 
+// elsewhereLines are the start lines every front prints, with or
+// without -v, about what is not here: where the tools act
+// (elsewhereBanner), and the servers workspace whose servers the
+// session connects, so the user is told that tools come from another
+// machine.
+func elsewhereLines(info frontInfo) []string {
+	var lines []string
+	if l := elsewhereBanner(info); l != "" {
+		lines = append(lines, l)
+	}
+	if info.Servers != "" {
+		lines = append(lines, "servers: "+info.Servers)
+	}
+	return lines
+}
+
 // banner is the lines dax shows at start in every front.
 func banner(info frontInfo, si agent.Info) []string {
 	// The root is the workspace's to report, so it is cleaned as any
@@ -149,12 +165,7 @@ func banner(info frontInfo, si agent.Info) []string {
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
-	if l := elsewhereBanner(info); l != "" {
-		lines = append(lines, l)
-	}
-	if info.Servers != "" {
-		lines = append(lines, "servers: "+info.Servers)
-	}
+	lines = append(lines, elsewhereLines(info)...)
 	if si.Recorded {
 		lines = append(lines, "session "+si.ID)
 	}
@@ -173,14 +184,17 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	// The start lines stay on the terminal under the client's alternate
 	// screen, so they are printed only with -v, but for where the tools
 	// act when that is not here: the executor's or the served
-	// workspace's line is printed either way. A warning is printed
+	// workspace's line, and the servers workspace's, are printed either
+	// way. A warning is printed
 	// either way, and waited on, since it may say the store was exposed.
 	if f.info.Verbose {
 		for _, l := range banner(f.info, si) {
 			fmt.Fprintln(out, render.Clean(l))
 		}
-	} else if l := elsewhereBanner(f.info); l != "" {
-		fmt.Fprintln(out, render.Clean(l))
+	} else {
+		for _, l := range elsewhereLines(f.info) {
+			fmt.Fprintln(out, render.Clean(l))
+		}
 	}
 	// The warnings stay captured while the client has the screen, so
 	// nothing draws over it: what comes meanwhile (the executor's

@@ -498,7 +498,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
 	// for its AGENTS.md.
-	if serversOnly(ws) {
+	if config.ServersOnly(ctx, ws) {
 		if _, err := fs.Stat(ws.FS(), "."); errors.Is(err, remote.ErrForbidden) {
 			s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 		}
@@ -625,7 +625,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// two servers' tools would be one name and box.confine claims a
 	// unit's by its name.
 	if sw := o.ServersWorkspace; sw != nil {
-		sp, err := checkServersWorkspace(sw, ws)
+		sp, err := checkServersWorkspace(ctx, sw, ws)
 		if err != nil {
 			return nil, err
 		}
@@ -636,7 +636,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, err
 		}
 		for _, m := range list {
-			if slices.Contains(s.reserved, m.Name) {
+			if slices.ContainsFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }) {
 				return nil, fmt.Errorf("mcp %s: the workspace and the servers workspace %s both offer a server by that name; offer it from one", m.Name, where(d))
 			}
 			s.served = append(s.served, m.Name)
@@ -910,7 +910,29 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
 	}
+	// So is the servers workspace: the header keeps the one the session
+	// started with, which -list names.
+	if w := serversResumed(sess.Header(), s.sw); w != "" {
+		fmt.Fprintf(warnings{}, "dax: %s\n", w)
+	}
 	return s, nil
+}
+
+// serversResumed is what to say when a session whose header h records
+// one servers workspace, or none, continues with another, or none (now,
+// nil for none); "" when they are one.
+func serversResumed(h agentsession.Header, now *workspace.Descriptor) string {
+	name := func(d workspace.Descriptor) string { return d.Kind + " " + d.Ref }
+	was, _, had := ServersWorkspaceOf(h)
+	switch {
+	case had && now == nil:
+		return "session's servers were recorded from servers workspace " + name(was) + ", continuing without one"
+	case !had && now != nil:
+		return "session was recorded without a servers workspace, continuing with " + name(*now)
+	case had && (was.Kind != now.Kind || was.Ref != now.Ref):
+		return "session's servers were recorded from servers workspace " + name(was) + ", continuing with " + name(*now)
+	}
+	return ""
 }
 
 // ID is the session ID, empty when not recording.
@@ -1230,7 +1252,11 @@ type mcpDial func(context.Context) (mcp.Transport, error)
 // offeredServers are the servers sp offers, by says who, as the session
 // connects them: each started by name there. One name offered twice is
 // refused, since it would be two servers under one prefix, and one's
-// rules the other's.
+// rules the other's; so is a name agentworkspace does not allow a
+// server (workspace.ValidServerName: no underscore), which remote's
+// client already refuses but a provider given in Options need not: "u_"
+// would have tools mcp__u___<tool>, which box.confine takes for unit
+// u's.
 func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string) ([]MCPServer, error) {
 	list, err := sp.Servers(ctx)
 	if err != nil {
@@ -1238,6 +1264,9 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string)
 	}
 	var out []MCPServer
 	for _, u := range list {
+		if !workspace.ValidServerName(u.Name) {
+			return nil, fmt.Errorf("%s offers an MCP server called %q, which is not a server's name: 1 to 32 lowercase letters, digits and inner hyphens", by, u.Name)
+		}
 		if slices.ContainsFunc(out, func(m MCPServer) bool { return m.Name == u.Name }) {
 			return nil, fmt.Errorf("%s offers two MCP servers called %s", by, u.Name)
 		}
@@ -1249,12 +1278,15 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string)
 // checkServersWorkspace is the servers workspace sw as the server
 // provider it must be, beside ws, the session's: one that offers
 // servers, that is not ws, and whose grant is servers alone
-// (config.ServersOnly): no exec, with which the session runs commands
+// (config.ServersAlone): no exec, with which the session runs commands
 // as its servers' user and reads a running server's environment from
-// /proc, and no write, with which it changes a server's code or config
-// to print its secret past the redaction. That grant is the point of
-// the seam: a secret holder is safe under it alone.
-func checkServersWorkspace(sw, ws workspace.Workspace) (workspace.ServerProvider, error) {
+// /proc; no write, with which it changes a server's code or config to
+// print its secret past the redaction; and no read, with which it reads
+// what a server keeps in the directory, and /proc too when the host
+// serves its root. That grant is the point of the seam: a secret holder
+// is safe under it alone (agentworkspace's remote.ScopeServers). The
+// probes are bounded by ctx, the session's start.
+func checkServersWorkspace(ctx context.Context, sw, ws workspace.Workspace) (workspace.ServerProvider, error) {
 	d := sw.Descriptor()
 	sp, offers := sw.(workspace.ServerProvider)
 	if !offers {
@@ -1263,8 +1295,11 @@ func checkServersWorkspace(sw, ws workspace.Workspace) (workspace.ServerProvider
 	if wd := ws.Descriptor(); wd.Kind == d.Kind && wd.Ref == d.Ref && (d.Ref != "" || wd.Root == d.Root) {
 		return nil, fmt.Errorf("the servers workspace %s is the session's workspace; it stands beside it, so name another or leave it out", where(d))
 	}
-	if !serversOnly(sw) {
-		return nil, fmt.Errorf("the servers workspace %s grants more than servers (exec or write), with which the session could read or change what its servers hold, their secrets among it; serve it with dax workspace -scopes servers", where(d))
+	if !config.ServersAlone(ctx, sw) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("the servers workspace %s grants more than servers (read, write or exec), with which the session could read or change what its servers hold, their secrets among it; serve it with dax workspace -scopes servers", where(d))
 	}
 	return sp, nil
 }

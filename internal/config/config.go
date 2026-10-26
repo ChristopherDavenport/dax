@@ -632,8 +632,9 @@ func Load(path string, project, must bool) (Layer, error) {
 // found, touching nothing). A read such a workspace refuses leaves
 // nothing for a project's rule to tighten; from any other, a refused
 // read of the project's files is an error, since the session would
-// act there under none of their rules.
-func ServersOnly(w workspace.Workspace) bool {
+// act there under none of their rules. The probe is bounded by ctx and
+// 30 seconds.
+func ServersOnly(ctx context.Context, w workspace.Workspace) bool {
 	_, starts := w.(workspace.Starter)
 	_, offers := w.(workspace.ServerProvider)
 	if !offers || starts {
@@ -641,9 +642,23 @@ func ServersOnly(w workspace.Workspace) bool {
 	}
 	var b [16]byte
 	rand.Read(b[:])
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	err := w.Remove(ctx, ".dax-no-such-"+hex.EncodeToString(b[:])+"/probe")
+	return errors.Is(err, remote.ErrForbidden)
+}
+
+// ServersAlone reports whether w is a workspace granted its servers and
+// nothing else: ServersOnly, and its files not read either (a stat of
+// its root refused as remote.ErrForbidden). That is the grant a
+// secret-holding server is safe under: with read, the token's holder
+// reads what the server keeps in the directory, and, with the host's
+// root served, a running server's environment from /proc.
+func ServersAlone(ctx context.Context, w workspace.Workspace) bool {
+	if !ServersOnly(ctx, w) {
+		return false
+	}
+	_, err := fs.Stat(w.FS(), ".")
 	return errors.Is(err, remote.ErrForbidden)
 }
 
@@ -2283,6 +2298,15 @@ func checkConnectionTokens(s Settings) error {
 	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
 		if w != nil && w.Hub != nil && w.Hub.TokenEnv == w.TokenEnv {
 			return fmt.Errorf("%s.token_env: %s is %s.token_env too, a served workspace's token; name a variable of the hub's own", w.Hub.Setting(), w.TokenEnv, w.Name())
+		}
+	}
+	// Two hubs on one port: the second's listen would fail only once the
+	// first's workspace connected, up to its wait.
+	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Hub != nil && sw.Hub != nil {
+		_, p1, _ := net.SplitHostPort(w.Hub.Listen)
+		_, p2, _ := net.SplitHostPort(sw.Hub.Listen)
+		if p1 == p2 && p1 != "" && p1 != "0" {
+			return fmt.Errorf("servers_workspace.hub.listen %q: port %s is workspace.hub's too; give each hub a port of its own", sw.Hub.Listen, p2)
 		}
 	}
 	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Ref() == sw.Ref() {

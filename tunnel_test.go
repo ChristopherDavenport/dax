@@ -561,7 +561,7 @@ func TestClosingASessionWithTheHostGone(t *testing.T) {
 		t.Errorf("a read with the host gone took %v", took)
 	}
 	start = time.Now()
-	closeSession(sess, hub)
+	closeSession(sess, []*hostedHub{hub})
 	hub.Close()
 	if took := time.Since(start); took > hubCloseWait+3*time.Second {
 		t.Errorf("closing with the host gone took %v, want about %v", took, hubCloseWait)

@@ -18,19 +18,31 @@ versions may break flags and the config file.
   `DAX_SERVERS_TUNNEL_TOKEN` by default, taken before anything starts.
   Its servers go through the same path as every other server, under
   the same names, collisions, rules, restarts and redaction. The session
-  refuses one whose grant has `exec` or `write` (learned as for a
-  servers-only workspace, `config.ServersOnly`), one that offers no
-  servers, and one that is its own workspace; a project's config may
-  not name one. The header records it as `dax.servers_workspace` (its
-  kind, its identity, the servers it offered), `-list` names it after a
-  session's line, and the start line says `servers: ...`. A drop of it
-  shows as a server that stopped; the session goes on.
+  refuses one whose grant is more than `servers` (`read`, `write` or
+  `exec`, learned by probing), one that offers no servers, one that is
+  its own workspace, one token for both connections whatever their
+  kinds, and two hubs on one port; a project's config may not name
+  one. The header records it as `dax.servers_workspace` (its kind, its
+  identity, the servers it offered), `-list` names it after a session's
+  line, every front's start line says `servers: ...` with or without
+  `-v`, and `-resume` with another or none warns. A drop of it shows as
+  a server that stopped; the session goes on, and at exit a dialed one
+  is given up after the 3 seconds a hub is.
 - Added: `agent.Options.ServersWorkspace` and `agent.ServersWorkspaceOf`,
   the servers workspace a session connects and the one its header
   records.
-- Changed: `dax workspace` granted servers alone (with or without
-  `read`) says to connect with `-servers-workspace` and
-  `DAX_SERVERS_WORKSPACE_TOKEN`.
+- Changed: `dax workspace` granted servers alone says to connect with
+  `-servers-workspace` and `DAX_SERVERS_WORKSPACE_TOKEN`, and a session's
+  `servers_workspace.hub` says to run `dax workspace -connect` with
+  `-scopes servers -servers FILE`.
+- Changed: `dax workspace` refuses to offer a secret-holding server
+  under a grant with `read` too, as agentworkspace's `servers` scope
+  says: `read` reaches what the server keeps in the directory, and
+  `/proc` with `/` served. Offer one with `-scopes servers` alone.
+- Changed: an offered server whose name agentworkspace does not allow
+  (`ValidServerName`) is refused from any provider, and a `-workspace
+  URL` whose host stops answering no longer holds the exit past the
+  3 seconds a hub's does.
 - Changed: `secret_env` may not name `DAX_SERVERS_WORKSPACE_TOKEN`,
   `DAX_SERVERS_TUNNEL_TOKEN` or a `servers_workspace` token variable.
 

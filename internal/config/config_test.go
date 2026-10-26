@@ -1463,6 +1463,7 @@ func TestServersWorkspacePrecedence(t *testing.T) {
 		{"its hub's own token_env", `{"servers_workspace":{"token_env":"SHARED","hub":{"listen":"127.0.0.1:7781","name":"gh","token_env":"SHARED"}}}`, Flags{}, "servers_workspace.hub.token_env: SHARED is servers_workspace.token_env too"},
 		{"the session's workspace", `{"workspace":{"url":"https://box.example"},"servers_workspace":{"url":"https://BOX.example:443/"}}`, Flags{}, "servers_workspace https://box.example is the session's workspace too"},
 		{"the session's hub", `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"gh"}},"servers_workspace":{"hub":{"listen":"127.0.0.1:7781","name":"gh"}}}`, Flags{}, "is the session's workspace too"},
+		{"two hubs on one port", `{"workspace":{"hub":{"listen":"127.0.0.1:7780","name":"build"}},"servers_workspace":{"hub":{"listen":"localhost:7780","name":"gh"}}}`, Flags{}, `servers_workspace.hub.listen "localhost:7780": port 7780 is workspace.hub's too`},
 		{"a flag over http elsewhere", `{}`, Flags{ServersWorkspace: ptr("http://gh.example")}, "-servers-workspace \"http://gh.example\": http only to a loopback host"},
 		{"a flag over http and the file's tls_ca", `{"servers_workspace":{"url":"https://gh.example","tls_ca":"/ca.pem"}}`, Flags{ServersWorkspace: ptr("http://127.0.0.1:7781")}, "servers_workspace.tls_ca is for an https URL"},
 	} {
@@ -1471,6 +1472,10 @@ func TestServersWorkspacePrecedence(t *testing.T) {
 				t.Errorf("Resolve: err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+	// Two hubs each on a port the system picks are two ports.
+	if _, err := Resolve([]Layer{parse(t, `{"workspace":{"hub":{"listen":"127.0.0.1:0","name":"build"}},"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh"}}}`, false)}, Flags{}, ""); err != nil {
+		t.Errorf("two hubs on port 0: %v", err)
 	}
 	// A server's secret may not be a servers workspace's default token
 	// variable either.

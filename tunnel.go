@@ -362,14 +362,16 @@ func (h *hostedHub) close() error {
 }
 
 // closeSession closes sess, and with hubs hosted (the workspace's, the
-// servers workspace's; nil for none), it and the hubs' Close after it
-// within hubCloseWait in all: past it each hub is closed under the
-// session, which fails at once what still waits for a workspace that
-// went away (the MCP servers' closes in it among them), and the close
-// finishes on that, the record's included.
-func closeSession(sess io.Closer, hubs ...*hostedHub) error {
-	hubs = slices.DeleteFunc(hubs, func(h *hostedHub) bool { return h == nil })
-	if len(hubs) == 0 {
+// servers workspace's; nil for none) or workspaces dialed, it and the
+// hubs' Close after it within hubCloseWait in all: past it each hub is
+// closed under the session, and each dialed workspace's requests given
+// up (abandoner), which fails at once what still waits for a workspace
+// that went away (the MCP servers' closes in it among them), and the
+// close finishes on that, the record's included.
+func closeSession(sess io.Closer, hubs []*hostedHub, dialed ...abandoner) error {
+	hubs = slices.DeleteFunc(slices.Clone(hubs), func(h *hostedHub) bool { return h == nil })
+	dialed = slices.DeleteFunc(slices.Clone(dialed), func(a abandoner) bool { return a == nil })
+	if len(hubs) == 0 && len(dialed) == 0 {
 		return sess.Close()
 	}
 	// One deadline for the session's close and the hubs' after it.
@@ -388,6 +390,9 @@ func closeSession(sess io.Closer, hubs ...*hostedHub) error {
 	}
 	for _, h := range hubs {
 		h.hub.Close()
+	}
+	for _, a := range dialed {
+		a.Abandon()
 	}
 	return <-done
 }
@@ -535,6 +540,11 @@ func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedH
 	go srv.Serve(ln)
 	h := &hostedHub{URL: scheme + "://" + servedHost(ln.Addr()) + config.TunnelPath, s: s, hub: hub, srv: srv}
 	h.connect = config.TunnelTokenEnv + "=... " + render.Clean(prog) + " workspace -connect " + render.Clean(h.URL)
+	if s.Field == config.ServersField+".hub" {
+		// A servers workspace is granted its servers alone, which the
+		// session requires.
+		h.connect += " -scopes servers -servers FILE"
+	}
 	fmt.Fprintf(out, "%s: waiting up to %s for workspace %s at %s; on its host run: %s\n", s.Setting(), s.Wait, s.Name, render.Clean(h.URL), h.connect)
 	return h, nil
 }

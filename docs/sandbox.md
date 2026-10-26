@@ -1312,29 +1312,37 @@ offers it: a rule for `mcp__gh__*` covers the `gh` any workspace you
 connect to offers, a box host's units, a served workspace's or a hub's.
 A workspace that lists one name twice is refused.
 
-A server that holds secrets is offered only to a grant without `exec`
-and `write`, and alone, beside no other server, and `dax workspace`
+A server that holds secrets is offered only to a grant of `servers`
+alone, beside no other server, and `dax workspace`
 refuses any other offer before it serves or dials: every server it
 offers runs as its user in its directory, so one that runs a command
 or writes a file would read the holder's secret too. The redaction covers what the server writes and nothing else:
 with `exec` the session runs commands as the server's user and reads a
 running server's environment from `/proc/<pid>/environ`; with `write`
 it changes the server's code, config or `PATH` in the directory and
-has it print the secret in an encoding the filter does not know. So
+has it print the secret in an encoding the filter does not know; with
+`read` it reads what the server keeps in the directory (an OAuth
+refresh token, a cache), and with `/` served, `/proc/<pid>/environ`
+too. So
 offer a secret-holding server from a workspace of its own, with
 `-scopes servers`, beside the workspace the session's tools act in:
 the session's `servers_workspace` (or `-servers-workspace URL`), a
 second connection, dialed or through a hub of its own as `workspace`'s
 is, whose offered servers it connects through the same path and nothing
-else. The session refuses a servers workspace that grants `exec` or
-`write` (it learns the grant as for a servers-only workspace of its own:
-no process starts, and a write is forbidden), one that offers none and
-one that is its own workspace; `read` is let through and unused. Its
+else. The session refuses a servers workspace that grants `exec`,
+`write` or `read` (it learns the grant by probing: no process starts,
+a write is forbidden and so is a stat of its root), one that offers
+none, one that is its own workspace, and one token for both
+connections. Its
 servers' names are held to the same rules as the workspace's offered
 ones, and they start without `-trust-mcp`, as those do, since only your
 config and the flags name it. A drop of it is a server that stopped:
 the next call tries to start it again, with the same warning and
-restart entry, and the session goes on in its own workspace.
+restart entry, and the session goes on in its own workspace; at exit,
+a dialed one is given up after the same 3 seconds a hub is. A hub
+holds to the first `dax workspace -connect` run that enrolled, so only
+that run reconnecting brings the servers back; a restarted one is
+refused for the session's life.
 
 ### Sessions and memory
 

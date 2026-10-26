@@ -204,11 +204,12 @@ func readOffered(file string) ([]offer.Server, error) {
 // exec without read, under which the session would act on files whose
 // project rules it cannot read; and a secret holder offered beside
 // another server, which runs as its user beside it. A server
-// that holds secrets (secret_env) is offered only to a grant holding
-// neither exec nor write: with exec the session reads a running
-// server's environment through /proc, and with write it changes the
-// server's code, config or PATH in the directory to print its secret
-// past the filter (agentworkspace's remote says why).
+// that holds secrets (secret_env) is offered only to a grant of servers
+// alone: with exec the session reads a running server's environment
+// through /proc, with write it changes the server's code, config or
+// PATH in the directory to print its secret past the filter, and with
+// read it reads what the server keeps in the directory, and /proc when
+// the directory is / (agentworkspace's remote.ScopeServers says why).
 func (w *workspaceServer) settle() error {
 	if w.scopes == nil {
 		w.scopes = []wsremote.Scope{wsremote.ScopeRead, wsremote.ScopeWrite, wsremote.ScopeExec}
@@ -241,9 +242,9 @@ func (w *workspaceServer) settle() error {
 			// session the secret through /proc or the holder's code.
 			return fmt.Errorf("workspace: -servers: server %s holds secrets (secret_env), and a secret holder is offered alone, as the box host offers each unit in a container of its own: the others run beside it as its user, and one that runs a command or writes a file reads its secret; give it a -servers file and a dax workspace of its own", o.Name)
 		}
-		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite} {
+		for _, sc := range []wsremote.Scope{wsremote.ScopeExec, wsremote.ScopeWrite, wsremote.ScopeRead} {
 			if slices.Contains(w.scopes, sc) {
-				return fmt.Errorf("workspace: server %s holds secrets (secret_env), which a session granted %s could take: with exec it reads the running server's environment through /proc, and with write it changes the server's code or config to print them past the redaction; offer a secret-holding server with -scopes servers (and read, if the session should read the files) on a workspace of its own", o.Name, sc)
+				return fmt.Errorf("workspace: server %s holds secrets (secret_env), which a session granted %s could take: with exec it reads the running server's environment through /proc, with write it changes the server's code or config to print them past the redaction, and with read it reads what the server keeps in the directory (and /proc too, with / served); offer a secret-holding server with -scopes servers alone, on a workspace of its own, as a session's servers_workspace", o.Name, sc)
 			}
 		}
 	}
@@ -251,9 +252,9 @@ func (w *workspaceServer) settle() error {
 }
 
 // serversOnly reports whether the grant is the servers workspace's: the
-// offered servers, with or without read, and neither write nor exec.
+// offered servers alone.
 func (w *workspaceServer) serversOnly() bool {
-	return slices.Contains(w.scopes, wsremote.ScopeServers) && !slices.Contains(w.scopes, wsremote.ScopeWrite) && !slices.Contains(w.scopes, wsremote.ScopeExec)
+	return len(w.scopes) == 1 && w.scopes[0] == wsremote.ScopeServers
 }
 
 // open is the workspace served: the directory as a workspace.Local
@@ -372,7 +373,7 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	if scheme == "https" {
 		ca = `, "tls_ca": "<the certificate's CA, unless the system trusts it>"`
 	}
-	// A grant of servers alone (and read) is for a session's servers
+	// A grant of servers alone is for a session's servers
 	// workspace, beside the workspace its tools act in.
 	env, flag, field := config.WorkspaceTokenEnv, "-workspace", "workspace"
 	if w.serversOnly() {
@@ -510,18 +511,63 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 	if err != nil {
 		return nil, err
 	}
+	// Every request can be given up at once (abandon), as a hub's are
+	// when it is closed under the session.
+	actx, abandon := context.WithCancel(context.Background())
+	hc.Transport = abandonable{rt: hc.Transport, ctx: actx}
 	// The token goes in the header of every request to the workspace's
 	// origin, from dax's own client, and nowhere else.
 	if hc, err = authn.Client(hc, s.URL, token); err != nil {
+		abandon()
 		return nil, fmt.Errorf("%s: %w", s.Flag(), err)
 	}
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ws, err := wsremote.Dial(dctx, s.URL, wsremote.WithHTTPClient(hc))
 	if err != nil {
+		abandon()
 		return nil, fmt.Errorf("%s %s: %w", s.Flag(), s.URL, err)
 	}
-	return identify(ws), nil
+	return identifyWith(ws, abandon), nil
+}
+
+// abandoner is a dialed workspace whose requests can all be given up at
+// once, those in flight and any later: closeSession does so past its
+// deadline, so a host that stopped answering (asleep, its network gone
+// without a reset) does not hold the exit for remote's request timeout.
+type abandoner interface{ Abandon() }
+
+// abandonable is a RoundTripper whose every request, its body included,
+// ends when ctx does.
+type abandonable struct {
+	rt  http.RoundTripper
+	ctx context.Context
+}
+
+func (a abandonable) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancel(r.Context())
+	stop := context.AfterFunc(a.ctx, cancel)
+	done := func() { stop(); cancel() }
+	resp, err := a.rt.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		done()
+		return nil, err
+	}
+	resp.Body = &abandonableBody{ReadCloser: resp.Body, done: done}
+	return resp, nil
+}
+
+// abandonableBody releases its request's ties to the abandon context
+// when it is closed.
+type abandonableBody struct {
+	io.ReadCloser
+	done func()
+}
+
+func (b *abandonableBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.done()
+	return err
 }
 
 // identify is ws under the identity dax records (config.WorkspaceRef):
@@ -531,8 +577,11 @@ func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string
 // servers the served workspace offers, under the servers scope) when ws
 // is, both when ws is both, so each type assertion tells the truth; and
 // its FS is ws's, an fs.ReadLinkFS when that is.
-func identify(ws wsremote.Workspace) wsremote.Workspace {
-	w := identified{ws}
+func identify(ws wsremote.Workspace) wsremote.Workspace { return identifyWith(ws, nil) }
+
+// identifyWith is identify, its Abandon abandon (nil for none).
+func identifyWith(ws wsremote.Workspace, abandon func()) wsremote.Workspace {
+	w := identified{Workspace: ws, abandon: abandon}
 	st, starts := ws.(workspace.Starter)
 	sp, offers := ws.(workspace.ServerProvider)
 	switch {
@@ -546,7 +595,25 @@ func identify(ws wsremote.Workspace) wsremote.Workspace {
 	return w
 }
 
-type identified struct{ wsremote.Workspace }
+type identified struct {
+	wsremote.Workspace
+	abandon func()
+}
+
+// Abandon gives up every request of the workspace's, in flight and
+// later, when it was dialed (dialWorkspace); otherwise it does nothing.
+func (w identified) Abandon() {
+	if w.abandon != nil {
+		w.abandon()
+	}
+}
+
+// Close closes the workspace, then releases what Abandon would.
+func (w identified) Close() error {
+	err := w.Workspace.Close()
+	w.Abandon()
+	return err
+}
 
 func (w identified) Descriptor() workspace.Descriptor {
 	d := w.Workspace.Descriptor()

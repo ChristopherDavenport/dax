@@ -227,11 +227,11 @@ func placements() []placement {
 // secret stays on the machine whose environment holds it, so the
 // session's own runs on this machine (in: host), beside a workspace
 // here or a served one, and a workspace's runs where that workspace's
-// host offers it, under servers and read alone, as dax workspace
-// requires, whether that workspace is the session's or a servers
-// workspace beside a workspace of the session's own.
+// host offers it, under servers alone, as dax workspace requires,
+// whether that workspace is the session's or a servers workspace beside
+// a workspace of the session's own.
 func secretPlacements(secret string) []placement {
-	scopes := []remote.Scope{remote.ScopeRead, remote.ScopeServers}
+	scopes := []remote.Scope{remote.ScopeServers}
 	return []placement{
 		{"on this machine", func(t *testing.T, o *Options) {
 			o.MCP = []MCPServer{{Name: "p", Command: os.Args[0], Host: true, SecretEnv: []string{secret}}}
