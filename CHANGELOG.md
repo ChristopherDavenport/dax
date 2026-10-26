@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.28 - 2026-10-25
 
 - Added: `dax workspace`, a mode with flags of its own that reads no
   config, serves a directory over HTTP as a whole workspace
