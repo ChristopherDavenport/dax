@@ -144,6 +144,33 @@ func TestEachModelIsAskedOnce(t *testing.T) {
 	}
 }
 
+// A streamer Over another sends through its own inner model, and
+// shares the other's answers and reports: the sub-agents' streamer asks
+// the vendor nothing the main one has asked, and a report made by
+// either is not made again.
+func TestOverSharesAnswersAndReports(t *testing.T) {
+	d := &table{infos: vary.infos}
+	var notes []string
+	main, sub := &recorder{}, &recorder{}
+	s := Wrap(main, d, func(m string) { notes = append(notes, m) })
+	o := Of(s).Over(sub)
+	send(t, s, "never", low)
+	send(t, o, "never", low)
+	send(t, o, "always", off)
+	if len(main.reqs) != 1 || len(sub.reqs) != 2 {
+		t.Fatalf("main got %d requests, sub %d; want 1 and 2", len(main.reqs), len(sub.reqs))
+	}
+	if got := sub.last().Reasoning; got != off {
+		t.Errorf("changed: %+v", got)
+	}
+	if d.calls != 2 {
+		t.Errorf("described %d times, want once per model", d.calls)
+	}
+	if len(notes) != 2 {
+		t.Errorf("notes: %q, want the one for never and the one for always", notes)
+	}
+}
+
 func TestAFailureIsKeptAndToldOnce(t *testing.T) {
 	d := &table{err: errors.New("catalogue down")}
 	var notes []string

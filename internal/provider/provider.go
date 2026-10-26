@@ -28,7 +28,6 @@ import (
 
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/openresponses"
-	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
 	"github.com/ChristopherDavenport/openresponses/providers/gemini"
 )
 
@@ -135,6 +134,11 @@ type Spec struct {
 	ClientHeader string
 	// Client is what ClientHeader carries, such as "dax/v0.0.5".
 	Client string
+	// CacheTTL is how long Claude's prompt cache keeps the main
+	// conversation's prefix, "5m" or "1h"; empty is Claude's default,
+	// five minutes. SubagentCacheTTL is the sub-agents'. Both are for
+	// the anthropic and vertex providers.
+	CacheTTL, SubagentCacheTTL string
 	// Getenv reads the environment; nil is os.Getenv.
 	Getenv func(string) string
 	// Credentials finds the vertex provider's Google credentials; nil
@@ -148,7 +152,11 @@ type Spec struct {
 // for.
 type Model struct {
 	Streamer openresponses.Streamer
-	Name     string
+	// SubagentStreamer is the streamer the sub-agents' requests go
+	// through when the sub-agents' prompt cache lives for another time
+	// than the main conversation's; nil, the usual case, is Streamer.
+	SubagentStreamer openresponses.Streamer
+	Name             string
 	// SubagentName is the model the sub-agents are asked for.
 	SubagentName string
 	// Endpoint says where requests go, for the banner; it holds no key.
@@ -216,8 +224,22 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 	default:
 		return m, fmt.Errorf("unknown provider %q", spec.Provider)
 	}
+	for _, t := range []struct{ field, ttl string }{{"cache_ttl", spec.CacheTTL}, {"subagent_cache_ttl", spec.SubagentCacheTTL}} {
+		if t.ttl == "" {
+			continue
+		}
+		if _, ok := cacheTTLs[t.ttl]; !ok {
+			return m, fmt.Errorf("%s %q: want 5m or 1h", t.field, t.ttl)
+		}
+		if spec.Provider != "anthropic" && spec.Provider != "vertex" {
+			return m, fmt.Errorf("%s: %s is for Claude's prompt cache, on the anthropic or vertex provider", spec.Provider, t.field)
+		}
+	}
 	var key string
 	var keys *keySource
+	// separate is whether the sub-agents have a streamer of their own
+	// (claudeAdapters); otherwise they share Streamer.
+	var separate bool
 	switch {
 	case len(spec.KeyCommand) > 0:
 		switch spec.Provider {
@@ -269,7 +291,9 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		}
 	case "anthropic":
 		client := sdk.NewClient(anthropicOptions(key, keys, transport(spec, keys, xAPIKey, nil))...)
-		m.Streamer = withClaudeCache(anthropic.New(client.Messages))
+		var sub openresponses.Adapter
+		m.Streamer, sub, separate = claudeAdapters(client.Messages, spec)
+		m.SubagentStreamer = sub
 		m.Endpoint = "api.anthropic.com"
 		m.Describer = modelinfo.Anthropic(&client.Models)
 	case "vertex":
@@ -301,7 +325,11 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		if err != nil {
 			return m, fmt.Errorf("vertex: %w", err)
 		}
-		m.Streamer = vertexModels{claude: withClaudeCache(anthropic.New(claude.Messages)), gemini: gemini.New(gc)}
+		var main, sub openresponses.Adapter
+		main, sub, separate = claudeAdapters(claude.Messages, spec)
+		g := gemini.New(gc)
+		m.Streamer = vertexModels{claude: main, gemini: g}
+		m.SubagentStreamer = vertexModels{claude: sub, gemini: g}
 		m.Endpoint = "vertex ai " + project + "/" + location
 		m.Describer = vertexDescriber{}
 	case "gemini":
@@ -315,6 +343,12 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 	}
 	if keys != nil {
 		m.Streamer = withKeyErrors(m.Streamer, keys)
+		if separate {
+			m.SubagentStreamer = withKeyErrors(m.SubagentStreamer, keys)
+		}
+	}
+	if !separate {
+		m.SubagentStreamer = nil
 	}
 	return m, nil
 }

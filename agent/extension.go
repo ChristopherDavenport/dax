@@ -345,6 +345,13 @@ func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = appen
 func (e *sessionEnv) Log(format string, args ...any)       { e.s.opts.log("%s", logText(format, args...)) }
 func (e *sessionEnv) SystemPrompt(except ...string) string { return e.s.systemPrompt(except...) }
 
+func (e *sessionEnv) SubagentModel() openresponses.Streamer {
+	if s := e.s.opts.SubagentStreamer; s != nil {
+		return s
+	}
+	return e.s.opts.Streamer
+}
+
 func (e *sessionEnv) Live() (string, bool) {
 	think, main := e.s.now()
 	return main, think

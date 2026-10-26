@@ -127,6 +127,31 @@ func (s *Streamer) Fit(ctx context.Context, model string, want openresponses.Rea
 // means a path built the request without asking Fit; it is reported
 // once, and the provider decides.
 func (s *Streamer) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	s.check(ctx, req)
+	return s.inner.CreateStream(ctx, req, sink)
+}
+
+// Over returns a streamer that sends through inner what s would send
+// through its own, checked against what s knows: another streamer to
+// the same vendor, such as the sub-agents' (provider.Model's
+// SubagentStreamer), shares s's answers and its reports, so the vendor
+// is asked about each model once and a report is made once.
+func (s *Streamer) Over(inner openresponses.Streamer) openresponses.Streamer {
+	return over{s: s, inner: inner}
+}
+
+type over struct {
+	s     *Streamer
+	inner openresponses.Streamer
+}
+
+func (o over) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	o.s.check(ctx, req)
+	return o.inner.CreateStream(ctx, req, sink)
+}
+
+// check reports a request whose effort its model does not take.
+func (s *Streamer) check(ctx context.Context, req openresponses.Request) {
 	if want := req.Reasoning.Effort; want != "" {
 		if info, err := s.Describe(ctx, req.Model); err == nil {
 			if got := info.Fit(want); got != want {
@@ -134,7 +159,6 @@ func (s *Streamer) CreateStream(ctx context.Context, req openresponses.Request, 
 			}
 		}
 	}
-	return s.inner.CreateStream(ctx, req, sink)
 }
 
 // tell reports msg once per key.

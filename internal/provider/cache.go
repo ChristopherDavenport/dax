@@ -3,9 +3,46 @@ package provider
 import (
 	"context"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
+
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
 )
+
+// cacheTTLs are the cache_ttl values and what each asks the adapter
+// for. 5m is Claude's default, so it asks for nothing: a request sent
+// with it is the one sent without a TTL.
+var cacheTTLs = map[string]sdk.CacheControlEphemeralTTL{
+	"5m": "",
+	"1h": sdk.CacheControlEphemeralTTLTTL1h,
+}
+
+// claudeAdapters are the Claude adapters over messages for the main
+// conversation and for the sub-agents, each caching for its own TTL,
+// and whether they are two. When the two TTLs ask for the same, the
+// sub-agents share the main adapter.
+//
+// The main conversation is where a 1-hour cache pays: its prefix is
+// the whole session, and a user who comes back after twenty minutes
+// reads it again. A sub-agent's prefix is its own short run, rarely
+// read again after it ends, so writing it at the 1-hour price (twice
+// the input price, against 1.25 times for five minutes) is mostly
+// waste; that is why the two are set apart.
+func claudeAdapters(messages sdk.MessageService, spec Spec) (main, sub openresponses.Adapter, separate bool) {
+	adapter := func(ttl string) openresponses.Adapter {
+		var opts []anthropic.Option
+		if t := cacheTTLs[ttl]; t != "" {
+			opts = append(opts, anthropic.WithCacheTTL(t))
+		}
+		return withClaudeCache(anthropic.New(messages, opts...))
+	}
+	main = adapter(spec.CacheTTL)
+	if cacheTTLs[spec.SubagentCacheTTL] == cacheTTLs[spec.CacheTTL] {
+		return main, main, false
+	}
+	return main, adapter(spec.SubagentCacheTTL), true
+}
 
 // noSessionCacheKey is the prompt cache key of a Claude request made
 // outside a run, whose context names no session. The anthropic adapter

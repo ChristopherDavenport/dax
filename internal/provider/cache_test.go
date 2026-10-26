@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/providers/anthropic"
+	"github.com/ChristopherDavenport/openresponses/providers/gemini"
 )
 
 // keyRecorder is an adapter that notes the prompt cache key of each
@@ -128,5 +130,131 @@ func TestClaudeRequestOptsIntoCaching(t *testing.T) {
 	var cc struct{ Type string }
 	if err := json.Unmarshal(body["cache_control"], &cc); err != nil || cc.Type != "ephemeral" {
 		t.Errorf("cache_control = %s, want an ephemeral one", body["cache_control"])
+	}
+}
+
+// Each TTL reaches the Messages request its own streamer sends: the
+// main conversation's through the main adapter, the sub-agents'
+// through theirs, and one adapter serves both when they ask the same.
+func TestCacheTTLsReachTheWire(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		ttl *string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body struct {
+			CacheControl *struct {
+				TTL string `json:"ttl"`
+			} `json:"cache_control"`
+		}
+		_ = json.Unmarshal(b, &body)
+		mu.Lock()
+		got := "none"
+		if body.CacheControl != nil {
+			got = body.CacheControl.TTL
+		}
+		ttl = &got
+		mu.Unlock()
+		http.Error(w, `{"error":{"type":"invalid_request_error","message":"no"}}`, http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+	client := sdk.NewClient(option.WithAPIKey("k"), option.WithBaseURL(srv.URL), option.WithMaxRetries(0))
+	send := func(t *testing.T, s openresponses.Streamer) string {
+		t.Helper()
+		mu.Lock()
+		ttl = nil
+		mu.Unlock()
+		ctx := session.ContextWithSessionID(context.Background(), "019a0000-0000-7000-8000-0000000000aa")
+		_ = s.CreateStream(ctx, openresponses.Request{Model: "claude-opus-5-5", Input: openresponses.Items{openresponses.UserText("hi")}}, discard)
+		mu.Lock()
+		defer mu.Unlock()
+		if ttl == nil {
+			t.Fatal("no request reached the server")
+		}
+		return *ttl
+	}
+	for _, tc := range []struct {
+		main, sub         string
+		separate          bool
+		wantMain, wantSub string // "" is an ephemeral cache_control with no ttl, Claude's 5 minutes
+	}{
+		{"", "", false, "", ""},
+		{"5m", "", false, "", ""},
+		{"1h", "1h", false, "1h", "1h"},
+		{"1h", "", true, "1h", ""},
+		{"1h", "5m", true, "1h", ""},
+		{"", "1h", true, "", "1h"},
+	} {
+		t.Run(tc.main+"/"+tc.sub, func(t *testing.T) {
+			main, sub, separate := claudeAdapters(client.Messages, Spec{CacheTTL: tc.main, SubagentCacheTTL: tc.sub})
+			if separate != tc.separate {
+				t.Fatalf("separate = %v, want %v", separate, tc.separate)
+			}
+			if got := send(t, main); got != tc.wantMain {
+				t.Errorf("main conversation's ttl %q, want %q", got, tc.wantMain)
+			}
+			if got := send(t, sub); got != tc.wantSub {
+				t.Errorf("sub-agents' ttl %q, want %q", got, tc.wantSub)
+			}
+		})
+	}
+}
+
+// New gives the sub-agents a streamer of their own only when their TTL
+// differs, on anthropic and on vertex's Claude route, and refuses a
+// TTL elsewhere or one Claude does not offer.
+func TestNewCacheTTLs(t *testing.T) {
+	env := map[string]string{"ANTHROPIC_API_KEY": "k", "OPENAI_API_KEY": "k", ProjectEnv: "p", LocationEnv: "global"}
+	build := func(spec Spec) (Model, error) {
+		spec.Getenv = func(k string) string { return env[k] }
+		spec.Credentials = fakeCredentials
+		return New(context.Background(), spec)
+	}
+	for _, tc := range []struct {
+		spec     Spec
+		separate bool
+	}{
+		{Spec{Provider: "anthropic"}, false},
+		{Spec{Provider: "anthropic", CacheTTL: "1h", SubagentCacheTTL: "1h"}, false},
+		{Spec{Provider: "anthropic", CacheTTL: "1h"}, true},
+		{Spec{Provider: "vertex", CacheTTL: "1h", SubagentCacheTTL: "5m"}, true},
+		{Spec{Provider: "vertex", SubagentCacheTTL: "5m"}, false},
+	} {
+		t.Run(tc.spec.Provider+"/"+tc.spec.CacheTTL+"/"+tc.spec.SubagentCacheTTL, func(t *testing.T) {
+			m, err := build(tc.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (m.SubagentStreamer != nil) != tc.separate {
+				t.Fatalf("sub-agent streamer %T, want one of their own: %v", m.SubagentStreamer, tc.separate)
+			}
+			if !tc.separate {
+				return
+			}
+			switch s := m.SubagentStreamer.(type) {
+			case claudeCache:
+			case vertexModels:
+				if _, ok := s.claude.(claudeCache); !ok {
+					t.Errorf("vertex sub-agents' Claude route is %T, want claudeCache", s.claude)
+				}
+				if _, ok := s.gemini.(*gemini.Adapter); !ok {
+					t.Errorf("vertex sub-agents' Gemini route is %T", s.gemini)
+				}
+			default:
+				t.Errorf("sub-agent streamer is %T", m.SubagentStreamer)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		spec Spec
+		want string
+	}{
+		{Spec{Provider: "openai", CacheTTL: "1h"}, "openai: cache_ttl is for Claude's prompt cache"},
+		{Spec{Provider: "anthropic", SubagentCacheTTL: "2h"}, `subagent_cache_ttl "2h": want 5m or 1h`},
+	} {
+		if _, err := build(tc.spec); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%+v: error %v, want %q", tc.spec, err, tc.want)
+		}
 	}
 }
