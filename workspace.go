@@ -33,6 +33,7 @@ import (
 
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
+	wstunnel "github.com/ChristopherDavenport/agentworkspace/tunnel"
 
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
@@ -68,6 +69,7 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	tlsCert := fs.String("tls-cert", "", "serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "the private key (PEM) of -tls-cert")
 	connect := fs.String("connect", "", "in place of -listen, dial out to a session's hub (workspace.hub) at this wss:// URL, or ws:// to a loopback host, and serve the directory through that connection; the token from $"+config.TunnelTokenEnv)
+	hubName := fs.String("name", "", "with -connect, the workspace's name the hub enrolls (its workspace.hub.name, which its waiting line gives); the proof is bound to it, so a hub of another name refuses it")
 	tlsCA := fs.String("tls-ca", "", "with a wss:// -connect, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots")
 	scopes := fs.String("scopes", "read,write,exec", "what the session may do here: a comma-separated list of read, write, exec and servers; servers is added to the default with -servers, and a server that names secret_env is offered only to a grant without exec and write")
 	servers := fs.String("servers", "", `a file of MCP servers to offer the session, in dax's config shape, {"mcp_servers": {"<name>": {"command": "..."}}}: each a command run in the served directory, its secret_env given from this environment and redacted from its output`)
@@ -117,6 +119,9 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 		if given["tls-ca"] {
 			return errors.New("workspace: -tls-ca goes with -connect")
 		}
+		if given["name"] {
+			return errors.New("workspace: -name goes with -connect")
+		}
 		return w.run(ctx)
 	}
 	switch {
@@ -131,7 +136,10 @@ func runWorkspace(ctx context.Context, args []string, p program) error {
 	if *tlsCA != "" && strings.HasPrefix(*connect, "ws://") {
 		return errors.New("workspace: -tls-ca is for a wss:// hub; ws:// has no certificate to verify")
 	}
-	w.connect, w.tlsCA = *connect, *tlsCA
+	if !wstunnel.ValidName(*hubName) {
+		return fmt.Errorf("workspace: -connect: give -name, the workspace's name the hub enrolls (the hub's waiting line says it: -name NAME), a DNS label; got %q", *hubName)
+	}
+	w.connect, w.tlsCA, w.hubName = *connect, *tlsCA, *hubName
 	// The token leaves the environment before the workspace is made,
 	// whose processes inherit what is left of it.
 	if w.token, err = takeTunnelToken("workspace -connect", config.TunnelTokenEnv); err != nil {
@@ -171,6 +179,9 @@ type workspaceServer struct {
 	// system's roots and tlsCA's certificate.
 	connect, tlsCA string
 	token          string
+	// hubName is the workspace's name the hub enrolls (-name), which
+	// the proof is bound to.
+	hubName string
 	// scopes are what the session may do, at addr or through the hub
 	// (-scopes); nil is the default (settle).
 	scopes []wsremote.Scope

@@ -110,7 +110,7 @@ func TestServersWorkspaceRefusalsOnTheCommandLine(t *testing.T) {
 		{cfg: `{"servers_workspace":{"url":"http://127.0.0.1:1"}}`, token: "x", want: "-servers-workspace http://127.0.0.1:1: "},
 		{cfg: `{"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh","wait":"300ms"}}}`, want: "servers_workspace.hub: no token: set $DAX_SERVERS_TUNNEL_TOKEN"},
 		{cfg: `{"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh","wait":"300ms"}}}`, token: tunnelToken, want: "servers_workspace.hub: workspace gh did not connect to ws://127.0.0.1:"},
-		{cfg: `{"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh","wait":"300ms"}}}`, token: tunnelToken, want: "/tunnel -scopes servers -servers FILE"},
+		{cfg: `{"servers_workspace":{"hub":{"listen":"127.0.0.1:0","name":"gh","wait":"300ms"}}}`, token: tunnelToken, want: "/tunnel -name gh -scopes servers -servers FILE"},
 		{cfg: `{"servers_workspace":{"hub":{"listen":"0.0.0.0:0","name":"gh"}}}`, want: "servers_workspace.hub.listen \"0.0.0.0:0\": without tls_cert and tls_key"},
 		{cfg: `{"workspace":{"url":"http://127.0.0.1:7779"},"servers_workspace":{"url":"http://127.0.0.1:7779/"}}`, want: "servers_workspace http://127.0.0.1:7779 is the session's workspace too"},
 		{cfg: `{"servers_workspace":{"url":"http://127.0.0.1:7781","token_env":"SHARED"},"workspace":{"url":"http://127.0.0.1:7779","token_env":"SHARED"}}`, want: "servers_workspace.token_env: SHARED is workspace.token_env too"},

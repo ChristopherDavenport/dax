@@ -14,9 +14,10 @@
 // "Authorization: Bearer <token>" to one origin and nowhere else, which
 // a library's client takes through its WithHTTPClient.
 //
-// Prover and Proofs are the tunnel's proof (proof.go): the workspace
+// Prover and Hub are the tunnel's proof (proof.go): the workspace
 // end and the hub each show the other they hold the tunnel's token,
-// an HMAC of a fresh nonce under it, and neither sends the token.
+// an HMAC under it of a nonce the hub issued, and neither sends the
+// token.
 //
 // It imports the standard library alone.
 package authn

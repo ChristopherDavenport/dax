@@ -64,16 +64,21 @@ before changing the shape.
   agentworkspace's `tunnel` (imported as `wstunnel`): `dax workspace
   -connect`, the directory served through `tunnel.Serve` to a session's
   hub it dials (wss, or ws to loopback; `$DAX_TUNNEL_TOKEN`, taken
-  from the environment first, never sent: the upgrade carries a nonce
-  and its MAC under the token with the run's instance id, and nothing
-  is served to a hub whose 101 lacks its own MAC (`internal/authn`'s
-  `Prover`; a hub that fails ends the run); `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
+  from the environment first, never sent: `-name`, the hub's
+  workspace name, required; before each upgrade a nonce fetched from
+  the hub (`authn.FetchNonce`), the upgrade carrying the MAC under the
+  token of the name, that nonce and the run's instance id, and nothing
+  served to a hub whose 101 lacks its own MAC (`internal/authn`'s
+  `Prover`; a hub that fails, or issues no nonce, ends the run in any
+  phase, through `dialWatch.halt`); `-scopes` and `-servers`, as `-listen`'s; `-tls-ca` in place of the system's roots;
   `dialWatch`, which ends the run before it connects at a certificate
   not verified or a 404); and `hostHub`, the config's
   `workspace.hub`, a `tunnel.Hub` at `/tunnel` (loopback unless
   `tls_cert`/`tls_key`) whose enrollment is `internal/authn`'s
-  `Proofs` of the one token for the one name (a stale or replayed nonce
-  refused), its 101 carrying the hub's MAC, held by `pin` to the first instance that
+  `Hub` for the one token and name (a nonce it did not issue, older
+  than 30 seconds or taken before refused), which `pin` also answers a
+  plain GET with a nonce from, its 101 carrying the hub's MAC, held by
+  `pin` to the first instance that
   connects (any other 403 for the session's life), its log among
   dax's warnings (`agent.Warnings`), and whose `Hub.Workspace`, waited
   for up to `wait`, with a 10-second request timeout, is the session's
@@ -278,9 +283,10 @@ before changing the shape.
   (each library's `WithChallenge`); `Client`, an
   `http.Client` that sends one token to one origin, for each library's
   `WithHTTPClient`; and `proof.go`, the tunnel's proof both ways
-  (`Prover` at `-connect`, `Proofs` at the hub: an HMAC-SHA256 of a
-  fresh nonce and the instance id under the token, labelled per
-  direction, the token never sent). Standard library only; no dax code uses a
+  (`Prover` at `-connect`, `Hub` at the hub: an HMAC-SHA256 under
+  the token of the name, a nonce the hub issued statelessly under a
+  secret of its own, and the instance id, labelled per direction, the
+  token never sent). Standard library only; no dax code uses a
   library's `BearerTokens` or `WithBearerToken`.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every

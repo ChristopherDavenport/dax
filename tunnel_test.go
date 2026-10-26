@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -89,6 +90,9 @@ func connectWith(t *testing.T, w *workspaceServer) *connecting {
 	if w.scopes == nil {
 		w.scopes = allScopes
 	}
+	if w.hubName == "" {
+		w.hubName = "build" // startTestHub's
+	}
 	c := &connecting{out: &syncBuffer{}, done: make(chan error, 1)}
 	w.name, w.out = "dax", c.out
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,17 +146,20 @@ func TestConnectingAWorkspaceRefuses(t *testing.T) {
 		{[]string{"-connect", ""}, tunnelToken, "-connect: give the hub's wss:// URL"},
 		{[]string{"-connect", "wss://me:pw@box.example/tunnel"}, tunnelToken, "carries credentials"},
 		{[]string{"-connect", "wss://box.example/tunnel?token=x"}, tunnelToken, "a query or fragment"},
-		{[]string{"-connect", "wss://box.example/tunnel"}, "", "no token: set $DAX_TUNNEL_TOKEN"},
-		{[]string{"-connect", "wss://box.example/tunnel"}, "short", "$DAX_TUNNEL_TOKEN is 5 bytes; the token must be at least 32"},
+		{[]string{"-connect", "wss://box.example/tunnel", "-name", "build"}, "", "no token: set $DAX_TUNNEL_TOKEN"},
+		{[]string{"-connect", "wss://box.example/tunnel", "-name", "build"}, "short", "$DAX_TUNNEL_TOKEN is 5 bytes; the token must be at least 32"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-listen", "127.0.0.1:0"}, tunnelToken, "-listen and -connect are exclusive"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-tls-cert", "c.pem", "-tls-key", "k.pem"}, tunnelToken, "-tls-cert and -tls-key are -listen's"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-scopes", "read,admin"}, tunnelToken, `-scopes: no scope "admin"`},
 		{[]string{"-connect", "wss://box.example/tunnel", "-scopes", ""}, tunnelToken, "-scopes: none given"},
 		{[]string{"-connect", "wss://box.example/tunnel", "-scopes", " , "}, tunnelToken, "-scopes: none given"},
-		{[]string{"-connect", "wss://box.example/tunnel", "-tls-ca", "/nonexistent/ca.pem"}, tunnelToken, "workspace: -tls-ca"},
-		{[]string{"-connect", "wss://box.example/tunnel", "-pass-env", "DAX_TUNNEL_TOKEN"}, tunnelToken, "-pass-env: DAX_TUNNEL_TOKEN is this server's token"},
+		{[]string{"-connect", "wss://box.example/tunnel", "-name", "build", "-tls-ca", "/nonexistent/ca.pem"}, tunnelToken, "workspace: -tls-ca"},
+		{[]string{"-connect", "wss://box.example/tunnel", "-name", "build", "-pass-env", "DAX_TUNNEL_TOKEN"}, tunnelToken, "-pass-env: DAX_TUNNEL_TOKEN is this server's token"},
 		{[]string{"-connect", "ws://127.0.0.1:7780/tunnel", "-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca is for a wss:// hub"},
 		{[]string{"-tls-ca", "ca.pem"}, tunnelToken, "-tls-ca goes with -connect"},
+		{[]string{"-name", "build"}, tunnelToken, "-name goes with -connect"},
+		{[]string{"-connect", "wss://box.example/tunnel"}, tunnelToken, "-connect: give -name"},
+		{[]string{"-connect", "wss://box.example/tunnel", "-name", "Not_A_Label"}, tunnelToken, "-connect: give -name"},
 	} {
 		t.Setenv(config.TunnelTokenEnv, tc.token)
 		err := run(context.Background(), append([]string{"workspace"}, tc.args...), program{name: "dax"})
@@ -165,7 +172,7 @@ func TestConnectingAWorkspaceRefuses(t *testing.T) {
 	}
 	// The token is taken out of the environment as soon as it is read.
 	t.Setenv(config.TunnelTokenEnv, tunnelToken)
-	run(context.Background(), []string{"workspace", "-connect", "wss://box.example/tunnel", "-tls-ca", "/nonexistent/ca.pem"}, program{name: "dax"})
+	run(context.Background(), []string{"workspace", "-connect", "wss://box.example/tunnel", "-name", "build", "-tls-ca", "/nonexistent/ca.pem"}, program{name: "dax"})
 	if v, ok := os.LookupEnv(config.TunnelTokenEnv); ok {
 		t.Errorf("$DAX_TUNNEL_TOKEN is still set: %q", v)
 	}
@@ -252,7 +259,7 @@ func TestAWorkspaceConnectsToTheSessionsHub(t *testing.T) {
 	}
 	if out := c.out.String(); !strings.Contains(out, "dax workspace: serving "+dir+" to the hub at "+hub.URL+", which may read, write, exec") || !strings.Contains(out, "token: $DAX_TUNNEL_TOKEN") ||
 		!strings.Contains(out, "note: ws:// is not encrypted; the hub must prove it holds the token before anything is served") ||
-		!strings.Contains(out, "relay to it from "+strings.TrimSuffix(strings.TrimPrefix(hub.URL, "ws://"), "/tunnel")+": then use wss://") {
+		!strings.Contains(out, "against a user of this host who takes "+strings.TrimSuffix(strings.TrimPrefix(hub.URL, "ws://"), "/tunnel")+", but not against one who can also reach the hub some other way and relay to it: then use wss://") {
 		t.Errorf("the workspace's end said %q", out)
 	}
 	if out := hubOut.String(); !strings.Contains(out, "waiting up to 30s for workspace build at "+hub.URL+"; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect "+hub.URL) {
@@ -437,12 +444,7 @@ func TestTheSessionsHubRefusesAnUpgradeWithNoInstance(t *testing.T) {
 	defer agent.CaptureWarnings(&syncBuffer{})()
 	hub, _ := startTestHub(t, tunnelToken, 30*time.Second)
 	for _, id := range []string{"", "not-an-id", strings.Repeat("A", 32)} {
-		req, _ := http.NewRequest(http.MethodGet, "http"+strings.TrimPrefix(hub.URL, "ws"), nil)
-		req.Header = authn.NewProver(tunnelToken).Header(id)
-		req.Header.Set("Connection", "Upgrade")
-		req.Header.Set("Upgrade", "websocket")
-		req.Header.Set("Sec-WebSocket-Version", "13")
-		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		req := upgradeTo(t, hub.URL, authn.NewProver(tunnelToken, "build").Header(hubNonce(t, hub.URL), id))
 		if id != "" {
 			req.Header.Set(instanceHeader, id)
 		}
@@ -613,27 +615,50 @@ func upgradeTo(t *testing.T, url string, header http.Header) *http.Request {
 	return req
 }
 
-// The session's hub takes a proof once: the same upgrade sent again,
-// its nonce and MAC replayed, is refused, as is one carrying the token
-// itself as a bearer token, or none; each 401 names the proof's scheme,
-// and the hub's 101 carries its own MAC of the nonce.
+// hubNonce is a nonce the hub at url issues, as -connect asks for it.
+func hubNonce(t *testing.T, url string) string {
+	t.Helper()
+	nonce, err := authn.FetchNonce(t.Context(), http.DefaultClient, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nonce
+}
+
+// The session's hub takes a proof only over a nonce it issued, for its
+// own name, and once: the same upgrade sent again is refused, as is one
+// over a nonce whatever held the port made up (the upgrade it captured,
+// replayed through the forward), one for another hub's name, one
+// carrying the token itself as a bearer token, or none; each 401 names
+// the proof's scheme, and the hub's 101 carries its own MAC.
 func TestTheSessionsHubRefusesAReplayedProof(t *testing.T) {
 	home(t)
 	var warned syncBuffer
 	defer agent.CaptureWarnings(&warned)()
 	hub, _ := startTestHub(t, tunnelToken, 30*time.Second)
 	id := newInstance()
-	prover := authn.NewProver(tunnelToken)
-	proved := prover.Header(id)
-	proved.Set(instanceHeader, id)
+	prover := authn.NewProver(tunnelToken, "build")
+	proved := func(nonce string) http.Header {
+		h := prover.Header(nonce, id)
+		h.Set(instanceHeader, id)
+		return h
+	}
+	fresh := proved(hubNonce(t, hub.URL))
+	// An impostor that held the port issued its own nonce, and kept the
+	// upgrade -connect made over it.
+	captured := proved(authn.NewHub(tunnelToken, "build").Nonce())
+	other := authn.NewProver(tunnelToken, "other").Header(hubNonce(t, hub.URL), id)
+	other.Set(instanceHeader, id)
 	bearer := http.Header{"Authorization": {"Bearer " + tunnelToken}, instanceHeader: {id}}
 	for _, tc := range []struct {
 		name   string
 		header http.Header
 		want   int
 	}{
-		{"a fresh proof", proved, http.StatusSwitchingProtocols},
-		{"the same proof again", proved, http.StatusUnauthorized},
+		{"an upgrade captured over an impostor's nonce", captured, http.StatusUnauthorized},
+		{"a proof for another hub's name", other, http.StatusUnauthorized},
+		{"a fresh proof", fresh, http.StatusSwitchingProtocols},
+		{"the same proof again", fresh, http.StatusUnauthorized},
 		{"the token as a bearer", bearer, http.StatusUnauthorized},
 		{"nothing", http.Header{instanceHeader: {id}}, http.StatusUnauthorized},
 	} {
@@ -657,73 +682,95 @@ func TestTheSessionsHubRefusesAReplayedProof(t *testing.T) {
 			}
 		}
 	}
-	if got := warned.String(); !strings.Contains(got, "nonce was used before") {
-		t.Errorf("the hub's warnings %q, want the replay said", got)
+	for _, want := range []string{"nonce was used before", "a nonce this hub did not issue"} {
+		if got := warned.String(); !strings.Contains(got, want) {
+			t.Errorf("the hub's warnings %q, want %q", got, want)
+		}
+	}
+	// A nonce is for no browser.
+	req, _ := http.NewRequest(http.MethodGet, "http"+strings.TrimPrefix(hub.URL, "ws"), nil)
+	req.Header.Set("Origin", "https://evil.example")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusForbidden || resp.Header.Get(authn.NonceHeader) != "" {
+		t.Errorf("a nonce asked from a web page: %v, %v", resp, err)
 	}
 }
 
+// impostor is a tunnel hub that takes every upgrade as build and answers
+// with proof, and answers a GET of its URL with nonce (none when "").
+func impostor(t *testing.T, nonce string, proof func(r *http.Request) http.Header, sent *[]string, mu *sync.Mutex) http.Handler {
+	t.Helper()
+	imp, err := wstunnel.NewHub(
+		wstunnel.WithEnrollment(func(r *http.Request) (string, error) {
+			mu.Lock()
+			*sent = append(*sent, r.Header.Get("Authorization"))
+			mu.Unlock()
+			return "build", nil
+		}),
+		wstunnel.WithProofHeader(func(r *http.Request, _ string) (http.Header, error) {
+			return proof(r), nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { imp.Close() })
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "" {
+			if nonce != "" {
+				w.Header().Set(authn.NonceHeader, nonce)
+			}
+			return
+		}
+		imp.ServeHTTP(w, r)
+	})
+}
+
 // dax workspace -connect serves nothing to a hub that cannot prove it
-// holds the token (an impostor that took the port), and stops saying
-// so, never dialling it again; the upgrade it was sent carries no token.
+// holds the token (an impostor that took the port), or that issues no
+// nonce, and stops saying so, never dialling it again; the upgrade it
+// was sent carries no token, and is over the impostor's own nonce.
 func TestAWorkspaceServesNoHubWithoutTheToken(t *testing.T) {
 	home(t)
 	for _, tc := range []struct {
-		name  string
-		proof func(r *http.Request) http.Header
+		name    string
+		nonce   string
+		proof   func(r *http.Request) http.Header
+		want    string
+		upgrade int
 	}{
-		{"no proof", func(*http.Request) http.Header { return nil }},
-		{"the workspace's own MAC sent back", func(r *http.Request) http.Header {
+		{"no proof", "1.AAAAAAAAAAAAAAAAAAAAAAAAAA.0123", func(*http.Request) http.Header { return nil }, "is not the session's hub", 1},
+		{"the workspace's own MAC sent back", "1.AAAAAAAAAAAAAAAAAAAAAAAAAA.0123", func(r *http.Request) http.Header {
 			_, mac, _ := strings.Cut(r.Header.Get("Authorization"), `proof="`)
 			return http.Header{authn.HubProofHeader: {strings.TrimSuffix(mac, `"`)}}
-		}},
+		}, "is not the session's hub", 1},
+		{"no nonce", "", func(*http.Request) http.Header { return nil }, "issued no nonce: it is not a session's hub, or it is a dax older than", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			write(t, filepath.Join(dir, "README.md"), "# hi\n")
 			var mu sync.Mutex
 			var sent []string
-			imp, err := wstunnel.NewHub(
-				wstunnel.WithEnrollment(func(r *http.Request) (string, error) {
-					mu.Lock()
-					sent = append(sent, r.Header.Get("Authorization"))
-					mu.Unlock()
-					return "build", nil
-				}),
-				wstunnel.WithProofHeader(func(r *http.Request, _ string) (http.Header, error) {
-					return tc.proof(r), nil
-				}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer imp.Close()
 			mux := http.NewServeMux()
-			mux.Handle(config.TunnelPath, imp)
+			mux.Handle(config.TunnelPath, impostor(t, tc.nonce, tc.proof, &sent, &mu))
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
 			url := "ws" + strings.TrimPrefix(srv.URL, "http") + config.TunnelPath
 			c := connectWorkspace(t, dir, url, tunnelToken)
 			select {
 			case err := <-c.done:
-				if err == nil || !strings.Contains(err.Error(), "is not the session's hub") || !errors.Is(err, wstunnel.ErrHubProof) {
+				if err == nil || !strings.Contains(err.Error(), tc.want) || tc.upgrade == 1 && (!errors.Is(err, wstunnel.ErrHubProof) || !strings.Contains(err.Error(), "rotate $DAX_TUNNEL_TOKEN")) {
 					t.Errorf("-connect to an impostor: %v", err)
 				}
 				c.done <- err
 			case <-time.After(30 * time.Second):
 				t.Fatal("dax workspace -connect kept dialling a hub that failed the proof")
 			}
-			wctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-			defer cancel()
-			if ws, err := imp.Workspace(wctx, "build"); err == nil {
-				ws.Close()
-				t.Error("the impostor was served the workspace")
-			}
 			mu.Lock()
 			defer mu.Unlock()
-			if len(sent) != 1 {
-				t.Errorf("the impostor was dialled %d times, want once", len(sent))
+			if len(sent) != tc.upgrade {
+				t.Errorf("the impostor was sent %d upgrades, want %d", len(sent), tc.upgrade)
 			}
 			for _, a := range sent {
-				if strings.Contains(a, tunnelToken) || !strings.HasPrefix(a, authn.ProofScheme+" ") {
+				if strings.Contains(a, tunnelToken) || !strings.HasPrefix(a, authn.ProofScheme+` nonce="`+tc.nonce+`", proof="`) {
 					t.Errorf("the upgrade carried %q", a)
 				}
 			}
@@ -731,5 +778,57 @@ func TestAWorkspaceServesNoHubWithoutTheToken(t *testing.T) {
 				t.Errorf("the token was printed: %s", out)
 			}
 		})
+	}
+}
+
+// After it has connected, -connect stops at the first hub that fails
+// the proof too: an impostor that takes the port after a drop is sent
+// one upgrade, and the run ends rather than dial it again within the
+// lease.
+func TestAWorkspaceStopsAtAnImpostorAfterADrop(t *testing.T) {
+	home(t)
+	defer agent.CaptureWarnings(&syncBuffer{})()
+	p := &pin{name: "build", proof: authn.NewHub(tunnelToken, "build"), log: hubLogger("workspace.hub")}
+	genuine, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithProofHeader(p.hubProof))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.hub = genuine
+	var mu sync.Mutex
+	var sent []string
+	imp := impostor(t, "1.AAAAAAAAAAAAAAAAAAAAAAAAAA.0123", func(*http.Request) http.Header { return nil }, &sent, &mu)
+	var taken atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if taken.Load() {
+			imp.ServeHTTP(w, r)
+			return
+		}
+		p.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := connectWorkspace(t, t.TempDir(), "ws"+strings.TrimPrefix(srv.URL, "http")+config.TunnelPath, tunnelToken)
+	wctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	ws, err := genuine.Workspace(wctx, "build")
+	if err != nil {
+		t.Fatalf("the real hub: %v; the workspace said %s", err, c.out)
+	}
+	ws.Close()
+	// The port changes hands, and the connection drops.
+	taken.Store(true)
+	genuine.Close()
+	select {
+	case err := <-c.done:
+		if err == nil || !errors.Is(err, wstunnel.ErrHubProof) || !strings.Contains(err.Error(), "this run stops rather than dial it again") {
+			t.Errorf("-connect after a drop to an impostor: %v", err)
+		}
+		c.done <- err
+	case <-time.After(30 * time.Second):
+		t.Fatal("dax workspace -connect kept dialling the impostor")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 1 {
+		t.Errorf("the impostor was sent %d upgrades, want 1", len(sent))
 	}
 }

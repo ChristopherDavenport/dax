@@ -1390,7 +1390,7 @@ over `-workspace`; only who dials whom differs.
 |---|---|---|
 | Who dials | the session dials the workspace | the workspace dials the session's hub |
 | Who listens, and needs a certificate off loopback | the workspace's host | the session's machine |
-| The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends, never sent: each proves it to the other with an HMAC of a fresh nonce |
+| The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends, never sent: each proves it to the other with an HMAC of a nonce the hub issues |
 | What the session may do | `-scopes`, set at the workspace's end; read, write and exec by default | the same |
 | Its identity | the URL | `http://<name>.tunnel.invalid` |
 
@@ -1409,13 +1409,13 @@ alone, and waits up to `wait` (default 60 seconds) for the workspace
 `name` to connect, printing on standard error what to run on its host:
 
 ```
-workspace.hub: waiting up to 2m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel
+workspace.hub: waiting up to 2m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel -name build
 ```
 
 On the host:
 
 ```sh
-DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel
+DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel -name build
 ```
 
 | `workspace.hub.` | |
@@ -1467,14 +1467,15 @@ through a tunnel of its own:
 
 ```sh
 ssh -N -o ExitOnForwardFailure=yes -R 7780:127.0.0.1:7780 build-host &   # here
-DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:7780/tunnel   # there
+DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:7780/tunnel -name build   # there
 ```
 
 `ExitOnForwardFailure` makes ssh stop when it cannot take the port
 there, rather than run on with a warning. `ws://` is not encrypted and
 TLS proves no hub, so the two ends prove the token to each other
 instead, and another user who binds `127.0.0.1:7780` there first gets
-neither the token nor the workspace.
+neither the token nor the workspace, within the limits
+[Proving the hub](#proving-the-hub) states.
 
 The host dials again whenever the connection drops, with a growing,
 jittered wait, and the session's requests while it is away wait for it
@@ -1484,7 +1485,8 @@ them, outlive a drop shorter than their lease (30 seconds): a restarted
 hub or a token rotated at the session's end within the lease is dialled
 again, and past it `dax workspace -connect` stops with the refusal. A
 first upgrade refused stops it at once, saying so, as does a hub that
-fails the proof, and so does, before it has connected, an answer no
+fails the proof or issues no nonce at any dial, first or not, and so
+does, before it has connected, an answer no
 redial would change: a certificate the
 roots (or `-tls-ca`) do not verify, or no hub at the path (404). A hub
 not up yet, a refused connection or a timeout are dialled again. A
@@ -1519,44 +1521,66 @@ are left to the host's lease.
 
 ### Proving the hub
 
-Neither end sends the token. Each upgrade `dax workspace -connect`
-makes carries
+Neither end sends the token. Before each upgrade `dax workspace
+-connect` asks the hub for a nonce, a plain `GET` of the hub's URL
+(`http://` or `https://` in place of `ws://` or `wss://`), which the
+hub answers with
+
+```
+Dax-Tunnel-Nonce: <its age in ns>.<26 random base32>.<32 hex>
+```
+
+the last part the hub's MAC of the rest under a secret it makes at its
+start (never the token), so it issues nonces without keeping any. The
+upgrade then carries
 
 ```
 Dax-Workspace-Instance: <the run's instance id, 32 hex digits>
-Authorization: Dax-Tunnel nonce="<unix seconds>.<26 random base32>", proof="<hex>"
+Authorization: Dax-Tunnel nonce="<that nonce>", proof="<hex>"
 ```
 
 where `proof` is HMAC-SHA256, keyed by the token, of
-`dax-tunnel workspace v1`, the nonce and the instance id, each followed
-by a zero byte. The hub checks it against its token, refuses a nonce
-more than 5 minutes from its own clock (so the two hosts' clocks must
-agree that closely) or one it has taken before, and answers the 101
-with
+`dax-tunnel workspace v2`, the workspace's name (`-name`, the hub's
+`name`), the nonce and the instance id, each followed by a zero byte.
+The hub takes it only for a nonce it issued itself, at most 30 seconds
+ago by its own clock (the other host's clock does not matter), and
+only once (it holds the nonces it has taken until they expire, at most
+1024), and answers the 101 with
 
 ```
-Dax-Hub-Proof: <hex HMAC-SHA256, keyed by the token, of "dax-tunnel hub v1", the nonce and the instance id, each followed by a zero byte>
+Dax-Hub-Proof: <hex HMAC-SHA256, keyed by the token, of "dax-tunnel hub v2", the name, the nonce and the instance id, each followed by a zero byte>
 ```
 
-which `-connect` checks before it serves a single request. What crosses
-the wire is good for one dial: an impostor holding the port learns no
-token, cannot answer with the MAC it was sent (the labels differ), and
-cannot replay that MAC to the hub later. A hub that fails the proof is
-served nothing, and `-connect` stops, saying whatever answered is not
-the session's hub (it is not dialled again: start it once the ssh
-forward is yours). A hub that refuses the proof (another token, or
-clocks too far apart) stops it too, and the hub warns about a stale or
-replayed nonce among the session's warnings.
+which `-connect` checks before it serves a single request.
 
-**The proof does not bind the connection.** An impostor on the
-workspace's host that can also reach the hub some other way relays the
-upgrade to it at once, passes, and sits between the two on a plain
-connection. So the proof covers the `ssh -R` case, where whoever takes
-the port cannot reach the hub (with `ExitOnForwardFailure`, ssh does
-not go on without the forward); where the hub is reachable otherwise,
-give it `tls_cert` and `tls_key` and dial `wss://` with `-tls-ca`
-naming its CA, whose TLS binds the connection. `-connect` says so on
-standard error each time it dials `ws://`.
+What that proves, with the hub behind `ssh -o ExitOnForwardFailure=yes
+-R` and another user of the workspace's host taking the port first:
+they learn no token; they cannot answer with the MAC they were sent
+(the labels differ); and the upgrade they captured is over a nonce
+they made up, which the hub never issued, so it is refused when they
+replay it through the forward once it is back up (the hub warns of a
+nonce it did not issue). Nor does a proof for one hub pass at another
+that holds the same token: the name, and each hub's own secret, are in
+it. A hub that fails the proof, or answers with no nonce, is served
+nothing, and `-connect` stops, at the first dial or after a drop alike,
+so an impostor that takes the port after a drop gets one upgrade, not
+one per redial. A hub that refuses the proof (another token, another
+name, or a dax older than v0.0.31, whose hub takes the token itself)
+stops it too.
+
+**What it does not prove.** It does not bind the connection: an
+impostor on the workspace's host that can reach the hub while it holds
+the port (the hub's own host, another forward of its own) relays the
+`GET` and the upgrade at once, passes, and sits between the two on a
+plain connection. And one that fetched a nonce from the hub while the
+forward was up, then takes the port after a drop, can hand `-connect`
+that nonce and replay the upgrade it gets within the nonce's 30
+seconds. So when `-connect` stops at a hub that failed the proof,
+rotate `$DAX_TUNNEL_TOKEN` (start the session's hub with a new one)
+before you bring the forward back. Where the hub is reachable other
+than through the forward, give it `tls_cert` and `tls_key` and dial
+`wss://` with `-tls-ca` naming its CA, whose TLS binds the connection.
+`-connect` says so on standard error each time it dials `ws://`.
 
 ### Limits
 

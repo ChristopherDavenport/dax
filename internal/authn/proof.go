@@ -1,28 +1,41 @@
 package authn
 
-// This file is the tunnel's proof, both ways, as agentworkspace's
-// tunnel package doc lays it out ("Proving the hub"): the workspace end
-// and the hub share a token, and neither sends it. Each upgrade carries
-// a fresh nonce and the workspace end's HMAC of it under the token,
-// which the hub's enrollment checks, refusing a nonce too old or seen
-// before; the hub answers with its own HMAC of the same nonce, under
-// another label, which the workspace end checks before it serves
-// anything. What crosses the wire is good for one dial alone, so over
-// ws:// an impostor holding the port learns nothing it can use again.
+// This file is the tunnel's proof, both ways: the workspace end
+// (`dax workspace -connect`) and the session's hub share a token, and
+// neither sends it. Before each upgrade the workspace end asks the hub
+// for a nonce (a plain GET of the hub's URL), which the hub issues
+// without keeping anything: the nonce carries when it was issued and
+// the hub's MAC of that under a secret of its own, made at its start
+// and never the token. The upgrade carries the workspace end's HMAC,
+// under the token, of the hub's name, that nonce and the run's instance
+// id; the hub takes it only for a nonce it issued, younger than
+// NonceLifetime, and once. Its 101 carries its own HMAC of the same,
+// under another label, which the workspace end checks before it serves
+// anything.
 //
-// The proof authenticates the hub at the handshake and does not bind
-// the connection: an impostor that can reach the real hub relays the
-// upgrade at once and passes. It holds where the impostor cannot reach
-// the hub (ws:// to loopback behind an ssh -R forward); where it can,
-// only wss:// binds the connection.
+// What this proves, over ws:// to loopback behind an ssh -R forward
+// where a local user may take the port first: the impostor learns no
+// token, and the upgrade it captured is made over a nonce the impostor
+// handed out, which no hub issued, so it is good for nothing later,
+// through the forward or at another hub (the name, and the hub's own
+// secret, bind it to one hub). What it does not prove: it does not
+// bind the connection. An impostor that can reach the hub while it
+// holds the port (another forward, the hub's host) relays the GET and
+// the upgrade at once and sits between the two on a plain connection;
+// and one that fetched a nonce from the hub while the forward was up,
+// then takes the port after a drop, can hand that nonce out and replay
+// the upgrade it gets within the nonce's lifetime. Only wss:// binds the
+// connection; where the hub is reachable otherwise, use it.
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,62 +47,68 @@ const (
 	// ProofScheme is the upgrade's Authorization scheme:
 	//	Authorization: Dax-Tunnel nonce="<nonce>", proof="<mac>"
 	ProofScheme = "Dax-Tunnel"
-	// HubProofHeader carries the hub's MAC of the nonce on its 101.
+	// NonceHeader carries the nonce the hub issues, on its answer to a
+	// GET of its URL.
+	NonceHeader = "Dax-Tunnel-Nonce"
+	// HubProofHeader carries the hub's MAC on its 101.
 	HubProofHeader = "Dax-Hub-Proof"
 	// ProofChallenge is the hub's WWW-Authenticate on a 401.
 	ProofChallenge = ProofScheme + ` realm="dax"`
-	// ProofWindow is how far a nonce's time may be from the hub's
-	// clock, either way, and so how long the hub remembers a nonce it
-	// took: the two hosts' clocks may differ by this much.
-	ProofWindow = 5 * time.Minute
+	// NonceLifetime is how long a nonce the hub issued may be used,
+	// by the hub's own monotonic clock: the other host's clock does
+	// not matter.
+	NonceLifetime = 30 * time.Second
+	// MaxLiveNonces bounds the nonces a hub holds as taken; past it an
+	// upgrade is ErrBusy, until the oldest expire. Only an upgrade
+	// proved with the token adds one.
+	MaxLiveNonces = 1024
 
-	workspaceLabel = "dax-tunnel workspace v1"
-	hubLabel       = "dax-tunnel hub v1"
+	workspaceLabel = "dax-tunnel workspace v2"
+	hubLabel       = "dax-tunnel hub v2"
+	nonceLabel     = "dax-tunnel nonce v2"
+	maxNonceBytes  = 128
 )
 
 // Errors of the hub's check; each is a refusal.
 var (
 	ErrNoProof       = errors.New("authn: the upgrade carries no tunnel proof")
-	ErrBadProof      = errors.New("authn: the upgrade's proof is not made with a known token")
-	ErrStaleNonce    = fmt.Errorf("authn: the upgrade's nonce is more than %s from this host's clock (do the two hosts' clocks agree?)", ProofWindow)
+	ErrBadProof      = errors.New("authn: the upgrade's proof is not made with the hub's token and name")
+	ErrUnknownNonce  = errors.New("authn: the upgrade's proof is over a nonce this hub did not issue (a replay of an upgrade made for another hub, or for whatever held the port)")
+	ErrStaleNonce    = fmt.Errorf("authn: the upgrade's nonce is more than %s old", NonceLifetime)
 	ErrReplayedNonce = errors.New("authn: the upgrade's nonce was used before")
+	ErrBusy          = fmt.Errorf("authn: %d nonces are taken and live, the most there may be", MaxLiveNonces)
 	// ErrHubProof is a hub whose answer does not prove it holds the
 	// token.
 	ErrHubProof = errors.New("authn: the hub's answer does not prove it holds the token")
+	// ErrNoNonce is a hub that answered the nonce's GET without one: not
+	// a dax hub, or one older than this proof.
+	ErrNoNonce = errors.New("authn: the hub issued no nonce")
 )
 
-// mac is the hex HMAC-SHA256 under key of label, nonce and bound, each
-// ended by a zero byte: bound is what else the MAC covers (the run's
-// instance id), so a relay cannot change it.
-func mac(key []byte, label, nonce, bound string) string {
+// mac is the hex HMAC-SHA256 under key of label and parts, each ended
+// by a zero byte, which none of them holds.
+func mac(key []byte, label string, parts ...string) string {
 	m := hmac.New(sha256.New, key)
-	m.Write([]byte(label + "\x00" + nonce + "\x00" + bound + "\x00"))
+	m.Write([]byte(label + "\x00"))
+	for _, p := range parts {
+		m.Write([]byte(p + "\x00"))
+	}
 	return hex.EncodeToString(m.Sum(nil))
 }
 
-// newNonce is a nonce for an upgrade at now: its Unix time in seconds,
-// a dot, and 26 random base32 characters.
-func newNonce(now time.Time) string {
-	return strconv.FormatInt(now.Unix(), 10) + "." + rand.Text()
-}
-
-// nonceTime is the time a nonce names, and whether it is one newNonce
-// makes.
-func nonceTime(nonce string) (time.Time, bool) {
-	secs, random, ok := strings.Cut(nonce, ".")
-	if !ok || len(secs) == 0 || len(secs) > 12 || len(random) != 26 {
-		return time.Time{}, false
+// validNonce reports whether s may be a nonce at all: short, of the
+// characters a hub's nonce has, so it cannot make a MAC's input
+// ambiguous or a header long.
+func validNonce(s string) bool {
+	if s == "" || len(s) > maxNonceBytes {
+		return false
 	}
-	for _, c := range random {
-		if (c < 'A' || c > 'Z') && (c < '2' || c > '7') {
-			return time.Time{}, false
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') && (c < 'a' || c > 'f') && c != '.' {
+			return false
 		}
 	}
-	n, err := strconv.ParseInt(secs, 10, 64)
-	if err != nil || n < 0 || strconv.FormatInt(n, 10) != secs {
-		return time.Time{}, false
-	}
-	return time.Unix(n, 0), true
+	return true
 }
 
 // proofOf reads the upgrade's Authorization: exactly
@@ -104,34 +123,68 @@ func proofOf(r *http.Request) (nonce, proof string, ok bool) {
 		return "", "", false
 	}
 	proof, ok = strings.CutSuffix(rest, `"`)
-	if !ok || len(proof) != 2*sha256.Size || strings.ContainsAny(nonce, `"`) {
+	if !ok || len(proof) != 2*sha256.Size || !validNonce(nonce) {
 		return "", "", false
 	}
 	return nonce, proof, true
 }
 
-// Prover is the workspace end's half: it makes each upgrade's proof
-// and checks the hub's answer. The token is the key, never sent.
+// FetchNonce asks the hub at hubURL (its ws:// or wss:// URL) for a
+// nonce, through hc: a GET of the same URL over http or https. A
+// failure to reach it is an error to try again on; an answer without a
+// nonce is ErrNoNonce.
+func FetchNonce(ctx context.Context, hc *http.Client, hubURL string) (string, error) {
+	u := hubURL
+	switch {
+	case strings.HasPrefix(u, "wss://"):
+		u = "https://" + strings.TrimPrefix(u, "wss://")
+	case strings.HasPrefix(u, "ws://"):
+		u = "http://" + strings.TrimPrefix(u, "ws://")
+	default:
+		return "", errors.New("authn: the hub's URL is not ws:// or wss://")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", errors.New("authn: the hub's URL is not one a request can be made to")
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("authn: asking the hub for a nonce: %w", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	nonce := resp.Header.Get(NonceHeader)
+	if resp.StatusCode != http.StatusOK || !validNonce(nonce) {
+		return "", fmt.Errorf("%w (it answered %s)", ErrNoNonce, resp.Status)
+	}
+	return nonce, nil
+}
+
+// Prover is the workspace end's half: it proves each upgrade over the
+// nonce the hub issued and checks the hub's answer. The token is the
+// key, never sent; name is the workspace's name the hub enrolls, which
+// both MACs cover, so a proof for one hub is no proof at another that
+// holds the same token.
 type Prover struct {
-	key []byte
-	now func() time.Time
+	key  []byte
+	name string
 }
 
-// NewProver is the proof under token.
-func NewProver(token string) *Prover {
-	return &Prover{key: []byte(token), now: time.Now}
+// NewProver is the proof under token, for the hub that enrolls name.
+func NewProver(token, name string) *Prover {
+	return &Prover{key: []byte(token), name: name}
 }
 
-// Header is the header of one upgrade: a fresh nonce and the workspace
-// end's MAC of it and bound, in Authorization.
-func (p *Prover) Header(bound string) http.Header {
-	nonce := newNonce(p.now())
-	return http.Header{"Authorization": {fmt.Sprintf(`%s nonce="%s", proof="%s"`, ProofScheme, nonce, mac(p.key, workspaceLabel, nonce, bound))}}
+// Header is the header of one upgrade: nonce, as the hub issued it, and
+// the workspace end's MAC of the name, it and bound (the run's instance
+// id), in Authorization.
+func (p *Prover) Header(nonce, bound string) http.Header {
+	return http.Header{"Authorization": {fmt.Sprintf(`%s nonce="%s", proof="%s"`, ProofScheme, nonce, mac(p.key, workspaceLabel, p.name, nonce, bound))}}
 }
 
 // CheckHub reports whether resp, the answer to req (as sent, with
-// Header's Authorization), carries the hub's MAC of req's nonce and
-// bound under the token; ErrHubProof otherwise.
+// Header's Authorization), carries the hub's MAC of the name, req's
+// nonce and bound under the token; ErrHubProof otherwise.
 func (p *Prover) CheckHub(req *http.Request, resp *http.Response, bound string) error {
 	nonce, _, ok := proofOf(req)
 	if !ok {
@@ -141,116 +194,124 @@ func (p *Prover) CheckHub(req *http.Request, resp *http.Response, bound string) 
 	if got == "" {
 		return fmt.Errorf("%w: it sent none", ErrHubProof)
 	}
-	if !hmac.Equal([]byte(got), []byte(mac(p.key, hubLabel, nonce, bound))) {
+	if !hmac.Equal([]byte(got), []byte(mac(p.key, hubLabel, p.name, nonce, bound))) {
 		return ErrHubProof
 	}
 	return nil
 }
 
-// Proofs is the hub's half: the tokens it knows, each naming a
-// principal, and the nonces it has taken within ProofWindow.
-type Proofs[P any] struct {
-	entries []proofEntry[P]
-	now     func() time.Time
+// Hub is the hub's half: its token and name, the secret its nonces are
+// made under, and the nonces it has taken that are still live.
+type Hub struct {
+	key    []byte
+	name   string
+	secret []byte
+	since  func() time.Duration // the hub's age, by the monotonic clock
 
-	mu   sync.Mutex
-	seen map[string]time.Time // a nonce taken, and when it may be forgotten
+	mu    sync.Mutex
+	taken map[string]time.Duration // a nonce taken, and the age it expires at
+	order []string                 // taken, oldest first
 }
 
-type proofEntry[P any] struct {
-	key []byte
-	p   P
+// NewHub is the hub's proof for the one token, enrolling name; its
+// nonces' secret is random, for this hub's life.
+func NewHub(token, name string) *Hub {
+	secret := make([]byte, 32)
+	rand.Read(secret)
+	start := time.Now()
+	return &Hub{key: []byte(token), name: name, secret: secret, since: func() time.Duration { return time.Since(start) }, taken: map[string]time.Duration{}}
 }
 
-// NewProofs is the hub's check of tokens; an empty token is left out.
-func NewProofs[P any](tokens map[string]P) *Proofs[P] {
-	v := &Proofs[P]{now: time.Now, seen: map[string]time.Time{}}
-	for tok, p := range tokens {
-		if tok != "" {
-			v.entries = append(v.entries, proofEntry[P]{[]byte(tok), p})
-		}
-	}
-	return v
+// Nonce issues a nonce: the hub's age in nanoseconds, 26 random base32
+// characters, and the hub's MAC of both under its secret, dot-separated.
+// It keeps nothing.
+func (h *Hub) Nonce() string {
+	body := strconv.FormatInt(int64(h.since()), 10) + "." + rand.Text()
+	return body + "." + mac(h.secret, nonceLabel, body)[:32]
 }
 
-// verify is the entry whose token made r's proof of bound, the nonce,
-// and whether the nonce's time is within the window; every entry is
-// tried, so the time taken does not say which matched.
-func (v *Proofs[P]) verify(r *http.Request, bound string) (proofEntry[P], string, error) {
-	var found proofEntry[P]
-	nonce, proof, ok := proofOf(r)
-	if !ok {
-		return found, "", ErrNoProof
+// issued is the age at which the hub issued nonce, when it did.
+func (h *Hub) issued(nonce string) (time.Duration, bool) {
+	i := strings.LastIndexByte(nonce, '.')
+	if i < 0 {
+		return 0, false
 	}
-	at, ok := nonceTime(nonce)
-	if !ok {
-		return found, "", ErrNoProof
+	body, sum := nonce[:i], nonce[i+1:]
+	if !hmac.Equal([]byte(sum), []byte(mac(h.secret, nonceLabel, body)[:32])) {
+		return 0, false
 	}
-	matched := false
-	for _, e := range v.entries {
-		if hmac.Equal([]byte(proof), []byte(mac(e.key, workspaceLabel, nonce, bound))) {
-			found, matched = e, true
-		}
-	}
-	if !matched {
-		return found, "", ErrBadProof
-	}
-	if d := v.now().Sub(at); d > ProofWindow || d < -ProofWindow {
-		return found, "", ErrStaleNonce
-	}
-	return found, nonce, nil
-}
-
-// Check names the principal whose token made r's proof of bound, with
-// a nonce within the window, without taking the nonce: a look before
-// the enrollment (Take) decides.
-func (v *Proofs[P]) Check(r *http.Request, bound string) (P, error) {
-	e, _, err := v.verify(r, bound)
-	return e.p, err
-}
-
-// Take is Check, and takes the nonce: one taken before within the
-// window is ErrReplayedNonce, so a proof is good for one upgrade.
-func (v *Proofs[P]) Take(r *http.Request, bound string) (P, error) {
-	e, nonce, err := v.verify(r, bound)
+	ns, _, _ := strings.Cut(body, ".")
+	n, err := strconv.ParseInt(ns, 10, 64)
 	if err != nil {
-		var zero P
-		return zero, err
+		return 0, false
 	}
-	now := v.now()
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	for n, until := range v.seen {
-		if now.After(until) {
-			delete(v.seen, n)
-		}
-	}
-	if _, used := v.seen[nonce]; used {
-		var zero P
-		return zero, ErrReplayedNonce
-	}
-	// Remembered until its time is out of the window for good.
-	at, _ := nonceTime(nonce)
-	v.seen[nonce] = at.Add(ProofWindow + time.Second)
-	return e.p, nil
+	return time.Duration(n), true
 }
 
-// HubHeader is the hub's answer to r, a proof Take accepted: its MAC of
-// r's nonce and bound under the token that made r's proof, in
-// HubProofHeader.
-func (v *Proofs[P]) HubHeader(r *http.Request, bound string) (http.Header, error) {
+// verify checks r's proof of bound: made with the token and name, over
+// a nonce this hub issued, within its lifetime. The MAC is checked
+// first, so every later refusal is of an upgrade made with the token.
+func (h *Hub) verify(r *http.Request, bound string) (nonce string, expires time.Duration, err error) {
 	nonce, proof, ok := proofOf(r)
 	if !ok {
-		return nil, ErrNoProof
+		return "", 0, ErrNoProof
 	}
-	var key []byte
-	for _, e := range v.entries {
-		if hmac.Equal([]byte(proof), []byte(mac(e.key, workspaceLabel, nonce, bound))) {
-			key = e.key
-		}
+	if !hmac.Equal([]byte(proof), []byte(mac(h.key, workspaceLabel, h.name, nonce, bound))) {
+		return "", 0, ErrBadProof
 	}
-	if key == nil {
-		return nil, ErrBadProof
+	at, ok := h.issued(nonce)
+	if !ok {
+		return "", 0, ErrUnknownNonce
 	}
-	return http.Header{HubProofHeader: {mac(key, hubLabel, nonce, bound)}}, nil
+	if age := h.since() - at; age < 0 || age > NonceLifetime {
+		return "", 0, ErrStaleNonce
+	}
+	return nonce, at + NonceLifetime, nil
+}
+
+// Check reports whether r's proof of bound would be taken, without
+// taking its nonce: a look before the enrollment (Take) decides.
+func (h *Hub) Check(r *http.Request, bound string) error {
+	_, _, err := h.verify(r, bound)
+	return err
+}
+
+// Take is Check, and takes the nonce, so a proof is good for one
+// upgrade: one taken before is ErrReplayedNonce. A taken nonce is kept
+// until it expires, the expired ones dropped oldest first; with
+// MaxLiveNonces live, Take is ErrBusy.
+func (h *Hub) Take(r *http.Request, bound string) error {
+	nonce, expires, err := h.verify(r, bound)
+	if err != nil {
+		return err
+	}
+	now := h.since()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// Taken in about the order issued, so the expired are at the front;
+	// one out of order waits behind a live one at most a lifetime.
+	for len(h.order) > 0 && h.taken[h.order[0]] < now {
+		delete(h.taken, h.order[0])
+		h.order = h.order[1:]
+	}
+	if _, used := h.taken[nonce]; used {
+		return ErrReplayedNonce
+	}
+	if len(h.taken) >= MaxLiveNonces {
+		return ErrBusy
+	}
+	h.taken[nonce] = expires
+	h.order = append(h.order, nonce)
+	return nil
+}
+
+// Header is the hub's answer to r, a proof Take accepted: its MAC of the
+// name, r's nonce and bound under the token, in HubProofHeader. It
+// checks r's proof again, so it answers nothing it did not take.
+func (h *Hub) Header(r *http.Request, bound string) (http.Header, error) {
+	nonce, _, err := h.verify(r, bound)
+	if err != nil {
+		return nil, err
+	}
+	return http.Header{HubProofHeader: {mac(h.key, hubLabel, h.name, nonce, bound)}}, nil
 }

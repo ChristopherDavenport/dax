@@ -932,29 +932,33 @@ On the session's machine, `build.example` with a certificate, in
 ```sh
 export DAX_TUNNEL_TOKEN="$(openssl rand -base64 32)"   # here, and the same value there
 dax
-# workspace.hub: waiting up to 1m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel
+# workspace.hub: waiting up to 1m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel -name build
 ```
 
 On the host behind NAT:
 
 ```sh
-DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel
+DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel -name build
 # dax workspace: serving /home/me/src/app to the hub at wss://build.example:7780/tunnel, which may read, write, exec
 ```
 
 | `dax workspace -connect` flag | |
 |---|---|
 | `-connect URL` | dial the session's hub at this URL in place of `-listen`: `wss://`, or `ws://` to a loopback host alone, no user, password, query or fragment. Not with `-listen`, `-tls-cert` or `-tls-key` |
+| `-name NAME` | the workspace's name the hub enrolls (its `name`; the hub's waiting line gives the whole command). Required with `-connect`: the proof is bound to it |
 | `-tls-ca FILE` | for a `wss://` hub, a CA certificate (PEM) to verify the hub's certificate against, in place of the system's roots, as `workspace.tls_ca` and `attach -tls-ca` do; refused with `ws://` |
 | `-dir`, `-pass-env`, `-scopes`, `-servers` | as without `-connect`; `-scopes` is the grant the hub's session gets |
 
 The token is `$DAX_TUNNEL_TOKEN` at both ends, at least 32 bytes, and
-neither end sends it: each upgrade carries a fresh nonce and an HMAC of
-it under the token, which the hub checks (refusing a nonce more than 5
-minutes from its clock, or one it has seen), and the hub's answer
-carries its own HMAC of the nonce, which `dax workspace -connect`
-checks before it serves anything. A hub that cannot answer is not the
-session's: `-connect` serves it nothing and stops, saying so.
+neither end sends it: `dax workspace -connect` asks the hub for a
+nonce, and its upgrade carries an HMAC under the token of the name,
+that nonce and the run's id, which the hub takes only for a nonce it
+issued within 30 seconds, once; the hub's answer carries its own HMAC
+of them, which `-connect` checks before it serves anything. A hub that
+cannot answer, at the first dial or after a drop, is not the session's:
+`-connect` serves it nothing and stops, saying so, and says to rotate
+the token ([Proving the hub](docs/sandbox.md#proving-the-hub) has the
+wire and what it does and does not prove).
 `-connect` takes the token out of its environment before it starts
 anything, never prints it, and refuses `-pass-env` naming it; the hub
 takes the one token from `workspace.hub.token_env` and refuses any
@@ -972,17 +976,20 @@ made while the host is away fails after 10 seconds.
 
 Without a certificate the hub listens on loopback only, and the host
 reaches it through a tunnel of its own (`ssh -o ExitOnForwardFailure=yes -R 7780:127.0.0.1:7780 host`, then
-`-connect ws://127.0.0.1:7780/tunnel` there). Over `ws://` the hub's
-proof is what keeps a user of the workspace's host who binds that port
-first from getting the workspace: the upgrade carries nothing they can
-use again, and nothing is served to them. **The proof does not bind the
-connection**: someone on that host who can also reach the hub another
-way can relay the upgrade to it and sit in the middle of a plain
-connection. It covers the `ssh -R` case (with `ExitOnForwardFailure`,
-whoever takes the port cannot reach the hub); where the hub is
-reachable otherwise, give it a certificate and dial `wss://` with
-`-tls-ca`. `-connect` says so on standard error whenever it dials
-`ws://`. The session's record names
+`-connect ws://127.0.0.1:7780/tunnel -name build` there). Over `ws://`
+the hub's proof is what keeps a user of the workspace's host who binds
+that port first from getting the workspace: nothing is served to them,
+and the upgrade they capture is over a nonce they made up, which the
+hub refuses if they replay it through the forward later. **The proof
+does not bind the connection**: someone on that host who can reach the
+hub while holding the port can relay to it and sit in the middle of a
+plain connection, and one who fetched a nonce from the hub while the
+forward was up and takes the port after a drop can replay one upgrade
+within 30 seconds; so after `-connect` stops at a hub that failed the
+proof, rotate the token before bringing the forward back. Where the hub
+is reachable other than through the forward, give it a certificate and
+dial `wss://` with `-tls-ca`. `-connect` says so on standard error
+whenever it dials `ws://`. The session's record names
 the workspace `remote` at `http://build.tunnel.invalid`, and
 `-list` with the config's hub lists its sessions without listening.
 If the workspace does not connect within `wait`, the session stops,

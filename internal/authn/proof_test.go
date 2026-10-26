@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,114 +26,163 @@ func upgrade(h http.Header) *http.Request {
 	return r
 }
 
-// The wire: Authorization is `Dax-Tunnel nonce="<unix>.<26 base32>",
-// proof="<hex HMAC-SHA256>"`, the MAC of "dax-tunnel workspace v1",
-// the nonce and the bound, each ended by a zero byte, under the token;
-// the hub's is the same under "dax-tunnel hub v1". The token itself is
-// in neither.
+// clock is a hub whose age is set by the test.
+func clock(h *Hub) *time.Duration {
+	var age time.Duration
+	h.since = func() time.Duration { return age }
+	return &age
+}
+
+// The wire: the hub's nonce is "<age ns>.<26 base32>.<32 hex>", the
+// last its MAC of the rest under a secret of its own; Authorization is
+// `Dax-Tunnel nonce="<nonce>", proof="<hex HMAC-SHA256>"`, the MAC of
+// "dax-tunnel workspace v2", the name, the nonce and the bound, each
+// ended by a zero byte, under the token; the hub's answer is the same
+// under "dax-tunnel hub v2". The token is in none of them.
 func TestTheProofsWire(t *testing.T) {
-	h := NewProver(proofToken).Header(instance)
+	hub := NewHub(proofToken, "build")
+	nonce := hub.Nonce()
+	parts := strings.Split(nonce, ".")
+	if len(parts) != 3 || len(parts[1]) != 26 || len(parts[2]) != 32 || !validNonce(nonce) {
+		t.Fatalf("nonce %q", nonce)
+	}
+	if _, err := strconv.ParseInt(parts[0], 10, 64); err != nil {
+		t.Errorf("nonce %q: %v", nonce, err)
+	}
+	if strings.Contains(nonce, proofToken) || hub.Nonce() == nonce {
+		t.Errorf("nonce %q", nonce)
+	}
+	h := NewProver(proofToken, "build").Header(nonce, instance)
 	auth := h.Get("Authorization")
 	if strings.Contains(auth, proofToken) {
 		t.Fatalf("the upgrade carries the token: %q", auth)
 	}
-	nonce, proof, ok := proofOf(upgrade(h))
-	if !ok {
+	got, proof, ok := proofOf(upgrade(h))
+	if !ok || got != nonce {
 		t.Fatalf("Authorization %q", auth)
 	}
-	if _, ok := nonceTime(nonce); !ok {
-		t.Errorf("nonce %q", nonce)
+	hm := func(label string) string {
+		m := hmac.New(sha256.New, []byte(proofToken))
+		m.Write([]byte(label + "\x00build\x00" + nonce + "\x00" + instance + "\x00"))
+		return hex.EncodeToString(m.Sum(nil))
 	}
-	m := hmac.New(sha256.New, []byte(proofToken))
-	m.Write([]byte("dax-tunnel workspace v1\x00" + nonce + "\x00" + instance + "\x00"))
-	if want := hex.EncodeToString(m.Sum(nil)); proof != want {
+	if want := hm("dax-tunnel workspace v2"); proof != want {
 		t.Errorf("proof %s, want %s", proof, want)
 	}
-	hub, err := NewProofs(map[string]string{proofToken: "build"}).HubHeader(upgrade(h), instance)
+	answer, err := hub.Header(upgrade(h), instance)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m = hmac.New(sha256.New, []byte(proofToken))
-	m.Write([]byte("dax-tunnel hub v1\x00" + nonce + "\x00" + instance + "\x00"))
-	if got, want := hub.Get(HubProofHeader), hex.EncodeToString(m.Sum(nil)); got != want {
+	if got, want := answer.Get(HubProofHeader), hm("dax-tunnel hub v2"); got != want {
 		t.Errorf("the hub's proof %s, want %s", got, want)
-	}
-	if again := NewProver(proofToken).Header(instance).Get("Authorization"); again == auth {
-		t.Error("two upgrades carry one nonce")
 	}
 }
 
-// The hub takes a proof made with a known token, of the instance it
-// carries, with a nonce within the window, once.
+// The hub takes a proof made with its token and name, of the instance
+// it carries, over a nonce it issued within NonceLifetime, once.
 func TestTheHubTakesAProofOnce(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	at := func(d time.Duration) *Prover {
-		return &Prover{key: []byte(proofToken), now: func() time.Time { return now.Add(d) }}
-	}
-	other := &Prover{key: []byte(otherToken), now: func() time.Time { return now }}
+	impostor := NewHub(proofToken, "build") // another hub: its own secret
 	for _, tc := range []struct {
 		name  string
-		h     http.Header
+		h     func(nonce string) http.Header
+		age   time.Duration // the hub's age at the upgrade, issued at 1h
 		bound string
 		want  error
 	}{
-		{"fresh", at(0).Header(instance), instance, nil},
-		{"within the window ahead", at(ProofWindow - time.Second).Header(instance), instance, nil},
-		{"within the window behind", at(-ProofWindow + time.Second).Header(instance), instance, nil},
-		{"too old", at(-ProofWindow - time.Second).Header(instance), instance, ErrStaleNonce},
-		{"too far ahead", at(ProofWindow + time.Second).Header(instance), instance, ErrStaleNonce},
-		{"another token", other.Header(instance), instance, ErrBadProof},
-		{"another instance", at(0).Header(instance), strings.Repeat("f", 32), ErrBadProof},
-		{"the token as a bearer", http.Header{"Authorization": {"Bearer " + proofToken}}, instance, ErrNoProof},
-		{"nothing", http.Header{}, instance, ErrNoProof},
-		{"a nonce not as made", http.Header{"Authorization": {`Dax-Tunnel nonce="x", proof="` + strings.Repeat("0", 64) + `"`}}, instance, ErrNoProof},
+		{"fresh", func(n string) http.Header { return NewProver(proofToken, "build").Header(n, instance) }, time.Hour, instance, nil},
+		{"at the end of its life", func(n string) http.Header { return NewProver(proofToken, "build").Header(n, instance) }, time.Hour + NonceLifetime, instance, nil},
+		{"too old", func(n string) http.Header { return NewProver(proofToken, "build").Header(n, instance) }, time.Hour + NonceLifetime + time.Nanosecond, instance, ErrStaleNonce},
+		{"issued later than now", func(n string) http.Header { return NewProver(proofToken, "build").Header(n, instance) }, time.Hour - time.Second, instance, ErrStaleNonce},
+		{"another hub's nonce", func(string) http.Header {
+			return NewProver(proofToken, "build").Header(impostor.Nonce(), instance)
+		}, time.Hour, instance, ErrUnknownNonce},
+		{"a nonce made up", func(string) http.Header {
+			return NewProver(proofToken, "build").Header("1.AAAAAAAAAAAAAAAAAAAAAAAAAA.0123", instance)
+		}, time.Hour, instance, ErrUnknownNonce},
+		{"another token", func(n string) http.Header { return NewProver(otherToken, "build").Header(n, instance) }, time.Hour, instance, ErrBadProof},
+		{"another name", func(n string) http.Header { return NewProver(proofToken, "other").Header(n, instance) }, time.Hour, instance, ErrBadProof},
+		{"another instance", func(n string) http.Header { return NewProver(proofToken, "build").Header(n, instance) }, time.Hour, strings.Repeat("f", 32), ErrBadProof},
+		{"the token as a bearer", func(string) http.Header { return http.Header{"Authorization": {"Bearer " + proofToken}} }, time.Hour, instance, ErrNoProof},
+		{"nothing", func(string) http.Header { return http.Header{} }, time.Hour, instance, ErrNoProof},
+		{"a nonce with a quote", func(string) http.Header {
+			return http.Header{"Authorization": {`Dax-Tunnel nonce="a"b", proof="` + strings.Repeat("0", 64) + `"`}}
+		}, time.Hour, instance, ErrNoProof},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := NewProofs(map[string]string{proofToken: "build", otherToken + "x": "else"})
-			v.now = func() time.Time { return now }
-			if _, err := v.Check(upgrade(tc.h), tc.bound); !errors.Is(err, tc.want) {
+			hub := NewHub(proofToken, "build")
+			age := clock(hub)
+			*age = time.Hour
+			h := tc.h(hub.Nonce())
+			*age = tc.age
+			if err := hub.Check(upgrade(h), tc.bound); !errors.Is(err, tc.want) {
 				t.Errorf("Check: %v, want %v", err, tc.want)
 			}
-			name, err := v.Take(upgrade(tc.h), tc.bound)
-			if !errors.Is(err, tc.want) || err == nil && name != "build" {
-				t.Fatalf("Take: %q, %v, want %v", name, err, tc.want)
+			err := hub.Take(upgrade(h), tc.bound)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Take: %v, want %v", err, tc.want)
+			}
+			if _, err := hub.Header(upgrade(h), tc.bound); !errors.Is(err, tc.want) {
+				t.Errorf("Header: %v, want %v", err, tc.want)
 			}
 			if err != nil {
+				if len(hub.taken) != 0 {
+					t.Errorf("a refused nonce was kept: %v", hub.taken)
+				}
 				return
 			}
-			// Replayed: the same nonce and MAC again.
-			if _, err := v.Take(upgrade(tc.h), tc.bound); !errors.Is(err, ErrReplayedNonce) {
+			if err := hub.Take(upgrade(h), tc.bound); !errors.Is(err, ErrReplayedNonce) {
 				t.Errorf("a replay: %v, want ErrReplayedNonce", err)
-			}
-			// Forgotten only once it is stale for good.
-			v.now = func() time.Time { return now.Add(3 * ProofWindow) }
-			if _, err := v.Take(upgrade(tc.h), tc.bound); !errors.Is(err, ErrStaleNonce) {
-				t.Errorf("a replay later: %v, want ErrStaleNonce", err)
-			}
-			if len(v.seen) != 1 {
-				t.Errorf("%d nonces remembered", len(v.seen))
 			}
 		})
 	}
 }
 
+// Taken nonces are dropped once they expire, oldest first, and no more
+// than MaxLiveNonces are held: past that an upgrade is ErrBusy.
+func TestTheHubsTakenNoncesAreBounded(t *testing.T) {
+	hub := NewHub(proofToken, "build")
+	age := clock(hub)
+	p := NewProver(proofToken, "build")
+	take := func() error {
+		return hub.Take(upgrade(p.Header(hub.Nonce(), instance)), instance)
+	}
+	for i := range MaxLiveNonces {
+		if err := take(); err != nil {
+			t.Fatalf("take %d: %v", i, err)
+		}
+	}
+	if err := take(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("one past the bound: %v", err)
+	}
+	*age += NonceLifetime + time.Nanosecond
+	if err := take(); err != nil {
+		t.Fatalf("after the taken expired: %v", err)
+	}
+	if len(hub.taken) != 1 || len(hub.order) != 1 {
+		t.Errorf("%d taken, %d in order, want 1 each", len(hub.taken), len(hub.order))
+	}
+}
+
 // The workspace end takes the hub's answer only when it is the hub's
-// MAC of the nonce it sent, under its token: not none, not its own MAC
-// sent back, not one under another token or of another instance.
+// MAC of the name, the nonce it sent and its instance, under its token:
+// not none, not its own MAC sent back, not one under another token, of
+// another name or of another instance.
 func TestTheWorkspaceChecksTheHub(t *testing.T) {
-	p := NewProver(proofToken)
-	req := upgrade(p.Header(instance))
+	hub := NewHub(proofToken, "build")
+	p := NewProver(proofToken, "build")
+	req := upgrade(p.Header(hub.Nonce(), instance))
 	nonce, mine, _ := proofOf(req)
-	hubMAC := func(key, bound string) string { return mac([]byte(key), hubLabel, nonce, bound) }
+	hubMAC := func(key, name, bound string) string { return mac([]byte(key), hubLabel, name, nonce, bound) }
 	for _, tc := range []struct {
 		name, answer string
 		ok           bool
 	}{
-		{"the hub's", hubMAC(proofToken, instance), true},
+		{"the hub's", hubMAC(proofToken, "build", instance), true},
 		{"none", "", false},
 		{"its own sent back", mine, false},
-		{"under another token", hubMAC(otherToken, instance), false},
-		{"of another instance", hubMAC(proofToken, strings.Repeat("f", 32)), false},
+		{"under another token", hubMAC(otherToken, "build", instance), false},
+		{"of another name", hubMAC(proofToken, "other", instance), false},
+		{"of another instance", hubMAC(proofToken, "build", strings.Repeat("f", 32)), false},
 	} {
 		resp := &http.Response{StatusCode: http.StatusSwitchingProtocols, Header: http.Header{}}
 		if tc.answer != "" {
@@ -144,5 +195,36 @@ func TestTheWorkspaceChecksTheHub(t *testing.T) {
 		if err != nil && strings.Contains(err.Error(), proofToken) {
 			t.Errorf("%s: the error holds the token", tc.name)
 		}
+	}
+}
+
+// FetchNonce asks the hub's URL over http for its nonce, and an answer
+// without one is ErrNoNonce.
+func TestFetchNonce(t *testing.T) {
+	hub := NewHub(proofToken, "build")
+	for _, tc := range []struct {
+		name   string
+		answer func(w http.ResponseWriter)
+		want   error
+	}{
+		{"a nonce", func(w http.ResponseWriter) { w.Header().Set(NonceHeader, hub.Nonce()) }, nil},
+		{"none", func(http.ResponseWriter) {}, ErrNoNonce},
+		{"a refusal", func(w http.ResponseWriter) { w.WriteHeader(http.StatusUnauthorized) }, ErrNoNonce},
+		{"not a nonce", func(w http.ResponseWriter) { w.Header().Set(NonceHeader, `a"b`) }, ErrNoNonce},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/tunnel" || r.Header.Get("Upgrade") != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				tc.answer(w)
+			}))
+			defer srv.Close()
+			nonce, err := FetchNonce(t.Context(), srv.Client(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/tunnel")
+			if !errors.Is(err, tc.want) || err == nil && !validNonce(nonce) {
+				t.Errorf("%q, %v; want %v", nonce, err, tc.want)
+			}
+		})
 	}
 }

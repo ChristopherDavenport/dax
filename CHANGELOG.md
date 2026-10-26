@@ -123,21 +123,26 @@ versions may break flags and the config file.
   and a filter for its output (`WithOutputFilter`).
 - Changed: `dax workspace -connect` and a session's hub
   (`workspace.hub`, `servers_workspace.hub`) no longer send the tunnel
-  token; each proves it to the other (#115). Every upgrade carries
-  `Authorization: Dax-Tunnel nonce="<unix seconds>.<random>",
-  proof="<hex>"`, an HMAC-SHA256 under the token of a fresh nonce and
-  the run's instance id, which the hub checks, refusing a nonce more
-  than 5 minutes from its clock or one it has taken before; the hub's
-  101 carries `Dax-Hub-Proof`, its own HMAC of them under another label,
-  which `-connect` checks before it serves anything. A hub that fails
-  is served nothing and `-connect` stops, saying whatever answered is
-  not the session's hub (it is not dialled again). Over `ws://` behind
-  `ssh -R`, a local user who binds the port first now gets neither the
-  token nor a shell. The proof does not bind the connection, so the
-  `ws://` line on standard error now says where it does not hold (a
-  user who can also reach the hub another way) and that `wss://` is
-  needed there. A `-connect` and a hub of different versions no longer
-  enroll; upgrade both.
+  token; each proves it to the other (#115). Before each upgrade
+  `-connect` asks the hub for a nonce (a plain GET of its URL, answered
+  in `Dax-Tunnel-Nonce`), which the hub issues statelessly under a
+  secret of its own; the upgrade carries `Authorization: Dax-Tunnel
+  nonce="<nonce>", proof="<hex>"`, an HMAC-SHA256 under the token of the
+  workspace's name, that nonce and the run's instance id, which the hub
+  takes only for a nonce it issued, within 30 seconds by its own clock,
+  once; its 101 carries `Dax-Hub-Proof`, its own HMAC of the same under
+  another label, which `-connect` checks before it serves anything.
+  `-connect` now requires `-name`, the hub's workspace name, which the
+  hub's waiting line includes. A hub that fails the proof, or issues no
+  nonce, is served nothing and `-connect` stops, at the first dial or
+  after a drop, saying whatever answered is not the session's hub and
+  to rotate the token. Over `ws://` behind `ssh -R`, a local user who
+  binds the port first now gets neither the token, nor a shell, nor an
+  upgrade the hub would take later. The proof does not bind the
+  connection, so the `ws://` line on standard error now says where it
+  does not hold (a user who can also reach the hub) and that `wss://`
+  is needed there. A `-connect` and a hub of different versions no
+  longer enroll, and each says so; upgrade both.
 - Changed: a servers workspace's grant, and whether a served
   workspace's project config may be left out, is now the scopes its
   client reports (`servers` alone), not learned by probing (a remove
