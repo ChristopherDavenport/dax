@@ -141,6 +141,13 @@ They are not for `vertex`.
 Ollama, OpenAI, OpenRouter and `openresponses` use the `openresponses`
 client; Anthropic and Gemini use its provider adapters.
 
+Requests to Claude, with `anthropic` or a `claude-` model on `vertex`,
+use Claude's prompt caching: each turn reads the conversation so far
+from the cache at a fraction of the input price instead of paying for
+all of it again. Claude matches the cache on the prompt's prefix; the
+session ID each request carries as `prompt_cache_key` only opts it in.
+The cache lasts 5 minutes from its last use.
+
 `vertex` is Google Vertex AI, which serves Claude and Gemini behind one
 project and login. Each request goes to the Anthropic adapter for a
 `claude-` model and to the Gemini adapter for a `gemini-` model, so the

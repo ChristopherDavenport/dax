@@ -5,6 +5,17 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: requests to Claude, with `-provider anthropic` or a `claude-`
+  model on `vertex`, opt into Claude's automatic prompt caching (5
+  minutes), so each turn reads the conversation so far from the cache
+  instead of resending all of it at the full input price. Each request
+  carries its run's session ID as `prompt_cache_key`, which is how the
+  anthropic adapter opts in; a request made outside a run carries a
+  fixed key. Gemini requests and the openresponses-client providers are
+  unchanged.
+
 ## v0.0.29 - 2026-10-26
 
 - Added: `dax workspace -connect URL`, the served workspace for a host

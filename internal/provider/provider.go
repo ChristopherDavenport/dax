@@ -269,7 +269,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		}
 	case "anthropic":
 		client := sdk.NewClient(anthropicOptions(key, keys, transport(spec, keys, xAPIKey, nil))...)
-		m.Streamer = anthropic.New(client.Messages)
+		m.Streamer = withClaudeCache(anthropic.New(client.Messages))
 		m.Endpoint = "api.anthropic.com"
 		m.Describer = modelinfo.Anthropic(&client.Models)
 	case "vertex":
@@ -301,7 +301,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		if err != nil {
 			return m, fmt.Errorf("vertex: %w", err)
 		}
-		m.Streamer = vertexModels{claude: anthropic.New(claude.Messages), gemini: gemini.New(gc)}
+		m.Streamer = vertexModels{claude: withClaudeCache(anthropic.New(claude.Messages)), gemini: gemini.New(gc)}
 		m.Endpoint = "vertex ai " + project + "/" + location
 		m.Describer = vertexDescriber{}
 	case "gemini":
