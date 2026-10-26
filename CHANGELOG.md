@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.30 - 2026-10-26
 
 - Added: requests to Claude, with `-provider anthropic` or a `claude-`
   model on `vertex`, opt into Claude's automatic prompt caching (5
