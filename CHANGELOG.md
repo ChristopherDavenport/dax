@@ -5,6 +5,12 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentworkspace and agentworkspace/mcpworkspace v0.0.5,
+  up from v0.0.4, whose new `remote` package serves a workspace over
+  HTTP and dials one (`dax workspace` and `-workspace`, below).
+
 ## v0.0.27 - 2026-10-25
 
 - Fixed: a rewind (the head move) on a session whose store reported
