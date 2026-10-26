@@ -188,6 +188,63 @@ func ListExecutorURL(ctx context.Context, root, endpoint string) (workspace.Desc
 	return listExecutor(ctx, root, executorURLID(endpoint))
 }
 
+// ListWorkspaceURL returns the sessions of the project a workspace
+// served at baseURL holds (`dax workspace`, reached by -workspace),
+// without dialing it: the workspace the latest session recorded in a
+// remote workspace at that URL names, its root the served root, and
+// every session recorded in that workspace, newest first. A URL no
+// recorded session used lists nothing, and the descriptor is zero.
+// The URL is the workspace's ref as its descriptor names it
+// (remoteRef), so it stands for whatever serves there last, as an
+// executor's address does.
+func ListWorkspaceURL(ctx context.Context, root, baseURL string) (workspace.Descriptor, []agentsession.Summary, error) {
+	var none workspace.Descriptor
+	if !cas.IsStore(root) {
+		return none, nil, nil
+	}
+	store, err := readOnly(root)
+	if err != nil {
+		return none, nil, err
+	}
+	defer store.Close()
+	ref := remoteRef(baseURL)
+	var (
+		ws      workspace.Descriptor
+		found   bool
+		scanErr error
+	)
+	// The store lists newest first, so the first is the latest.
+	for sum, err := range store.List(ctx, agentsession.ListFilter{}) {
+		if err != nil {
+			scanErr = err
+			break
+		}
+		if d, ok := recordedIn(sum.Header); ok && d.Kind == workspace.KindRemote && d.Ref == ref {
+			ws, found = d, true
+			break
+		}
+	}
+	if !found {
+		return none, nil, scanErr
+	}
+	sums, err := listIn(ctx, store, agentsession.ListFilter{CWD: ws.Root}, &ws)
+	return ws, sums, errors.Join(scanErr, err)
+}
+
+// remoteRef is the ref of the workspace agentworkspace's remote dials at
+// baseURL, as its Descriptor names it: the URL with no query or
+// fragment, and no trailing slash on its path.
+func remoteRef(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return baseURL
+	}
+	u.User = nil
+	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
+	u.Path, u.RawPath = strings.TrimSuffix(u.Path, "/"), ""
+	return u.String()
+}
+
 func listExecutor(ctx context.Context, root, id string) (workspace.Descriptor, []agentsession.Summary, error) {
 	var none workspace.Descriptor
 	if !cas.IsStore(root) {

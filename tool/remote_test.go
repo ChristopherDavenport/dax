@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
@@ -79,6 +81,30 @@ func (m *mapped) Exec(ctx context.Context, c workspace.Command) (*workspace.Outp
 	return o, nil
 }
 
+// served is ws as agentworkspace's remote serves it, dialed over HTTP
+// behind a bearer token whose principal may read, write and run, as
+// `dax workspace` serves a directory and -workspace dials it: every
+// stat, read, write and process crosses the wire on its own, and the
+// tools and the policy's checks run on this side.
+func served(t *testing.T, ws workspace.Workspace) workspace.Workspace {
+	t.Helper()
+	h, err := remote.NewHandler(ws, remote.WithAuthenticator(remote.BearerTokens(map[string]remote.Principal{
+		"tok": {Name: "test", Scopes: []remote.Scope{remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec}},
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { h.Close() })
+	c, err := remote.Dial(t.Context(), srv.URL, remote.WithBearerToken("tok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
 // noLinks is a workspace whose FS cannot tell a link from what it leads
 // to, as an FS over a plain file API may not.
 type noLinks struct{ *workspace.Local }
@@ -107,8 +133,9 @@ func remoteProject(t *testing.T) (dir, outside string) {
 }
 
 // The tools and the policy's checks behave the same whether the
-// workspace is this machine's directory or a container that calls it
-// /workspace: a path is the workspace's, written in its own namespace.
+// workspace is this machine's directory, a container that calls it
+// /workspace, or the directory served over HTTP (remote): a path is the
+// workspace's, written in its own namespace.
 func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 	dir, outside := remoteProject(t)
 	local, err := workspace.NewLocal(dir, DefaultEnv(nil))
@@ -116,7 +143,7 @@ func TestTheToolsAndChecksAreTheSameInAContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { local.Close() })
-	for _, ws := range []workspace.Workspace{local, newMapped(t, dir)} {
+	for _, ws := range []workspace.Workspace{local, newMapped(t, dir), served(t, local)} {
 		root := ws.Root()
 		t.Run(ws.Descriptor().Kind, func(t *testing.T) {
 			f := NewFiles(ws)
@@ -303,6 +330,10 @@ func TestAWorkspaceThatCannotReadLinksAsks(t *testing.T) {
 	}{
 		{"local", local, agentturn.Allow},
 		{"no links", noLinks{local}, agentturn.Defer},
+		// Served, its FS reads links when the served one does, and
+		// not when it does not.
+		{"remote", served(t, local), agentturn.Allow},
+		{"remote with no links", served(t, noLinks{local}), agentturn.Defer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := NewFiles(tc.ws)

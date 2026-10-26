@@ -85,15 +85,9 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	if *insecure && *listen == "" {
 		return errors.New("execute: -insecure-no-auth is for -listen")
 	}
-	var pass []string
-	for v := range strings.SplitSeq(*passEnv, ",") {
-		if v = strings.TrimSpace(v); v == "" {
-			continue
-		}
-		if strings.ContainsAny(v, "= \t") {
-			return fmt.Errorf("execute: -pass-env: %q is not a variable name", v)
-		}
-		pass = append(pass, v)
+	pass, err := splitPassEnv("execute", *passEnv)
+	if err != nil {
+		return err
 	}
 	dir := *root
 	if dir == "" {
@@ -160,6 +154,22 @@ func runExecute(ctx context.Context, args []string, p program) error {
 		return nil
 	}
 	return err
+}
+
+// splitPassEnv is a -pass-env list, the variables separated by commas,
+// for mode's errors.
+func splitPassEnv(mode, list string) ([]string, error) {
+	var pass []string
+	for v := range strings.SplitSeq(list, ",") {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		if strings.ContainsAny(v, "= \t") {
+			return nil, fmt.Errorf("%s: -pass-env: %q is not a variable name", mode, v)
+		}
+		pass = append(pass, v)
+	}
+	return pass, nil
 }
 
 // executeListen listens on addr for `execute -listen`: a loopback

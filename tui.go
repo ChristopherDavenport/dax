@@ -128,14 +128,27 @@ func (f *tuiFront) Prepare(o *agent.Options) {
 // it is not here, in the terminal client and the REPL.
 func executorBanner(executor string) string { return "executor: " + executor }
 
+// elsewhereBanner is the start line that says where the tools act when
+// it is not here: the executor's, or the served workspace's; "" when
+// they act here.
+func elsewhereBanner(info frontInfo) string {
+	switch {
+	case info.Executor != "":
+		return executorBanner(info.Executor)
+	case info.Workspace != "":
+		return "workspace: " + info.Workspace
+	}
+	return ""
+}
+
 // banner is the lines dax shows at start in every front.
 func banner(info frontInfo, si agent.Info) []string {
 	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, info.Dir)}
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
-	if info.Executor != "" {
-		lines = append(lines, executorBanner(info.Executor))
+	if l := elsewhereBanner(info); l != "" {
+		lines = append(lines, l)
 	}
 	if si.Recorded {
 		lines = append(lines, "session "+si.ID)
@@ -154,15 +167,15 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	}
 	// The start lines stay on the terminal under the client's alternate
 	// screen, so they are printed only with -v, but for where the tools
-	// act when that is not here: the executor's line is printed either
-	// way. A warning is printed either way, and waited on, since it may
-	// say the store was exposed.
+	// act when that is not here: the executor's or the served
+	// workspace's line is printed either way. A warning is printed
+	// either way, and waited on, since it may say the store was exposed.
 	if f.info.Verbose {
 		for _, l := range banner(f.info, si) {
 			fmt.Fprintln(out, render.Clean(l))
 		}
-	} else if f.info.Executor != "" {
-		fmt.Fprintln(out, render.Clean(executorBanner(f.info.Executor)))
+	} else if l := elsewhereBanner(f.info); l != "" {
+		fmt.Fprintln(out, render.Clean(l))
 	}
 	// The warnings stay captured while the client has the screen, so
 	// nothing draws over it: what comes meanwhile (the executor's

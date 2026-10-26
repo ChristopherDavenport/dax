@@ -286,15 +286,21 @@ func (f *serveFront) listen() (net.Listener, string, error) {
 // serveTLS is the TLS dax serve serves with: the certificate and key
 // files, both or neither (nil: no TLS). TLS 1.2 is the least it takes.
 func serveTLS(certFile, keyFile string) (*tls.Config, error) {
+	return loadTLS("dax serve", certFile, keyFile)
+}
+
+// loadTLS is the TLS mode serves with: the certificate and key files,
+// both or neither (nil: no TLS), at TLS 1.2 at least.
+func loadTLS(mode, certFile, keyFile string) (*tls.Config, error) {
 	switch {
 	case certFile == "" && keyFile == "":
 		return nil, nil
 	case certFile == "" || keyFile == "":
-		return nil, errors.New("dax serve: -tls-cert and -tls-key go together")
+		return nil, errors.New(mode + ": -tls-cert and -tls-key go together")
 	}
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("dax serve: -tls-cert, -tls-key: %w", err)
+		return nil, fmt.Errorf("%s: -tls-cert, -tls-key: %w", mode, err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
