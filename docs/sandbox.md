@@ -1203,7 +1203,7 @@ your config names:
 | `workspace.` | |
 |---|---|
 | `url` | https, or http to a loopback host; no user, password, query or fragment. `-workspace URL` replaces it, `-workspace ""` clears it |
-| `token_env` | the variable holding the token; default `DAX_WORKSPACE_TOKEN`. dax takes it out of its own environment once read, so no child here inherits it, and never prints or records it. `pass_env` and `executor.pass_env` may not name it |
+| `token_env` | the variable holding the token; default `DAX_WORKSPACE_TOKEN`. dax takes it out of its own environment as soon as the settings are read, before it starts any process (the key command first), so no child here inherits it, and never prints or records it. `pass_env` and `executor.pass_env` may not name it |
 | `tls_ca` | for https: a CA certificate (PEM) in place of the system's roots; nothing skips the verification |
 
 Only your config and the flags can name a workspace: a project's

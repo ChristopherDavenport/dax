@@ -26,7 +26,7 @@ versions may break flags and the config file.
   there when the token holds `exec`. The URL is https, or http to a
   loopback host, with no user, password, query or fragment; the token
   is never printed or recorded, and its variable is taken out of dax's
-  environment once read. Your config only: a project's file may not
+  environment before dax starts any process, the key command first. Your config only: a project's file may not
   set `workspace`, and it is refused beside an executor or a box. The
   header records the workspace as `remote` with the URL as ref, and
   `-list` finds its sessions by the URL without connecting. See

@@ -181,22 +181,25 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 			}
 		}
 	}
-	// The client refuses to dial without its variable, and sends it.
+	// The token is taken from its variable, which then leaves the
+	// environment; none set is refused.
 	t.Setenv(config.WorkspaceTokenEnv, "")
-	if _, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: config.WorkspaceTokenEnv}); err == nil || !strings.Contains(err.Error(), "no token: set $DAX_WORKSPACE_TOKEN") {
-		t.Errorf("a dial with no token: %v", err)
-	}
-	t.Setenv("MY_WS_TOKEN", "not-the-token")
-	if _, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: "MY_WS_TOKEN"}); err == nil || strings.Contains(err.Error(), "not-the-token") {
-		t.Errorf("a dial with another token: %v", err)
+	if _, err := takeWorkspaceToken(config.WorkspaceTokenEnv); err == nil || !strings.Contains(err.Error(), "no token: set $DAX_WORKSPACE_TOKEN") {
+		t.Errorf("no token: %v", err)
 	}
 	t.Setenv("MY_WS_TOKEN", token)
-	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: "MY_WS_TOKEN"})
-	if err != nil {
-		t.Fatal(err)
+	if got, err := takeWorkspaceToken("MY_WS_TOKEN"); err != nil || got != token {
+		t.Fatalf("takeWorkspaceToken: %v", err)
 	}
 	if _, ok := os.LookupEnv("MY_WS_TOKEN"); ok {
 		t.Error("the token's variable is still in this process's environment, for a child here to inherit")
+	}
+	if _, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, "not-the-token"); err == nil || strings.Contains(err.Error(), "not-the-token") {
+		t.Errorf("a dial with another token: %v", err)
+	}
+	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, token)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if d := ws.Descriptor(); d.Kind != workspace.KindRemote || d.Ref != s.url || d.Root != dir || strings.Contains(d.Ref, token) {
 		t.Errorf("descriptor %+v", d)
@@ -227,7 +230,7 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 	if out := s.out.String(); strings.Contains(out, "the-environment's-token") || !strings.Contains(out, "token: $DAX_WORKSPACE_TOKEN") {
 		t.Errorf("dax workspace's lines with the environment's token:\n%s", out)
 	}
-	if ws, err = dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: config.WorkspaceTokenEnv}); err != nil {
+	if ws, err = dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, os.Getenv(config.WorkspaceTokenEnv)); err != nil {
 		t.Fatal(err)
 	}
 	ws.Close()
@@ -239,8 +242,7 @@ func TestStoppingAServedWorkspaceEndsItsProcesses(t *testing.T) {
 	home(t)
 	dir := t.TempDir()
 	s := serveWorkspace(t, dir, nil)
-	t.Setenv("TEST_WS_TOKEN", s.token(t))
-	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: "TEST_WS_TOKEN"})
+	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, s.token(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,12 +330,10 @@ func TestAServedWorkspaceOverTLS(t *testing.T) {
 		t.Fatalf("dax workspace over TLS: %s\n%s", s.url, s.out.String())
 	}
 	url := "https://127.0.0.1:" + portOf(t, s.url)
-	t.Setenv("TEST_WS_TOKEN", s.token(t))
-	if _, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: url, TokenEnv: "TEST_WS_TOKEN"}); err == nil || !strings.Contains(err.Error(), "certificate") {
+	if _, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: url}, s.token(t)); err == nil || !strings.Contains(err.Error(), "certificate") {
 		t.Errorf("a dial without the CA: %v", err)
 	}
-	t.Setenv("TEST_WS_TOKEN", s.token(t))
-	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: url, TokenEnv: "TEST_WS_TOKEN", TLSCA: cert})
+	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: url, TLSCA: cert}, s.token(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,8 +370,7 @@ func TestTheProjectConfigIsReadThroughTheServedWorkspace(t *testing.T) {
 	if st, err := settingsOf(local(t, here), "", config.Flags{Workspace: str("")}); err != nil || st.Workspace != nil || len(st.Policy.Project.Deny) != 1 {
 		t.Fatalf("with -workspace \"\": %+v %v, %v", st.Workspace, st.Policy.Project.Deny, err)
 	}
-	t.Setenv("TEST_WS_TOKEN", s.token(t))
-	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: "TEST_WS_TOKEN"})
+	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, s.token(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,8 +432,7 @@ func TestListFindsTheServedWorkspacesSessions(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	here, servedDir := t.TempDir(), t.TempDir()
 	s := serveWorkspace(t, servedDir, nil)
-	t.Setenv("TEST_WS_TOKEN", s.token(t))
-	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url, TokenEnv: "TEST_WS_TOKEN"})
+	ws, err := dialWorkspace(t.Context(), config.WorkspaceSettings{URL: s.url}, s.token(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,5 +467,29 @@ func TestListFindsTheServedWorkspacesSessions(t *testing.T) {
 	}
 	if out := list(cfg, config.Flags{Workspace: str("")}); strings.Contains(out, id) || out == "" {
 		t.Errorf("-list -workspace \"\" lists %q, want this directory's session alone", out)
+	}
+}
+
+// The workspace's token leaves dax's environment before anything here
+// starts a process: the key command, which provider.New runs at once,
+// finds no $DAX_WORKSPACE_TOKEN.
+func TestTheKeyCommandDoesNotInheritTheWorkspaceToken(t *testing.T) {
+	h := home(t)
+	t.Chdir(t.TempDir())
+	s := serveWorkspace(t, t.TempDir(), nil)
+	seen := filepath.Join(t.TempDir(), "seen")
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"openresponses","model":"m","base_url":"http://127.0.0.1:1/v1",`+
+		`"api_key_command":["sh","-c","printf 'token=[%s]' \"$DAX_WORKSPACE_TOKEN\" > `+seen+`; echo key"]}`)
+	t.Setenv(config.WorkspaceTokenEnv, s.token(t))
+	// The model is unreachable, so the prompt fails; the key command ran
+	// before it.
+	err := run(context.Background(), []string{"-workspace", s.url, "-sessions", "", "-p", "hi"}, program{name: "dax", version: "test"})
+	t.Logf("run: %v", err)
+	b, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("the key command did not run: %v", err)
+	}
+	if string(b) != "token=[]" {
+		t.Errorf("the key command saw %q", b)
 	}
 }

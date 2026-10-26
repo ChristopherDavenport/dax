@@ -320,6 +320,14 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
+	// A served workspace's token leaves the environment before anything
+	// here starts a process, the key command first among them.
+	var wsToken string
+	if settings.Workspace != nil {
+		if wsToken, err = takeWorkspaceToken(settings.Workspace.TokenEnv); err != nil {
+			return err
+		}
+	}
 	cost, err := pricing(settings.PricingFile)
 	if err != nil {
 		return err
@@ -398,7 +406,7 @@ func run(ctx context.Context, args []string, p program) error {
 		// Served elsewhere: the tools, their facts and the policy run
 		// here, and every file and process they touch is the served
 		// workspace's. The project's file is read through it.
-		served, err := dialWorkspace(ctx, *settings.Workspace)
+		served, err := dialWorkspace(ctx, *settings.Workspace, wsToken)
 		if err != nil {
 			return err
 		}

@@ -269,21 +269,27 @@ func listenWorkspace(addr string, cfg *tls.Config) (net.Listener, string, error)
 	return ln, "http", nil
 }
 
-// dialWorkspace dials the served workspace s names, with the token in
-// its variable, which is sent as a bearer token and never printed: the
-// workspace the session's tools act in. The variable is taken out of
-// this process's environment once read, so no child here (an MCP
-// server on this machine, the key command) inherits it, whatever its
-// name. An https URL is verified against the system's roots, or
-// s.TLSCA in their place; nothing skips the verification, and no
-// redirect is followed. The settings checked the URL: https, or http to
-// a loopback host.
-func dialWorkspace(ctx context.Context, s config.WorkspaceSettings) (wsremote.Workspace, error) {
-	token := os.Getenv(s.TokenEnv)
+// takeWorkspaceToken is the served workspace's token, read from env and
+// taken out of this process's environment at once, so no child here
+// inherits it whatever its name: the run takes it as soon as its
+// settings are resolved, before the key command or anything else
+// starts a process.
+func takeWorkspaceToken(env string) (string, error) {
+	token := os.Getenv(env)
 	if token == "" {
-		return nil, fmt.Errorf("-workspace: no token: set $%s to the token dax workspace took or wrote (the file it printed)", s.TokenEnv)
+		return "", fmt.Errorf("-workspace: no token: set $%s to the token dax workspace took or wrote (the file it printed)", env)
 	}
-	os.Unsetenv(s.TokenEnv)
+	os.Unsetenv(env)
+	return token, nil
+}
+
+// dialWorkspace dials the served workspace s names with token
+// (takeWorkspaceToken), which is sent as a bearer token and never
+// printed: the workspace the session's tools act in. An https URL is
+// verified against the system's roots, or s.TLSCA in their place;
+// nothing skips the verification, and no redirect is followed. The
+// settings checked the URL: https, or http to a loopback host.
+func dialWorkspace(ctx context.Context, s config.WorkspaceSettings, token string) (wsremote.Workspace, error) {
 	hc, err := workspaceHTTPClient(s.URL, s.TLSCA)
 	if err != nil {
 		return nil, err

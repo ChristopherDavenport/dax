@@ -49,7 +49,8 @@ before changing the shape.
   as serve's), loopback unless `-tls-cert`/`-tls-key`, flags of its own
   and no config read; and `dialWorkspace`, `-workspace`'s client
   (https verified against the system's roots or `workspace.tls_ca`, no
-  redirect followed, the token's variable unset once read), whose
+  redirect followed, the token taken and its variable unset, by `takeWorkspaceToken`, as
+  soon as the settings are resolved, before the key command runs), whose
   `remote.Workspace` is the session's `Options.Workspace`.
   `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as

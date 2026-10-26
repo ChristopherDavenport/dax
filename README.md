@@ -736,8 +736,9 @@ process a session started in it ends first.
 
 The session sends the token from `workspace.token_env`
 (`DAX_WORKSPACE_TOKEN` by default), takes the variable out of its own
-environment once read so no child here gets it, and never prints or
-records it. The URL is https, verified against the system's roots or
+environment as soon as its settings are read, before it starts any
+process (the key command first), so no child here gets it, and never
+prints or records it. The URL is https, verified against the system's roots or
 `workspace.tls_ca`, or http to a loopback host; only your config and
 the flags can name it, never a project's, and not beside an executor
 or a box. The session's header records the workspace as `remote`, the
