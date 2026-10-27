@@ -5,6 +5,20 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agenttool, mcpclient and mcpserver v0.0.25, up from
+  v0.0.24 (mcpclient's `Remote.Close` returns nil for a server whose
+  session had already ended, a failed restart's included, and closes a
+  session once, so closing a session after an MCP server or a servers
+  workspace dropped no longer sometimes fails with the close of a
+  connection already gone); and agentworkspace,
+  agentworkspace/mcpworkspace and agentworkspace/tunnel v0.0.9, up from
+  v0.0.8 (a `remote` process closed right after its start keeps all of
+  its standard error: the client waits up to a two-second grace for the
+  stream before the close, and the server keeps a closed process's
+  standard error reachable for that grace).
+
 ## v0.0.32 - 2026-10-26
 
 - Added: `/mcp` (or `/mcp list`) lists the session's MCP servers in the
