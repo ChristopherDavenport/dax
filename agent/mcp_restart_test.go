@@ -170,12 +170,13 @@ func callOutside(ctx context.Context, t *testing.T, s *Session, name string) str
 }
 
 // callAfterEnd is callOnce, or with outside callOutside, after the
-// server's session ended, sent again while the call was cut, sent as
+// server's session ended, and once more when that call was cut, sent as
 // the session was ending: a call in flight is never sent again, and
-// does not restart the server. mcpclient reads a closed connection as
-// a cut at once, before it marks the session ended, so more than one
-// call can be cut before the next restarts the server (#129); this
-// gives up after cutGrace.
+// does not restart the server. One resend is enough: mcpclient returns
+// a cut call only once the session has ended (agenttool#90), so the
+// next call restarts the server, unless a handler of the client's held
+// the session past the half second mcpclient waits. These servers ask
+// the client nothing and send it no notification, so none does.
 func callAfterEnd(ctx context.Context, t *testing.T, s *Session, model *offering, name string, outside bool) string {
 	t.Helper()
 	call := func() string {
@@ -184,18 +185,13 @@ func callAfterEnd(ctx context.Context, t *testing.T, s *Session, model *offering
 		}
 		return callOnce(ctx, t, s, model, name)
 	}
-	deadline := time.Now().Add(cutGrace)
 	out := call()
-	for strings.Contains(out, "may or may not have run") && time.Now().Before(deadline) {
-		t.Logf("a call after the end was cut: %s", out)
-		time.Sleep(20 * time.Millisecond)
+	if strings.Contains(out, "may or may not have run") {
+		t.Logf("the first call after the end was cut: %s", out)
 		out = call()
 	}
 	return out
 }
-
-// cutGrace is how long callAfterEnd sends a call again that was cut.
-const cutGrace = 10 * time.Second
 
 // restartsIn is the restarts a session's record holds (mcpRestartNS),
 // read from its projection.
