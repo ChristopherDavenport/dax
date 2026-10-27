@@ -7,6 +7,11 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Dependencies: agenttool, mcpclient and mcpserver v0.0.26, up from
+  v0.0.25 (a call to an MCP server cut because its connection closed
+  returns only once the server's session has ended, waiting at most
+  half a second, so the very next call starts the server again rather
+  than being cut too; agenttool#90).
 - Dependencies: agenttool, mcpclient and mcpserver v0.0.25, up from
   v0.0.24 (mcpclient's `Remote.Close` returns nil for a server whose
   session had already ended, a failed restart's included, and closes a
