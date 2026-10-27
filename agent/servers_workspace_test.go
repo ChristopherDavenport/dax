@@ -211,10 +211,7 @@ func TestAServersWorkspaceThatDrops(t *testing.T) {
 	h.Close()
 	srv.CloseClientConnections()
 	srv.Close()
-	out := callOutside(t.Context(), t, s, "mcp__p__ping")
-	if strings.Contains(out, "may or may not have run") {
-		out = callOutside(t.Context(), t, s, "mcp__p__ping")
-	}
+	out := callAfterEnd(t.Context(), t, s, nil, "mcp__p__ping", true)
 	if !strings.HasPrefix(out, "Error: ") || !strings.Contains(out, "could not be restarted; the next request tries again") {
 		t.Errorf("a call after the drop: %q", out)
 	}
@@ -230,20 +227,11 @@ func TestAServersWorkspaceThatDrops(t *testing.T) {
 	if err != nil || !strings.Contains(res.Output.Text, "Run go test") {
 		t.Errorf("read after the drop: %v, %v", res.Output.Text, err)
 	}
-	// Its close may fail at the server's process, there no longer, and
-	// at nothing else; the record is kept whole either way. mcpclient's
-	// Remote.Close reports, depending on scheduling, the close error of a
-	// link the failed restart already ended (agenttool#88); once that is
-	// fixed this requires nil.
+	// Its close is clean: the server's session had ended, and the
+	// failed restart reported it already. The record is kept whole.
 	id := s.ID()
 	if err := s.Close(); err != nil {
-		// Each error joined is the process's close.
-		for _, line := range strings.Split(err.Error(), "\n") {
-			if !strings.Contains(line, "/processes/") {
-				t.Errorf("close after the drop: %v, want nil or the server's process's close", err)
-				break
-			}
-		}
+		t.Errorf("close after the drop: %v", err)
 	}
 	path, err := Project(context.Background(), o.Root, id, t.TempDir())
 	if err != nil {
