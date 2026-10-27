@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.32 - 2026-10-26
 
 - Added: `/mcp` (or `/mcp list`) lists the session's MCP servers in the
   terminal client, the REPL and `dax attach` alike: each server's name,
