@@ -10,19 +10,19 @@ require (
 	github.com/ChristopherDavenport/agentmemory v0.0.10
 	github.com/ChristopherDavenport/agentpolicy v0.0.17
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.1
-	github.com/ChristopherDavenport/agentsession v0.0.29
+	github.com/ChristopherDavenport/agentsession v0.0.30
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.3
 	github.com/ChristopherDavenport/agenttool v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.24
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.24
-	github.com/ChristopherDavenport/agentturn v0.0.33
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.33
-	github.com/ChristopherDavenport/agentturn/session v0.0.33
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.33
-	github.com/ChristopherDavenport/agentworkspace v0.0.7
-	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.7
-	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.7
+	github.com/ChristopherDavenport/agentturn v0.0.34
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.34
+	github.com/ChristopherDavenport/agentturn/session v0.0.34
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.34
+	github.com/ChristopherDavenport/agentworkspace v0.0.8
+	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.8
+	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.8
 	github.com/ChristopherDavenport/openresponses v0.0.16
 	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.16
 	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.16

@@ -1330,8 +1330,10 @@ the session's `servers_workspace` (or `-servers-workspace URL`), a
 second connection, dialed or through a hub of its own as `workspace`'s
 is, whose offered servers it connects through the same path and nothing
 else. The session refuses a servers workspace that grants `exec`,
-`write` or `read` (it learns the grant by probing: no process starts,
-a write is forbidden and so is a stat of its root), one that offers
+`write` or `read` (the grant is the scopes the served workspace's
+client reports, as its server said them at the dial: anything but
+`servers` alone is refused, and so is a workspace that is not served),
+one that offers
 none, one that is its own workspace, and one token for both
 connections. Its
 servers' names are held to the same rules as the workspace's offered
@@ -1388,7 +1390,7 @@ over `-workspace`; only who dials whom differs.
 |---|---|---|
 | Who dials | the session dials the workspace | the workspace dials the session's hub |
 | Who listens, and needs a certificate off loopback | the workspace's host | the session's machine |
-| The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends; the workspace sends it, the hub checks it |
+| The token | made by `dax workspace` or `$DAX_WORKSPACE_TOKEN`; the session sends it | `$DAX_TUNNEL_TOKEN` at both ends, never sent: each proves it to the other with an HMAC of a nonce the hub issues |
 | What the session may do | `-scopes`, set at the workspace's end; read, write and exec by default | the same |
 | Its identity | the URL | `http://<name>.tunnel.invalid` |
 
@@ -1407,13 +1409,13 @@ alone, and waits up to `wait` (default 60 seconds) for the workspace
 `name` to connect, printing on standard error what to run on its host:
 
 ```
-workspace.hub: waiting up to 2m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel
+workspace.hub: waiting up to 2m0s for workspace build at wss://build.example:7780/tunnel; on its host run: DAX_TUNNEL_TOKEN=... dax workspace -connect wss://build.example:7780/tunnel -name build
 ```
 
 On the host:
 
 ```sh
-DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel
+DAX_TUNNEL_TOKEN=... dax workspace -dir ~/src/app -connect wss://build.example:7780/tunnel -name build
 ```
 
 | `workspace.hub.` | |
@@ -1433,23 +1435,25 @@ the hub.
 `dax workspace -connect` dials `wss://`, verified against the system's
 roots or, with `-tls-ca`, that certificate in their place (as
 `workspace.tls_ca` and `attach -tls-ca`; `-tls-ca` with `ws://` is
-refused), or `ws://` to a loopback host alone, and follows no redirect. It sends `$DAX_TUNNEL_TOKEN` in
-the upgrade's `Authorization` header and nowhere else, takes it out of
-its environment before the workspace starts any process, refuses
-`-pass-env` naming it, and never prints it. `-scopes` ([Scopes](#scopes),
+refused), or `ws://` to a loopback host alone, and follows no redirect. It
+never sends `$DAX_TUNNEL_TOKEN` (see [Proving the hub](#proving-the-hub)),
+takes it out of its environment before the workspace starts any
+process, refuses `-pass-env` naming it, and never prints it. `-scopes` ([Scopes](#scopes),
 as `-listen`'s) is what the session may do there, decided at the
 workspace's end, and `-servers` offers servers through the hub as at
 an address: without `exec` the workspace
 starts no process, so bash fails as forbidden, your MCP servers run on
 the session's machine and the project's not at all, as with a token
-without `exec` above. The hub enrolls the one token as the one name
-and refuses any other upgrade before it is answered, and a request from
-a web page.
+without `exec` above. The hub enrolls an upgrade proved with the one
+token as the one name and refuses any other upgrade before it is
+answered (401, with `WWW-Authenticate: Dax-Tunnel realm="dax"`), and a
+request from a web page.
 
 The hub holds its workspace to one `dax workspace -connect` run. Each
 run sends an instance id of its own on every upgrade (random, made once
-for the run, so its redials keep it), and the hub takes the first that
-connects with the token: an upgrade with the token and another id, a
+for the run, so its redials keep it, and covered by the upgrade's MAC),
+and the hub takes the first that connects with the token: an upgrade
+proved with the token and another id, a
 second host or a second run on the first in another directory, is
 refused 403 for the session's life, and that run stops, saying the
 hub's workspace is held by another host. The hub warns that it refused
@@ -1463,18 +1467,15 @@ through a tunnel of its own:
 
 ```sh
 ssh -N -o ExitOnForwardFailure=yes -R 7780:127.0.0.1:7780 build-host &   # here
-DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:7780/tunnel   # there
+DAX_TUNNEL_TOKEN=... dax workspace -connect ws://127.0.0.1:7780/tunnel -name build   # there
 ```
 
 `ExitOnForwardFailure` makes ssh stop when it cannot take the port
-there, rather than run on with a warning. **A `ws://` URL authenticates
-no hub: the token, and the workspace with every scope you gave it, go
-to whoever holds that port on the workspace's host.** Another user who
-binds `127.0.0.1:7780` there first gets both. On a host others share,
-give the hub `tls_cert` and `tls_key` and dial `wss://` with
-`-tls-ca` naming its CA, even through the ssh tunnel; `-connect` warns
-on standard error each time it dials `ws://`. (The hub proving that it
-knows the token is not in the tunnel yet.)
+there, rather than run on with a warning. `ws://` is not encrypted and
+TLS proves no hub, so the two ends prove the token to each other
+instead, and another user who binds `127.0.0.1:7780` there first gets
+neither the token nor the workspace, within the limits
+[Proving the hub](#proving-the-hub) states.
 
 The host dials again whenever the connection drops, with a growing,
 jittered wait, and the session's requests while it is away wait for it
@@ -1483,8 +1484,10 @@ connection, so the session's processes there, its MCP servers among
 them, outlive a drop shorter than their lease (30 seconds): a restarted
 hub or a token rotated at the session's end within the lease is dialled
 again, and past it `dax workspace -connect` stops with the refusal. A
-first upgrade refused stops it at once, saying so, and so does, before
-it has connected, an answer no redial would change: a certificate the
+first upgrade refused stops it at once, saying so, as does a hub that
+fails the proof or issues no nonce at any dial, first or not, and so
+does, before it has connected, an answer no
+redial would change: a certificate the
 roots (or `-tls-ca`) do not verify, or no hub at the path (404). A hub
 not up yet, a refused connection or a timeout are dialled again. A
 signal stops it, and every process the session started there ends
@@ -1515,6 +1518,82 @@ processes there, then the hub and every connection to it, then its
 server, all within one deadline of 3 seconds: with the host gone, the
 hub is closed under what still waits for it, and the processes there
 are left to the host's lease.
+
+### Proving the hub
+
+Neither end sends the token. Before each upgrade `dax workspace
+-connect` asks the hub for a nonce, a plain `GET` of the hub's URL
+(`http://` or `https://` in place of `ws://` or `wss://`), which the
+hub answers with
+
+```
+Dax-Tunnel-Nonce: <its age in ns, from a random offset>.<26 random base32>.<32 hex>
+```
+
+the last part the hub's MAC of the rest under a secret it makes at its
+start (never the token), so it issues nonces without keeping any. An
+answer that rules a session's hub out (200 without a nonce, a redirect,
+401 as an older dax hub gives, 403, 404) ends the run; one a hub gives
+for a while (a 5xx, 429 or 408, as through a proxy while the hub
+restarts), or no answer at all, is dialled again. The
+upgrade then carries
+
+```
+Dax-Workspace-Instance: <the run's instance id, 32 hex digits>
+Authorization: Dax-Tunnel nonce="<that nonce>", proof="<hex>"
+```
+
+where `proof` is HMAC-SHA256, keyed by the token, of
+`dax-tunnel workspace v2`, the workspace's name (`-name`, the hub's
+`name`), the nonce and the instance id, each followed by a zero byte.
+The hub takes it only for a nonce it issued itself, at most 30 seconds
+ago by its own clock (the other host's clock does not matter), and
+only once (it holds the nonces it has taken until they expire, at most
+1024), and answers the 101 with
+
+```
+Dax-Hub-Proof: <hex HMAC-SHA256, keyed by the token, of "dax-tunnel hub v2", the name, the nonce and the instance id, each followed by a zero byte>
+```
+
+which `-connect` checks before it serves a single request.
+
+What that proves, with the hub behind `ssh -o ExitOnForwardFailure=yes
+-R` and another user of the workspace's host taking the port first:
+they learn no token; they cannot answer with the MAC they were sent
+(the labels differ); and the upgrade they captured is over a nonce
+they made up, which the hub never issued, so it is refused when they
+replay it through the forward once it is back up (the hub warns of a
+nonce it did not issue). Nor does a proof for one hub replay at another
+that holds the same token: the name, and each hub's own secret, are in
+it (a live relay to another hub of the same name and token is the
+relay case below; give each session's hub its own token, or name).
+Nothing is served to a hub that fails the proof, and `-connect` stops,
+at the first dial or after a drop alike, at the first 101 that fails
+it, at a nonce answer that rules a session's hub out, and at the third
+upgrade in a row it sent after a nonce that got no answer a hub gives
+(no 101, 401, 403 or 503: a real hub never takes an upgrade and drops
+it). So an impostor that takes the port after a drop gets at most three
+upgrades, and only if it hands out nonces it fetched from the hub
+earlier; one that never answers the nonce's `GET` is dialled again as
+an unreachable hub is, and gets none. A hub that refuses the proof
+(another token, another name, or a dax older than v0.0.31, whose hub
+takes the token itself) stops it too.
+
+**What it does not prove.** It does not bind the connection: an
+impostor on the workspace's host that can reach a hub of this name and
+token while it holds the port (the hub's own host, another forward of
+its own) relays the `GET` and the upgrade at once, passes, and sits
+between the two on a plain connection. And one that fetched nonces
+from the hub while the forward was up, then takes the port after a
+drop, can hand them to `-connect` and replay each upgrade it gets (at
+most three, above) within that nonce's 30 seconds. The token is not
+exposed either way. So when `-connect` stops at a hub that failed the
+proof, wait 30 seconds, or restart the session's hub (a new secret, so
+every nonce it issued is unknown), before you bring the forward back;
+rotate `$DAX_TUNNEL_TOKEN` only if it may have leaked some other way. Where the hub is reachable other
+than through the forward, give it `tls_cert` and `tls_key` and dial
+`wss://` with `-tls-ca` naming its CA, whose TLS binds the connection.
+`-connect` says so on standard error each time it dials `ws://`.
 
 ### Limits
 

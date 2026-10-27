@@ -21,6 +21,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses/echo"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
@@ -195,6 +196,9 @@ func TestAServedWorkspaceTakesItsTokenAlone(t *testing.T) {
 			resp.Body.Close()
 			if resp.StatusCode != tc.want {
 				t.Errorf("%s, %s: %d, want %d", tc.name, route, resp.StatusCode, tc.want)
+			}
+			if got := resp.Header.Get("WWW-Authenticate"); tc.want == http.StatusUnauthorized && got != authn.Challenge {
+				t.Errorf("%s, %s: WWW-Authenticate %q, want %q", tc.name, route, got, authn.Challenge)
 			}
 		}
 	}

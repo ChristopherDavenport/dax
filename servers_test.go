@@ -392,7 +392,7 @@ func TestAGrantWithoutReadKeepsTheProjectsRules(t *testing.T) {
 			t.Errorf("%v: servers alone: %v, %v", tc.scopes, st.Policy.Project.Deny, err)
 		}
 		if _, statErr := os.Stat(filepath.Join(dir, ".dax", "config.json")); statErr != nil {
-			t.Errorf("%v: the probe touched the project: %v", tc.scopes, statErr)
+			t.Errorf("%v: the check touched the project: %v", tc.scopes, statErr)
 		}
 		ws.Close()
 		srv.Close()

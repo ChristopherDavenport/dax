@@ -381,7 +381,8 @@ the terminal client, agentconsole, is a view of the record and the
 session's events that sends the session intents (`client.Direct` over
 the session). `dax serve` is in place of a front: it serves the session
 (`front/control` with `agent.Controls` as its commands, the record
-through agentsession's `remote`) behind one bearer token, holding
+through agentsession's `remote`) behind one bearer token (each 401
+naming `Bearer realm="dax"`, `internal/authn`'s challenge), holding
 `Answering` while it serves, so questions wait for whoever attaches.
 `dax attach` is the terminal client over that wire, its slash commands
 through the served commands; leaving it leaves the session's run going.
@@ -490,7 +491,8 @@ What is not equal yet, and why:
   (`workspace.ServerProvider`: a box host's units) are connected beside
   them, by name (`mcpworkspace.ServerTransport`), and so are those a
   servers workspace offers (`Options.ServersWorkspace`,
-  `servers_workspace`): a second workspace, granted servers alone,
+  `servers_workspace`): a second workspace, granted servers alone
+  (the scopes its `remote` client reports are exactly `servers`),
   beside the one the tools act in, which nothing else uses. A server placed on
   the host (`"in": "host"`) or at a `url` is called from this machine
   whatever the workspace, its tools never taken as confined.

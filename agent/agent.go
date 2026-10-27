@@ -120,7 +120,7 @@ type Options struct {
 	// ServersWorkspace is a second workspace beside Workspace (or the
 	// executor's), whose offered servers (workspace.ServerProvider) the
 	// session connects and nothing else: a served or tunnelled one
-	// granted servers alone (config.ServersOnly), so a server holding a
+	// granted servers alone (config.ServersAlone), so a server holding a
 	// secret of another machine's is used while the tools act in the
 	// session's own workspace. Its servers are connected as the
 	// workspace's offered ones are, through mcpStart, under the same
@@ -558,10 +558,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
 	// for its AGENTS.md.
-	if config.ServersOnly(ctx, ws) {
-		if _, err := fs.Stat(ws.FS(), "."); errors.Is(err, remote.ErrForbidden) {
-			s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
-		}
+	if config.ServersAlone(ws) {
+		s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 	}
 	s.live.think, s.live.main = o.Think, o.Model
 	ok := false
@@ -685,7 +683,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// two servers' tools would be one name and box.confine claims a
 	// unit's by its name.
 	if sw := o.ServersWorkspace; sw != nil {
-		sp, err := checkServersWorkspace(ctx, sw, ws)
+		sp, err := checkServersWorkspace(sw, ws)
 		if err != nil {
 			return nil, err
 		}
@@ -1373,8 +1371,10 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string,
 // what a server keeps in the directory, and /proc too when the host
 // serves its root. That grant is the point of the seam: a secret holder
 // is safe under it alone (agentworkspace's remote.ScopeServers). The
-// probes are bounded by ctx, the session's start.
-func checkServersWorkspace(ctx context.Context, sw, ws workspace.Workspace) (workspace.ServerProvider, error) {
+// grant is the scopes its client reports, as the server said them at
+// the dial; a workspace that is not served reports none, and is
+// refused.
+func checkServersWorkspace(sw, ws workspace.Workspace) (workspace.ServerProvider, error) {
 	d := sw.Descriptor()
 	sp, offers := sw.(workspace.ServerProvider)
 	if !offers {
@@ -1383,13 +1383,24 @@ func checkServersWorkspace(ctx context.Context, sw, ws workspace.Workspace) (wor
 	if wd := ws.Descriptor(); wd.Kind == d.Kind && wd.Ref == d.Ref && (d.Ref != "" || wd.Root == d.Root) {
 		return nil, fmt.Errorf("the servers workspace %s is the session's workspace; it stands beside it, so name another or leave it out", where(d))
 	}
-	if !config.ServersAlone(ctx, sw) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("the servers workspace %s grants more than servers (read, write or exec), with which the session could read or change what its servers hold, their secrets among it; serve it with dax workspace -scopes servers", where(d))
+	scopes, served := config.Scopes(sw)
+	if !served {
+		return nil, fmt.Errorf("the servers workspace %s is not a served workspace, whose grant would say it may start its servers alone; serve it with dax workspace -scopes servers", where(d))
+	}
+	if !config.ServersAlone(sw) {
+		return nil, fmt.Errorf("the servers workspace %s grants more than servers (%s), with which the session could read or change what its servers hold, their secrets among it; serve it with dax workspace -scopes servers", where(d), scopeNames(scopes))
 	}
 	return sp, nil
+}
+
+// scopeNames is a grant's scopes, comma-separated and cleaned: a
+// served workspace's server names them.
+func scopeNames(scopes []remote.Scope) string {
+	names := make([]string, len(scopes))
+	for i, s := range scopes {
+		names[i] = string(s)
+	}
+	return render.Clean(strings.Join(names, ","))
 }
 
 // mcpServer is the dial of an MCP server started from a command line,

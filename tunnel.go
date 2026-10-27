@@ -9,7 +9,18 @@ package dax
 // tunnel carries agentworkspace's remote unchanged, so what runs where
 // is as in workspace.go; only who dials whom differs. The library ships
 // no authentication: the one token, enrolling one name, is dax's
-// (internal/authn).
+// (internal/authn), and it is never sent. Before each upgrade -connect
+// asks the hub for a nonce, which the hub issues statelessly; the
+// upgrade carries an HMAC under the token of the hub's name, that nonce
+// and the run's instance id, which the hub takes only for a nonce it
+// issued, within 30 seconds, once; the hub's 101 carries its own HMAC
+// of the same, which -connect checks before it serves anything
+// (authn.Prover and authn.Hub). Over ws:// to loopback behind an ssh -R
+// forward, a local user who takes the port first gets no token, no
+// shell, and no upgrade the hub would take later. The proof does not
+// bind the connection: an impostor that can reach the hub while it
+// holds the port relays to it, so where the hub is reachable otherwise,
+// wss:// is needed; authn's proof.go says what else it leaves.
 
 import (
 	"context"
@@ -40,10 +51,13 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
-// checkConnectURL refuses a hub URL -connect would send its token or
-// the workspace over in the clear, or with credentials in it: wss://,
-// or ws:// to a loopback host alone, the tunnel's own rule, checked
-// before anything starts.
+// checkConnectURL refuses a hub URL -connect would serve the workspace
+// over in the clear across a network, or with credentials in it:
+// wss://, or ws:// to a loopback host alone, the tunnel's own rule,
+// checked before anything starts. The token crosses neither (the proof
+// is a MAC), but the workspace's files and commands would cross ws://
+// unencrypted and, since the proof does not bind the connection,
+// unbound to the hub.
 func checkConnectURL(s string) error {
 	if s == "" {
 		return errors.New("workspace: -connect: give the hub's wss:// URL")
@@ -57,7 +71,7 @@ func checkConnectURL(s string) error {
 	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "":
 		return fmt.Errorf("workspace: -connect %q: a query or fragment; give the hub's address alone", s)
 	case u.Scheme == "ws" && !isLoopbackHost(strings.ToLower(u.Hostname())):
-		return fmt.Errorf("workspace: -connect %q: ws:// only to a loopback host, since the token and the workspace would cross the network in the clear; use wss://", s)
+		return fmt.Errorf("workspace: -connect %q: ws:// only to a loopback host, since the workspace's files and commands would cross the network in the clear, bound to no hub; use wss://", s)
 	}
 	return nil
 }
@@ -151,26 +165,48 @@ func validInstance(id string) bool {
 	return err == nil && strings.ToLower(id) == id
 }
 
-// dialWatch is -connect's transport for the upgrades: it passes each
-// on, and until the first is answered it ends the run, by stop, at an
-// answer no redial would change, which the tunnel would otherwise try
-// again for ever: a hub's certificate the roots do not verify, or no
-// hub at the path (404). Not up yet, refused or timed out are tried
-// again, as the tunnel does; once connected, everything is.
+// dialWatch is -connect's transport for the nonce's GETs and the
+// upgrades: it passes each on, and until the first upgrade is answered
+// it ends the run, by stop, at an answer no redial would change, which
+// the tunnel would otherwise try again for ever: a hub's certificate
+// the roots do not verify, or no hub at the path (404). Not up yet,
+// refused or timed out are tried again, as the tunnel does. In any
+// phase it ends the run at the maxUnanswered-th upgrade in a row that
+// went out (so after a nonce the GET got) and came back with no answer
+// a session's hub gives (a 101, 401, 403 or 503): an impostor holding
+// the port that hands out nonces fetched from the hub and drops each
+// upgrade it takes. The run's halt (halt) ends it the same way.
 type dialWatch struct {
 	base http.RoundTripper
 	stop context.CancelFunc
 
-	mu        sync.Mutex
-	connected bool
-	fatal     error
+	mu         sync.Mutex
+	connected  bool
+	unanswered int // upgrades in a row with no answer a hub gives
+	fatal      error
 }
+
+// maxUnanswered is how many upgrades in a row may go unanswered after
+// a nonce before the run ends.
+const maxUnanswered = 3
 
 func (d *dialWatch) RoundTrip(r *http.Request) (*http.Response, error) {
 	resp, err := d.base.RoundTrip(r)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var cert *tls.CertificateVerificationError
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && d.fatal == nil {
+		switch {
+		case err == nil && slices.Contains([]int{http.StatusSwitchingProtocols, http.StatusUnauthorized, http.StatusForbidden, http.StatusServiceUnavailable}, resp.StatusCode):
+			d.unanswered = 0
+		default:
+			d.unanswered++
+			if d.unanswered >= maxUnanswered {
+				d.fatal = fmt.Errorf("%d upgrades in a row, each after a nonce the hub's URL gave, got no answer a session's hub gives: whatever holds the port takes upgrades and drops them. Nothing was served to it, the token was not exposed, and this run stops rather than dial it again; wait %s (the nonce's life), or restart the session's hub, before you bring the ssh -R forward back (%w)", d.unanswered, authn.NonceLifetime, wstunnel.ErrHubProof)
+				d.stop()
+			}
+		}
+	}
 	switch {
 	case err == nil && resp.StatusCode == http.StatusSwitchingProtocols:
 		d.connected = true
@@ -185,7 +221,18 @@ func (d *dialWatch) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// failure is what ended the run before it connected, or nil.
+// halt ends the run, in any phase, with err, unless something already
+// has.
+func (d *dialWatch) halt(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.fatal == nil {
+		d.fatal = err
+		d.stop()
+	}
+}
+
+// failure is what ended the run, or nil.
 func (d *dialWatch) failure() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -195,7 +242,19 @@ func (d *dialWatch) failure() error {
 // dial is dax workspace -connect: the directory served as a
 // workspace.Local through a tunnel to the hub at w.connect, dialled
 // again whenever it drops, until a signal or the context's end. The
-// token goes in the upgrade's Authorization header and nowhere else.
+// token is never sent: before each upgrade it asks the hub for a nonce,
+// and the upgrade carries the MAC of the hub's name (-name), that nonce
+// and the run's instance id under the token (authn.Prover); nothing is
+// served to a hub whose 101 does not carry its own MAC of them. In any
+// phase, first dial or redial, the run ends at the first 101 that fails
+// the proof, at a nonce answer that rules a session's hub out, and at
+// the third upgrade in a row taken after a nonce and left without an
+// answer (dialWatch), none of which a session's hub does. So an
+// impostor that takes the port after a drop and hands out nonces it
+// fetched from the hub earlier gets at most three upgrades, each good
+// at the hub only until its nonce's 30 seconds run out; one that never
+// answers the GET is dialled again as any unreachable hub is, and gets
+// none.
 // At a stop every process the session started here ends before it
 // returns, each wait bounded as -listen's are.
 func (w *workspaceServer) dial(ctx context.Context) error {
@@ -208,8 +267,13 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 		return err
 	}
 	if strings.HasPrefix(w.connect, "ws://") {
+		// ws:// is to loopback alone (checkConnectURL), where the proof
+		// holds against a user who takes the port and cannot reach the
+		// hub: the upgrade carries nothing the hub would take later,
+		// and nothing is served to a hub that cannot answer it. What it
+		// does not do is bind the connection.
 		u, _ := neturl.Parse(w.connect)
-		fmt.Fprintln(out, "dax workspace: warning: ws:// is neither encrypted nor authenticated: whoever holds "+render.Clean(u.Host)+" on this host gets the token and the workspace; on a host others share, use wss:// with -tls-ca")
+		fmt.Fprintln(out, "dax workspace: note: ws:// is not encrypted; the hub must prove it holds the token before anything is served, which holds behind ssh -o ExitOnForwardFailure=yes -R against a user of this host who takes "+render.Clean(u.Host)+", but not against one who can also reach the hub some other way and relay to it: then use wss:// with -tls-ca")
 	}
 	ws, err := w.open()
 	if err != nil {
@@ -228,20 +292,49 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 		defer cancel()
 	}
 	instance := newInstance()
-	header := func(context.Context) (http.Header, error) {
-		return http.Header{"Authorization": {"Bearer " + w.token}, instanceHeader: {instance}}, nil
-	}
+	prover := authn.NewProver(w.token, w.hubName)
 	serve, cancelServe := context.WithCancel(stop)
 	defer cancelServe()
 	watch := &dialWatch{base: hc.Transport, stop: cancelServe}
 	hc.Transport = watch
+	notTheHub := func(err error) error {
+		return fmt.Errorf("whatever answered %s is not the session's hub: it could not prove it holds $%s, so nothing was served to it, the token was not exposed, and this run stops rather than dial it again. Another user of this host may hold the port: one who fetched a nonce from the hub while the forward was up can replay this upgrade within %s, so wait that long, or restart the session's hub, before you bring the ssh -R forward back; rotate $%s only if it may have leaked some other way (%w: %w)", render.Clean(w.connect), config.TunnelTokenEnv, authn.NonceLifetime, config.TunnelTokenEnv, wstunnel.ErrHubProof, err)
+	}
+	header := func(ctx context.Context) (http.Header, error) {
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		nonce, err := authn.FetchNonce(fctx, hc, w.connect)
+		switch {
+		case errors.Is(err, authn.ErrNoNonce):
+			// An answer that rules a session's hub of this dax out: no
+			// redial changes it. One a hub gives for a while (5xx, 429,
+			// 408, ErrNonceLater) is a failed dial, tried again.
+			watch.halt(fmt.Errorf("asking %s for a nonce: %w; it is not a session's hub of dax %s or later (an older one: upgrade both)", render.Clean(w.connect), err, proofSince))
+			return nil, err
+		case err != nil:
+			return nil, err
+		}
+		h := prover.Header(nonce, instance)
+		h.Set(instanceHeader, instance)
+		return h, nil
+	}
+	proof := func(req *http.Request, resp *http.Response) error {
+		err := prover.CheckHub(req, resp, instance)
+		if err != nil {
+			// Whatever the phase: an impostor after a drop gets no
+			// upgrade after this one.
+			watch.halt(notTheHub(err))
+		}
+		return err
+	}
 	// The tunnel's own log, on standard error: each connection made and
 	// lost, and why; it holds no credential.
 	lg := slog.New(slog.NewTextHandler(out, nil))
 	served := make(chan error, 1)
 	go func() {
 		served <- wstunnel.Serve(serve, w.connect, ws,
-			wstunnel.WithScopes(w.scopes...), wstunnel.WithHTTPClient(hc), wstunnel.WithHeader(header), wstunnel.WithLogger(lg))
+			wstunnel.WithScopes(w.scopes...), wstunnel.WithHTTPClient(hc), wstunnel.WithHeader(header),
+			wstunnel.WithHubProof(proof), wstunnel.WithLogger(lg))
 	}()
 	if w.ready != nil {
 		w.ready(w.connect)
@@ -254,6 +347,11 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 			return fmt.Errorf("workspace: -connect: %w", watch.failure())
 		case stop.Err() != nil:
 			return nil
+		case errors.Is(err, wstunnel.ErrHubProof):
+			// The proof hook halts the run first; this is the same.
+			return fmt.Errorf("workspace: -connect: %w", notTheHub(err))
+		case errors.Is(err, wsremote.ErrUnauthenticated):
+			return fmt.Errorf("workspace: -connect: the hub refused this workspace's proof: $%s is not the token the hub was given, -name is not the workspace name it enrolls, or the hub is a dax older than %s, whose hub takes the token itself (upgrade both) (%w)", config.TunnelTokenEnv, proofSince, err)
 		case errors.Is(err, wsremote.ErrForbidden):
 			// dax's hub answers 403 to a host other than the first
 			// that connected, for the session's life.
@@ -397,12 +495,17 @@ func closeSession(sess io.Closer, hubs []*hostedHub, dialed ...abandoner) error 
 	return <-done
 }
 
-// errNotEnrolled is an upgrade whose token enrolls no workspace; the
+// proofSince is the dax release whose hub and -connect first prove the
+// token to each other with a nonce the hub issues; the two sides of an
+// older one do not enroll with these.
+const proofSince = "v0.0.31"
+
+// errNotEnrolled is an upgrade whose proof enrolls no workspace; the
 // hub sends none of its text.
 var errNotEnrolled = errors.New("workspace.hub: no known token")
 
-// errHeld is an upgrade with the token from another instance than the
-// one that holds the workspace.
+// errHeld is an upgrade proved with the token from another instance
+// than the one that holds the workspace.
 var errHeld = errors.New("workspace.hub: the workspace is held by another host")
 
 // hubRequestTimeout bounds each of the workspace's requests that should
@@ -418,29 +521,42 @@ var errHeld = errors.New("workspace.hub: the workspace is held by another host")
 const hubRequestTimeout = 10 * time.Second
 
 // pin holds a hub's workspace to the first instance that enrolls: the
-// enrollment takes the one token as the one name, and the instance id
-// of the first upgrade with it; an upgrade with the token and another
-// id is refused 403 before the hub sees it, for the hub's life, so a
-// second host (or a second run on the first) cannot take the workspace
-// over while the session describes the first.
+// enrollment takes an upgrade proved with the one token (its MAC of the
+// name, a nonce the hub issued and the instance id, authn.Hub) as the
+// one name, and
+// the instance id of the first such upgrade; one proved with the token
+// and another id is refused 403 before the hub sees it, for the hub's
+// life, so a second host (or a second run on the first) cannot take the
+// workspace over while the session describes the first.
 type pin struct {
-	name   string
-	tokens func(*http.Request) (string, error)
-	hub    http.Handler
-	log    *slog.Logger
+	name  string
+	proof *authn.Hub
+	hub   http.Handler
+	log   *slog.Logger
 
 	mu       sync.Mutex
 	instance string
 }
 
-// enroll is the hub's Enrollment: the token's name, the first id taken
-// as the one that holds it.
+// enroll is the hub's Enrollment: the one name, for an upgrade proved
+// with the token over a nonce the hub issued, the nonce taken so it
+// serves no other upgrade, and the first id taken as the one that holds
+// it.
 func (p *pin) enroll(r *http.Request) (string, error) {
-	name, err := p.tokens(r)
-	if err != nil {
-		return "", err
-	}
 	id := r.Header.Get(instanceHeader)
+	err := p.proof.Take(r, id)
+	switch {
+	case errors.Is(err, authn.ErrBusy):
+		return "", fmt.Errorf("%w: %w", wstunnel.ErrTryLater, err)
+	case errors.Is(err, authn.ErrUnknownNonce), errors.Is(err, authn.ErrStaleNonce), errors.Is(err, authn.ErrReplayedNonce):
+		// Made with the token, so worth saying: a replay of an upgrade
+		// someone captured, or one sent again or too slowly.
+		p.log.Warn("refused an upgrade for workspace "+p.name+": "+err.Error(), "from", r.RemoteAddr)
+		return "", errNotEnrolled
+	case err != nil:
+		return "", errNotEnrolled
+	}
+	name := p.name
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
@@ -454,9 +570,32 @@ func (p *pin) enroll(r *http.Request) (string, error) {
 	return name, nil
 }
 
+// hubProof is the hub's answer to an upgrade enroll took: its MAC of
+// the name, the upgrade's nonce and its instance id under the token.
+func (p *pin) hubProof(r *http.Request, _ string) (http.Header, error) {
+	return p.proof.Header(r, r.Header.Get(instanceHeader))
+}
+
+// ServeHTTP answers a plain GET (no upgrade) with a nonce for the next
+// upgrade (authn.FetchNonce asks for it), which costs the hub nothing to
+// keep; refuses an upgrade proved with the token from another instance
+// than the one that holds the workspace; and hands every other request
+// to the hub.
 func (p *pin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if _, err := p.tokens(r); err == nil {
-		id := r.Header.Get(instanceHeader)
+	if r.Method == http.MethodGet && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		if r.Header.Get("Origin") != "" {
+			// No browser is a client, as the hub says of an upgrade.
+			http.Error(w, "workspace.hub: a request from a web page", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set(authn.NonceHeader, p.proof.Nonce())
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	id := r.Header.Get(instanceHeader)
+	// A look, not the enrollment: the nonce is taken there.
+	if err := p.proof.Check(r, id); err == nil {
 		p.mu.Lock()
 		held := p.instance
 		p.mu.Unlock()
@@ -508,7 +647,8 @@ func hostHub(ctx context.Context, s config.HubSettings, token, prog string, out 
 // startHub listens and serves the hub s says, at config.TunnelPath, on
 // a loopback address unless s has a certificate. token is the one that
 // enrolls the workspace as s.Name (takeTunnelToken); any other is
-// refused before the upgrade is answered. out is told where it waits,
+// refused before the upgrade is answered, and the token is never sent
+// either way: the upgrade and the 101 each carry a MAC under it. out is told where it waits,
 // and what to run on the workspace's host (prog, this program's name,
 // with -connect), never the token.
 func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedHub, error) {
@@ -520,12 +660,14 @@ func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedH
 	if err != nil {
 		return nil, err
 	}
-	// The one token names the one workspace (the Authenticator's shape
-	// is the tunnel's Enrollment: a request's name, or a refusal), held
-	// by the first instance it enrolls.
+	// The one token enrolls the one workspace, held by the first
+	// instance it enrolls: an upgrade proves it holds the token over a
+	// nonce the hub issued, and the hub's 101 proves the hub does
+	// (authn.Hub); a refusal's 401 names the proof's scheme.
 	lg := hubLogger(s.Setting())
-	p := &pin{name: s.Name, tokens: authn.New(map[string]string{token: s.Name}).Authenticator(errNotEnrolled), log: lg}
-	hub, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithMaxWorkspaces(1), wstunnel.WithLogger(lg))
+	p := &pin{name: s.Name, proof: authn.NewHub(token, s.Name), log: lg}
+	hub, err := wstunnel.NewHub(wstunnel.WithEnrollment(p.enroll), wstunnel.WithProofHeader(p.hubProof),
+		wstunnel.WithChallenge(authn.ProofChallenge), wstunnel.WithMaxWorkspaces(1), wstunnel.WithLogger(lg))
 	if err != nil {
 		ln.Close()
 		return nil, err
@@ -539,7 +681,7 @@ func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedH
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	go srv.Serve(ln)
 	h := &hostedHub{URL: scheme + "://" + servedHost(ln.Addr()) + config.TunnelPath, s: s, hub: hub, srv: srv}
-	h.connect = config.TunnelTokenEnv + "=... " + render.Clean(prog) + " workspace -connect " + render.Clean(h.URL)
+	h.connect = config.TunnelTokenEnv + "=... " + render.Clean(prog) + " workspace -connect " + render.Clean(h.URL) + " -name " + s.Name
 	if s.Field == config.ServersField+".hub" {
 		// A servers workspace is granted its servers alone, which the
 		// session requires.

@@ -14,6 +14,11 @@
 // "Authorization: Bearer <token>" to one origin and nowhere else, which
 // a library's client takes through its WithHTTPClient.
 //
+// Prover and Hub are the tunnel's proof (proof.go): the workspace
+// end and the hub each show the other they hold the tunnel's token,
+// an HMAC under it of a nonce the hub issued, and neither sends the
+// token.
+//
 // It imports the standard library alone.
 package authn
 
@@ -25,6 +30,11 @@ import (
 	"net/url"
 	"strings"
 )
+
+// Challenge is the WWW-Authenticate of every 401 a handler dax mounts
+// behind Tokens writes (each library's WithChallenge): the scheme and
+// realm a client is to answer with.
+const Challenge = `Bearer realm="dax"`
 
 // Tokens is a set of static bearer tokens and the principal each names.
 type Tokens[P any] struct {

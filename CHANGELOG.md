@@ -35,7 +35,7 @@ versions may break flags and the config file.
   Its servers go through the same path as every other server, under
   the same names, collisions, rules, restarts and redaction. The session
   refuses one whose grant is more than `servers` (`read`, `write` or
-  `exec`, learned by probing), one that offers no servers, one that is
+  `exec`, as its client reports its scopes), one that offers no servers, one that is
   its own workspace, one token for both connections whatever their
   kinds, and two hubs on one port; a project's config may not name
   one. The header records it as `dax.servers_workspace` (its kind, its
@@ -121,6 +121,53 @@ versions may break flags and the config file.
   `tunnel` carry a workspace's offered MCP servers under a new
   `servers` scope, and whose `Offer` takes the secrets a server holds
   and a filter for its output (`WithOutputFilter`).
+- Changed: `dax workspace -connect` and a session's hub
+  (`workspace.hub`, `servers_workspace.hub`) no longer send the tunnel
+  token; each proves it to the other (#115). Before each upgrade
+  `-connect` asks the hub for a nonce (a plain GET of its URL, answered
+  in `Dax-Tunnel-Nonce`), which the hub issues statelessly under a
+  secret of its own; the upgrade carries `Authorization: Dax-Tunnel
+  nonce="<nonce>", proof="<hex>"`, an HMAC-SHA256 under the token of the
+  workspace's name, that nonce and the run's instance id, which the hub
+  takes only for a nonce it issued, within 30 seconds by its own clock,
+  once; its 101 carries `Dax-Hub-Proof`, its own HMAC of the same under
+  another label, which `-connect` checks before it serves anything.
+  `-connect` now requires `-name`, the hub's workspace name, which the
+  hub's waiting line includes. A hub that fails the proof, answers the
+  nonce's GET in a way that rules a session's hub out (200 without a
+  nonce, a redirect, 401, 403, 404), or takes three upgrades in a row
+  and drops them unanswered, is served nothing and `-connect` stops, at
+  the first dial or after a drop, saying the token was not exposed and
+  to wait 30 seconds, or restart the session's hub, before bringing the
+  forward back; a 5xx, 429 or 408 to the GET is dialled again. The
+  nonce's age starts at a random offset, so it does not tell when the
+  hub started. Over `ws://` behind `ssh -R`, a local user who
+  binds the port first now gets neither the token, nor a shell, nor an
+  upgrade the hub would take later. The proof does not bind the
+  connection, so the `ws://` line on standard error now says where it
+  does not hold (a user who can also reach the hub) and that `wss://`
+  is needed there. A `-connect` and a hub of different versions no
+  longer enroll, and each says so; upgrade both.
+- Changed: a servers workspace's grant, and whether a served
+  workspace's project config may be left out, is now the scopes its
+  client reports (`servers` alone), not learned by probing (a remove
+  under a nonexistent path, a stat of its root, no `Starter`) (#121). A
+  servers workspace that is not served is refused as such, and a refusal
+  names the grant's scopes.
+- Added: every 401 of `dax workspace -listen`, and of `dax serve`'s
+  control and record, carries `WWW-Authenticate: Bearer realm="dax"`;
+  the hub's carries `Dax-Tunnel realm="dax"` (#125). `-listen` had sent
+  a bare `Bearer` through agentworkspace, which no longer sends one of
+  its own.
+- Dependencies: agentworkspace, agentworkspace/mcpworkspace and
+  agentworkspace/tunnel v0.0.8, up from v0.0.7 (`remote.Client.Scopes`,
+  `WithChallenge` in `remote` and `tunnel` with no default challenge,
+  `tunnel.WithHubProof` and `WithProofHeader`, `tunnel.Serve` refusing
+  bounds over its stream arithmetic, a closing process counted against
+  its bounds and one wait per process); agentsession v0.0.30, up from
+  v0.0.29 (`remote.WithChallenge`); and agentturn, agentturn/session,
+  agentturn/front/a2a and agentturn/tools/a2a v0.0.34, up from v0.0.33
+  (`front/control.WithChallenge`).
 
 ## v0.0.30 - 2026-10-26
 

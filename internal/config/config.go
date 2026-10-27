@@ -14,9 +14,6 @@ package config
 
 import (
 	"bytes"
-	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -624,42 +621,40 @@ func Load(path string, project, must bool) (Layer, error) {
 	return Parse(data, path, project)
 }
 
-// ServersOnly reports whether w is a workspace the session can only
-// start servers in (a served one granted its servers alone, with or
-// without read): it offers servers, starts no process, and may not
-// write, which a removal under a directory no workspace holds asks
-// (refused as remote.ErrForbidden without write, and otherwise not
-// found, touching nothing). A read such a workspace refuses leaves
-// nothing for a project's rule to tighten; from any other, a refused
-// read of the project's files is an error, since the session would
-// act there under none of their rules. The probe is bounded by ctx and
-// 30 seconds.
-func ServersOnly(ctx context.Context, w workspace.Workspace) bool {
-	_, starts := w.(workspace.Starter)
-	_, offers := w.(workspace.ServerProvider)
-	if !offers || starts {
-		return false
+// Scopes is what a served workspace's grant holds, as its server said
+// at the dial (remote.Workspace's Scopes, through dax's wrappers, which
+// embed it), and whether w is one: a workspace that is not served (this
+// machine's directory, an executor's) has no grant to report.
+func Scopes(w workspace.Workspace) ([]remote.Scope, bool) {
+	rw, ok := w.(remote.Workspace)
+	if !ok {
+		return nil, false
 	}
-	var b [16]byte
-	rand.Read(b[:])
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	err := w.Remove(ctx, ".dax-no-such-"+hex.EncodeToString(b[:])+"/probe")
-	return errors.Is(err, remote.ErrForbidden)
+	return rw.Scopes(), true
 }
 
-// ServersAlone reports whether w is a workspace granted its servers and
-// nothing else: ServersOnly, and its files not read either (a stat of
-// its root refused as remote.ErrForbidden). That is the grant a
-// secret-holding server is safe under: with read, the token's holder
-// reads what the server keeps in the directory, and, with the host's
-// root served, a running server's environment from /proc.
-func ServersAlone(ctx context.Context, w workspace.Workspace) bool {
-	if !ServersOnly(ctx, w) {
-		return false
-	}
-	_, err := fs.Stat(w.FS(), ".")
-	return errors.Is(err, remote.ErrForbidden)
+// ServersOnly reports whether w is a served workspace the session can
+// only start servers in: its grant holds servers and neither write nor
+// exec (read or not), as its client reports it (Scopes). A read such a
+// workspace refuses leaves nothing for a project's rule to tighten;
+// from any other, a refused read of the project's files is an error,
+// since the session would act there under none of their rules.
+func ServersOnly(w workspace.Workspace) bool {
+	scopes, ok := Scopes(w)
+	return ok && slices.Contains(scopes, remote.ScopeServers) &&
+		!slices.Contains(scopes, remote.ScopeWrite) && !slices.Contains(scopes, remote.ScopeExec)
+}
+
+// ServersAlone reports whether w is a served workspace granted its
+// servers and nothing else: its scopes are exactly [servers]. That is
+// the grant a secret-holding server is safe under: with read, the
+// token's holder reads what the server keeps in the directory, and,
+// with the host's root served, a running server's environment from
+// /proc; with write, it changes the server's code or config; with
+// exec, it runs commands as the server's user.
+func ServersAlone(w workspace.Workspace) bool {
+	scopes, ok := Scopes(w)
+	return ok && slices.Equal(scopes, []remote.Scope{remote.ScopeServers})
 }
 
 // LoadProject reads the project's file through the workspace the
