@@ -566,6 +566,10 @@ func SecretInWorkspace(name string) error {
 	return fmt.Errorf(`mcp_servers.%s: secret_env: a secret is never sent to a workspace; set "in": "host" to run the server on this machine, or have the workspace's host offer it with dax workspace -servers`, name)
 }
 
+// MinProjectContextWindow is the least window a project's
+// context_window may set.
+const MinProjectContextWindow = 4096
+
 // MaxDescriptionBytes bounds an MCP server's description.
 const MaxDescriptionBytes = 1024
 
@@ -760,6 +764,11 @@ func (l *Layer) validate() error {
 	for m, n := range c.ContextWindow {
 		if strings.TrimSpace(m) == "" || n <= 0 {
 			return fmt.Errorf("context_window: want a model's name and its window in tokens, more than 0; got %q: %d", m, n)
+		}
+		if l.Project && n < MinProjectContextWindow {
+			// A window this small turns compaction off (a budget of 0)
+			// or folds on every call, which loosens or costs.
+			return fmt.Errorf("context_window.%s: %d; a project's file may set a window of %d tokens or more", m, n, MinProjectContextWindow)
 		}
 	}
 	if c.BaseURL != "" {

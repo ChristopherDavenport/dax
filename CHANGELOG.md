@@ -145,6 +145,10 @@ versions may break flags and the config file.
 - Fixed: `-timeout` ends a `-p` run that waits on standard input for an
   answer, as no answer, rather than hanging past the deadline when
   stdin stays open (#138).
+- Changed: a project's `context_window` may be no less than 4096: a
+  smaller one would turn compaction off or fold on every call (#171).
+  An Ollama model not loaded when dax starts still gets its trained
+  length as the window; set `context_window` for it.
 
 ## v0.0.32 - 2026-10-26
 

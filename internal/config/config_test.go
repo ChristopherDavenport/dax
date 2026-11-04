@@ -588,6 +588,14 @@ func TestContextWindowPrecedence(t *testing.T) {
 	if got := s.ProjectContextWindow; got["qwen3.5:9b"] != 32768 || got["big"] != 0 || got["other"] != 4096 {
 		t.Errorf("the project's windows %v, want only those lower than the user's", got)
 	}
+	// A project's window has a floor: one of 1 would turn compaction
+	// off, and one of 2 fold on every call (#171).
+	if _, err := Parse([]byte(`{"context_window":{"m":2}}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Errorf("a project's window of 2: %v", err)
+	}
+	if _, err := Parse([]byte(`{"context_window":{"m":4096}}`), "/p/.dax/config.json", true); err != nil {
+		t.Errorf("a project's window of 4096: %v", err)
+	}
 	for _, bad := range []string{`{"context_window":{"m":0}}`, `{"context_window":{"m":-1}}`, `{"context_window":{"":100}}`} {
 		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "context_window") {
 			t.Errorf("%s: %v", bad, err)
