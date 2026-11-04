@@ -52,9 +52,11 @@ func TestAnswerLine(t *testing.T) {
 	}
 }
 
-// In the REPL, n refuses a call and the run goes on, and s refuses it
-// and ends the run; the model is told the same words either way (#150).
-func TestTheREPLRefusesAndGoesOnOrStops(t *testing.T) {
+// n refuses a call and the run goes on, and s refuses it and ends the
+// run; the model is told the same words either way (#150). -p reads
+// its answers as the REPL does, and asks synchronously, so the line
+// cannot race the question.
+func TestARefusalGoesOnOrStops(t *testing.T) {
 	for _, tc := range []struct {
 		line   string
 		reason agentturn.Reason
@@ -63,42 +65,20 @@ func TestTheREPLRefusesAndGoesOnOrStops(t *testing.T) {
 		{"s not that\n", agentturn.ReasonStopped},
 	} {
 		t.Run(tc.line[:1], func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := context.Background()
 			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
 			sess, dir := printSession(t, ctx, m)
-			ended := make(chan *agentturn.RunEnd, 4)
+			var last *agentturn.RunEnd
 			defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
 				if e, ok := ev.(*agentturn.RunEnd); ok {
-					ended <- e
+					last = e
 				}
 				return nil
 			})()
-			pr, pw := io.Pipe()
-			f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr)}
-			done := make(chan error, 1)
-			go func() { done <- f.Run(ctx, sess) }()
-			pw.Write([]byte("go\n"))
-			select {
-			case end := <-ended:
-				if end.Reason != agentturn.ReasonInputRequired {
-					t.Fatalf("the first run ended %s", end.Reason)
-				}
-			case <-time.After(15 * time.Second):
-				t.Fatal("no permission was asked")
-			}
-			pw.Write([]byte(tc.line))
-			select {
-			case end := <-ended:
-				if end.Reason != tc.reason {
-					t.Fatalf("after %q the run ended %s (%s), want %s", tc.line, end.Reason, end.Cause, tc.reason)
-				}
-			case <-time.After(15 * time.Second):
-				t.Fatal("the run did not end")
-			}
-			pw.Close()
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(tc.line))}
+			f.run(ctx, sess, sess)
+			if last == nil || last.Reason != tc.reason {
+				t.Fatalf("after %q the run ended %+v, want %s", tc.line, last, tc.reason)
 			}
 			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
 				t.Error("the refused call ran")
