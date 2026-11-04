@@ -27,6 +27,11 @@ versions may break flags and the config file.
   that stops reading its input fails the test with the screen as it
   stuck, instead of holding the package until its timeout (#88; why the
   client stopped reading is still open).
+- Fixed: `TestAnAttachedViewContinuesFromAnEarlierEntry` typed its
+  second question once the record had the first, which could be while
+  the attached view still showed the first run going, so the line
+  steered a run that had ended; it now waits for the view to show the
+  run ended (#96).
 
 ## v0.0.32 - 2026-10-26
 

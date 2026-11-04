@@ -310,6 +310,25 @@ func (r *tuiRig) waitOutput(sub string) {
 	}
 }
 
+// mark is where the screen's output ends now, for waitOutputSince.
+func (r *tuiRig) mark() int { return len(r.out.String()) }
+
+// waitOutputSince waits for sub on the screen in what was drawn after
+// mark. The renderer redraws only what differs, so a line the screen
+// showed before (the run line's "idle") is drawn again only once it
+// changed and changed back: what was on the screen at mark does not
+// count.
+func (r *tuiRig) waitOutputSince(mark int, sub string) {
+	r.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(ansi.Strip(r.out.String()[mark:]), sub) {
+		if time.Now().After(deadline) {
+			r.t.Fatalf("%q never shown after the mark; output since:\n%q", sub, r.out.String()[mark:])
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (r *tuiRig) waitFile(name string, want bool) {
 	r.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
