@@ -139,7 +139,10 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
-	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
+	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost, and for -max-cost")
+	maxTurns := fs.Int("max-turns", 0, "stop each run after this many turns (stopped, max_turns); overrides max_turns, 0 is no limit")
+	maxTokens := fs.Int("max-tokens", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have used this many tokens; 0 is no limit")
+	maxCost := fs.Float64("max-cost", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have cost this many US dollars by the pricing file, which must price the model; 0 is no limit")
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
 	tlsCert := fs.String("tls-cert", "", "dax serve: serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "dax serve: the private key (PEM) of -tls-cert")
@@ -302,6 +305,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 	}
 	flags.PricingFile = str("pricing-file", pricingFile)
+	if given["max-turns"] {
+		flags.MaxTurns = maxTurns
+	}
 	flags.Effort = str("effort", effort)
 	if given["agents"] {
 		flags.Agents = agentsFlag
@@ -563,6 +569,13 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.Instructions = string(data)
 	}
 	opts.MCP = mcpServersOf(settings, *mcp)
+	if *maxTokens < 0 || *maxCost < 0 {
+		return errors.New("-max-tokens and -max-cost: want 0 or more")
+	}
+	opts.MaxTurns, opts.MaxTokens, opts.MaxCost = settings.MaxTurns, *maxTokens, *maxCost
+	if cost != nil {
+		opts.Price = agent.Price(cost)
+	}
 	opts.TrustMCP = *trustMCP
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy

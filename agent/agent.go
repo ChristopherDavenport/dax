@@ -94,6 +94,19 @@ type Options struct {
 	SubagentStreamer openresponses.Streamer
 	// Model is the model name the requests carry.
 	Model string
+	// MaxTurns stops each run after this many turns, stopped with
+	// cause max_turns; zero is no limit. The sub-agents keep their own.
+	MaxTurns int
+	// MaxTokens and MaxCost stop a run, stopped with cause guard,
+	// before its next model call once the session's model calls, the
+	// sub-agents' among them, have used this many tokens (input and
+	// output) or cost this many US dollars by Price; a sub-agent's next
+	// call is refused then too. Zero is no limit. Under MaxCost a model
+	// Price does not know refuses the session's start, or stops the run
+	// once a call goes to one.
+	MaxTokens int
+	MaxCost   float64
+	Price     Price
 	// Fit is the reasoning effort to ask a model for in place of the
 	// one Think implies, from what its vendor says it takes; nil asks
 	// as configured. It is applied where each configuration is built,
@@ -554,6 +567,16 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	case o.Description == "":
 		o.Description = "An agent built on dax."
 	}
+	if o.MaxTurns < 0 || o.MaxTokens < 0 || o.MaxCost < 0 {
+		return nil, errors.New("a limit on turns, tokens or cost is zero or more")
+	}
+	// Every model call the session makes, a sub-agent's or a fold's
+	// summary among them, goes through the meter.
+	m, err := newMeter(o)
+	if err != nil {
+		return nil, err
+	}
+	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
 	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
@@ -649,6 +672,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(s.systemPrompt()),
 	)
+	if o.MaxTurns > 0 {
+		kopts = append(kopts, agentkit.WithMaxTurns(o.MaxTurns))
+	}
+	if m != nil {
+		kopts = append(kopts, agentkit.WithBeforeTurn(m.beforeTurn))
+	}
 	// The servers the workspace offers of its own, a box host's units
 	// among them, each connected below as the config's are. Behind a box
 	// host, every MCP unit its handshake names must be one: an older box

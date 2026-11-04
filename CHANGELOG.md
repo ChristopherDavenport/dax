@@ -48,6 +48,16 @@ versions may break flags and the config file.
   calls, the status it would have exited with, the main agent's usage)
   as JSON and exits 0 for any end the run reached, for a harness that
   counts any other status as its own failure (#138).
+- Added: limits on a run. `max_turns` (`-max-turns N`) stops each run
+  after `N` turns, cause `max_turns`; a project's file may set it only
+  lower than yours. `-max-tokens N` and `-max-cost USD` stop a run
+  before its next model call once the session's model calls, the
+  sub-agents' among them, have used `N` tokens or cost `USD` by
+  `-pricing-file`, cause `guard`; a sub-agent's next call is refused
+  then too. Under `-max-cost` a model the pricing file does not price
+  refuses the start. Each ends the run stopped, exit 3 under `-p` (#139).
+- Added: `agent.Options.MaxTurns`, `MaxTokens`, `MaxCost` and `Price`,
+  and `agent.Price`.
 
 ## v0.0.32 - 2026-10-26
 

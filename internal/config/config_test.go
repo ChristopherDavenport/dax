@@ -541,6 +541,37 @@ func TestPassEnv(t *testing.T) {
 	}
 }
 
+// max_turns is the user's, the project's only when lower, and the
+// flag's over both (#139).
+func TestMaxTurnsPrecedence(t *testing.T) {
+	user := parse(t, `{"max_turns":50}`, false)
+	lower := parse(t, `{"max_turns":20}`, true)
+	higher := parse(t, `{"max_turns":80}`, true)
+	n := func(v int) *int { return &v }
+	for _, tc := range []struct {
+		name   string
+		layers []Layer
+		flag   *int
+		want   int
+	}{
+		{"none", nil, nil, 0},
+		{"the user's", []Layer{user}, nil, 50},
+		{"a project's lower one", []Layer{user, lower}, nil, 20},
+		{"a project's higher one is no tighter", []Layer{user, higher}, nil, 50},
+		{"a project's where the user set none", []Layer{higher}, nil, 80},
+		{"the flag's", []Layer{user, lower}, n(100), 100},
+		{"the flag's 0 turns it off", []Layer{user}, n(0), 0},
+	} {
+		s, err := Resolve(tc.layers, Flags{MaxTurns: tc.flag}, "")
+		if err != nil || s.MaxTurns != tc.want {
+			t.Errorf("%s: max_turns %d (%v), want %d", tc.name, s.MaxTurns, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(`{"max_turns":-1}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_turns") {
+		t.Errorf("a negative max_turns: %v", err)
+	}
+}
+
 func TestMaxReadBytes(t *testing.T) {
 	user := parse(t, `{"max_read_bytes":4096}`, false)
 	if s, err := Resolve([]Layer{user}, Flags{}, ""); err != nil || s.MaxReadBytes != 4096 {

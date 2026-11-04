@@ -119,6 +119,9 @@ type Config struct {
 	// MaxReadBytes is the most bytes of a file the read tool scans and
 	// the edit tool will rewrite; default 2 MiB.
 	MaxReadBytes int64 `json:"max_read_bytes,omitempty"`
+	// MaxTurns stops a run after this many turns; 0, the default, is
+	// no limit. A project's file may set it only lower than the user's.
+	MaxTurns int `json:"max_turns,omitempty"`
 	// PassEnv names environment variables that look like credentials
 	// (*_API_KEY, *_TOKEN, *_SECRET) which bash commands and MCP
 	// servers are nevertheless given. By default they get none.
@@ -745,6 +748,9 @@ func (l *Layer) validate() error {
 	}
 	if c.MaxReadBytes < 0 {
 		return errors.New("max_read_bytes: want a positive number of bytes")
+	}
+	if c.MaxTurns < 0 {
+		return errors.New("max_turns: want a number of turns, 0 for no limit")
 	}
 	if c.BaseURL != "" {
 		if err := checkBaseURL(c.BaseURL); err != nil {
@@ -1791,6 +1797,8 @@ type Flags struct {
 	AgentsMDGlobal []string
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
+	// MaxTurns replaces max_turns; 0 turns the limit off.
+	MaxTurns *int
 }
 
 // Settings is what dax runs with: the layers folded, the flags laid
@@ -1833,7 +1841,9 @@ type Settings struct {
 	Peers            []a2a.Remote // the user's, sorted by name
 	PassEnv          []string
 	MaxReadBytes     int64
-	Policy           PolicySettings
+	// MaxTurns is the limit on a run's turns, 0 for none.
+	MaxTurns int
+	Policy   PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1939,6 +1949,13 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
+		}
+		if l.MaxTurns != 0 {
+			// Tighten only: a project's limit stands where it is lower
+			// than the user's, or the user set none.
+			if !l.Project || s.MaxTurns == 0 || l.MaxTurns < s.MaxTurns {
+				s.MaxTurns = l.MaxTurns
+			}
 		}
 		for _, v := range l.PassEnv {
 			if !slices.Contains(s.PassEnv, v) {
@@ -2070,6 +2087,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
+	}
+	if f.MaxTurns != nil {
+		s.MaxTurns = *f.MaxTurns
 	}
 	var err error
 	if s.Executor, s.ExecutorURL, err = executorOf(layers, f); err != nil {
