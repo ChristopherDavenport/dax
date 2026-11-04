@@ -68,6 +68,11 @@ func TestHostConfigCheck(t *testing.T) {
 		{name: "bad files", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Files: project("all")}), err: "units.x.files.project"},
 		{name: "bad state", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Files: &Files{State: "ro"}}), err: "units.x.files.state"},
 		{name: "a bad kind", h: withUnit("x", Unit{Kind: "agent", Image: "node:24", Command: []string{"x"}}), err: "units.x.kind"},
+		{name: "an MCP unit's description", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Description: "GitHub, as me"})},
+		{name: "a description with a control character", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Description: "GitHub\x1b[2J"}), err: "units.x.description"},
+		{name: "a description of two lines", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Description: "a\nb"}), err: "units.x.description"},
+		{name: "a description past the bound", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Description: strings.Repeat("a", MaxDescriptionBytes+1)}), err: "units.x.description"},
+		{name: "a workspace's description", h: withWorkspace(Unit{Description: "the box"}), err: "units.workspace.description"},
 		// Rule 1.
 		{name: "secrets with internet on", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Internet: InternetOn, Secrets: map[string]string{"T": "env:T"}}), err: "(rule 1)"},
 		{name: "secrets with an allowlist", h: withUnit("x", Unit{Image: "node:24", Command: []string{"x"}, Allow: []string{"api.test"}, Secrets: map[string]string{"T": "env:T"}})},

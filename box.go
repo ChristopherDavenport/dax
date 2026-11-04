@@ -377,6 +377,7 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		// with the reason.
 		units := map[string]box.Spec{}
 		var names []string
+		descriptions := map[string]string{}
 		for _, u := range r.Units {
 			spec, err := unitSpec(b, r, u)
 			if err != nil {
@@ -387,6 +388,9 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 			}
 			units[u.Unit] = spec
 			names = append(names, u.Unit)
+			if u.Description != "" {
+				descriptions[u.Unit] = u.Description
+			}
 		}
 		child, err := start(ctx, b.Command())
 		if err != nil {
@@ -401,7 +405,7 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 				info.Units[i].Guard = b.Guard
 			}
 		}
-		hosted := box.Hosted{Child: child, Info: info, Units: names}
+		hosted := box.Hosted{Child: child, Info: info, Units: names, Descriptions: descriptions}
 		if len(units) > 0 {
 			// A unit's server runs in its container, over this connection;
 			// the container is started again first if it stopped since.

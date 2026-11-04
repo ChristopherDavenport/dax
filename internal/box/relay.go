@@ -39,6 +39,9 @@ type Hosted struct {
 	Child Child
 	Info  any
 	Units []string
+	// Descriptions are the units' descriptions by name, listed with
+	// them; a unit without one is listed by name alone.
+	Descriptions map[string]string
 	// StartUnit starts unit's server, its standard error kept when
 	// stderr; nil when the session has no units.
 	StartUnit func(ctx context.Context, unit string, stderr bool) (Proc, error)
@@ -163,7 +166,7 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, key string, start S
 	if err != nil {
 		return refuseAll(br, out, msg.ID, fmt.Errorf("box host: %w", err))
 	}
-	rl := &relay{out: out, key: key, units: h.Units, handshake: map[string]bool{idKey(msg.ID): true}, inflight: map[string]context.CancelFunc{}}
+	rl := &relay{out: out, key: key, units: h.Units, descriptions: h.Descriptions, handshake: map[string]bool{idKey(msg.ID): true}, inflight: map[string]context.CancelFunc{}}
 	if h.Info != nil {
 		if rl.info, err = json.Marshal(h.Info); err != nil {
 			return fmt.Errorf("box host: %w", err)
@@ -237,7 +240,9 @@ type relay struct {
 	key   string
 	info  json.RawMessage // what the handshake's answers gain, nil for nothing
 	units []string
-	procs *hostProcs
+	// descriptions are the units' by name.
+	descriptions map[string]string
+	procs        *hostProcs
 
 	outMu sync.Mutex // one message to the session at a time
 	out   io.Writer
@@ -316,7 +321,7 @@ func (rl *relay) own(line []byte) bool {
 		// the box's executor is not asked.
 		list := wire.ServerList{Servers: []wire.ServerInfo{}}
 		for _, u := range rl.units {
-			list.Servers = append(list.Servers, wire.ServerInfo{Name: u})
+			list.Servers = append(list.Servers, wire.ServerInfo{Name: u, Description: rl.descriptions[u]})
 		}
 		rl.answer(m.ID, list, nil)
 		return true

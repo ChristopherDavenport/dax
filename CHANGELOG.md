@@ -32,6 +32,10 @@ versions may break flags and the config file.
   the attached view still showed the first run going, so the line
   steered a run that had ended; it now waits for the view to show the
   run ended (#96).
+- Added: a box host's MCP unit takes a `description` in
+  `box-host.json` (one line, at most 1024 bytes, no control
+  characters, MCP units only), which the box host lists with the unit's
+  name, so `/mcp` says what the unit is for (#107).
 
 ## v0.0.32 - 2026-10-26
 
