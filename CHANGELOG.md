@@ -23,6 +23,10 @@ versions may break flags and the config file.
   its standard error: the client waits up to a two-second grace for the
   stream before the close, and the server keeps a closed process's
   standard error reachable for that grace).
+- Fixed: the terminal client's tests type with a deadline, so a client
+  that stops reading its input fails the test with the screen as it
+  stuck, instead of holding the package until its timeout (#88; why the
+  client stopped reading is still open).
 
 ## v0.0.32 - 2026-10-26
 

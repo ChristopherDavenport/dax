@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -145,7 +147,7 @@ func (m *steps) sawInChild() string {
 // tuiRig is dax's terminal client over a scripted model, on a pipe.
 type tuiRig struct {
 	f    *tuiFront
-	t    *testing.T
+	t    testing.TB
 	dir  string
 	in   *io.PipeWriter
 	out  *syncBuf
@@ -153,6 +155,9 @@ type tuiRig struct {
 	done chan error
 	sess *agent.Session
 	o    agent.Options
+	// typeWait bounds how long type_ waits for the client to take its
+	// keys; 0 is typeWait's default.
+	typeWait time.Duration
 }
 
 func startTUI(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Options)) *tuiRig {
@@ -216,10 +221,78 @@ func startRig(t *testing.T, m *steps, rules policy.Rules, tweak func(*agent.Opti
 	return r
 }
 
+// typeWait is how long type_ waits, by default, for the client to take
+// its keys.
+const typeWait = 20 * time.Second
+
+// type_ writes s to the client's input. The pipe blocks until the client
+// reads, so the write races a deadline: a client that stopped reading
+// fails the test with the screen as it stuck, rather than holding the
+// test, and quit's own deadline with it, until the package's timeout. A
+// write left waiting ends when the rig's cleanup closes the pipe.
 func (r *tuiRig) type_(s string) {
 	r.t.Helper()
-	if _, err := r.in.Write([]byte(s)); err != nil {
-		r.t.Fatal(err)
+	wait := r.typeWait
+	if wait == 0 {
+		wait = typeWait
+	}
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := r.in.Write([]byte(s))
+		wrote <- err
+	}()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			r.t.Fatal(err)
+		}
+	case <-time.After(wait):
+		r.t.Fatalf("the client took no input for %v (typing %q); output:\n%q", wait, s, r.out.String())
+	}
+}
+
+// stuckTB stands in for a test where a fatal ends the goroutine and
+// keeps the message.
+type stuckTB struct {
+	testing.TB
+	mu  sync.Mutex
+	msg string
+}
+
+func (f *stuckTB) Helper() {}
+
+func (f *stuckTB) Fatalf(format string, a ...any) {
+	f.mu.Lock()
+	f.msg = fmt.Sprintf(format, a...)
+	f.mu.Unlock()
+	runtime.Goexit()
+}
+
+func (f *stuckTB) Fatal(a ...any) { f.Fatalf("%s", fmt.Sprint(a...)) }
+
+// A client that stops reading its input fails the test, with the
+// screen, rather than blocking the rig until the package's timeout
+// (#88): quit's own deadline is never reached while a key waits.
+func TestTypeFailsWhenTheClientStopsReading(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pr.Close() })
+	tb := &stuckTB{}
+	r := &tuiRig{t: tb, in: pw, out: &syncBuf{}, typeWait: 100 * time.Millisecond}
+	r.out.Write([]byte("the screen as it stuck"))
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		r.type_("n")
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("type_ blocked on a client that does not read")
+	}
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if !strings.Contains(tb.msg, "the screen as it stuck") {
+		t.Errorf("the failure %q does not show the screen", tb.msg)
 	}
 }
 
