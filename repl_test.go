@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,11 +54,70 @@ func TestAnswerLine(t *testing.T) {
 	}
 }
 
+// toldOfRefusal is what the model was told of the last call on sess's
+// record.
+func toldOfRefusal(t *testing.T, sess *agent.Session) string {
+	t.Helper()
+	r, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for _, e := range rec.Path(rec.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if o, ok := it.Item.(*openresponses.FunctionCallOutput); ok {
+				out = o.Output.Text
+			}
+		}
+	}
+	return out
+}
+
 // n refuses a call and the run goes on, and s refuses it and ends the
-// run; the model is told the same words either way (#150). -p reads
-// its answers as the REPL does, and asks synchronously, so the line
-// cannot race the question.
+// run; the model is told the same words either way (#150). -p asks in
+// line, so its answer is read only once the question is shown.
 func TestARefusalGoesOnOrStops(t *testing.T) {
+	for _, tc := range []struct {
+		line   string
+		reason agentturn.Reason
+		status int
+	}{
+		{"n not that\n", agentturn.ReasonDone, 0},
+		{"s not that\n", agentturn.ReasonStopped, exitStopped},
+	} {
+		t.Run(tc.line[:1], func(t *testing.T) {
+			ctx := context.Background()
+			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+			sess, dir := printSession(t, ctx, m)
+			f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(tc.line))}
+			err := f.run(ctx, sess, sess)
+			var ended *runEnded
+			switch {
+			case tc.status == 0 && err != nil:
+				t.Fatalf("run: %v, want done", err)
+			case tc.status != 0 && (!errors.As(err, &ended) || ended.status != tc.status):
+				t.Fatalf("run: %v, want exit %d", err, tc.status)
+			}
+			if end := runEndOf(t, sess); end.Reason != string(tc.reason) {
+				t.Errorf("the record ends %s, want %s", end.Reason, tc.reason)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
+				t.Error("the refused call ran")
+			}
+			if out := toldOfRefusal(t, sess); !strings.Contains(out, "Do not get the same result another way") || !strings.HasSuffix(out, "Reason: not that") {
+				t.Errorf("the model was told %q", out)
+			}
+		})
+	}
+}
+
+// The REPL's own n and s, typed once the question is shown: n refuses
+// and the run goes on, s refuses and ends it (#150).
+func TestTheREPLRefusesAndGoesOnOrStops(t *testing.T) {
 	for _, tc := range []struct {
 		line   string
 		reason agentturn.Reason
@@ -69,38 +129,32 @@ func TestARefusalGoesOnOrStops(t *testing.T) {
 			ctx := context.Background()
 			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
 			sess, dir := printSession(t, ctx, m)
-			var last *agentturn.RunEnd
-			defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
-				if e, ok := ev.(*agentturn.RunEnd); ok {
-					last = e
+			pr, pw := io.Pipe()
+			out := &syncBuf{}
+			f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
+			done := make(chan error, 1)
+			go func() { done <- f.Run(ctx, sess) }()
+			pw.Write([]byte("go\n"))
+			waitIn(t, out, "? allow bash")
+			pw.Write([]byte(tc.line))
+			deadline := time.Now().Add(15 * time.Second)
+			for !strings.Contains(out.String(), "["+string(tc.reason)) {
+				if time.Now().After(deadline) {
+					t.Fatalf("the run never ended %s:\n%s", tc.reason, out.String())
 				}
-				return nil
-			})()
-			f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(tc.line))}
-			f.run(ctx, sess, sess)
-			if last == nil || last.Reason != tc.reason {
-				t.Fatalf("after %q the run ended %+v, want %s", tc.line, last, tc.reason)
+				time.Sleep(10 * time.Millisecond)
+			}
+			pw.Close()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if end := runEndOf(t, sess); end.Reason != string(tc.reason) {
+				t.Errorf("the record ends %s, want %s", end.Reason, tc.reason)
 			}
 			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
 				t.Error("the refused call ran")
 			}
-			r, err := client.RecordOf(sess.Recorder())
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec, err := r.Read(ctx, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var out string
-			for _, e := range rec.Path(rec.Leaf()) {
-				if it, ok := e.(*agentsession.ItemEntry); ok {
-					if o, ok := it.Item.(*openresponses.FunctionCallOutput); ok {
-						out = o.Output.Text
-					}
-				}
-			}
-			if !strings.Contains(out, "Do not get the same result another way") || !strings.HasSuffix(out, "Reason: not that") {
+			if out := toldOfRefusal(t, sess); !strings.HasSuffix(out, "Reason: not that") {
 				t.Errorf("the model was told %q", out)
 			}
 		})
