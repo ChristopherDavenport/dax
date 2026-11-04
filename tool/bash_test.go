@@ -90,3 +90,17 @@ func TestBashSaysWhenTheWorkspaceHasNoBash(t *testing.T) {
 		t.Errorf("the model is told %q", result)
 	}
 }
+
+// A command that leaves a job running in the background with the
+// output open ends the call after the workspace's wait with what it
+// printed and a note that the job is still running, not with exec's
+// WaitDelay error (#153, the bash half).
+func TestBashSaysABackgroundJobHeldItsOutput(t *testing.T) {
+	_, result, err := runBash(t, t.TempDir(), "sleep 5 & echo started")
+	if err != nil {
+		t.Fatalf("the call failed: %v", err)
+	}
+	if !strings.Contains(result, "started") || !strings.Contains(result, "still holds its output") {
+		t.Errorf("the model is told %q", result)
+	}
+}

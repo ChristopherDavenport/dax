@@ -90,6 +90,11 @@ versions may break flags and the config file.
   read bash's grammar. A workspace over a wire (`-workspace`, a hub)
   carries a missing program as an error of no kind yet, so only a
   local workspace's, an executor's included, is told apart (#143).
+- Changed: a bash command that exits 0 while a job it started in the
+  background still holds its output (`server &`) ends the call after
+  the workspace's two-second wait with what it printed and a note that
+  the job keeps running, in place of failing with exec's "WaitDelay
+  expired" (#153; the `process` tool is still to come).
 
 ## v0.0.32 - 2026-10-26
 
