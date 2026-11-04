@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -101,6 +102,14 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 				b.WriteByte('\n')
 			}
 			switch {
+			case errors.Is(runErr, exec.ErrNotFound):
+				// Said to the model as the call's output, so it can go on
+				// with the file tools rather than retry a shell it does
+				// not have. No sh in its place: the analyzer and the
+				// stamp read bash's grammar. A workspace over a wire
+				// carries this as an error of no kind yet, so only a
+				// local workspace's is told apart.
+				return noBashOutput, nil
 			case runErr != nil:
 				return "", runErr
 			case res.TimedOut:
@@ -111,6 +120,9 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 			return b.String(), nil
 		}, agenttool.WithBarrier(), claim)
 }
+
+// noBashOutput is what bash says in a workspace that has no bash.
+const noBashOutput = "Error: this workspace has no bash, so no command can run here; read, write and edit still work."
 
 // progressWriter reports a command's output as it arrives: as
 // [agenttool.Progress] the window since the last report, at most one

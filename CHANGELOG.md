@@ -83,6 +83,13 @@ versions may break flags and the config file.
   agentconsole#42's).
 - Changed: `agent.Refusal` takes `stop`, and returns `agentturn.Refuse`
   for it; `agent.Rules.Stops` says which refused calls end the run.
+- Changed: in a workspace with no bash, the bash tool's call returns
+  "this workspace has no bash, so no command can run here; read, write
+  and edit still work" for the model, in place of failing with exec's
+  error. Nothing falls back to `sh`, since the analyzer and the stamp
+  read bash's grammar. A workspace over a wire (`-workspace`, a hub)
+  carries a missing program as an error of no kind yet, so only a
+  local workspace's, an executor's included, is told apart (#143).
 
 ## v0.0.32 - 2026-10-26
 
