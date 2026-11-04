@@ -594,8 +594,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 						}
 						continue
 					}
-					// Not kept as the run's prompt text: were calls held,
-					// the template is sent again once they are answered.
+					// Not kept as the run's prompt text, which would send
+					// it again unmarked: were calls held, they are asked
+					// and the template is not sent; run it again after.
 					sent = ""
 					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, item) })
 					continue
