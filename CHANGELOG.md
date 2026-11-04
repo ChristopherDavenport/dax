@@ -48,6 +48,13 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Fixed: a session's env entry records the workspace's host and
+  instance beside its kind and ref (agentsession's `workspace.host` and
+  `workspace.instance`): this machine's name for a local workspace, so
+  a session resumed on another machine reads as another file system.
+  An executor's capability carries both, and `dax execute` takes
+  `-host` and `-instance` (#155, the recording half; a box's ref is
+  still its name).
 - Added: `-p` tells the model nobody will reply to its last message, so
   it finishes the task rather than ending on a question, in an
   instructions part of its own (`one-shot`, source `dax`) that the

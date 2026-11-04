@@ -979,7 +979,10 @@ func (s *Session) envOption() session.Option {
 	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
 		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
-		e.SetWorkspace(d.Kind, d.Ref)
+		// The machine and the file system's instance too, which the
+		// substitution rule compares (agentworkspace RFC 0001 §12).
+		w := e.SetWorkspace(d.Kind, d.Ref)
+		w.Host, w.Instance = d.Host, d.Instance
 		return e, nil
 	})
 }

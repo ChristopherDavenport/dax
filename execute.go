@@ -64,6 +64,8 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	passEnv := fs.String("pass-env", "", "comma-separated variables that look like credentials to pass to the tools' processes anyway")
 	kind := fs.String("kind", workspace.KindRemote, "the workspace's kind as the session records it: "+strings.Join(executeKinds, ", "))
 	ref := fs.String("ref", "", "the workspace's ref as the session records it: an image, a host, an instance; default this host's name")
+	host := fs.String("host", "", "the machine the workspace is on, as the session records it (workspace.host); default none")
+	instance := fs.String("instance", "", "the file system's instance as the session records it (workspace.instance): a container's ID, set when a restart gives a new file system; default none")
 	listen := fs.String("listen", "", "serve over HTTP at this address (127.0.0.1:7777) instead of on standard input and output; a loopback address unless -insecure-no-auth")
 	insecure := fs.Bool("insecure-no-auth", false, "with -listen, take an address that is not loopback: nothing authenticates a client, so anyone who can reach it can run commands here")
 	if err := fs.Parse(args); err != nil {
@@ -132,7 +134,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	// the session's close waits for the requests reading them.
 	srv, err := executor.NewServer(executor.ServeOptions{
 		Name: p.name, Version: p.version,
-		Descriptor:   workspace.Descriptor{Kind: *kind, Ref: descRef, Root: ws.Root()},
+		Descriptor:   workspace.Descriptor{Kind: *kind, Ref: descRef, Host: *host, Instance: *instance, Root: ws.Root()},
 		Done:         ctx.Done(),
 		MaxReadBytes: *maxRead,
 	}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})

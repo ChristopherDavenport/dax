@@ -67,7 +67,8 @@ type executorServer struct {
 }
 
 var testDescriptor = func(root string) workspace.Descriptor {
-	return workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Root: root}
+	// A host and an instance cross the wire with the rest (#155).
+	return workspace.Descriptor{Kind: workspace.KindContainer, Ref: "box", Host: "build-host", Instance: "c0ffee", Root: root}
 }
 
 func newServer(t *testing.T) executorServer {
@@ -169,7 +170,7 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 		want = append(want, capabilityTool{Name: tl.Name(), Extension: tl.Extension, ReadOnly: tl.ReadOnly, Facts: tl.Factual, Strict: tl.Name() == "deploy"})
 	}
 	d := testDescriptor(s.ws.Root())
-	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}) ||
+	if got.Version != CapabilityVersion || got.Descriptor != (capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Host: d.Host, Instance: d.Instance, Root: d.Root}) ||
 		!slices.Equal(got.Extensions, []string{coding.Name, "acme"}) || !reflect.DeepEqual(got.Tools, want) ||
 		got.Files == nil || got.Files.URITemplate != wire.FilesURITemplate ||
 		got.Start == nil || *got.Start != wire.DefaultBounds() {
