@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,5 +236,25 @@ func TestPrintNamesItsSessionAndWritesItsTrajectory(t *testing.T) {
 		if len(doc.Subagents) != 1 || doc.Subagents[0].SessionID == "" || doc.Subagents[0].SessionID == sess.ID() || len(doc.Subagents[0].Steps) == 0 {
 			t.Errorf("run %d: the trajectory does not embed the task's session:\n%s", i, data)
 		}
+	}
+}
+
+// -timeout bounds a run that waits on standard input for an answer: a
+// harness that leaves stdin open does not hang past the deadline (#138).
+func TestPrintTimeoutEndsAWaitOnStdin(t *testing.T) {
+	sess, _ := sessionOver(t, &steps{parent: [][2]string{{"bash", `{"command":"touch ASKED"}`}}})
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	f := &printFront{info: frontInfo{Name: "dax", Prompt: "go", Timeout: 300 * time.Millisecond}, in: bufio.NewScanner(pr)}
+	done := make(chan error, 1)
+	go func() { done <- f.run(t.Context(), sess, sess) }()
+	select {
+	case err := <-done:
+		var ended *runEnded
+		if !errors.As(err, &ended) || ended.status != exitAborted {
+			t.Errorf("run: %v, want aborted", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("-timeout did not end a run waiting on standard input")
 	}
 }

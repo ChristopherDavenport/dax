@@ -201,14 +201,32 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	// The questions the person typed an answer to, by ID, and the calls
 	// they refused with s, which ends the run.
 	var answered, stops sync.Map
+	// One reader scans standard input for every answer, so a wait on a
+	// line ends with the run's context (-timeout) as no answer.
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		for f.in.Scan() {
+			lines <- f.in.Text()
+		}
+	}()
+	readLine := func() (string, bool) {
+		select {
+		case l, ok := <-lines:
+			return l, ok
+		case <-ctx.Done():
+			return "", false
+		}
+	}
 	rules := agent.Rules{
 		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
 			fmt.Print(question(c, reason))
-			if !f.in.Scan() {
+			line, ok := readLine()
+			if !ok {
 				fmt.Println()
 				return false, ""
 			}
-			allow, stop, note := answerLine(f.in.Text())
+			allow, stop, note := answerLine(line)
 			if stop {
 				stops.Store(c.CallID, true)
 			}
@@ -220,7 +238,8 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
-			if !f.in.Scan() {
+			line, ok := readLine()
+			if !ok {
 				fmt.Println()
 				if q.Call == nil {
 					// A tool's own question: nobody is left to answer
@@ -231,7 +250,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 				return agenttool.Answer{Action: agenttool.ActionDecline}
 			}
 			answered.Store(q.ID, true)
-			return replyOf(q.Elicitation, f.in.Text())
+			return replyOf(q.Elicitation, line)
 		},
 		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
 		// The person at this terminal, for what they typed.

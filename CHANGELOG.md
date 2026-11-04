@@ -142,6 +142,9 @@ versions may break flags and the config file.
   `-max-cost`; and a resumed session's limits go on from what its record
   (its sub-agents' sessions included) says it spent, not from 0 (#139).
 - Added: `agent.Options.PricedModels`.
+- Fixed: `-timeout` ends a `-p` run that waits on standard input for an
+  answer, as no answer, rather than hanging past the deadline when
+  stdin stays open (#138).
 
 ## v0.0.32 - 2026-10-26
 

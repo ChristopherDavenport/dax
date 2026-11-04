@@ -1624,7 +1624,10 @@ each one's own, even of a run it killed.
 
 A harness that counts any status but 0 as its own failure gives
 `-result PATH`: dax then writes the run's end to `PATH`, private to you,
-and exits 0 for any end the run reached (1 still for an error):
+and exits 0 for a run that ended done, stopped, requiring input or
+aborted; a run that ended in an error (the model call failed, say) is
+in the file too, and exits 1 as without it. `-timeout` also ends a wait
+on standard input for an answer, as no answer:
 
 ```json
 {
