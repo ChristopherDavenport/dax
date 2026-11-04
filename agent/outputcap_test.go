@@ -7,13 +7,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
 )
 
-var keptRef = regexp.MustCompile(`sidecar:sha256:[0-9a-f]{64}`)
+// keptRef is the opaque id a cut result names its kept whole by; the
+// blob's hash is never in the text (review R2-H1).
+var keptRef = regexp.MustCompile(`out_[0-9a-f]{16}`)
 
 // big is an extension whose tool returns a megabyte, as an MCP server
 // may.
@@ -47,6 +50,9 @@ func TestALongResultIsCutAndKept(t *testing.T) {
 		}
 	}
 	ref := keptRef.FindString(out)
+	if strings.Contains(out, "sidecar:") || strings.Contains(out, "sha256:") {
+		t.Errorf("the cut result names the blob: %q", out[strings.Index(out, "left out")-40:][:300])
+	}
 	if len(out) > 31000 || !strings.Contains(out, "ERR\n[exit 0]") || !strings.HasPrefix(out, "1\n2\n") || ref == "" {
 		i := strings.Index(out, "left out")
 		t.Fatalf("bash told the model %d bytes, ref %q, note %q", len(out), ref, out[max(0, i-80):min(len(out), i+300)])
@@ -63,8 +69,32 @@ func TestALongResultIsCutAndKept(t *testing.T) {
 	if err != nil || !strings.Contains(res.Output.Text, "15000\t15000") || !strings.Contains(res.Output.Text, "15001\t15001") {
 		t.Errorf("read_output = %q, %v", res.Output.Text, err)
 	}
-	if _, err := s.ToolOutput(ctx, "sidecar:sha256:"+strings.Repeat("0", 64)); err == nil {
-		t.Error("a blob this session did not keep was read")
+	// Only an id this session kept: not a hash, not a made-up id, not
+	// another session's (review R2-M1).
+	for _, bad := range []string{"sidecar:sha256:" + strings.Repeat("0", 64), "out_0000000000000000"} {
+		if _, err := s.ToolOutput(ctx, bad); err == nil {
+			t.Errorf("read %q", bad)
+		}
+	}
+	other, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err := other.ToolOutput(ctx, ref); err == nil {
+		t.Error("another session read this one's output")
+	}
+	// The record maps the id to the blob in an entry of its own, the
+	// reference whole as its member, which keeps the blob and which a
+	// redaction pass reads as a structural reference.
+	var kept []string
+	for _, e := range sessionEntries(t, s) {
+		if c, ok := e.(*agentsession.CustomEntry); ok && c.NS == "dax.output_kept" {
+			kept = append(kept, string(c.Data))
+		}
+	}
+	if len(kept) != 1 || !strings.Contains(kept[0], `"id":"`+ref+`"`) || !regexp.MustCompile(`"blob":"sidecar:sha256:[0-9a-f]{64}"`).MatchString(kept[0]) {
+		t.Errorf("dax.output_kept entries %q", kept)
 	}
 
 	// A tool that is not dax's own is cut at mcp_max_output.
@@ -76,4 +106,18 @@ func TestALongResultIsCutAndKept(t *testing.T) {
 	if err != nil || len(res.Output.Text) > 101000 || !strings.HasSuffix(res.Output.Text, "LAST") || keptRef.FindString(res.Output.Text) == "" {
 		t.Errorf("dump told the model %d bytes, %v", len(res.Output.Text), err)
 	}
+}
+
+// sessionEntries are s's entries as its store holds them now.
+func sessionEntries(t *testing.T, s *Session) []agentsession.Entry {
+	t.Helper()
+	rd, ok := s.Recorder().Store().(agentsession.Reader)
+	if !ok {
+		t.Fatal("the store cannot be read")
+	}
+	sess, err := rd.Read(context.Background(), s.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess.Entries()
 }

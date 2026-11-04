@@ -145,7 +145,7 @@ func TestDefaultPolicy(t *testing.T) {
 		{"grep", `{"pattern":"x"}`, agentturn.Allow},
 		{"ls", `{}`, agentturn.Allow},
 		// A cut result's whole, from the session's own outputs (#172).
-		{"read_output", `{"ref":"sidecar:sha256:00"}`, agentturn.Allow},
+		{"read_output", `{"ref":"out_0000000000000000"}`, agentturn.Allow},
 		// Writes ask.
 		{"write", `{"path":"a.go","content":""}`, agentturn.Defer},
 		{"edit", `{"path":"a.go","old_string":"a","new_string":"b"}`, agentturn.Defer},

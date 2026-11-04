@@ -12,7 +12,7 @@ import (
 
 // ReadOutputArgs are read_output's arguments.
 type ReadOutputArgs struct {
-	Ref     string `json:"ref" desc:"The output's reference, sidecar:sha256:..., as a cut result names it"`
+	Ref     string `json:"ref" desc:"The output's id, out_..., as a cut result names it"`
 	Offset  int    `json:"offset,omitempty" desc:"The first line to show, from 1 (default 1)"`
 	Limit   int    `json:"limit,omitempty" desc:"How many lines to show (default 200, at most 2000)"`
 	Pattern string `json:"pattern,omitempty" desc:"A regular expression: show only the lines that match it, numbered"`
@@ -29,10 +29,10 @@ const (
 // runs where the session does, not in the workspace.
 func ReadOutput(get func(ctx context.Context, ref string) ([]byte, error)) agenttool.Tool {
 	return exactArgs[ReadOutputArgs](agenttool.New("read_output",
-		"Read the whole output of a tool call whose result was cut, by the sidecar:sha256:... reference the cut result names: numbered lines from offset, or the lines matching a pattern.",
+		"Read the whole output of a tool call whose result was cut, by the output id (out_...) the cut result names: numbered lines from offset, or the lines matching a pattern.",
 		func(ctx context.Context, in ReadOutputArgs) (string, error) {
 			if strings.TrimSpace(in.Ref) == "" {
-				return "", errors.New("ref is required: the sidecar:sha256:... a cut result names")
+				return "", errors.New("ref is required: the output id (out_...) a cut result names")
 			}
 			data, err := get(ctx, in.Ref)
 			if err != nil {

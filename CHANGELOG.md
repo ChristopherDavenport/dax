@@ -66,9 +66,11 @@ versions may break flags and the config file.
   out between them, where bash kept its first 50 KiB and dropped the
   end, the error of a long build or test among it, and other tools were
   not capped. The whole is kept as a typed blob of the session, named
-  in the result as `sidecar:sha256:…`, and dax-coding's new
-  `read_output` reads it back, by lines or by a pattern; it never lands
-  in the repository or a remote workspace. `read` returns at most
+  in the result by an opaque output id (`out_…`), never by the blob's
+  hash, which a `dax.output_kept` entry maps to the blob; dax-coding's
+  new `read_output` reads it back by that id alone, only an output this
+  session kept, by lines or by a pattern; it never lands in the
+  repository or a remote workspace. `read` returns at most
   100 KiB a call, down from 200 KiB. Both settings are the user's, and
   a project's file may only lower them. `extension.Env.ToolOutput`,
   `agent.Session.ToolOutput`, `agent.Options.BashMaxOutput` and

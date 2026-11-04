@@ -231,8 +231,8 @@ type Env interface {
 	// Log is a note for the user, as the front shows them.
 	Log(format string, args ...any)
 	// ToolOutput is the whole of a tool result the session cut to its
-	// cap, by the reference the cut result names
-	// (sidecar:sha256:<hex>): only an output this session kept.
+	// cap, by the output id the cut result names (out_<hex>): only an
+	// output this session kept.
 	ToolOutput(ctx context.Context, ref string) ([]byte, error)
 }
 
