@@ -1404,6 +1404,13 @@ the input until the next line, and an error gives the line back to edit.
   marks the project's. A name is lowercase letters, digits, `-` and `_`;
   one of dax's own commands, or a file over 64 KiB, is left out and
   said once. `-bare` leaves out yours; `dax attach` offers none.
+- `/mcp__<server>__<prompt> args` runs a prompt an MCP server offers
+  (`prompts/get`), its arguments the prompt's declared ones in order,
+  split on white space, the last taking the rest; its messages are sent
+  as a prompt, or a steer while a run goes, recorded as composed from
+  that prompt (`instructions_part`, source `dax.mcp_prompt`) and marked
+  untrusted: a third party's text, never words you wrote. `/help` lists
+  the servers' prompts as they offer them now. `dax attach` offers none.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
 - `/port N` reaches port `N` on the loopback of wherever the tools act

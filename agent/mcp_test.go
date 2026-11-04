@@ -52,6 +52,13 @@ func TestMain(m *testing.M) {
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, struct{}{}, nil
 			})
 		addPlacementTools(srv)
+		// A prompt, which a user runs as a slash command (#176).
+		srv.AddPrompt(&mcp.Prompt{Name: "review_pr", Description: "review a pull request", Arguments: []*mcp.PromptArgument{{Name: "number", Required: true}, {Name: "focus"}}},
+			func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+				return &mcp.GetPromptResult{Messages: []*mcp.PromptMessage{
+					{Role: "user", Content: &mcp.TextContent{Text: "Review PR " + req.Params.Arguments["number"] + " for " + req.Params.Arguments["focus"] + "."}},
+				}}, nil
+			})
 		if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 			os.Exit(1)
 		}

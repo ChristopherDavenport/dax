@@ -48,6 +48,11 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: an MCP server's prompts are slash commands,
+  `/mcp__<server>__<prompt> args`, whose messages are sent recorded as
+  composed from the prompt and untrusted, never as your words; `/help`
+  lists them. `agent.Session.MCPPrompts`, `MCPPrompt` and
+  `agent.MCPPrompt` (#176; resources as `@` mentions are still to come).
 - Added: prompt templates. `/<name> args` sends `~/.dax/prompts/<name>.md`
   or the project's `.dax/prompts/<name>.md` with `$ARGUMENTS` and `$1`
   to `$9` filled in; the message is recorded as composed from that file

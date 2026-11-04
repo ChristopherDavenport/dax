@@ -583,11 +583,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				}
-				if item := r.send; err == nil && item != nil {
+				if items := r.send; err == nil && len(items) > 0 {
 					// A prompt template's message, sent as a typed line
 					// is, marked with the file it came from.
 					if running {
-						if err := t.Queue(ctx, agentturn.QueueSteer, item); err != nil {
+						if err := t.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
 							fmt.Fprintln(w, "[queued as steering]")
@@ -598,7 +598,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					// it again unmarked: were calls held, they are asked
 					// and the template is not sent; run it again after.
 					sent = ""
-					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, item) })
+					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, items...) })
 					continue
 				}
 				if r.quit {

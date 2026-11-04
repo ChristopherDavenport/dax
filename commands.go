@@ -65,9 +65,10 @@ const commandHelp = `commands:
 type commandResult struct {
 	out  string
 	quit bool
-	// send is a message the front sends as a prompt, or a steer while
-	// a run goes: a prompt template's, marked with where it came from.
-	send openresponses.Item
+	// send is what the front sends as a prompt, or a steer while a run
+	// goes: a prompt template's message or an MCP prompt's, marked with
+	// where it came from.
+	send []openresponses.Item
 }
 
 // command runs a slash line against the session. While a run goes, a
@@ -99,7 +100,7 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 	}
 	switch name {
 	case "/help":
-		return commandResult{out: commandHelp + templateHelp(ctl)}, nil
+		return commandResult{out: commandHelp + templateHelp(ctx, ctl)}, nil
 	case "/quit", "/exit":
 		return commandResult{quit: true}, nil
 	case "/abort":
@@ -195,10 +196,25 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			if err != nil {
 				return commandResult{}, err
 			}
-			return commandResult{send: item}, nil
+			return commandResult{send: []openresponses.Item{item}}, nil
 		}
 	}
-	return commandResult{}, fmt.Errorf("unknown command %s\n%s%s", name, commandHelp, templateHelp(ctl))
+	if mp, ok := ctl.(mcpPrompter); ok && strings.HasPrefix(name, "/mcp__") {
+		items, err := mp.MCPPrompt(ctx, strings.TrimPrefix(name, "/"), arg)
+		if err != nil {
+			return commandResult{}, err
+		}
+		return commandResult{send: items}, nil
+	}
+	return commandResult{}, fmt.Errorf("unknown command %s\n%s%s", name, commandHelp, templateHelp(ctx, ctl))
+}
+
+// mcpPrompter is what an MCP prompt's command asks of the session's
+// controls: the session's own (agent.Session.MCPPrompts and
+// MCPPrompt), which hold its servers; dax attach offers none.
+type mcpPrompter interface {
+	MCPPrompts(ctx context.Context) []agent.MCPPrompt
+	MCPPrompt(ctx context.Context, command, args string) (openresponses.Items, error)
 }
 
 // templater is what a prompt template asks of the session's controls:
@@ -211,17 +227,29 @@ type templater interface {
 
 // templateHelp lists the session's prompt templates for /help, the
 // project's marked, since its text is the repository's.
-func templateHelp(ctl agent.Controls) string {
-	tp, ok := ctl.(templater)
-	if !ok || len(tp.Templates()) == 0 {
-		return ""
-	}
+func templateHelp(ctx context.Context, ctl agent.Controls) string {
 	var b strings.Builder
-	b.WriteString("\nprompt templates ($ARGUMENTS, $1…$9 filled in):")
-	for _, p := range tp.Templates() {
-		fmt.Fprintf(&b, "\n  /%-24s %s", p.Name+" [args]", p.Path)
-		if p.Project {
-			b.WriteString(" (the project's: its text is the repository's)")
+	if tp, ok := ctl.(templater); ok && len(tp.Templates()) > 0 {
+		b.WriteString("\nprompt templates ($ARGUMENTS, $1…$9 filled in):")
+		for _, p := range tp.Templates() {
+			fmt.Fprintf(&b, "\n  /%-24s %s", p.Name+" [args]", p.Path)
+			if p.Project {
+				b.WriteString(" (the project's: its text is the repository's)")
+			}
+		}
+	}
+	if mp, ok := ctl.(mcpPrompter); ok {
+		if prompts := mp.MCPPrompts(ctx); len(prompts) > 0 {
+			b.WriteString("\nMCP prompts (a server's text, sent as its own):")
+			for _, p := range prompts {
+				fmt.Fprintf(&b, "\n  /%s", p.Command)
+				for _, a := range p.Arguments {
+					b.WriteString(" <" + a + ">")
+				}
+				if p.Description != "" {
+					b.WriteString("  " + oneLine(p.Description, maxDescription))
+				}
+			}
 		}
 	}
 	return b.String()

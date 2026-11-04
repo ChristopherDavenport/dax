@@ -289,6 +289,17 @@ func (*templateControls) Template(name, args string) (openresponses.Item, error)
 	return openresponses.UserText(name + ": " + args), nil
 }
 
+func (*templateControls) MCPPrompts(context.Context) []agent.MCPPrompt {
+	return []agent.MCPPrompt{{Command: "mcp__team__review_pr", Description: "review a pull request", Arguments: []string{"number"}}}
+}
+
+func (*templateControls) MCPPrompt(_ context.Context, command, args string) (openresponses.Items, error) {
+	if command != "mcp__team__review_pr" {
+		return nil, errors.New("no MCP prompt /" + command)
+	}
+	return openresponses.Items{openresponses.UserText("PR " + args), openresponses.AssistantText("ok")}, nil
+}
+
 // A prompt template is a command that sends its message; /help lists
 // it, marking the project's (#168).
 func TestAPromptTemplateIsACommand(t *testing.T) {
@@ -297,7 +308,10 @@ func TestAPromptTemplateIsACommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := r.send.(*openresponses.Message); !ok || m.Text() != "review: internal/box tool" {
+	if len(r.send) != 1 {
+		t.Fatalf("sent %d item(s)", len(r.send))
+	}
+	if m, ok := r.send[0].(*openresponses.Message); !ok || m.Text() != "review: internal/box tool" {
 		t.Errorf("sent %#v", r.send)
 	}
 	h, _ := command(context.Background(), &fakeTurn{}, ctl, "/help", false)
@@ -306,5 +320,16 @@ func TestAPromptTemplateIsACommand(t *testing.T) {
 	}
 	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/nope", false); err == nil || !strings.Contains(err.Error(), "/review") {
 		t.Errorf("unknown command: %v", err)
+	}
+	// An MCP server's prompt too (#176).
+	if !strings.Contains(h.out, "/mcp__team__review_pr <number>  review a pull request") {
+		t.Errorf("/help lists no MCP prompt:\n%s", h.out)
+	}
+	m, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp__team__review_pr 456", false)
+	if err != nil || len(m.send) != 2 {
+		t.Errorf("an MCP prompt sent %d item(s), %v", len(m.send), err)
+	}
+	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp__team__nope", false); err == nil {
+		t.Error("an MCP prompt the server does not offer was run")
 	}
 }
