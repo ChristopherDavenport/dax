@@ -16,8 +16,8 @@ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdB
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 github.com/ChristopherDavenport/agentconsole v0.0.15 h1:QJnx6DbcQDM61iHJGwGL3TTDNfivIz94YkrYmfaIwpU=
 github.com/ChristopherDavenport/agentconsole v0.0.15/go.mod h1:rgz5yn30vadnLIfw6SA5J8t6+fjlrak/l0DpXvUa1m0=
-github.com/ChristopherDavenport/agenteval v0.0.12 h1:M8uzTwKFMy5UG01+QaQulMBMciBVcOvXs8UQjXgRlyc=
-github.com/ChristopherDavenport/agenteval v0.0.12/go.mod h1:Ae4JGo7tK4A/s5L08PnWlUELJmhdMV1J5Dkyh67jHa8=
+github.com/ChristopherDavenport/agenteval v0.0.13 h1:LryP642FHLBLGQcmDk0WG7bJZ7t16eYLgYduGGz0CFo=
+github.com/ChristopherDavenport/agenteval v0.0.13/go.mod h1:4wAb6+Lnx91hUUZiqxVhqZSmY0fAbXeC5RDjL0EubFs=
 github.com/ChristopherDavenport/agentkit v0.0.16 h1:GheEZ+gyk6OQFysvAPtGwB14iUShr86UOSucpq1MG48=
 github.com/ChristopherDavenport/agentkit v0.0.16/go.mod h1:ITqJJNBGCdqn9rAM2ZNqUQAHGxEtdsyzgDxB5xanVI4=
 github.com/ChristopherDavenport/agentmemory v0.0.12 h1:X4sT0HbPezUmuvsTJK49SiEFKLgAB/vVUWEeXcMLnPo=

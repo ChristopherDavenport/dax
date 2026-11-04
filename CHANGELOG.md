@@ -16,7 +16,7 @@ versions may break flags and the config file.
   mcpworkspace and tunnel v0.0.11, up from v0.0.9; agenttool, mcpclient
   and mcpserver v0.0.29, up from v0.0.26; openresponses and its
   anthropic and gemini providers v0.0.18, up from v0.0.16;
-  agentredact/secrets v0.0.3, up from v0.0.1; agenteval v0.0.12, up
+  agentredact/secrets v0.0.3, up from v0.0.1; agenteval v0.0.13, up
   from v0.0.11. What changes for you:
   - Sessions are written as `agentsession/0.20`, and a session dax
     appends to is raised to it, after which a reader built on an older
