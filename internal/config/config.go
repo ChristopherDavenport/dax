@@ -122,6 +122,11 @@ type Config struct {
 	// MaxTurns stops a run after this many turns; 0, the default, is
 	// no limit. A project's file may set it only lower than the user's.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// ContextWindow is the context window, in tokens, a model is served
+	// at, by model name, for a server that cannot say or says the wrong
+	// one (Ollama's trained length): the compaction budget is sized
+	// from it. A project's file may only lower one.
+	ContextWindow map[string]int64 `json:"context_window,omitempty"`
 	// PassEnv names environment variables that look like credentials
 	// (*_API_KEY, *_TOKEN, *_SECRET) which bash commands and MCP
 	// servers are nevertheless given. By default they get none.
@@ -751,6 +756,11 @@ func (l *Layer) validate() error {
 	}
 	if c.MaxTurns < 0 {
 		return errors.New("max_turns: want a number of turns, 0 for no limit")
+	}
+	for m, n := range c.ContextWindow {
+		if strings.TrimSpace(m) == "" || n <= 0 {
+			return fmt.Errorf("context_window: want a model's name and its window in tokens, more than 0; got %q: %d", m, n)
+		}
 	}
 	if c.BaseURL != "" {
 		if err := checkBaseURL(c.BaseURL); err != nil {
@@ -1843,7 +1853,12 @@ type Settings struct {
 	MaxReadBytes     int64
 	// MaxTurns is the limit on a run's turns, 0 for none.
 	MaxTurns int
-	Policy   PolicySettings
+	// ContextWindow is the user's context_window by model, and
+	// ProjectContextWindow the project's where it is lower than the
+	// user's or the user set none: the session takes the project's only
+	// where it is lower than the window it would otherwise believe.
+	ContextWindow, ProjectContextWindow map[string]int64
+	Policy                              PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1949,6 +1964,20 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
+		}
+		for m, n := range l.ContextWindow {
+			switch {
+			case !l.Project:
+				if s.ContextWindow == nil {
+					s.ContextWindow = map[string]int64{}
+				}
+				s.ContextWindow[m] = n
+			case s.ContextWindow[m] == 0 || n < s.ContextWindow[m]:
+				if s.ProjectContextWindow == nil {
+					s.ProjectContextWindow = map[string]int64{}
+				}
+				s.ProjectContextWindow[m] = n
+			}
 		}
 		if l.MaxTurns != 0 {
 			// Tighten only: a project's limit stands where it is lower

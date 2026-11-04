@@ -572,6 +572,29 @@ func TestMaxTurnsPrecedence(t *testing.T) {
 	}
 }
 
+// context_window is per model: the user's sets it, and a project's may
+// only lower it, kept apart so the session can hold it to the vendor's
+// figure too (#171).
+func TestContextWindowPrecedence(t *testing.T) {
+	user := parse(t, `{"context_window":{"qwen3.5:9b":65536,"big":200000}}`, false)
+	proj := parse(t, `{"context_window":{"qwen3.5:9b":32768,"big":300000,"other":4096}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ContextWindow["qwen3.5:9b"] != 65536 || s.ContextWindow["big"] != 200000 || len(s.ContextWindow) != 2 {
+		t.Errorf("the user's windows %v", s.ContextWindow)
+	}
+	if got := s.ProjectContextWindow; got["qwen3.5:9b"] != 32768 || got["big"] != 0 || got["other"] != 4096 {
+		t.Errorf("the project's windows %v, want only those lower than the user's", got)
+	}
+	for _, bad := range []string{`{"context_window":{"m":0}}`, `{"context_window":{"m":-1}}`, `{"context_window":{"":100}}`} {
+		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "context_window") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
 func TestMaxReadBytes(t *testing.T) {
 	user := parse(t, `{"max_read_bytes":4096}`, false)
 	if s, err := Resolve([]Layer{user}, Flags{}, ""); err != nil || s.MaxReadBytes != 4096 {

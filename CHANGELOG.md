@@ -100,6 +100,18 @@ versions may break flags and the config file.
   (`compact.WithPin`), so a task's exact paths, format and constraints
   outlive the summary; the compaction entry records what it pinned. A
   longer message, a pasted log, is folded like the rest (#173).
+- Fixed: on Ollama the context window, and the default compaction
+  budget from it, is the one the server runs the model at (a loaded
+  model's `context_length` from `/api/ps`, or a `num_ctx` it sets), with
+  the trained length only an upper bound, and the window only when the
+  server says nothing else. Past the served window Ollama drops the
+  oldest messages silently, so a budget sized from the trained length
+  never folded. The banner says where the window came from (#171).
+- Added: `context_window` (by model, `{"qwen3.5:9b": 65536}`; a
+  project's file may only lower one) and `-context-window N` set the
+  window a server cannot say. The session warns once when the server
+  counts fewer input tokens than for the call before while the
+  conversation grew (#171).
 
 ## v0.0.32 - 2026-10-26
 

@@ -142,6 +142,7 @@ func run(ctx context.Context, args []string, p program) error {
 	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost, and for -max-cost")
+	contextWindow := fs.Int("context-window", 0, "the context window, in tokens, the model is served at, which sizes the default compaction budget; overrides the config's context_window for the model and what the vendor says, 0 leaves them")
 	maxTurns := fs.Int("max-turns", 0, "stop each run after this many turns (stopped, max_turns); overrides max_turns, 0 is no limit")
 	maxTokens := fs.Int("max-tokens", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have used this many tokens; 0 is no limit")
 	maxCost := fs.Float64("max-cost", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have cost this many US dollars by the pricing file, which must price the model; 0 is no limit")
@@ -566,6 +567,12 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.SubagentStreamer = m.SubagentStreamer
 	}
 	info, modelLine := describeModel(ctx, opts.Streamer, m)
+	if *contextWindow < 0 {
+		return errors.New("-context-window: want a number of tokens, 0 for the vendor's")
+	}
+	if w := info.WithWindow(settings.ContextWindow[m.Name], settings.ProjectContextWindow[m.Name], int64(*contextWindow)); w.WindowFrom != info.WindowFrom {
+		info, modelLine = w, w.String()
+	}
 	if !given["compact"] {
 		// The model's window when the vendor reports one; otherwise
 		// compaction stays off, as before.

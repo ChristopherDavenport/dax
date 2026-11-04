@@ -210,6 +210,18 @@ their model endpoints, OpenRouter through its public catalogue (fetched
 once, without the key) and Ollama through `/api/show`; OpenAI and an
 `openresponses` server publish nothing, and nothing is shown.
 
+On Ollama the window shown is the one the server runs the model at: a
+loaded model's (`/api/ps`), or a `num_ctx` the model sets, never more
+than the length it was trained to, which is the window only when the
+server says nothing else (`256k context (ollama trained length)`: the
+model is not loaded yet). Past the window it runs at, Ollama drops the
+oldest messages, the task first, and answers as if nothing happened, so
+a budget sized from the trained length would never fold: give the
+window the server runs (`OLLAMA_CONTEXT_LENGTH`) as `context_window`
+or `-context-window`. Whatever the provider, when the server counts
+fewer input tokens for a call than for the one before while the
+conversation grew, dax says so once.
+
 The reasoning effort dax asks for is then fitted to the answer: an
 effort the model does not take becomes the nearest one it does, and dax
 says so once, `[qwen3-coder:30b: reasoning effort low is not accepted;
@@ -390,6 +402,7 @@ names the file and the field.
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
 | `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN`, `DAX_SERVERS_WORKSPACE_TOKEN`, `DAX_SERVERS_TUNNEL_TOKEN`, a `token_env` of `workspace` or `servers_workspace`, or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
+| `context_window` | the window, in tokens, a model is served at, by model: `{"qwen3.5:9b": 65536}`, for a server that cannot say or says the wrong one; it sizes the default `-compact` budget (three quarters of it). A project's file may only lower one |
 | `max_turns` | stop each run after this many turns (`[stopped: max_turns]`, exit 3 under `-p`); default none. A project's file may set it only lower than yours |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
@@ -461,6 +474,7 @@ no other account could have written it.
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. The session's header records the run as bare and what it left out (`dax.profile`) |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
+| `-context-window N` | the main model's window for this run, over `context_window` and what the vendor says |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message you wrote (a prompt, a steer, a note with an answer) up to 8 KiB is kept verbatim through every fold, after the summary, so the task's exact words outlive it; the compaction entry records what it kept. A longer one, a pasted log, is folded like the rest |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |

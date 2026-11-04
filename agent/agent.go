@@ -881,6 +881,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
+	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
 	// The kit's control hands the agent the inputs a stopped session
 	// accepted and no run took, which it takes after the next prompt.
 	// The session's elicitor is the kit's own, so the control leaves

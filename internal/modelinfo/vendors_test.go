@@ -102,6 +102,10 @@ func TestOpenRouterFailureIsNotKept(t *testing.T) {
 
 func TestOllama(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" && r.Method == http.MethodGet {
+			io.WriteString(w, `{"models":[]}`)
+			return
+		}
 		if r.URL.Path != "/api/show" || r.Method != http.MethodPost {
 			t.Errorf("request %s %s", r.Method, r.URL.Path)
 		}
@@ -128,6 +132,55 @@ func TestOllama(t *testing.T) {
 	}
 	if _, err := d.Describe(ctx, "nope"); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("unknown model: %v", err)
+	}
+}
+
+// On Ollama the window is the one the server runs the model at: a
+// loaded model's context_length from /api/ps, or a num_ctx the model's
+// parameters set; the trained length is only an upper bound, and the
+// window when the server says nothing else (#171).
+func TestOllamaTakesTheServedWindow(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/ps":
+			io.WriteString(w, `{"models":[{"name":"qwen3.5:9b","model":"qwen3.5:9b","context_length":65536},{"name":"tiny:1b","model":"tiny:1b","context_length":1048576}]}`)
+			return
+		case "/api/show":
+		default:
+			t.Errorf("request %s %s", r.Method, r.URL.Path)
+		}
+		var body struct{ Model string }
+		json.NewDecoder(r.Body).Decode(&body)
+		switch body.Model {
+		case "qwen3.5:9b":
+			io.WriteString(w, `{"capabilities":["completion"],"model_info":{"qwen35.context_length":262144}}`)
+		case "small-ctx":
+			io.WriteString(w, `{"capabilities":["completion"],"parameters":"stop \"<|im_end|>\"\nnum_ctx 2048\ntemperature 0.6","model_info":{"qwen3.context_length":40960}}`)
+		case "tiny:1b":
+			io.WriteString(w, `{"capabilities":["completion"],"model_info":{"llama.context_length":8192}}`)
+		case "unloaded":
+			io.WriteString(w, `{"capabilities":["completion"],"model_info":{"qwen3.context_length":40960}}`)
+		}
+	})
+	d := Ollama(srv.URL+"/v1", nil)
+	for _, tc := range []struct {
+		model  string
+		window int64
+		from   string
+	}{
+		{"qwen3.5:9b", 65536, "ollama /api/ps"},
+		{"small-ctx", 2048, "ollama num_ctx"},
+		{"tiny:1b", 8192, "ollama trained length"},
+		{"unloaded", 40960, "ollama trained length"},
+	} {
+		info, err := d.Describe(context.Background(), tc.model)
+		if err != nil || info.ContextWindow != tc.window || info.WindowFrom != tc.from {
+			t.Errorf("%s: window %d from %q (%v), want %d from %q", tc.model, info.ContextWindow, info.WindowFrom, err, tc.window, tc.from)
+		}
+	}
+	info, _ := d.Describe(context.Background(), "qwen3.5:9b")
+	if info.CompactBudget() != 49152 {
+		t.Errorf("budget %d, want 49152", info.CompactBudget())
 	}
 }
 
@@ -201,5 +254,29 @@ func TestGemini(t *testing.T) {
 	}
 	if _, err := d.Describe(ctx, "nope"); err == nil {
 		t.Error("unknown model: no error")
+	}
+}
+
+// The user's window wins over the vendor's, the flag's over theirs, and
+// a project's only where it is lower (#171).
+func TestWithWindow(t *testing.T) {
+	vendor := Info{Source: "ollama", ContextWindow: 262144, WindowFrom: "ollama trained length"}
+	for _, tc := range []struct {
+		name             string
+		user, proj, flag int64
+		want             int64
+		from             string
+	}{
+		{"none", 0, 0, 0, 262144, "ollama trained length"},
+		{"the user's", 65536, 0, 0, 65536, "config"},
+		{"a project's lower", 65536, 32768, 0, 32768, "project config"},
+		{"a project's higher", 65536, 131072, 0, 65536, "config"},
+		{"a project's lower than the vendor's", 0, 32768, 0, 32768, "project config"},
+		{"the flag's", 65536, 32768, 100000, 100000, "flag"},
+	} {
+		got := vendor.WithWindow(tc.user, tc.proj, tc.flag)
+		if got.ContextWindow != tc.want || got.WindowFrom != tc.from {
+			t.Errorf("%s: %d from %q, want %d from %q", tc.name, got.ContextWindow, got.WindowFrom, tc.want, tc.from)
+		}
 	}
 }
