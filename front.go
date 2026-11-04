@@ -197,8 +197,9 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	}
 	showAssembly(info)
 	showPending(t, "resumed")
-	// The questions the person typed an answer to, by ID.
-	var answered sync.Map
+	// The questions the person typed an answer to, by ID, and the calls
+	// they refused with s, which ends the run.
+	var answered, stops sync.Map
 	rules := agent.Rules{
 		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
 			fmt.Print(question(c, reason))
@@ -206,7 +207,15 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 				fmt.Println()
 				return false, ""
 			}
-			return answerLine(f.in.Text())
+			allow, stop, note := answerLine(f.in.Text())
+			if stop {
+				stops.Store(c.CallID, true)
+			}
+			return allow, note
+		},
+		Stops: func(c *openresponses.FunctionCall) bool {
+			_, ok := stops.LoadAndDelete(c.CallID)
+			return ok
 		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
@@ -448,7 +457,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 			if len(asks) > 0 {
 				a := asks[0]
 				asks = asks[1:]
-				allow, note := answerLine(line)
+				allow, stop, note := answerLine(line)
 				switch {
 				case a.question != "":
 					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(a.ask, line))
@@ -460,7 +469,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					answers = append(answers, ans)
 				default:
 					fmt.Printf("  ✗ %s denied\n", render.Clean(a.call.Name))
-					answers = append(answers, agent.Refusal(a.call.CallID, note))
+					answers = append(answers, agent.Refusal(a.call.CallID, note, stop))
 				}
 				if len(asks) > 0 {
 					next()
@@ -549,18 +558,20 @@ func questionText(q agentturn.Question) string {
 // anything else refuses, and what follows the first word (or the whole
 // line, for a refusal that does not start with n or no) is what the user
 // said with it, which the model is told.
-func answerLine(line string) (allow bool, note string) {
+func answerLine(line string) (allow, stop bool, note string) {
 	line = strings.TrimSpace(line)
 	word, rest, _ := strings.Cut(line, " ")
 	word = strings.TrimRight(strings.ToLower(word), ",:;.")
 	rest = strings.TrimSpace(rest)
 	switch word {
 	case "y", "yes":
-		return true, rest
+		return true, false, rest
 	case "n", "no", "":
-		return false, rest
+		return false, false, rest
+	case "s", "stop":
+		return false, true, rest
 	}
-	return false, line
+	return false, false, line
 }
 
 // replyOf is a line's answer to a question asked while a call runs.
@@ -583,7 +594,9 @@ func replyOf(q agenttool.Elicitation, line string) agenttool.Answer {
 		}
 		return agenttool.Answer{Action: agenttool.ActionAccept, Content: extension.TextContent(line)}
 	}
-	allow, note := answerLine(line)
+	// A question is answered while its call runs: there is no run to
+	// stop from here, so s declines it as n does.
+	allow, _, note := answerLine(line)
 	if allow {
 		return agenttool.Answer{Action: agenttool.ActionAccept, Note: note}
 	}

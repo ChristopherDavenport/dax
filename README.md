@@ -1567,8 +1567,13 @@ restarts.
 with the same commands; a permission or a question is answered with `y`
 or `n` on the next line, and what follows the first word is what you say
 with the answer, which the model is told: `y keep it short` allows with a
-note, `n not that file` refuses with a reason. Any other line refuses,
-the whole line its reason. `-p` reads its answers the same way.
+note, `n not that file` refuses with a reason and the run goes on, and
+`s not that file` refuses and ends the run there. Any other line refuses,
+the whole line its reason. A refusal tells the model not to get the same
+result another way (another tool, a script, another path) and to say so
+if it is still needed. `-p` reads its answers the same way; a question
+asked while a call runs has no run to end, so `s` declines it as `n`
+does.
 
 ## Exit status
 

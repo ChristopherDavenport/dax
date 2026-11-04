@@ -63,7 +63,7 @@ const Version = "0.1.0-dev"
 // about is one nobody can account for.
 const (
 	abortedOutput  = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput   = "Error: the user denied this call."
+	deniedOutput   = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
 	unknownOutput  = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
 	neverRanOutput = "Error: this call was cut off before it reached its tool; it did not run."
 	heldOutput     = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."

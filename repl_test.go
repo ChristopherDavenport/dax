@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
@@ -24,24 +26,103 @@ import (
 
 func TestAnswerLine(t *testing.T) {
 	for _, tc := range []struct {
-		line  string
-		allow bool
-		note  string
+		line        string
+		allow, stop bool
+		note        string
 	}{
-		{"y", true, ""},
-		{"Yes", true, ""},
-		{"y keep it short", true, "keep it short"},
-		{"yes, keep it short", true, "keep it short"},
-		{"", false, ""},
-		{"n", false, ""},
-		{"no: wrong file", false, "wrong file"},
-		{"not that one", false, "not that one"},
-		{"yesterday", false, "yesterday"},
+		{"y", true, false, ""},
+		{"Yes", true, false, ""},
+		{"y keep it short", true, false, "keep it short"},
+		{"yes, keep it short", true, false, "keep it short"},
+		{"", false, false, ""},
+		{"n", false, false, ""},
+		{"no: wrong file", false, false, "wrong file"},
+		{"not that one", false, false, "not that one"},
+		{"yesterday", false, false, "yesterday"},
+		// s refuses and stops the run (#150).
+		{"s", false, true, ""},
+		{"S not now", false, true, "not now"},
+		{"stop: leave build alone", false, true, "leave build alone"},
+		{"stopping", false, false, "stopping"},
 	} {
-		allow, note := answerLine(tc.line)
-		if allow != tc.allow || note != tc.note {
-			t.Errorf("answerLine(%q) = %v %q, want %v %q", tc.line, allow, note, tc.allow, tc.note)
+		allow, stop, note := answerLine(tc.line)
+		if allow != tc.allow || stop != tc.stop || note != tc.note {
+			t.Errorf("answerLine(%q) = %v %v %q, want %v %v %q", tc.line, allow, stop, note, tc.allow, tc.stop, tc.note)
 		}
+	}
+}
+
+// In the REPL, n refuses a call and the run goes on, and s refuses it
+// and ends the run; the model is told the same words either way (#150).
+func TestTheREPLRefusesAndGoesOnOrStops(t *testing.T) {
+	for _, tc := range []struct {
+		line   string
+		reason agentturn.Reason
+	}{
+		{"n not that\n", agentturn.ReasonDone},
+		{"s not that\n", agentturn.ReasonStopped},
+	} {
+		t.Run(tc.line[:1], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+			sess, dir := printSession(t, ctx, m)
+			ended := make(chan *agentturn.RunEnd, 4)
+			defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+				if e, ok := ev.(*agentturn.RunEnd); ok {
+					ended <- e
+				}
+				return nil
+			})()
+			pr, pw := io.Pipe()
+			f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr)}
+			done := make(chan error, 1)
+			go func() { done <- f.Run(ctx, sess) }()
+			pw.Write([]byte("go\n"))
+			select {
+			case end := <-ended:
+				if end.Reason != agentturn.ReasonInputRequired {
+					t.Fatalf("the first run ended %s", end.Reason)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("no permission was asked")
+			}
+			pw.Write([]byte(tc.line))
+			select {
+			case end := <-ended:
+				if end.Reason != tc.reason {
+					t.Fatalf("after %q the run ended %s (%s), want %s", tc.line, end.Reason, end.Cause, tc.reason)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("the run did not end")
+			}
+			pw.Close()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
+				t.Error("the refused call ran")
+			}
+			r, err := client.RecordOf(sess.Recorder())
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, err := r.Read(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out string
+			for _, e := range rec.Path(rec.Leaf()) {
+				if it, ok := e.(*agentsession.ItemEntry); ok {
+					if o, ok := it.Item.(*openresponses.FunctionCallOutput); ok {
+						out = o.Output.Text
+					}
+				}
+			}
+			if !strings.Contains(out, "Do not get the same result another way") || !strings.HasSuffix(out, "Reason: not that") {
+				t.Errorf("the model was told %q", out)
+			}
+		})
 	}
 }
 

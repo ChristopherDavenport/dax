@@ -75,6 +75,14 @@ versions may break flags and the config file.
   brings that one source back. The header records the run as
   `dax.profile`, `{"bare": true, "left_out": [...]}` (#141).
 - Added: `agent.Options.NoUserAgentsMD` and `agent.Options.Bare`.
+- Changed: a person's refusal tells the model "Do not get the same
+  result another way (another tool, a script, another path); if it is
+  still needed, say so and let the user decide." The REPL and `-p` take
+  `s [reason]` to refuse and end the run, beside `n [reason]`, which
+  refuses and goes on (#150; the terminal client's second refusal is
+  agentconsole#42's).
+- Changed: `agent.Refusal` takes `stop`, and returns `agentturn.Refuse`
+  for it; `agent.Rules.Stops` says which refused calls end the run.
 
 ## v0.0.32 - 2026-10-26
 
