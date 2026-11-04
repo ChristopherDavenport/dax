@@ -2,6 +2,7 @@ package dax
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -63,6 +64,11 @@ func (f *fakeControls) AddMCP(_ context.Context, name, command string) (string, 
 
 func (f *fakeControls) RemoveMCP(label string) error {
 	f.did = append(f.did, "remove "+label)
+	return nil
+}
+
+func (f *fakeControls) Compact(_ context.Context, instructions string) error {
+	f.did = append(f.did, "compact "+instructions)
 	return nil
 }
 
@@ -138,7 +144,11 @@ func TestCommands(t *testing.T) {
 		{line: "/quit", quit: true},
 		{line: "/exit", running: true, quit: true},
 		{line: "/help", out: "//text"},
-		{line: "/compact", err: "unknown command /compact"},
+		// The next request folds, with what follows as that fold's
+		// instructions (#165).
+		{line: "/compact", out: "[the next request folds the conversation]", did: "compact "},
+		{line: "/compact keep the failing test names", out: "[the next request folds the conversation, with your instructions]", did: "compact keep the failing test names"},
+		{line: "/compact", running: true, err: "/compact waits for the run to end"},
 		// Controls that cannot run the user's command, as over dax
 		// attach, refuse it.
 		{line: "!ls", err: "dax attach"},
@@ -237,5 +247,22 @@ func TestAttachRefusesAUserCommand(t *testing.T) {
 	_, err := command(context.Background(), &fakeTurn{}, ctl, "!touch PWNED", false)
 	if err == nil || !strings.Contains(err.Error(), "not offered over dax attach") {
 		t.Errorf("a ! line over attach: %v", err)
+	}
+}
+
+// dax serve offers /compact as a named command, so dax attach sends it.
+func TestServedCompact(t *testing.T) {
+	ctl := &fakeControls{}
+	cmd, ok := serveCommands(ctl, nil, "")[cmdCompact]
+	if !ok {
+		t.Fatal("no compact command served")
+	}
+	for _, raw := range []string{`{"instructions":"keep X"}`, ``} {
+		if _, err := cmd.Run(context.Background(), json.RawMessage(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Join(ctl.did, ";"); got != "compact keep X;compact " {
+		t.Errorf("served compact asked %q", got)
 	}
 }

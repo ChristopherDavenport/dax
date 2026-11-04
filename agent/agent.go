@@ -858,6 +858,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 				o.log("[not compacted: %v; %d tokens sent unfolded]", f.Err, f.TokensBefore)
 			case f.Err != nil:
 				o.log("[compaction failed after %d call(s): %v]", f.Attempts, f.Err)
+			case f.Summary != nil && f.Forced:
+				o.log("[compacted on request: %d item(s) folded, %d tokens before]", f.Split, f.TokensBefore)
 			case f.Summary != nil:
 				o.log("[compacted: %d item(s) folded, %d tokens before]", f.Split, f.TokensBefore)
 			}
@@ -1233,6 +1235,22 @@ func (s *Session) SetThink(on bool) error {
 	cfg := a.Config()
 	cfg.Reasoning = o.reasoningFor(context.Background(), cfg.ModelName)
 	return a.SetConfig(cfg)
+}
+
+// Compact has the next request fold the conversation whatever the
+// compaction budget, with instructions, when not empty, for that fold
+// alone (/compact): the fold a request over budget makes, noted and
+// recorded as one. The next request is the main agent's next model
+// call; a sub-agent's call in that run comes after it. With compaction
+// off it returns agentkit.ErrNoCompaction.
+func (s *Session) Compact(ctx context.Context, instructions string) error {
+	if err := s.ctl.Compact(ctx, instructions); err != nil {
+		if errors.Is(err, agentkit.ErrNoCompaction) {
+			return fmt.Errorf("compaction is off for this session (-compact 0, or the model's window is not known; give -compact N): %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 // Close detaches the recorder and releases the MCP server and the

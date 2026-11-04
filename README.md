@@ -1425,10 +1425,22 @@ the input until the next line, and an error gives the line back to edit.
   session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think`, `/mcp add` and `/mcp remove`
-wait for the run to end; the rest, the `/mcp` listing among them, work
+the next model call. `/model`, `/think`, `/compact`, `/mcp add` and
+`/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
 during one. An unknown command is an error, not a
-prompt. `/compact` does not exist (use `-compact N`).
+prompt.
+
+`/compact [instructions]` has the next request fold the conversation
+whatever the `-compact` budget, as a fold over budget does (your
+messages up to 8 KiB kept, the fold noted and recorded), with what
+follows the command as instructions for that fold's summary alone:
+`/compact keep the failing test names`. It waits for the run to end
+and folds at the next prompt's first model call, the main agent's,
+before any sub-agent's. A conversation whose older part is under an
+eighth of the budget is left as it is, as it would be over budget. With
+compaction off (`-compact 0`, or a model
+whose window is not known) it says so. `dax attach` sends it to the
+served session.
 
 ## Serving a session: `dax serve` and `dax attach`
 

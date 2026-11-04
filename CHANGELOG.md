@@ -48,6 +48,13 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: `/compact [instructions]` has the next request fold the
+  conversation whatever the budget, with the instructions for that
+  fold's summary alone (agentkit's `Control.Compact`); it waits for the
+  run to end, says so when compaction is off, and is a command `dax
+  serve` offers, so `dax attach` sends it. A fold asked for is noted
+  `[compacted on request: …]` (#165).
+- Added: `agent.Session.Compact`.
 - Fixed: a call whose tool returned while the rest of its batch ran,
   when dax stopped before the batch ended, is answered on the next
   prompt with what it returned, and not run again, where the model was

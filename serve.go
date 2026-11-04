@@ -479,6 +479,7 @@ const (
 	cmdThink     = "think"
 	cmdMCPAdd    = "mcp-add"
 	cmdMCPRemove = "mcp-remove"
+	cmdCompact   = "compact"
 	// cmdContinueFrom moves the session's head: the tree of an attached
 	// view continues from an entry, as a local view's does.
 	cmdContinueFrom = "continue-from"
@@ -490,6 +491,10 @@ type modelArgs struct {
 
 type thinkArgs struct {
 	On bool `json:"on"`
+}
+
+type compactArgs struct {
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type mcpAddArgs struct {
@@ -579,6 +584,23 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 					return nil, errors.New("no entry named")
 				}
 				return nil, head.ContinueFrom(ctx, a.Entry)
+			},
+		},
+		cmdCompact: {
+			Description: "fold the conversation at the next request, with instructions for that fold alone",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"instructions":{"type":"string"}}}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+				var a compactArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &a); err != nil {
+						return nil, err
+					}
+				}
+				c, ok := ctl.(compacter)
+				if !ok {
+					return nil, errors.New("this session does not compact on request")
+				}
+				return nil, c.Compact(ctx, a.Instructions)
 			},
 		},
 		cmdMCPRemove: {

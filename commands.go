@@ -50,6 +50,7 @@ const commandHelp = `commands:
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
+  /compact [instructions]   fold the conversation at the next request, keeping what you say
   /follow <text>            a follow-up, taken when the model would stop
   /abort                    abort the run
   /quit                     leave
@@ -139,6 +140,21 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
+	case "/compact":
+		if err := idle(); err != nil {
+			return commandResult{}, err
+		}
+		c, ok := ctl.(compacter)
+		if !ok {
+			return commandResult{}, errors.New("/compact is not offered by this session")
+		}
+		if err := c.Compact(ctx, arg); err != nil {
+			return commandResult{}, err
+		}
+		if arg != "" {
+			return commandResult{out: "[the next request folds the conversation, with your instructions]"}, nil
+		}
+		return commandResult{out: "[the next request folds the conversation]"}, nil
 	case "/mcp":
 		// The listing changes nothing, so it works during a run.
 		if sub, rest, _ := strings.Cut(arg, " "); sub == "" || sub == "list" {
@@ -153,6 +169,12 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		return mcpCommand(ctx, ctl, arg)
 	}
 	return commandResult{}, fmt.Errorf("unknown command %s\n%s", name, commandHelp)
+}
+
+// compacter is what /compact asks of the session's controls: the
+// session's own (agent.Session.Compact) or a served one's command.
+type compacter interface {
+	Compact(ctx context.Context, instructions string) error
 }
 
 // mcpCommand is /mcp add and /mcp remove; runCommand answers /mcp and
