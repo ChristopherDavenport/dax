@@ -220,7 +220,9 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 		}
 	}
 	instr := s.ag.Config().Instructions
-	for _, sub := range []string{"You are dax", "greet", "Short answers.", "Run go test before saying done."} {
+	// dax-coding's lines on bounded searches and checks after a change
+	// reach the rendered prompt (#11).
+	for _, sub := range []string{"You are dax", "greet", "Short answers.", "Run go test before saying done.", "never search from / or $HOME", "run the checks the project's instructions name"} {
 		if !strings.Contains(instr, sub) {
 			t.Errorf("instructions lack %q", sub)
 		}

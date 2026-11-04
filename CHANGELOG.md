@@ -36,6 +36,10 @@ versions may break flags and the config file.
   `box-host.json` (one line, at most 1024 bytes, no control
   characters, MCP units only), which the box host lists with the unit's
   name, so `/mcp` says what the unit is for (#107).
+- Changed: dax-coding's instructions tell the model to keep shell
+  searches to the working directory and named paths, never from `/` or
+  `$HOME`, and to run the checks the project's instructions name after
+  a change and say which ran and how they ended (#11).
 
 ## v0.0.32 - 2026-10-26
 

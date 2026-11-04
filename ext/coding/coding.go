@@ -27,7 +27,9 @@ const Name = "dax-coding"
 // instructions are dax-coding's part of the system prompt.
 const instructions = "Use the tools to inspect and change files and run commands; do not guess at file contents. " +
 	"Prefer glob, grep and ls over shell commands to find and list files. File tools reach only the working directory. " +
-	"Read before you edit."
+	"Read before you edit. " +
+	"Keep shell searches to the working directory and paths you name; never search from / or $HOME. " +
+	"After a change, run the checks the project's instructions name (AGENTS.md, a Makefile target) before calling it done, and say which ran and how they ended."
 
 // New is dax-coding. maxRead is the most bytes of a
 // file read scans, edit rewrites and the bash analyzer reads of a file a
