@@ -69,6 +69,12 @@ type recordedWorkspace struct {
 	Kind string `json:"kind"`
 	Ref  string `json:"ref,omitempty"`
 	Root string `json:"root"`
+	// Host and Instance are where the workspace was when the session
+	// started (agentworkspace RFC 0001 §12): not the project's
+	// identity, but what a resume on another machine, or in a new
+	// container, is told apart by. A header from before holds neither.
+	Host     string `json:"host,omitempty"`
+	Instance string `json:"instance,omitempty"`
 }
 
 // executorMark is an executor's address as the header holds it.
@@ -141,7 +147,7 @@ type recordedProfile struct {
 func (s *Session) extras() map[string]json.RawMessage {
 	d := s.x.Descriptor()
 	out := map[string]json.RawMessage{}
-	if ws, err := json.Marshal(recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root}); err == nil {
+	if ws, err := json.Marshal(recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root, Host: d.Host, Instance: d.Instance}); err == nil {
 		out[headerWorkspace] = ws
 	}
 	if ex := s.opts.Executor; ex != nil && ex.addr != "" {
@@ -204,7 +210,7 @@ func recordedIn(h agentsession.Header) (workspace.Descriptor, bool) {
 	if err := json.Unmarshal(raw, &w); err != nil || w.Kind == "" {
 		return workspace.Descriptor{}, false
 	}
-	return workspace.Descriptor{Kind: w.Kind, Ref: w.Ref, Root: w.Root}, true
+	return workspace.Descriptor{Kind: w.Kind, Ref: w.Ref, Root: w.Root, Host: w.Host, Instance: w.Instance}, true
 }
 
 // workspaceOf is the workspace a header records, or, for a session
@@ -216,12 +222,35 @@ func workspaceOf(h agentsession.Header) workspace.Descriptor {
 	return workspace.Descriptor{Kind: workspace.KindLocal, Root: h.CWD}
 }
 
-// sameWorkspace says whether a and b are one workspace by what the
-// header records of it, its kind, ref and root: a descriptor's host
-// and instance (agentworkspace v0.0.11) say where it runs now, not
-// which project it is.
-func sameWorkspace(a, b workspace.Descriptor) bool {
+// sameProject says whether a and b are one project, the identity
+// -list, memory and the MCP trust go by: kind, ref and root. A
+// descriptor's host and instance say where it is now, not which
+// project it is.
+func sameProject(a, b workspace.Descriptor) bool {
 	return a.Kind == b.Kind && a.Ref == b.Ref && a.Root == b.Root
+}
+
+// sameWorkspace says whether a and b are one file system: one project,
+// on one machine and one instance where both name them. A header from
+// before dax recorded host and instance names neither, and compares as
+// one project.
+func sameWorkspace(a, b workspace.Descriptor) bool {
+	same := func(x, y string) bool { return x == "" || y == "" || x == y }
+	return sameProject(a, b) && same(a.Host, b.Host) && same(a.Instance, b.Instance)
+}
+
+// placed names a workspace for the resume warning: where, and its
+// host and instance when it names them, so a move between machines on
+// one path reads as one.
+func placed(d workspace.Descriptor) string {
+	w := where(d)
+	if d.Host != "" {
+		w += " on " + d.Host
+	}
+	if d.Instance != "" {
+		w += " (instance " + d.Instance + ")"
+	}
+	return w
 }
 
 // where names a workspace for a line: this machine's as its root
@@ -407,7 +436,7 @@ func listIn(ctx context.Context, store agentsession.Store, f agentsession.ListFi
 	}
 	var out []agentsession.Summary
 	for _, s := range all {
-		if of(s.Header) == *in {
+		if sameProject(of(s.Header), *in) {
 			out = append(out, s)
 		}
 	}

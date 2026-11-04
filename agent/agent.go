@@ -1095,7 +1095,12 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// only its cwd, which is compared with the root as before.
 	now := s.x.Descriptor()
 	if was, ok := recordedIn(sess.Header()); ok && !sameWorkspace(was, now) {
-		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", where(was), where(now))
+		// Named by host and instance only when they are the change.
+		name := where
+		if sameProject(was, now) {
+			name = placed
+		}
+		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", name(was), name(now))
 	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
 	}

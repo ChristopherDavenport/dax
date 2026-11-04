@@ -119,9 +119,12 @@ versions may break flags and the config file.
 - Added: `/mcp` marks a server a workspace offers `holds secrets there`
   when the workspace says its offering gives it secrets
   (agentworkspace's `Server.Secrets`); `agent.MCPServerInfo.HoldsSecrets`.
-- Fixed: resuming a session says it moved only when its workspace's
-  kind, ref or root differ, not when the host the workspace reports
-  does.
+- Changed: the session's header records its workspace's host and
+  instance (`dax.workspace`), and resuming says the session moved when
+  its machine or container instance differs, though the path is the
+  same (`… on <host>`); a header from before compares by kind, ref and
+  root. `-list`, memory and the MCP trust still go by kind, ref and
+  root.
 - Changed: the release workflow's binaries job checks out without
   keeping the token in `.git/config`.
 
