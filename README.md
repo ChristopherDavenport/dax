@@ -446,6 +446,8 @@ no other account could have written it.
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
+| `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
+| `-result PATH` | with `-p`, write how the run ended to `PATH` as JSON and exit 0 however it ended (see [Exit status](#exit-status)) |
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
@@ -1557,6 +1559,39 @@ or `n` on the next line, and what follows the first word is what you say
 with the answer, which the model is told: `y keep it short` allows with a
 note, `n not that file` refuses with a reason. Any other line refuses,
 the whole line its reason. `-p` reads its answers the same way.
+
+## Exit status
+
+`dax -p` exits with how its run ended, so a script or a harness reading
+`$?` knows what happened:
+
+| status | the run |
+|---|---|
+| 0 | is done |
+| 1 | failed, or dax could not start it (the error is on standard error) |
+| 3 | stopped: the loop ended it (the end line says why, `[stopped: max_turns]`) |
+| 4 | requires input: a call waits on an answer nobody gave |
+| 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
+
+A harness that counts any status but 0 as its own failure gives
+`-result PATH`: dax then writes the run's end to `PATH`, private to you,
+and exits 0 for any end the run reached (1 still for an error):
+
+```json
+{
+  "session": "01a112e5-b4df-7081-bd11-baac746b29cc",
+  "reason": "aborted",
+  "error": "timeout: -timeout 12m0s reached",
+  "pending": [],
+  "exit": 5,
+  "usage": { "model_calls": 147, "input_tokens": 5390000, "cached_tokens": 0, "output_tokens": 41200 }
+}
+```
+
+`reason`, `cause`, `error` and `pending` (each call's `call_id`, `name`,
+`arguments` and `why`) are the run's end as the session records it,
+`exit` the status dax would have exited with, and `usage` the main
+agent's model calls and tokens (a sub-agent's are its own session's).
 
 ## Sessions
 

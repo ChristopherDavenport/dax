@@ -40,6 +40,14 @@ versions may break flags and the config file.
   searches to the working directory and named paths, never from `/` or
   `$HOME`, and to run the checks the project's instructions name after
   a change and say which ran and how they ended (#11).
+- Added: `dax -p` exits with how its run ended: 0 done, 1 an error, 3
+  stopped, 4 input required, 5 aborted (it exited 0 for all but an
+  error). `-timeout D` aborts the run after `D` with the timeout as its
+  cause, on the record and in the end line, not "context canceled".
+  `-result PATH` writes the run's end (reason, cause, error, pending
+  calls, the status it would have exited with, the main agent's usage)
+  as JSON and exits 0 for any end the run reached, for a harness that
+  counts any other status as its own failure (#138).
 
 ## v0.0.32 - 2026-10-26
 

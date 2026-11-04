@@ -36,6 +36,7 @@ package dax
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -93,13 +94,20 @@ type program struct {
 
 // Main runs dax with args, the command line after the program's name,
 // and returns the process's exit status: 0, or 1 after printing the
-// error.
+// error; after -p, 3 for a run that stopped, 4 for one that requires
+// input and 5 for one aborted (README, "Exit status").
 func Main(ctx context.Context, args []string, opts ...Option) int {
 	p := program{name: "dax", version: buildVersion(agent.Version)}
 	for _, o := range opts {
 		o(&p)
 	}
 	if err := run(ctx, args, p); err != nil {
+		// A -p run that ended other than done has said how; its status
+		// says it again for the caller.
+		var ended *runEnded
+		if errors.As(err, &ended) {
+			return ended.status
+		}
 		fmt.Fprintf(os.Stderr, "%s: %v\n", p.name, err)
 		if h := hint(err); h != "" {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, h)

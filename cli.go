@@ -108,6 +108,8 @@ func run(ctx context.Context, args []string, p program) error {
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
+	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
+	resultPath := fs.String("result", "", "with -p, write how the run ended (reason, cause, error, pending calls, usage) to this file as JSON, and exit 0 however it ended")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
 	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's or served workspace's, and exit")
@@ -158,6 +160,14 @@ func run(ctx context.Context, args []string, p program) error {
 		if given[name] && !serving {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
+	}
+	for _, name := range []string{"timeout", "result"} {
+		if given[name] && *once == "" {
+			return fmt.Errorf("-%s goes with -p", name)
+		}
+	}
+	if *timeout < 0 {
+		return errors.New("-timeout: want a duration of 0 or more")
 	}
 	if serving && (*once != "" || *frontName != "") {
 		return errors.New("dax serve has no front of its own: drop -p and -front, and attach with dax attach")
@@ -567,7 +577,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
 	}
 	var f front

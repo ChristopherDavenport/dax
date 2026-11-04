@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/toolview"
@@ -71,6 +72,12 @@ type frontInfo struct {
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string
+	// Timeout (-timeout) is how long -p's run may take before it is
+	// aborted, its cause the timeout; zero is no limit.
+	Timeout time.Duration
+	// Result (-result) is where -p writes how its run ended, as JSON;
+	// with it, a run that ended exits 0 however it ended.
+	Result string
 	// Policy is a line saying what policy is in force.
 	Policy string
 	// Cost prices the terminal client's session pane and status line; nil
@@ -160,6 +167,15 @@ func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
 
 func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
+	var usage runUsage
+	defer t.Subscribe(usage.count)()
+	if f.info.Timeout > 0 {
+		// A deadline is a cancellation: the run ends aborted, and its
+		// cause, on the record and in the end line, is the timeout.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, f.info.Timeout, &timeoutError{f.info.Timeout})
+		defer cancel()
+	}
 	abortOnInterrupt(t)
 	showAssembly(ctl.Info())
 	showPending(t, "resumed")
@@ -199,10 +215,18 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		},
 	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
+	if end != nil && f.info.Result != "" {
+		if werr := writeResult(f.info.Result, sessionIDOf(t), end, usage.total()); werr != nil {
+			return errors.Join(err, werr)
+		}
+	}
 	if err != nil {
 		return err
 	}
 	ended(t, end)
+	if status := exitStatus(end); status != 0 && f.info.Result == "" {
+		return &runEnded{status: status, reason: end.Reason}
+	}
 	return nil
 }
 
@@ -570,6 +594,9 @@ func ended(t agentturn.Control, end *agentturn.RunEnd) {
 		}
 	case agentturn.ReasonStopped:
 		fmt.Printf("[stopped: %s]\n", end.Cause)
+	}
+	if te := (*timeoutError)(nil); end.Reason == agentturn.ReasonAborted && errors.As(end.Err, &te) {
+		fmt.Printf("[%v]\n", te)
 	}
 	if h := hint(end.Err); end.Err != nil && h != "" {
 		fmt.Printf("[%s]\n", h)
