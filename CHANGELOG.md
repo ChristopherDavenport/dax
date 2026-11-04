@@ -48,6 +48,10 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: `-p` tells the model nobody will reply to its last message, so
+  it finishes the task rather than ending on a question, in an
+  instructions part of its own (`one-shot`, source `dax`) that the
+  record keeps; `agent.Options.OneShot` and `agent.PartOneShot` (#137).
 - Changed: an allow rule for one MCP server's every tool,
   `"allow": ["mcp__gh__*"]`, runs them unasked, a tool the server adds
   later included (agentpolicy's server glob); a project's deny of one

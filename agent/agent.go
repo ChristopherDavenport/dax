@@ -203,6 +203,10 @@ type Options struct {
 	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
 	// AgentsMD (dax -bare); the repository's files are still read.
 	NoUserAgentsMD bool
+	// OneShot is a run nobody replies to (-p): the model is told so in a
+	// part of its own (PartOneShot), recorded with the instructions, so
+	// it finishes the task rather than ending on a question.
+	OneShot bool
 	// Bare names the sources a bare run (dax -bare) left out, which the
 	// header records as dax.profile so two sessions read as the
 	// configurations they were; nil for a run that is not bare.
@@ -496,6 +500,15 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 	return cfg
 }
 
+// PartOneShot is the id of the instructions part a one-shot run
+// (Options.OneShot) adds.
+const PartOneShot = "one-shot"
+
+// oneShotLine is what a one-shot run's model is told.
+const oneShotLine = "This is a one-shot run: nobody will reply to your last message, and the run ends with it. " +
+	"Act on your best judgement and finish the task rather than ending with a question or a list of options; " +
+	"say what you chose and why in your final report."
+
 // answerOf is the output the model is given for an unanswered call: a
 // call whose tool returned before a stop is owed what it returned
 // (#162), and every other call what is known of it.
@@ -724,6 +737,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	)
 	if o.MaxTurns > 0 {
 		kopts = append(kopts, agentkit.WithMaxTurns(o.MaxTurns))
+	}
+	if o.OneShot {
+		kopts = append(kopts, agentkit.WithPart(PartOneShot, "dax", func(context.Context) (agentkit.PartRender, error) {
+			return agentkit.PartRender{Text: oneShotLine}, nil
+		}))
 	}
 	if m != nil {
 		kopts = append(kopts, agentkit.WithBeforeTurn(m.beforeTurn))

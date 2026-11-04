@@ -1638,6 +1638,12 @@ not that you denied it.
 | 4 | requires input: a call waits on an answer nobody gave |
 | 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
 
+`-p` tells the model, in a part of the instructions of its own
+(`one-shot`, source `dax`, kept on the record), that nobody will reply
+to its last message, so it acts on its best judgement and finishes the
+task rather than ending on a question or a list of options; the REPL
+and the terminal client do not.
+
 Before the run starts, `-p` says on standard error which session it
 records, `session: <id>`, so a harness whose runs share a store finds
 each one's own, even of a run it killed.
