@@ -50,6 +50,14 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: an `AGENTS.md` below the directory the session started in, a
+  package's in a monorepo, reaches the model the turn after a file
+  tool (`read`, `write`, `edit`, `ls`, `glob`, `grep`) touches a path
+  in or below its directory, once, as a message the record holds as
+  composed from that file (`instructions_part`, source `agentsmd`),
+  never as your words; the system prompt and its cache stay as they
+  are. A `bash` command's paths do not count yet, and the sub-agents
+  are not given them (#170).
 - Changed: what one tool result sends the model is capped and cut at
   both ends. A `bash` result over `bash_max_output` (default 30000
   bytes), and a result of a tool that is not dax's own (an MCP

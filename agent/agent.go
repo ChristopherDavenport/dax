@@ -740,6 +740,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
 		agentsText = agentsmd.Render(res.Files)
+		// The files below the start directory reach the model as the
+		// work reaches their directories (nestedmd.go).
+		var start []string
+		for _, f := range res.Files {
+			start = append(start, f.Path)
+		}
+		kopts = append(kopts, agentkit.WithBeforeTurn(nestedAgentsMD(s.files, mdOpts, start)))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
 	// Every tool's result is cut to its cap, an MCP server's and a
