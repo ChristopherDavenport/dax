@@ -599,6 +599,11 @@ func run(ctx context.Context, args []string, p program) error {
 	if cost != nil {
 		opts.Price = agent.Price(cost)
 	}
+	if hasExtension(exts, agents.Name) && m.SubagentName != "" && m.SubagentName != m.Name {
+		// The sub-agents' calls count toward -max-cost too, so their
+		// model needs a price before anything spends.
+		opts.PricedModels = []string{m.SubagentName}
+	}
 	if *trajectory != "" && *root == "" {
 		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
 	}

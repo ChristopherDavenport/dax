@@ -137,6 +137,11 @@ versions may break flags and the config file.
   ahead (a steer that crossed a sub-agent's question, say) goes on as a
   message and the question is shown again. A steer starting "yes" could
   approve a call nobody had seen.
+- Fixed: under `-max-cost` the sub-agents' model must be priced at
+  start too; a server's compaction counts toward `-max-tokens` and
+  `-max-cost`; and a resumed session's limits go on from what its record
+  (its sub-agents' sessions included) says it spent, not from 0 (#139).
+- Added: `agent.Options.PricedModels`.
 
 ## v0.0.32 - 2026-10-26
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
@@ -42,8 +43,13 @@ func newMeter(o Options) (*meter, error) {
 		if o.Price == nil {
 			return nil, fmt.Errorf("a cost limit of $%.2f and no price for any model: give a pricing file", o.MaxCost)
 		}
-		if _, ok := o.Price(o.Model, openresponses.Usage{}); !ok {
-			return nil, fmt.Errorf("a cost limit of $%.2f and no price for model %s: add it to the pricing file", o.MaxCost, o.Model)
+		for _, model := range append([]string{o.Model}, o.PricedModels...) {
+			if model == "" {
+				continue
+			}
+			if _, ok := o.Price(model, openresponses.Usage{}); !ok {
+				return nil, fmt.Errorf("a cost limit of $%.2f and no price for model %s: add it to the pricing file", o.MaxCost, model)
+			}
 		}
 	}
 	return &meter{maxTokens: o.MaxTokens, maxCost: o.MaxCost, price: o.Price}, nil
@@ -129,4 +135,48 @@ func (s metered) CreateStream(ctx context.Context, req openresponses.Request, si
 type meteredCompactor struct {
 	metered
 	compact.Compactor
+}
+
+// Compact is the server's compaction, metered and refused once a limit
+// is reached, as a model call is.
+func (s meteredCompactor) Compact(ctx context.Context, req openresponses.CompactRequest) (*openresponses.CompactResponse, error) {
+	if err := s.m.reached(); err != nil {
+		return nil, err
+	}
+	res, err := s.Compactor.Compact(ctx, req)
+	if res != nil {
+		s.m.add(req.Model, res.Usage)
+	}
+	return res, err
+}
+
+// seed counts what the session id already spent, as its record holds
+// it, its sub-agents' sessions included, so a resumed session's limits
+// go on from there. A record that cannot be read counts nothing more.
+func (m *meter) seed(ctx context.Context, r agentsession.Reader, id, model string) {
+	seen := map[string]bool{}
+	var walk func(id string)
+	walk = func(id string) {
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		rec, err := r.Read(ctx, id)
+		if err != nil {
+			return
+		}
+		for _, e := range rec.Entries() {
+			switch e := e.(type) {
+			case *agentsession.ResponseEntry:
+				m.add(e.Model, e.Usage)
+			case *agentsession.CompactionEntry:
+				m.add(model, e.Usage)
+			case *agentsession.LinkEntry:
+				if e.Rel == agentsession.RelSubsession {
+					walk(e.Session)
+				}
+			}
+		}
+	}
+	walk(id)
 }

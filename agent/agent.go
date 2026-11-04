@@ -107,6 +107,10 @@ type Options struct {
 	MaxTokens int
 	MaxCost   float64
 	Price     Price
+	// PricedModels are the other models the session's calls go to (the
+	// sub-agents'), each of which Price must know under MaxCost, checked
+	// at start as Model is.
+	PricedModels []string
 	// Fit is the reasoning effort to ask a model for in place of the
 	// one Think implies, from what its vendor says it takes; nil asks
 	// as configured. It is applied where each configuration is built,
@@ -595,6 +599,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	m, err := newMeter(o)
 	if err != nil {
 		return nil, err
+	}
+	if r, ok := store.(agentsession.Reader); ok && m != nil && resume != "" {
+		// A resumed session goes on from what its record says it spent.
+		m.seed(ctx, r, resume, o.Model)
 	}
 	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
 	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}

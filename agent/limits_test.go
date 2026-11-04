@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -132,4 +133,71 @@ func TestACostLimitNeedsAPrice(t *testing.T) {
 	if _, err := New(context.Background(), o); err == nil || !strings.Contains(err.Error(), "no price") {
 		t.Errorf("New with no prices: %v, want a refusal", err)
 	}
+}
+
+// Under a cost limit every model the session calls must be priced at
+// start: an unpriced sub-agent model is refused before it spends (#139).
+func TestACostLimitPricesTheSubagentModelAtStart(t *testing.T) {
+	o := options(t, &thrashing{})
+	o.MaxCost = 1
+	o.Price = func(model string, _ openresponses.Usage) (float64, bool) { return 0, model == "echo" }
+	o.PricedModels = []string{"cheap-sub"}
+	if _, err := New(context.Background(), o); err == nil || !strings.Contains(err.Error(), "cheap-sub") {
+		t.Errorf("New: %v, want a refusal naming the unpriced sub-agent model", err)
+	}
+}
+
+// A resumed session's limit counts what the record says it spent
+// already, its sub-agents' sessions included: -resume does not start
+// the meter again at 0 (#139).
+func TestAResumedSessionCountsWhatItSpent(t *testing.T) {
+	ctx := context.Background()
+	m := &thrashing{perCall: 1000}
+	o := options(t, m)
+	o.MaxTokens = 2500
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	s.Close()
+	calls := m.calls.Load()
+	if calls != 3 {
+		t.Fatalf("%d calls before the stop, want 3", calls)
+	}
+	r, err := Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	end, err := promptOn(ctx, r, "again", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.Reason != agentturn.ReasonStopped || m.calls.Load() != calls {
+		t.Errorf("the resumed session ended %s after %d more call(s), want stopped before any", end.Reason, m.calls.Load()-calls)
+	}
+}
+
+// A server compaction's usage counts toward the limit (#139).
+func TestAServerCompactionIsMetered(t *testing.T) {
+	mt := &meter{maxTokens: 100}
+	c := mt.wrap(&compactingEcho{}).(compact.Compactor)
+	if _, err := c.Compact(context.Background(), openresponses.CompactRequest{Model: "echo"}); err != nil {
+		t.Fatal(err)
+	}
+	if mt.reached() == nil {
+		t.Error("a server compaction's 150 tokens were not counted")
+	}
+}
+
+// compactingEcho is a streamer with a compaction endpoint that reports
+// 150 tokens.
+type compactingEcho struct{ thrashing }
+
+func (*compactingEcho) Compact(context.Context, openresponses.CompactRequest) (*openresponses.CompactResponse, error) {
+	return &openresponses.CompactResponse{Usage: &openresponses.Usage{InputTokens: 140, OutputTokens: 10}}, nil
 }
