@@ -335,15 +335,15 @@ func run(ctx context.Context, args []string, p program) error {
 	// With an executor the project is where it runs, and its file is
 	// read through it once it is connected (executorSettings); with a
 	// served workspace, through that once it is dialed.
-	user, err := loadUser(*cfgPath)
-	if err != nil {
-		return err
-	}
 	var leftOut []string
 	if *bare {
 		leftOut = bareLeftOut(given)
-		applyBare(leftOut, &user, &flags, skillsFlag)
 	}
+	user, err := loadUserFor(*cfgPath, leftOut)
+	if err != nil {
+		return err
+	}
+	applyBare(leftOut, &user, &flags, skillsFlag)
 	proj, err := workspace.NewLocal(dir, nil)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
@@ -534,6 +534,7 @@ func run(ctx context.Context, args []string, p program) error {
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
 		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
+		NoMCPTrustFile: leftOut != nil,
 		Bare:           leftOut,
 		AgentsMDGlobal: settings.AgentsMDGlobal,
 		PassEnv:        settings.PassEnv,
@@ -744,6 +745,15 @@ func bareLeftOut(given map[string]bool) []string {
 		}
 	}
 	return out
+}
+
+// loadUserFor is the user's layer, or none, unread, when a bare run
+// leaves the config out: a broken file does not fail it.
+func loadUserFor(userPath string, leftOut []string) (config.Layer, error) {
+	if slices.Contains(leftOut, "config") {
+		return config.Layer{}, nil
+	}
+	return loadUser(userPath)
 }
 
 // applyBare leaves out what leftOut names: the user's layer, the

@@ -244,6 +244,9 @@ type Options struct {
 	// MCPTrustFile is where the trusted sets are kept; empty is
 	// DefaultMCPTrustFile under DefaultUserDir.
 	MCPTrustFile string
+	// NoMCPTrustFile neither reads nor writes the trust file (dax -bare):
+	// a project's servers start only with TrustMCP, for this session.
+	NoMCPTrustFile bool
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
 	// With an Executor, its tools take ExecutorOptions.MaxReadBytes,
@@ -775,12 +778,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
-	trustFile := o.MCPTrustFile
-	if trustFile == "" {
-		trustFile = DefaultMCPTrustFile(DefaultUserDir())
-	}
 	_, starts := ws.(workspace.Starter)
-	servers := trusted(o.MCP, ws.Descriptor(), !starts, trustFile, o.TrustMCP)
+	servers := trusted(o.MCP, ws.Descriptor(), !starts, o.trustFile(), o.TrustMCP)
 	// Two servers whose tools would be named alike are refused: a rule
 	// for one's tools would be the other's (the -mcp flag's "cli"
 	// beside a configured "cli" among them).

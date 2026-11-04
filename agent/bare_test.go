@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses/echo"
 )
 
@@ -51,5 +53,42 @@ func TestABareSessionLeavesTheUsersAgentsMDOutAndSaysSo(t *testing.T) {
 	}
 	if h, _ := headerOf(t, o.Root, s); h.Extra[headerProfile] != nil {
 		t.Errorf("a session that is not bare records %s", h.Extra[headerProfile])
+	}
+}
+
+// A bare run neither reads nor writes the MCP trust file in ~/.dax: a
+// project's servers start only with -trust-mcp, for that session alone,
+// whatever the file trusts (#141).
+func TestABareSessionIgnoresTheMCPTrustFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "mcp-trust.json")
+	d := workspace.Descriptor{Kind: "local", Root: "/p"}
+	servers := []MCPServer{{Name: "mine", Command: "a"}, {Name: "theirs", Command: "b", Project: true}}
+	key := recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root}
+	if err := recordTrust(file, key, serverSetHash(servers[1:], false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := trusted(servers, d, false, file, false); len(got) != 2 {
+		t.Fatalf("the trust file does not trust the set: %v", got)
+	}
+	o := Options{MCPTrustFile: file, NoMCPTrustFile: true}
+	if f := o.trustFile(); f != "" {
+		t.Fatalf("a bare session's trust file is %q", f)
+	}
+	var warned strings.Builder
+	restore := CaptureWarnings(&warned)
+	got := trusted(servers, d, false, o.trustFile(), false)
+	restore()
+	if len(got) != 1 || got[0].Name != "mine" {
+		t.Errorf("a bare session started %v, want yours alone", got)
+	}
+	if strings.Contains(warned.String(), "trust file") {
+		t.Errorf("the trust file was read: %s", warned.String())
+	}
+	before, _ := os.ReadFile(file)
+	if got := trusted(servers, d, false, o.trustFile(), true); len(got) != 2 {
+		t.Errorf("-trust-mcp under -bare started %v", got)
+	}
+	if after, _ := os.ReadFile(file); string(after) != string(before) {
+		t.Error("-trust-mcp under -bare wrote the trust file")
 	}
 }

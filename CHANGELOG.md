@@ -73,8 +73,12 @@ versions may break flags and the config file.
   memory, so a run does not depend on your home directory; the
   repository's `AGENTS.md` files and config stay. `-config`,
   `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it
-  brings that one source back. The header records the run as
-  `dax.profile`, `{"bare": true, "left_out": [...]}` (#141).
+  brings that one source back. Your config is not parsed unless
+  `-config` brings it back, and `~/.dax/mcp-trust.json` is neither
+  read nor written (a project's servers start only with `-trust-mcp`).
+  The header records the run as `dax.profile`,
+  `{"bare": true, "left_out": [...]}` (#141).
+- Added: `agent.Options.NoMCPTrustFile`.
 - Added: `agent.Options.NoUserAgentsMD` and `agent.Options.Bare`.
 - Changed: a person's refusal tells the model "Do not get the same
   result another way (another tool, a script, another path); if it is

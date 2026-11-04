@@ -637,3 +637,19 @@ func TestBareLeavesOutTheUsersSources(t *testing.T) {
 		})
 	}
 }
+
+// -bare does not parse the user's config when it leaves it out: a
+// broken file does not fail a bare run (#141).
+func TestBareDoesNotReadTheUsersConfig(t *testing.T) {
+	h := home(t)
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider": `)
+	if _, err := loadUserFor("", bareLeftOut(map[string]bool{})); err != nil {
+		t.Errorf("a bare run read the broken config: %v", err)
+	}
+	if _, err := loadUserFor("", bareLeftOut(map[string]bool{"config": true})); err == nil {
+		t.Error("-bare -config did not read the config")
+	}
+	if _, err := loadUserFor("", nil); err == nil {
+		t.Error("a run that is not bare did not read the config")
+	}
+}
