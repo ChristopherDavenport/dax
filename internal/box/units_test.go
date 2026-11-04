@@ -453,8 +453,10 @@ func TestStartProc(t *testing.T) {
 	if status, _ := p.Wait(); status != 7 {
 		t.Errorf("status after TERM = %d, want 7", status)
 	}
-	if _, err := p.Signal("HUP"); err == nil {
-		t.Error("HUP was sent")
+	// A signal the wire has no name for is unsupported, as on every
+	// backend (agentworkspace RFC 0001 §7).
+	if _, err := p.Signal("BOGUS"); !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Signal(BOGUS) = %v, want unsupported", err)
 	}
 
 	// Close: input, then TERM, then KILL.

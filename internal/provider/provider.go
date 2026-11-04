@@ -285,7 +285,17 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 				return transport(spec, keys, bearer, next)
 			}))
 		}
-		m.Streamer = openresponses.NewClient(base, opts...).AsAdapter()
+		// A provider's own API refuses an item under another
+		// provider's slug, such as Claude's redacted thinking kept
+		// from before /model moved the session, so the client leaves
+		// every such item out (openresponses extensions.md section
+		// 1.6). An openresponses server may be a proxy over one of
+		// those adapters that needs its items back, so it gets them.
+		var aopts []openresponses.AdapterOption
+		if spec.Provider != "openresponses" {
+			aopts = append(aopts, openresponses.WithProviderSlugs())
+		}
+		m.Streamer = openresponses.NewClient(base, opts...).AsAdapter(aopts...)
 		m.Endpoint = base
 		switch spec.Provider {
 		case "ollama":

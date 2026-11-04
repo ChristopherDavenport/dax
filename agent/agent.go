@@ -62,11 +62,12 @@ const Version = "0.1.0-dev"
 // a call found unanswered in a transcript the record says nothing
 // about is one nobody can account for.
 const (
-	abortedOutput  = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput   = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
-	unknownOutput  = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
-	neverRanOutput = "Error: this call was cut off before it reached its tool; it did not run."
-	heldOutput     = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
+	abortedOutput    = "Error: this call was cut off while it was running; it may have taken effect."
+	deniedOutput     = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
+	unknownOutput    = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
+	neverRanOutput   = "Error: this call was cut off before it reached its tool; it did not run."
+	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. Do not get the same result another way; if it is still needed, say so."
+	heldOutput       = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
 )
 
 // Options configure a session.
@@ -316,6 +317,9 @@ type MCPServer struct {
 	offeredBy workspace.ServerProvider
 	offeredAs Placement
 	offeredAt string
+	// offeredSecrets is the offering's mark that it gives the server
+	// secrets there, for the listing.
+	offeredSecrets bool
 	// SecretEnv names variables a command's server is given from this
 	// process's environment, which every other child of the session
 	// loses (Secrets): it is started as a workspace's offered server is
@@ -373,10 +377,12 @@ type MCPServerInfo struct {
 	Description string
 	// Secrets says this session gives it secrets (MCPServer.SecretEnv)
 	// and starts it on this machine, redacting them from what it
-	// writes. A server a workspace offers is never marked, even one
-	// that holds secrets there: agentworkspace does not tell a client
-	// that an offered server does (agentworkspace#23).
+	// writes.
 	Secrets bool
+	// HoldsSecrets says the workspace that offers it gives it secrets
+	// there (agentworkspace's Server.Secrets): it informs the listing
+	// alone, since a server not marked may still hold one.
+	HoldsSecrets bool
 	// Added is the label RemoveMCP takes, for a server AddMCP started;
 	// empty for one the session opened with.
 	Added string
@@ -488,6 +494,18 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 		return inner(ctx, info)
 	}
 	return cfg
+}
+
+// answerOf is the output the model is given for an unanswered call: a
+// call whose tool returned before a stop is owed what it returned
+// (#162), and every other call what is known of it.
+func answerOf(p agentturn.PendingCall) *openresponses.FunctionCallOutput {
+	if p.Reason == agentturn.PendingReturned && p.Ran != nil {
+		out := *p.Ran
+		out.CallID = p.Call.CallID
+		return &out
+	}
+	return openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))
 }
 
 // output is what the model is told about an unanswered call.
@@ -894,7 +912,15 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		engine.Store(e)
 	}
-	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), kit.AgentOptions()...)
+	// The session as the store holds it now, not New's reading: an
+	// agent seeded from an older reading would hold an item the record's
+	// omit leaves out since, a quarantine's, and send it again.
+	seed, err := kit.ReadAgentOptions(ctx)
+	if err != nil {
+		kit.Close()
+		return nil, err
+	}
+	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), seed...)
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
@@ -1026,7 +1052,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// the same path. One recorded before dax wrote its workspace says
 	// only its cwd, which is compared with the root as before.
 	now := s.x.Descriptor()
-	if was, ok := recordedIn(sess.Header()); ok && was != now {
+	if was, ok := recordedIn(sess.Header()); ok && !sameWorkspace(was, now) {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", where(was), where(now))
 	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
@@ -1416,7 +1442,7 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string,
 		if slices.ContainsFunc(out, func(m MCPServer) bool { return m.Name == u.Name }) {
 			return nil, fmt.Errorf("%s offers two MCP servers called %s", by, u.Name)
 		}
-		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp, offeredAs: placed, offeredAt: at})
+		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp, offeredAs: placed, offeredAt: at, offeredSecrets: u.Secrets})
 	}
 	return out, nil
 }
@@ -1529,7 +1555,7 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 // machine, as an executor that cannot start one fails it. Your own
 // servers keep the rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
-	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0}
+	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0, HoldsSecrets: m.offeredSecrets}
 	placed := func(p Placement, at string, dial mcpDial, err error) (mcpDial, MCPServerInfo, error) {
 		info.Placement, info.Where = p, at
 		return dial, info, err

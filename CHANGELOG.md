@@ -7,6 +7,81 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Dependencies, in one step, since agentsession v0.0.37 writes a format
+  older readers refuse: agentkit v0.0.16, up from v0.0.15; agentturn,
+  agentturn/session, front/a2a and tools/a2a v0.0.37, up from v0.0.34;
+  agentsession v0.0.37, up from v0.0.30; agentconsole v0.0.15, up from
+  v0.0.14; agentpolicy v0.0.19, up from v0.0.17; agentmemory v0.0.12,
+  up from v0.0.10; agentsmd v0.0.4, up from v0.0.3; agentworkspace,
+  mcpworkspace and tunnel v0.0.11, up from v0.0.9; agenttool, mcpclient
+  and mcpserver v0.0.29, up from v0.0.26; openresponses and its
+  anthropic and gemini providers v0.0.18, up from v0.0.16;
+  agentredact/secrets v0.0.3, up from v0.0.1; agenteval v0.0.12, up
+  from v0.0.11. What changes for you:
+  - Sessions are written as `agentsession/0.20`, and a session dax
+    appends to is raised to it, after which a reader built on an older
+    agentsession (an older dax, agenteval before v0.0.12, agentconsole
+    before v0.0.15) refuses it. Upgrade every reader of a store first.
+  - Each MCP server's instructions are sent to the model, as a part of
+    their own labelled `untrusted`, while the session offers that
+    server's tools (agentkit v0.0.16). dax keeps that default: it
+    names no server trusted (`WithTrustedMCPInstructions`) and does not
+    leave them out (`WithoutMCPInstructions`), so the model reads what
+    a server says of its own tools, marked as text a third party wrote.
+    The request, and its hash, changes for a session with such a server.
+  - `explore` and `task` decide under a grant scope of their own: an
+    "allow for this session" given in the main conversation no longer
+    lets a sub-agent run the tool unasked (agentkit v0.0.16, #109).
+  - Memory: a link inside the memory directory is not followed, so a
+    committed `project/x.md` pointing at `~/.ssh/id_ed25519` is not read
+    into the block; a scope directory that is a link is an error. The
+    block's entries are labelled `untrusted` on the record, `memory_search`
+    reads untrusted text by its flow, and a heading or a `<` that starts
+    a line of an entry is escaped, so the block's bytes, and the prompt
+    cache's prefix, change once (agentmemory v0.0.12).
+  - `AGENTS.md` is matched byte for byte: on macOS an `agents.md` is no
+    longer read for it (agentsmd v0.0.4).
+  - A served workspace dialled with a token that lacks `read` gives no
+    root (`""`) rather than its last element (agentworkspace v0.0.11),
+    and a box unit's process takes every signal the wire names (`HUP`,
+    `USR1`, `WINCH` and the rest), refusing another as unsupported.
+  - The terminal client's permission and question panels take no
+    answer for half a second after they open, so a `y` typed in the
+    middle of a line is not an approval (agentconsole v0.0.15).
+- Fixed: a call whose tool returned while the rest of its batch ran,
+  when dax stopped before the batch ended, is answered on the next
+  prompt with what it returned, and not run again, where the model was
+  told "whether it ran is not recorded" (#162).
+- Fixed: Ollama, OpenAI and OpenRouter are no longer sent an item
+  another provider's adapter made, such as Claude's redacted thinking
+  kept from before `/model` moved the session, which they refuse; an
+  `openresponses` server, which may be a proxy over that adapter, still
+  gets every item (openresponses `WithProviderSlugs`).
+- Fixed: a call `-p` asked about when its input had ended, or when
+  `-timeout` ended the wait, was recorded as refused by you; it is
+  refused by dax's rule, the record naming `policy` as the decider, and
+  the model is told nobody was there to approve it, not that you
+  denied it. A question declined or cancelled for the same reason names
+  `policy` too.
+- Added: `agent.Rules.PermitBy`, who decided the permit `Permit` gave
+  (`agentpolicy.ByHuman`, `ByPolicy`); a rule's refusal tells the model
+  nobody answered.
+- Fixed (security): the session's agent is seeded from the session as
+  the store holds it when the agent is built (agentkit's
+  `ReadAgentOptions`), so an item a quarantine took out of the
+  conversation is not sent again.
+- Added: the REPL and `-p` say when a guard refused a model call
+  (`[model call refused: …]`, its tokens counted) and when an item was
+  quarantined between runs.
+- Added: `/mcp` marks a server a workspace offers `holds secrets there`
+  when the workspace says its offering gives it secrets
+  (agentworkspace's `Server.Secrets`); `agent.MCPServerInfo.HoldsSecrets`.
+- Fixed: resuming a session says it moved only when its workspace's
+  kind, ref or root differ, not when the host the workspace reports
+  does.
+- Changed: the release workflow's binaries job checks out without
+  keeping the token in `.git/config`.
+
 - Dependencies: agenttool, mcpclient and mcpserver v0.0.26, up from
   v0.0.25 (a call to an MCP server cut because its connection closed
   returns only once the server's session has ended, waiting at most

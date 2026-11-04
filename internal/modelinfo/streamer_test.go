@@ -3,6 +3,7 @@ package modelinfo
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -112,10 +113,10 @@ func TestRequestsAreSentAsTheyAre(t *testing.T) {
 	send(t, s, "never", low)
 	send(t, s, "never", low)
 	send(t, s, "always", off)
-	if got := inner.last().Reasoning; got != off {
+	if got := inner.last().Reasoning; !reflect.DeepEqual(got, off) {
 		t.Errorf("changed: %+v", got)
 	}
-	if got := inner.reqs[0].Reasoning; got != low {
+	if got := inner.reqs[0].Reasoning; !reflect.DeepEqual(got, low) {
 		t.Errorf("changed: %+v", got)
 	}
 	if len(notes) != 2 || !strings.Contains(notes[0], "never: a request asks for reasoning effort low, which ollama says is not accepted; sent as asked") {
@@ -160,7 +161,7 @@ func TestOverSharesAnswersAndReports(t *testing.T) {
 	if len(main.reqs) != 1 || len(sub.reqs) != 2 {
 		t.Fatalf("main got %d requests, sub %d; want 1 and 2", len(main.reqs), len(sub.reqs))
 	}
-	if got := sub.last().Reasoning; got != off {
+	if got := sub.last().Reasoning; !reflect.DeepEqual(got, off) {
 		t.Errorf("changed: %+v", got)
 	}
 	if d.calls != 2 {
@@ -205,7 +206,7 @@ func TestNoDescriberSendsAsAsked(t *testing.T) {
 	inner := &recorder{}
 	s := Wrap(inner, nil, nil)
 	send(t, s, "anything", off)
-	if got := inner.last().Reasoning; got != off {
+	if got := inner.last().Reasoning; !reflect.DeepEqual(got, off) {
 		t.Errorf("%+v", got)
 	}
 	if info, err := Of(s).Describe(context.Background(), "anything"); err != nil || info.Known() {

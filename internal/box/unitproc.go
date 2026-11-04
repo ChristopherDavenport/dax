@@ -28,7 +28,10 @@ type Proc interface {
 	Stdout() io.Reader
 	// Stderr is its standard error, nil when it was not asked for.
 	Stderr() io.Reader
-	// Signal sends INT, TERM or KILL; done says it had exited already.
+	// Signal sends one of the wire's signals (wire.SignalOf: HUP, INT,
+	// TERM, KILL and the rest agentworkspace RFC 0001 §7 names); done
+	// says it had exited already. Any other name is
+	// errors.ErrUnsupported.
 	Signal(name string) (done bool, err error)
 	// Wait waits for it to exit: its status, and an error when it could
 	// not say one.
@@ -199,7 +202,7 @@ func (p *unitProc) gone() bool {
 func (p *unitProc) Signal(name string) (bool, error) {
 	// The names are the wire's, which kill(1) takes as they are.
 	if _, ok := wire.SignalOf(name); !ok {
-		return false, fmt.Errorf("signal %q: want INT, TERM or KILL", name)
+		return false, fmt.Errorf("signal %q: %w", name, errors.ErrUnsupported)
 	}
 	if p.gone() || p.pid == 0 {
 		return true, nil

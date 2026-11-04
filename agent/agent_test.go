@@ -210,7 +210,9 @@ func TestTheKitAssemblesEveryLayer(t *testing.T) {
 			layers = append(layers, layer)
 		}
 	}
-	want := []string{agentkit.PartProduct, agentkit.PartSkills, agentkit.PartMemory, agentsmd.PartID}
+	// The usage paragraph is a part of its own after the block, outside
+	// agentmemory's reserved IDs (agentkit v0.0.16).
+	want := []string{agentkit.PartProduct, agentkit.PartSkills, agentkit.PartMemory, agentkit.PartMemoryUsage, agentsmd.PartID}
 	if !slices.Equal(layers, want) {
 		t.Errorf("layers = %v, want %v", layers, want)
 	}

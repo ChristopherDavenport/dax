@@ -184,7 +184,7 @@ func TestTheMCPListing(t *testing.T) {
 		{Name: "lint", Placement: agent.PlacedWorkspace, Where: "/src/p"},
 		{Name: "wide", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/" + strings.Repeat("d/", 60), Description: strings.Repeat("字", 100)},
 		{Name: "web", Placement: agent.PlacedURL, Where: "https://mcp.example/mcp", Description: "Web search"},
-		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database"},
+		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database", HoldsSecrets: true},
 		{Name: "vault", Placement: agent.PlacedServersWorkspace, Where: "remote https://vault.example:/", Description: strings.Repeat("long ", 50)},
 		{Name: "scratch", Placement: agent.PlacedWorkspace, Where: "/src/p", Added: "mcp:#6 x"},
 		{Name: "next", Placement: "elsewhere", Where: "a place"},
@@ -200,7 +200,7 @@ func TestTheMCPListing(t *testing.T) {
 		// Each field is cut by the columns it takes, a wide character two.
 		"  wide: offered by the workspace remote https://ws.example:/" + strings.Repeat("d/", 26) + "…" + " — " + strings.Repeat("字", 79) + "…",
 		"  web: at https://mcp.example/mcp — Web search",
-		"  db: offered by the workspace remote https://ws.example:/srv/p — The team's database",
+		"  db: offered by the workspace remote https://ws.example:/srv/p, holds secrets there — The team's database",
 		"  vault: offered by the servers workspace remote https://vault.example:/ — " + strings.TrimSpace(strings.Repeat("long ", 32)) + "…",
 		"  scratch: in the workspace /src/p, added as mcp:#6 x",
 		"  next: elsewhere a place",

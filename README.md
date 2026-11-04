@@ -1346,7 +1346,7 @@ drawn as the client draws any call, its name and arguments.
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
-| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
+| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
@@ -1400,9 +1400,10 @@ the input until the next line, and an error gives the line back to edit.
   label `/mcp remove` takes for one `/mcp add` started, and its
   description. The listing looks the same whatever the placement. A URL
   is shown by its scheme and host alone, since a hosted server's key is
-  often in its path. A server a workspace offers is never marked as
-  given secrets, even one that holds them there: the workspace does not
-  say. Each field is the server's, its offerer's or a served
+  often in its path. A server a workspace offers is marked `holds
+  secrets there` when the workspace says its offering gives it secrets
+  (a `dax workspace -servers` server with `secret_env`); the mark only
+  informs, since an older workspace says nothing. Each field is the server's, its offerer's or a served
   workspace's text, so it is cleaned, kept to one line and cut, a
   description at 160 columns and the rest at 80. Attached to a `dax
   serve` older than `/mcp`, the listing says the servers are not
@@ -1605,7 +1606,11 @@ asked while a call runs has no run to end, so `s` declines it as `n`
 does. Only a line typed after a question is shown answers it: one typed
 ahead (a steer such as "yes, also fix the tests" that crossed a
 sub-agent's question) goes on as the message it was, and the question
-is shown again.
+is shown again. When `-p`'s input has ended, or `-timeout` ends the
+wait, nobody answered: the call is refused, or the question declined,
+by dax's rule, and the record names the rule (`policy`), not you, as
+the decider. The model is told nobody was there to approve the call,
+not that you denied it.
 
 ## Exit status
 

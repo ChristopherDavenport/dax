@@ -216,6 +216,14 @@ func workspaceOf(h agentsession.Header) workspace.Descriptor {
 	return workspace.Descriptor{Kind: workspace.KindLocal, Root: h.CWD}
 }
 
+// sameWorkspace says whether a and b are one workspace by what the
+// header records of it, its kind, ref and root: a descriptor's host
+// and instance (agentworkspace v0.0.11) say where it runs now, not
+// which project it is.
+func sameWorkspace(a, b workspace.Descriptor) bool {
+	return a.Kind == b.Kind && a.Ref == b.Ref && a.Root == b.Root
+}
+
 // where names a workspace for a line: this machine's as its root
 // alone, any other as its kind, its ref and its root ("container
 // box:/work").

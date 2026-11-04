@@ -102,7 +102,7 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	}
 	outs := make([]openresponses.Item, 0, len(pending)+len(items))
 	for _, p := range pending {
-		outs = append(outs, openresponses.NewFunctionCallOutput(p.Call.CallID, output(p)))
+		outs = append(outs, answerOf(p))
 	}
 	return s.ctl.Prompt(ctx, append(outs, items...)...)
 }
@@ -118,7 +118,7 @@ func (s *Session) Resume(ctx context.Context, answers ...agentturn.Answer) (*age
 	}
 	for _, p := range s.ag.State().Pending {
 		if !held(p) && !given[p.Call.CallID] {
-			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))))
+			answers = append(answers, agentturn.Output(answerOf(p)))
 		}
 	}
 	return s.ctl.Resume(ctx, answers...)
@@ -366,6 +366,14 @@ type Rules struct {
 	// of the input) name the person only for what the person said. The
 	// zero Trigger, or a nil By, leaves the reply unattributed.
 	By func(q agentturn.Question) agentturn.Trigger
+	// PermitBy, when set, names who decided the permit Permit has just
+	// given for call, the decider the record writes: agentpolicy.ByHuman
+	// for a person's answer, ByPolicy for the controller's own rule,
+	// such as a refusal because nobody was left to ask (the end of -p's
+	// input, its -timeout). A rule's refusal tells the model nobody
+	// answered, not that the user denied the call. Nil or "" is
+	// ByHuman.
+	PermitBy func(call *openresponses.FunctionCall) string
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -409,8 +417,14 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Permit != nil {
 			allow, note = r.Permit(call, reason)
 		}
+		by := agentpolicy.ByHuman
+		if r.PermitBy != nil {
+			if b := r.PermitBy(call); b != "" {
+				by = b
+			}
+		}
 		if allow {
-			a := agentturn.Approve(call.CallID).WithBy(agentpolicy.ByHuman)
+			a := agentturn.Approve(call.CallID).WithBy(by)
 			if note != "" {
 				a = a.WithNote(note)
 			}
@@ -419,7 +433,15 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		return Refusal(call.CallID, note, r.Stops != nil && r.Stops(call))
+		stop := r.Stops != nil && r.Stops(call)
+		if by != agentpolicy.ByHuman {
+			o := openresponses.NewFunctionCallOutput(call.CallID, unansweredOutput)
+			if stop {
+				return agentturn.Refuse(o).WithBy(by)
+			}
+			return agentturn.Output(o).WithBy(by)
+		}
+		return Refusal(call.CallID, note, stop)
 	}
 	var end *agentturn.RunEnd
 	var err error

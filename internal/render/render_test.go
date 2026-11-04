@@ -3,6 +3,7 @@ package render
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -53,6 +54,31 @@ func TestThePrinterNeverWritesAControlSequence(t *testing.T) {
 	for _, want := range []string{"hello [2Jworld", "file line", "last", "[done"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// A model call a guard refused is said, its tokens counted, and a
+// quarantine made between runs is said too: neither reaches a
+// response's end.
+func TestThePrinterSaysWhatAGuardDid(t *testing.T) {
+	var b strings.Builder
+	p := &Printer{W: &b}
+	ctx := context.Background()
+	for _, ev := range []agentturn.Event{
+		&agentturn.RunStart{},
+		&agentturn.ModelBlocked{Err: errors.New("flagged: injection"), Usage: &openresponses.Usage{InputTokens: 7, OutputTokens: 2}},
+		&agentturn.RunEnd{Reason: agentturn.ReasonStopped, Cause: agentturn.StopGuard},
+		&agentturn.QuarantineAdded{Items: openresponses.Items{openresponses.UserText("x"), openresponses.UserText("y")}},
+	} {
+		if err := p.Handle(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := b.String()
+	for _, want := range []string{"[model call refused: flagged: injection]", "[stopped: guard · 0 model call(s) · 0 tool call(s) · 7 in / 2 out tokens]", "[quarantined 2 item(s): left out of every request from now on]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("printed:\n%s\nwant %q", out, want)
 		}
 	}
 }

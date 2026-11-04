@@ -200,7 +200,9 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	showPending(os.Stdout, t, "resumed")
 	// The questions the person typed an answer to, by ID, and the calls
 	// they refused with s, which ends the run.
-	var answered, stops sync.Map
+	// The calls refused because nobody was left to answer, whose
+	// refusal is dax's rule, not the person's.
+	var answered, stops, unanswered sync.Map
 	// One reader scans standard input for every answer, so a wait on a
 	// line ends with the run's context (-timeout) as no answer.
 	lines := make(chan string)
@@ -224,6 +226,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
+				unanswered.Store(c.CallID, true)
 				return false, ""
 			}
 			allow, stop, note := answerLine(line)
@@ -236,6 +239,12 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			_, ok := stops.LoadAndDelete(c.CallID)
 			return ok
 		},
+		PermitBy: func(c *openresponses.FunctionCall) string {
+			if _, ok := unanswered.LoadAndDelete(c.CallID); ok {
+				return agentpolicy.ByPolicy
+			}
+			return agentpolicy.ByHuman
+		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
 			line, ok := readLine()
@@ -244,10 +253,10 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 				if q.Call == nil {
 					// A tool's own question: nobody is left to answer
 					// it, which is not a no.
-					return agenttool.Answer{Action: agenttool.ActionCancel}
+					return agenttool.Answer{Action: agenttool.ActionCancel, By: agenttool.ByPolicy}
 				}
 				// Nobody is left to answer: the decline is dax's.
-				return agenttool.Answer{Action: agenttool.ActionDecline}
+				return agenttool.Answer{Action: agenttool.ActionDecline, By: agenttool.ByPolicy}
 			}
 			answered.Store(q.ID, true)
 			return replyOf(q.Elicitation, line)
@@ -758,6 +767,9 @@ func mcpLines(info agent.Info) []string {
 		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
 		if m.Secrets {
 			l += ", given secrets (secret_env)"
+		}
+		if m.HoldsSecrets {
+			l += ", holds secrets there"
 		}
 		if m.Added != "" {
 			l += ", added as " + oneLine(m.Added, maxField)
