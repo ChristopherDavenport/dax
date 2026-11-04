@@ -400,8 +400,11 @@ answered with `Resume`, and every question asked while a call runs is
 an `agentturn.Question` event, answered with `Reply`, what the user said
 with it in the answer's `Note`. A front that answers questions says so
 (`Session.Answering`); with none answering, a tool's question is
-cancelled and a sub-agent's call the policy asks about is refused with
-a note to make it from the main agent.
+cancelled and a sub-agent's call the policy asks about stays deferred:
+the sub-agent ends input-required and its task call fails naming the
+call (tools/agent's `WithAskParent`, agentturn RFC 0001 Composition),
+never handed to the main agent to make under the conversation's
+grants.
 
 ## Workspaces
 

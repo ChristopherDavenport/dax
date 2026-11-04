@@ -1374,7 +1374,13 @@ questions while the run goes, ahead of any permission:
 - A call a **sub-agent** (`explore` or `task`) makes that the policy asks
   about: `y` allows it, `a` allows it with a note, `n` refuses it with an
   optional reason, and `Esc` goes back. The sub-agent sees the note with
-  the call's result, and the reason in place of it.
+  the call's result, and the reason in place of it ("declined when
+  asked: …; the user said: …"). A call held only beside the one asked
+  about follows your answer. With nobody to ask (a served session with
+  no view attached, `-p` at the end of its input), the call is not run:
+  the sub-agent stops, and its `task` or `explore` call fails naming the
+  call that waits, so the main agent's model sees an error rather than
+  making the call itself under the conversation's grants.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
   dax's own question for a line of text (a peer's question) is answered
   with `a` and the text, or `y` for "yes"; any other form, an MCP

@@ -33,7 +33,6 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
-	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
@@ -1995,7 +1994,11 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 				args = h.Args
 			}
 			set.Release(bctx)
-			return s.askChild(ctx, name, info, why, subject, args), nil
+			// The deferral stands, and tools/agent's WithAskParent puts
+			// it to the task call's elicitor with agentturn.Ask: the
+			// question the fronts show is this reason (elicit), and
+			// with nobody to ask the sub-agent ends input-required.
+			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy}, nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -2027,64 +2030,16 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 	_, _ = rec.Annotate(ctx, ns, json.RawMessage(data))
 }
 
-// askChild puts a sub-agent's call the policy or a hook asks about to
-// the fronts answering the session's questions, from inside the
-// sub-agent's run: an agentturn.Question about the call, answered with
-// Reply. Its context is the call's, so an abort gives the question up.
-// With nobody to ask, the call is refused, and the model is told to make
-// it itself, where it can be put to the user. An approved call runs with
-// args, the hooks' rewrite, when there is one, as an allowed call does
-// and as the main agent's approved call does: a file tool's call carries
-// the stamp of the facts it was asked about, and a stamp the model
-// forged never reaches the tool. What the person said with the answer
-// reaches the model: a refusal's reason in its output, an approval's
-// note as their own message after the batch's outputs. The question and
-// its answer are on the record, under the call they are about, as a
-// tool's own question is.
-func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
-	// What the question is about is the asked call's decision's Subject,
-	// which each front shows beside the question; the question's text,
-	// which is recorded, is the sub-agent's and the policy's own.
-	reason := "the " + name + " sub-agent asks: " + why
-	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
-	call := agentturn.AskedCall{Parent: info.Parent, CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
-		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, Args: args, By: agentpolicy.ByPolicy}}
-	// agentturn.Ask puts it, so what the person says with an approval is
-	// theirs, a user message held with the call and appended after the
-	// batch's outputs, not a line of the decision's note; the question
-	// is dax's own text, put through the kit's recorded elicitor.
-	var (
-		ans    agenttool.Answer
-		askErr error
-	)
-	elicit := func(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
-		q.Message = reason
-		ans, askErr = s.askRecorded(ctx, q)
-		return ans, askErr
-	}
-	d, ok := agentturn.Ask(agenttool.ContextWithElicitor(ctx, elicit), call)
-	switch {
-	case errors.Is(askErr, errNoOne):
-		return cannot
-	case askErr != nil:
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
-	case ok && d.Action == agentturn.Allow:
-		return d
-	case ok && d.Action == agentturn.Block && d.By != "" && d.By != agentpolicy.ByHuman:
-		// Refused by a rule (nobody was left to answer: -p's input
-		// ended, its -timeout), not by the person: said so, and
-		// recorded under that decider, as the main agent's are.
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: unansweredOutput, By: d.By}
-	case ok && d.Action == agentturn.Block:
-		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
-		out := deniedOutput
-		if ans.Note != "" {
-			out += " Reason: " + ans.Note
-		}
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
-	}
-	// Cancelled: the front could not answer it.
-	return cannot
+// childAsks is the question a sub-agent's deferred call puts, as the
+// fronts show it and the record keeps it: the sub-agent's name, then
+// the policy's reason.
+func childAsks(name, why string) string { return "the " + name + " sub-agent asks: " + why }
+
+// isChildAsk reports whether reason is a sub-agent's question
+// (childAsks).
+func isChildAsk(reason string) bool {
+	rest, ok := strings.CutPrefix(reason, "the ")
+	return ok && strings.Contains(rest, " sub-agent asks: ")
 }
 
 // secrets are the variables taken out of the environment the session's

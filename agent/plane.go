@@ -51,8 +51,8 @@ var ErrHeld = errors.New("calls held for approval when the session stopped wait 
 //     fronts answer with a line) or a page to visit is cancelled, and
 //     noted, and with no front
 //     answering questions (Answering) a tool's question is cancelled and
-//     a sub-agent's call the policy asks about is refused with a note
-//     to make it from the main agent.
+//     a sub-agent's call the policy asks about stays deferred, so its
+//     task call fails input-required (agentturn RFC 0001 Composition).
 //
 // Questions asked while a call runs are agentturn.Question events,
 // answered with Reply; what the user says with an answer is its Note.
@@ -193,8 +193,8 @@ func (s *Session) ContinueFrom(ctx context.Context, entryID string) error {
 // Answering says a front answers the questions asked while a call
 // runs, until the returned func is called. With none answering, a
 // question is not asked: a tool's is cancelled, and a sub-agent's call
-// the policy asks about is refused with a note to make it from the main
-// agent, where a run that ends for input can put it to the user.
+// the policy asks about stays deferred, its task call failing
+// input-required, naming the call, for the main agent's model.
 func (s *Session) Answering() (done func()) {
 	s.answering.Add(1)
 	var once sync.Once
@@ -257,8 +257,19 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
 	// A call an A2A caller's conversation asks about (front/a2a puts
-	// it with agentturn.Ask) is the policy's question, not a tool's.
-	if call, ok := agentturn.AskedCallFrom(ctx); !ok || call.Parent != "" {
+	// it with agentturn.Ask) is the policy's question, not a tool's; so
+	// is a sub-agent's call (tools/agent's WithAskParent puts it), whose
+	// question is dax's own text, the sub-agent and the policy's
+	// reason, as before agentturn.Ask framed it.
+	call, asked := agentturn.AskedCallFrom(ctx)
+	switch {
+	case asked && call.Parent == "" && call.Decision != nil && isChildAsk(call.Decision.Reason):
+		q.Message = call.Decision.Reason
+		// The fronts show the call as the sub-agent made it: the stamp
+		// its facts claim added for the run is dax's, not the call's.
+		call.Args = unstamped(call.Args)
+		ctx = agentturn.ContextWithAskedCall(ctx, call)
+	case !asked || call.Parent != "":
 		q.Message = "a tool asks: " + q.Message
 	}
 	ans, err := s.ask(ctx, q)
@@ -349,8 +360,8 @@ type Rules struct {
 	// call the policy asks about (q.Call), a tool's own question. What
 	// it says with the answer is its Note, which the model is told of an
 	// answer about a call. Nil leaves the questions unasked: a
-	// sub-agent's call is refused with a note to make it from the main
-	// agent, and a tool's question is cancelled.
+	// sub-agent's call stays deferred, its task call failing
+	// input-required, and a tool's question is cancelled.
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
@@ -543,6 +554,25 @@ func PermissionsOf(c agentturn.Control, end *agentturn.RunEnd) []Permission {
 			perm.Reason = about(d.Reason, d.Subject)
 		}
 		out = append(out, perm)
+	}
+	return out
+}
+
+// unstamped is args without dax's stamp (dax_stamp), the rewrite a
+// file tool's or bash's facts claim adds for the call to run with; args
+// as they are when they hold none or are not an object.
+func unstamped(args json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return args
+	}
+	if _, ok := m["dax_stamp"]; !ok {
+		return args
+	}
+	delete(m, "dax_stamp")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return args
 	}
 	return out
 }

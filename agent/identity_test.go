@@ -56,7 +56,12 @@ func TestTheHeaderRecordsTheWorkspaceAndTheExecutor(t *testing.T) {
 	}{
 		{"this machine", func(t *testing.T) made {
 			return made{o: options(t, &scripted{})}
-		}, func(o Options) recordedWorkspace { return recordedWorkspace{Kind: workspace.KindLocal, Root: o.Dir} }},
+		}, func(o Options) recordedWorkspace {
+			// This machine's directory names this machine (review M2).
+			host, _ := workspace.NewLocal(o.Dir, nil)
+			defer host.Close()
+			return recordedWorkspace{Kind: workspace.KindLocal, Root: o.Dir, Host: host.Descriptor().Host}
+		}},
 		{"a command", func(t *testing.T) made {
 			box := t.TempDir()
 			t.Setenv(executorRoot, box)

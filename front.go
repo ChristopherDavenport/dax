@@ -250,13 +250,11 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
-				if q.Call == nil {
-					// A tool's own question: nobody is left to answer
-					// it, which is not a no.
-					return agenttool.Answer{Action: agenttool.ActionCancel, By: agenttool.ByPolicy}
-				}
-				// Nobody is left to answer: the decline is dax's.
-				return agenttool.Answer{Action: agenttool.ActionDecline, By: agenttool.ByPolicy}
+				// Nobody is left to answer, which is not a no: a tool's
+				// own question is cancelled, and a sub-agent's call
+				// stays deferred, so its task call fails input-required
+				// (agentturn RFC 0001 Composition).
+				return agenttool.Answer{Action: agenttool.ActionCancel, By: agenttool.ByPolicy}
 			}
 			answered.Store(q.ID, true)
 			return replyOf(q.Elicitation, line)

@@ -575,7 +575,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 		t.Error("the child's touch ran")
 	}
 	saw := m.sawInChild()
-	if strings.Count(saw, "the user denied this call") != 2 {
+	if strings.Count(saw, "declined when asked") != 2 {
 		t.Errorf("the child saw %q, want both calls denied", saw)
 	}
 	if strings.Contains(saw, "abc123") {
@@ -609,7 +609,9 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 			t.Fatal(err)
 		}
 		switch {
-		case q.Phase == session.ElicitationAsk && strings.HasPrefix(q.Message, want):
+		// agentturn.Ask frames a sub-agent's question ("Allow write
+		// with arguments …?") before dax's text, on the record (#163).
+		case q.Phase == session.ElicitationAsk && strings.Contains(q.Message, want):
 			asked = &q
 		case q.Phase == session.ElicitationAnswer && asked != nil && q.Call == asked.Call:
 			answered = &q
@@ -617,7 +619,7 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 	}
 	switch {
 	case asked == nil:
-		t.Fatalf("no recorded question starts %q", want)
+		t.Fatalf("no recorded question holds %q", want)
 	case asked.Tool != tool || asked.Call == "":
 		t.Errorf("the recorded question is about %q (call %q), want a call to %s", asked.Tool, asked.Call, tool)
 	case answered == nil:
@@ -900,7 +902,9 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	m.mu.Lock()
 	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
 	m.mu.Unlock()
-	if !strings.Contains(saw, "Reason: wrong file") {
+	// agentturn.Ask's decline text; dax's #150 sentence waits on
+	// agentturn#304.
+	if !strings.Contains(saw, "the user said: wrong file") {
 		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
 	}
 	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)

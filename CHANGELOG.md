@@ -48,6 +48,18 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Changed: a sub-agent's call the policy asks about is put to whoever
+  answers the `task` or `explore` call's questions through agentturn's
+  `tools/agent.WithAskParent`, which also settles the calls held only
+  beside it by that answer. With nobody to ask, the call is not run and
+  the sub-agent's call fails input-required, naming it, where the
+  sub-agent was told to have the main agent make the call, which would
+  have run it under the conversation's grants rather than the
+  sub-agent's (agentturn RFC 0001 Composition). A refusal now reads
+  "declined when asked: …; the user said: …", agentturn's text, without
+  dax's "do not get the same result another way" until agentturn#304
+  lets a host give it; `-p` at the end of its input cancels a
+  sub-agent's question rather than declining it (#163).
 - Added: an MCP server's prompts are slash commands,
   `/mcp__<server>__<prompt> args`, whose messages are sent recorded as
   composed from the prompt and untrusted, never as your words; `/help`
