@@ -703,8 +703,13 @@ func TestBoxServeUnit(t *testing.T) {
 	outR, outW := io.Pipe()
 	served := make(chan error, 1)
 	go func() {
-		served <- runBoxServe(context.Background(), []string{"-config", hostCfg, "-project", dir}, program{name: "dax", version: "test"}, inR, outW, c, start)
+		err := runBoxServe(context.Background(), []string{"-config", hostCfg, "-project", dir}, program{name: "dax", version: "test"}, inR, outW, c, start)
+		// Nothing reads the session's side once the box host has ended:
+		// a write to it fails rather than blocking the test until the
+		// package's timeout.
+		inR.CloseWithError(fmt.Errorf("the box host ended: %v", err))
 		outW.Close()
+		served <- err
 	}()
 	lines := make(chan string, 16)
 	go func() {
@@ -724,7 +729,7 @@ func TestBoxServeUnit(t *testing.T) {
 		select {
 		case l, ok := <-lines:
 			if !ok {
-				t.Fatal("the box host ended")
+				t.Fatalf("the box host ended: %v", <-served)
 			}
 			return l
 		case <-time.After(10 * time.Second):
