@@ -119,6 +119,14 @@ type Config struct {
 	// MaxReadBytes is the most bytes of a file the read tool scans and
 	// the edit tool will rewrite; default 2 MiB.
 	MaxReadBytes int64 `json:"max_read_bytes,omitempty"`
+	// MaxTurns stops a run after this many turns; 0, the default, is
+	// no limit. A project's file may set it only lower than the user's.
+	MaxTurns int `json:"max_turns,omitempty"`
+	// ContextWindow is the context window, in tokens, a model is served
+	// at, by model name, for a server that cannot say or says the wrong
+	// one (Ollama's trained length): the compaction budget is sized
+	// from it. A project's file may only lower one.
+	ContextWindow map[string]int64 `json:"context_window,omitempty"`
 	// PassEnv names environment variables that look like credentials
 	// (*_API_KEY, *_TOKEN, *_SECRET) which bash commands and MCP
 	// servers are nevertheless given. By default they get none.
@@ -558,6 +566,10 @@ func SecretInWorkspace(name string) error {
 	return fmt.Errorf(`mcp_servers.%s: secret_env: a secret is never sent to a workspace; set "in": "host" to run the server on this machine, or have the workspace's host offer it with dax workspace -servers`, name)
 }
 
+// MinProjectContextWindow is the least window a project's
+// context_window may set.
+const MinProjectContextWindow = 4096
+
 // MaxDescriptionBytes bounds an MCP server's description.
 const MaxDescriptionBytes = 1024
 
@@ -745,6 +757,19 @@ func (l *Layer) validate() error {
 	}
 	if c.MaxReadBytes < 0 {
 		return errors.New("max_read_bytes: want a positive number of bytes")
+	}
+	if c.MaxTurns < 0 {
+		return errors.New("max_turns: want a number of turns, 0 for no limit")
+	}
+	for m, n := range c.ContextWindow {
+		if strings.TrimSpace(m) == "" || n <= 0 {
+			return fmt.Errorf("context_window: want a model's name and its window in tokens, more than 0; got %q: %d", m, n)
+		}
+		if l.Project && n < MinProjectContextWindow {
+			// A window this small turns compaction off (a budget of 0)
+			// or folds on every call, which loosens or costs.
+			return fmt.Errorf("context_window.%s: %d; a project's file may set a window of %d tokens or more", m, n, MinProjectContextWindow)
+		}
 	}
 	if c.BaseURL != "" {
 		if err := checkBaseURL(c.BaseURL); err != nil {
@@ -1791,6 +1816,8 @@ type Flags struct {
 	AgentsMDGlobal []string
 	// NoPolicy turns the policy off: every call runs.
 	NoPolicy bool
+	// MaxTurns replaces max_turns; 0 turns the limit off.
+	MaxTurns *int
 }
 
 // Settings is what dax runs with: the layers folded, the flags laid
@@ -1833,7 +1860,14 @@ type Settings struct {
 	Peers            []a2a.Remote // the user's, sorted by name
 	PassEnv          []string
 	MaxReadBytes     int64
-	Policy           PolicySettings
+	// MaxTurns is the limit on a run's turns, 0 for none.
+	MaxTurns int
+	// ContextWindow is the user's context_window by model, and
+	// ProjectContextWindow the project's where it is lower than the
+	// user's or the user set none: the session takes the project's only
+	// where it is lower than the window it would otherwise believe.
+	ContextWindow, ProjectContextWindow map[string]int64
+	Policy                              PolicySettings
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1939,6 +1973,27 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
+		}
+		for m, n := range l.ContextWindow {
+			switch {
+			case !l.Project:
+				if s.ContextWindow == nil {
+					s.ContextWindow = map[string]int64{}
+				}
+				s.ContextWindow[m] = n
+			case s.ContextWindow[m] == 0 || n < s.ContextWindow[m]:
+				if s.ProjectContextWindow == nil {
+					s.ProjectContextWindow = map[string]int64{}
+				}
+				s.ProjectContextWindow[m] = n
+			}
+		}
+		if l.MaxTurns != 0 {
+			// Tighten only: a project's limit stands where it is lower
+			// than the user's, or the user set none.
+			if !l.Project || s.MaxTurns == 0 || l.MaxTurns < s.MaxTurns {
+				s.MaxTurns = l.MaxTurns
+			}
 		}
 		for _, v := range l.PassEnv {
 			if !slices.Contains(s.PassEnv, v) {
@@ -2070,6 +2125,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
+	}
+	if f.MaxTurns != nil {
+		s.MaxTurns = *f.MaxTurns
 	}
 	var err error
 	if s.Executor, s.ExecutorURL, err = executorOf(layers, f); err != nil {

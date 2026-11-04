@@ -2,7 +2,9 @@ name: Release
 
 # Pushing an annotated tag vX.Y.Z, or <dir>/vX.Y.Z for a nested module,
 # publishes a GitHub release whose notes are the tag message. A
-# lightweight tag gets auto-generated notes instead.
+# lightweight tag gets auto-generated notes instead. A vX.Y.Z release
+# then gets dax's static binaries for linux and darwin on amd64 and
+# arm64, dax_<tag>_<os>_<arch>, and their SHA256SUMS.
 
 on:
   push:
@@ -28,3 +30,54 @@ jobs:
           else
             gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
           fi
+
+  binaries:
+    name: Attach static binaries
+    needs: release
+    # A nested module's tag (<dir>/vX.Y.Z) is not dax's command.
+    if: ${{ !contains(github.ref_name, '/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag and its history, so the build stamps the tag as the
+          # module's version.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          # The latest 1.26 patch, not go.mod's floor (1.26.0): a binary
+          # carries the standard library it was built with, and setup-go
+          # installs an exact version as given, check-latest or not.
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Build and check the stamp
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            out="dist/dax_${TAG}_${os}_${arch}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -o "$out" ./cmd/dax
+            # dax has no -version flag: the build info says the version
+            # it reports, which must be the tag, not a pseudo-version or
+            # a +dirty one.
+            go version -m "$out" | grep -E "^[[:space:]]+mod[[:space:]]+github.com/ChristopherDavenport/dax[[:space:]]+${TAG}([[:space:]]|$)" \
+              || { echo "$out is not stamped $TAG:"; go version -m "$out"; exit 1; }
+          done
+          (cd dist && sha256sum dax_* > SHA256SUMS)
+      - name: Check the binaries for known vulnerabilities
+        # What each binary was built with, its standard library and its
+        # modules, as shipped; GOOS and GOARCH are read from the binary.
+        run: |
+          set -eu
+          for bin in dist/dax_*; do
+            go run golang.org/x/vuln/cmd/govulncheck@latest -mode=binary "$bin"
+          done
+      - name: Upload
+        # The token is this step's alone, never the build's.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/* --clobber

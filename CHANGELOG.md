@@ -23,6 +23,132 @@ versions may break flags and the config file.
   its standard error: the client waits up to a two-second grace for the
   stream before the close, and the server keeps a closed process's
   standard error reachable for that grace).
+- Fixed: the terminal client's tests type with a deadline, so a client
+  that stops reading its input fails the test with the screen as it
+  stuck, instead of holding the package until its timeout (#88; why the
+  client stopped reading is still open).
+- Fixed: `TestAnAttachedViewContinuesFromAnEarlierEntry` typed its
+  second question once the record had the first, which could be while
+  the attached view still showed the first run going, so the line
+  steered a run that had ended; it now waits for the view to show the
+  run ended (#96).
+- Added: a box host's MCP unit takes a `description` in
+  `box-host.json` (one line, at most 1024 bytes, no control
+  characters, MCP units only), which the box host lists with the unit's
+  name, so `/mcp` says what the unit is for (#107).
+- Changed: dax-coding's instructions tell the model to keep shell
+  searches to the working directory and named paths, never from `/` or
+  `$HOME`, and to run the checks the project's instructions name after
+  a change and say which ran and how they ended (#11).
+- Added: `dax -p` exits with how its run ended: 0 done, 1 an error, 3
+  stopped, 4 input required, 5 aborted (it exited 0 for all but an
+  error). `-timeout D` aborts the run after `D` with the timeout as its
+  cause, on the record and in the end line, not "context canceled".
+  `-result PATH` writes the run's end (reason, cause, error, pending
+  calls, the status it would have exited with, the main agent's usage)
+  as JSON and exits 0 for any end the run reached, for a harness that
+  counts any other status as its own failure (#138).
+- Added: limits on a run. `max_turns` (`-max-turns N`) stops each run
+  after `N` turns, cause `max_turns`; a project's file may set it only
+  lower than yours. `-max-tokens N` and `-max-cost USD` stop a run
+  before its next model call once the session's model calls, the
+  sub-agents' among them, have used `N` tokens or cost `USD` by
+  `-pricing-file`, cause `guard`; a sub-agent's next call is refused
+  then too. Under `-max-cost` a model the pricing file does not price
+  refuses the start. Each ends the run stopped, exit 3 under `-p` (#139).
+- Added: `agent.Options.MaxTurns`, `MaxTokens`, `MaxCost` and `Price`,
+  and `agent.Price`.
+- Added: `dax -p` prints `session: <id>` on standard error before its
+  run, when the session is recorded, and `-trajectory PATH` writes the
+  session as an ATIF trajectory once the run ends, each sub-agent's
+  session embedded and priced by `-pricing-file` (#140).
+- Added: `agent.Session.WriteTrajectory`.
+- Added: a release carries static binaries (`CGO_ENABLED=0`, `-trimpath`)
+  for linux and darwin on amd64 and arm64, `dax_<tag>_<os>_<arch>`, and
+  a `SHA256SUMS`, built with the latest Go 1.26 patch and checked with
+  `govulncheck -mode=binary`; the release workflow checks each is
+  stamped with the tag. `make static` builds the same locally (#142).
+- Added: `-bare` leaves out your config (its MCP servers, peers and
+  rules with it), `~/.dax/AGENTS.md`, `agents_md_global`, skills and
+  memory, so a run does not depend on your home directory; the
+  repository's `AGENTS.md` files and config stay. `-config`,
+  `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it
+  brings that one source back. Your config is not parsed unless
+  `-config` brings it back, and `~/.dax/mcp-trust.json` is neither
+  read nor written (a project's servers start only with `-trust-mcp`).
+  The header records the run as `dax.profile`,
+  `{"bare": true, "left_out": [...]}` (#141).
+- Added: `agent.Options.NoMCPTrustFile`.
+- Added: `agent.Options.NoUserAgentsMD` and `agent.Options.Bare`.
+- Changed: a person's refusal tells the model "Do not get the same
+  result another way (another tool, a script, another path); if it is
+  still needed, say so and let the user decide." The REPL and `-p` take
+  `s [reason]` to refuse and end the run, beside `n [reason]`, which
+  refuses and goes on (#150; the terminal client's second refusal is
+  agentconsole#42's).
+- Changed: `agent.Refusal` takes `stop`, and returns `agentturn.Refuse`
+  for it; `agent.Rules.Stops` says which refused calls end the run.
+- Changed: in a workspace with no bash, the bash tool's call returns
+  "this workspace has no bash, so no command can run here; read, write
+  and edit still work" for the model, in place of failing with exec's
+  error. Nothing falls back to `sh`, since the analyzer and the stamp
+  read bash's grammar. A workspace over a wire (`-workspace`, a hub)
+  carries a missing program as an error of no kind yet, so only a
+  local workspace's, an executor's included, is told apart (#143).
+- Changed: a bash command that exits 0 while a job it started in the
+  background still holds its output (`server &`) ends the call after
+  the workspace's two-second wait with what it printed and a note that
+  the job keeps running, in place of failing with exec's "WaitDelay
+  expired" (#153; the `process` tool is still to come).
+- Changed: a fold keeps every message you wrote (a prompt, a steer, a
+  note with an answer) up to 8 KiB verbatim after its summary
+  (`compact.WithPin`), so a task's exact paths, format and constraints
+  outlive the summary; the compaction entry records what it pinned. A
+  longer message, a pasted log, is folded like the rest (#173).
+- Fixed: on Ollama the context window, and the default compaction
+  budget from it, is the one the server runs the model at (a loaded
+  model's `context_length` from `/api/ps`, or a `num_ctx` it sets), with
+  the trained length only an upper bound, and the window only when the
+  server says nothing else. Past the served window Ollama drops the
+  oldest messages silently, so a budget sized from the trained length
+  never folded. The banner says where the window came from (#171).
+- Added: `context_window` (by model, `{"qwen3.5:9b": 65536}`; a
+  project's file may only lower one) and `-context-window N` set the
+  window a server cannot say. The session warns once when the server
+  counts fewer input tokens than for the call before while the
+  conversation grew (#171).
+- Added: the session's header records its context strategy as
+  `dax.context`: the compaction budget, where it came from (`flag`,
+  `window`, `off`), and the window dax believed and where that came from,
+  so sessions that differ only in `-compact` compare as different
+  configurations (#174; the tool-output caps join it with #172, and
+  agenteval's diff of header extras is agenteval#69).
+- Added: `agent.Options.CompactFrom`, `Window` and `WindowFrom`.
+- Added: `!command` in the terminal client and the REPL runs a command
+  yourself in the session's workspace, not through the policy, and
+  sends its line, output (at most 50 KiB) and exit status to the model
+  as your message with the next prompt, or as a follow-up during a run;
+  the record holds a `dax.user_command` entry, and a fold does not pin
+  it. `!!` escapes a leading `!`; `dax attach` refuses `!` (#169).
+- Added: `agent.Session.RunUserCommand` and `agent.UserCommand`.
+- Security: in the REPL a line typed before a question was shown no
+  longer answers it. Each line is numbered as it is read, and a
+  question takes only a line read after it was shown; a line typed
+  ahead (a steer that crossed a sub-agent's question, say) goes on as a
+  message and the question is shown again. A steer starting "yes" could
+  approve a call nobody had seen.
+- Fixed: under `-max-cost` the sub-agents' model must be priced at
+  start too; a server's compaction counts toward `-max-tokens` and
+  `-max-cost`; and a resumed session's limits go on from what its record
+  (its sub-agents' sessions included) says it spent, not from 0 (#139).
+- Added: `agent.Options.PricedModels`.
+- Fixed: `-timeout` ends a `-p` run that waits on standard input for an
+  answer, as no answer, rather than hanging past the deadline when
+  stdin stays open (#138).
+- Changed: a project's `context_window` may be no less than 4096: a
+  smaller one would turn compaction off or fold on every call (#171).
+  An Ollama model not loaded when dax starts still gets its trained
+  length as the window; set `context_window` for it.
 
 ## v0.0.32 - 2026-10-26
 

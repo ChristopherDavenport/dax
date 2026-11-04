@@ -116,6 +116,7 @@ unit alone. A file says more:
                    "allow": ["docs.example.com"] },
     "github":    { "image": "registry.example.com/mcp/github:1.0",
                    "command": ["github-mcp", "stdio"], "files": "none",
+                   "description": "GitHub, as the box host's account",
                    "allow": ["api.github.com"],
                    "secrets": { "GITHUB_TOKEN": "env:GITHUB_TOKEN" } }
   },
@@ -161,6 +162,7 @@ rule says otherwise.
 | `secrets` | MCP units only: `{"NAME": "env:VAR" \| "command:LINE" \| "file:/abs/path"}`, resolved on the box host when the unit's container is made |
 | `command` | MCP units only: the server's argv in its container |
 | `exfiltration` | `"accepted"`: see rule 2 |
+| `description` | MCP units only: what the server is for, which the session lists with the unit's name (`/mcp`); one line of at most 1024 bytes, no control characters |
 
 Each MCP unit is a container of its own beside the box,
 `<box>-<unit>`, made with the box when a session connects (its image

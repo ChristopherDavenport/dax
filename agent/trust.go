@@ -86,7 +86,6 @@ const agentsMDPath = "."
 // and not screened; a global file that is also one of the others is
 // read once, in the other's place.
 func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []string) (agentsmd.Options, []agentkit.Omission) {
-	user := filepath.Join(userDir, "AGENTS.md")
 	var host []string
 	var omitted []agentkit.Omission
 	start, local := hostDir(ws, dir)
@@ -95,10 +94,14 @@ func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []strin
 		host = files
 		omitted = append(omitted, refused...)
 	}
-	extra := []string{user}
+	// An empty userDir leaves the user's own file out (dax -bare).
+	var extra []string
+	if userDir != "" {
+		extra = append(extra, filepath.Join(userDir, "AGENTS.md"))
+	}
 	for _, g := range global {
 		g = filepath.Clean(g)
-		if g == filepath.Clean(user) || slices.Contains(extra, g) || slices.Contains(host, g) ||
+		if slices.Contains(extra, g) || slices.Contains(host, g) ||
 			local && g == filepath.Join(start, agentsmd.DefaultNames[0]) {
 			continue
 		}

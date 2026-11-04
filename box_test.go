@@ -684,7 +684,7 @@ func TestBoxServeUnit(t *testing.T) {
 	home(t)
 	dir := t.TempDir()
 	hostCfg := filepath.Join(t.TempDir(), "box-host.json")
-	if err := os.WriteFile(hostCfg, []byte(`{"units":{"workspace":{},"echo":{"image":"node:24","command":["cat"],"files":{"project":"ro"}}},"profiles":{"default":{"workspace":"workspace","mcp":["echo"]}}}`), 0o600); err != nil {
+	if err := os.WriteFile(hostCfg, []byte(`{"units":{"workspace":{},"echo":{"image":"node:24","command":["cat"],"files":{"project":"ro"},"description":"echoes what it is sent"}},"profiles":{"default":{"workspace":"workspace","mcp":["echo"]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stand := filepath.Join(t.TempDir(), "docker")
@@ -703,8 +703,13 @@ func TestBoxServeUnit(t *testing.T) {
 	outR, outW := io.Pipe()
 	served := make(chan error, 1)
 	go func() {
-		served <- runBoxServe(context.Background(), []string{"-config", hostCfg, "-project", dir}, program{name: "dax", version: "test"}, inR, outW, c, start)
+		err := runBoxServe(context.Background(), []string{"-config", hostCfg, "-project", dir}, program{name: "dax", version: "test"}, inR, outW, c, start)
+		// Nothing reads the session's side once the box host has ended:
+		// a write to it fails rather than blocking the test until the
+		// package's timeout.
+		inR.CloseWithError(fmt.Errorf("the box host ended: %v", err))
 		outW.Close()
+		served <- err
 	}()
 	lines := make(chan string, 16)
 	go func() {
@@ -724,7 +729,7 @@ func TestBoxServeUnit(t *testing.T) {
 		select {
 		case l, ok := <-lines:
 			if !ok {
-				t.Fatal("the box host ended")
+				t.Fatalf("the box host ended: %v", <-served)
 			}
 			return l
 		case <-time.After(10 * time.Second):
@@ -738,7 +743,7 @@ func TestBoxServeUnit(t *testing.T) {
 	// The fake executor answers the initialize when its input ends; the
 	// box host's own answers come first.
 	io.WriteString(inW, `{"jsonrpc":"2.0","id":5,"method":"agentworkspace/servers.list","params":{}}`+"\n")
-	if got := next(); !strings.Contains(got, `"servers":[{"name":"echo"}]`) {
+	if got := next(); !strings.Contains(got, `"servers":[{"name":"echo","description":"echoes what it is sent"}]`) {
 		t.Fatalf("servers.list answered %s", got)
 	}
 	io.WriteString(inW, `{"jsonrpc":"2.0","id":2,"method":"agentworkspace/servers.start","params":{"name":"echo"}}`+"\n")

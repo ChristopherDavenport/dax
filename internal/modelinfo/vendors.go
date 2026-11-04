@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -150,23 +151,34 @@ func (d *openRouterDescriber) Describe(ctx context.Context, model string) (Info,
 	return info, nil
 }
 
-// Ollama describes a model from POST {root}/api/show, where root is
-// the server the /v1 endpoint is under. Ollama refuses any effort but
-// none for a model without the thinking capability; which levels a
-// thinking model takes depends on the model, so those are unknown.
+// Ollama describes a model from POST {root}/api/show and GET
+// {root}/api/ps, where root is the server the /v1 endpoint is under.
+// Ollama refuses any effort but none for a model without the thinking
+// capability; which levels a thinking model takes depends on the
+// model, so those are unknown.
+//
+// The window is the one the server runs the model at, not the length
+// it was trained to, which /api/show's model_info gives: past the
+// served window Ollama drops the oldest messages and answers as if
+// nothing happened, so a budget sized from the trained length never
+// folds. A loaded model's context_length in /api/ps is the window, or
+// else a num_ctx the model's parameters set; the trained length is an
+// upper bound on either, and the window only when the server says
+// nothing else (a model not loaded yet, with no num_ctx).
 func Ollama(base string, client *http.Client) Describer {
 	root := strings.TrimSuffix(strings.TrimSuffix(base, "/"), "/v1")
-	return ollamaDescriber{url: root + "/api/show", client: client}
+	return ollamaDescriber{url: root + "/api/show", ps: root + "/api/ps", client: client}
 }
 
 type ollamaDescriber struct {
-	url    string
-	client *http.Client
+	url, ps string
+	client  *http.Client
 }
 
 func (d ollamaDescriber) Describe(ctx context.Context, model string) (Info, error) {
 	var show struct {
 		Capabilities []string                   `json:"capabilities"`
+		Parameters   string                     `json:"parameters"`
 		ModelInfo    map[string]json.RawMessage `json:"model_info"`
 	}
 	req, _ := json.Marshal(map[string]string{"model": model})
@@ -177,12 +189,59 @@ func (d ollamaDescriber) Describe(ctx context.Context, model string) (Info, erro
 	if slices.Contains(show.Capabilities, "thinking") {
 		info.Reasons, info.Efforts = Yes, nil
 	}
+	var trained int64
 	for k, v := range show.ModelInfo {
 		if strings.HasSuffix(k, ".context_length") {
-			_ = json.Unmarshal(v, &info.ContextWindow)
+			_ = json.Unmarshal(v, &trained)
 		}
 	}
+	served, from := d.served(ctx, model), "ollama /api/ps"
+	if served == 0 {
+		served, from = numCtx(show.Parameters), "ollama num_ctx"
+	}
+	switch {
+	case served > 0 && (trained == 0 || served < trained):
+		info.ContextWindow, info.WindowFrom = served, from
+	case trained > 0:
+		info.ContextWindow, info.WindowFrom = trained, "ollama trained length"
+	}
 	return info, nil
+}
+
+// served is the context length the server runs model at while it is
+// loaded (/api/ps), zero when it is not loaded or the server does not
+// say.
+func (d ollamaDescriber) served(ctx context.Context, model string) int64 {
+	var ps struct {
+		Models []struct {
+			Name          string `json:"name"`
+			Model         string `json:"model"`
+			ContextLength int64  `json:"context_length"`
+		} `json:"models"`
+	}
+	if getJSON(ctx, d.client, http.MethodGet, d.ps, nil, &ps) != nil {
+		return 0
+	}
+	for _, m := range ps.Models {
+		if m.Name == model || m.Model == model {
+			return m.ContextLength
+		}
+	}
+	return 0
+}
+
+// numCtx is the num_ctx a model's parameters set, zero for none. The
+// parameters are lines of a name and a value, as a Modelfile's.
+func numCtx(params string) int64 {
+	for line := range strings.SplitSeq(params, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "num_ctx" {
+			if n, err := strconv.ParseInt(f[1], 10, 64); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // getJSON makes one request and decodes a 200 response into out. An

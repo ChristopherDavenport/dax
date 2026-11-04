@@ -85,6 +85,10 @@ func TestALineIsACommandWhenItStartsWithOneSlash(t *testing.T) {
 		{"//etc/hosts says what?", false, "/etc/hosts says what?"},
 		{"// a comment", false, "/ a comment"},
 		{"hello /model", false, "hello /model"},
+		// ! runs a command of the user's own (#169); !! sends one !.
+		{"!go test ./...", true, "!go test ./..."},
+		{"!!important: read this", false, "!important: read this"},
+		{"say !hi", false, "say !hi"},
 	} {
 		if got := isCommand(c.line); got != c.command {
 			t.Errorf("isCommand(%q) = %v, want %v", c.line, got, c.command)
@@ -135,6 +139,10 @@ func TestCommands(t *testing.T) {
 		{line: "/exit", running: true, quit: true},
 		{line: "/help", out: "//text"},
 		{line: "/compact", err: "unknown command /compact"},
+		// Controls that cannot run the user's command, as over dax
+		// attach, refuse it.
+		{line: "!ls", err: "dax attach"},
+		{line: "!", err: "usage: !<command>"},
 	} {
 		turn, ctl := &fakeTurn{}, &fakeControls{}
 		r, err := command(context.Background(), turn, ctl, c.line, c.running)
@@ -214,5 +222,20 @@ func TestAnUnlistedSessionIsNotSaidToHaveNoServers(t *testing.T) {
 	}
 	if r.out != "mcp servers: not listed; the served session's dax is older than /mcp" {
 		t.Errorf("/mcp = %q", r.out)
+	}
+}
+
+// dax attach's own controls cannot run a command of the user's: a "!"
+// line from an attached view is refused there, and nothing on the wire
+// runs one, so a token holder cannot reach the workspace past the
+// policy (#169).
+func TestAttachRefusesAUserCommand(t *testing.T) {
+	var ctl agent.Controls = &remoteControls{}
+	if _, ok := ctl.(userCommander); ok {
+		t.Fatal("attach's controls run a command of the user's")
+	}
+	_, err := command(context.Background(), &fakeTurn{}, ctl, "!touch PWNED", false)
+	if err == nil || !strings.Contains(err.Error(), "not offered over dax attach") {
+		t.Errorf("a ! line over attach: %v", err)
 	}
 }

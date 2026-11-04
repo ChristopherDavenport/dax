@@ -578,3 +578,78 @@ func TestAnMCPTokenReachesNoChild(t *testing.T) {
 		t.Errorf("a workspace MCP server saw %q", got)
 	}
 }
+
+// -bare leaves out the user's own sources, each brought back by its
+// one flag beside it; the repository's stay (#141).
+func TestBareLeavesOutTheUsersSources(t *testing.T) {
+	h := home(t)
+	cfg := filepath.Join(h, ".config", "dax", "config.json")
+	write(t, cfg, `{"policy":{"allow":["bash(make:*)"]},"agents_md_global":["/g/AGENTS.md"],"memory_dir":"`+filepath.Join(h, "mem")+`"}`)
+	all := []string{"config", "agents_md_home", "agents_md_global", "skills", "memory"}
+	for _, tc := range []struct {
+		name  string
+		given []string
+		want  []string
+	}{
+		{"bare", nil, all},
+		{"-config brings the config back", []string{"config"}, []string{"agents_md_home", "agents_md_global", "skills", "memory"}},
+		{"-agents-md brings ~/.dax/AGENTS.md back", []string{"agents-md"}, []string{"config", "agents_md_global", "skills", "memory"}},
+		{"-agents-md-global brings those files back", []string{"agents-md-global"}, []string{"config", "agents_md_home", "skills", "memory"}},
+		{"-skills brings the skills back", []string{"skills"}, []string{"config", "agents_md_home", "agents_md_global", "memory"}},
+		{"-memory brings memory back", []string{"memory"}, []string{"config", "agents_md_home", "agents_md_global", "skills"}},
+		{"every flag", []string{"config", "agents-md", "agents-md-global", "skills", "memory"}, []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			given := map[string]bool{}
+			for _, g := range tc.given {
+				given[g] = true
+			}
+			left := bareLeftOut(given)
+			if left == nil || strings.Join(left, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("left out %q, want %q", left, tc.want)
+			}
+			user, err := loadUser("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var flags config.Flags
+			if given["memory"] {
+				flags.MemoryDir = str(filepath.Join(h, "flagmem"))
+			}
+			skills := true
+			applyBare(left, &user, &flags, &skills)
+			s, err := loadSettings(local(t, t.TempDir()), user, flags)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := slices.Contains(s.Policy.User.Allow, "bash(make:*)"); got != given["config"] {
+				t.Errorf("the user's rule in force: %v", got)
+			}
+			if got := len(s.AgentsMDGlobal) > 0; got != (given["config"] && given["agents-md-global"]) {
+				t.Errorf("agents_md_global %q", s.AgentsMDGlobal)
+			}
+			if got := s.MemoryDir != ""; got != given["memory"] {
+				t.Errorf("memory %q", s.MemoryDir)
+			}
+			if skills != given["skills"] {
+				t.Errorf("skills %v", skills)
+			}
+		})
+	}
+}
+
+// -bare does not parse the user's config when it leaves it out: a
+// broken file does not fail a bare run (#141).
+func TestBareDoesNotReadTheUsersConfig(t *testing.T) {
+	h := home(t)
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider": `)
+	if _, err := loadUserFor("", bareLeftOut(map[string]bool{})); err != nil {
+		t.Errorf("a bare run read the broken config: %v", err)
+	}
+	if _, err := loadUserFor("", bareLeftOut(map[string]bool{"config": true})); err == nil {
+		t.Error("-bare -config did not read the config")
+	}
+	if _, err := loadUserFor("", nil); err == nil {
+		t.Error("a run that is not bare did not read the config")
+	}
+}

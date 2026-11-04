@@ -35,6 +35,14 @@ go install github.com/ChristopherDavenport/dax/cmd/dax@latest
 make install
 ```
 
+Each release also carries static binaries for linux and darwin on amd64
+and arm64 (`dax_<tag>_<os>_<arch>`, with a `SHA256SUMS`), built with
+`CGO_ENABLED=0`, so they run in a container without glibc (Alpine,
+busybox) as `dax execute` does; `make static` builds the same here.
+The darwin binaries are not signed: macOS refuses one downloaded with
+a browser until you clear its quarantine (`xattr -d
+com.apple.quarantine dax_...`).
+
 Go 1.26 or later. With no flags dax talks to Ollama on
 `localhost:11434` and runs `qwen3.5:9b`.
 
@@ -204,6 +212,20 @@ context · 128k out (openrouter)`. Anthropic and Gemini are asked through
 their model endpoints, OpenRouter through its public catalogue (fetched
 once, without the key) and Ollama through `/api/show`; OpenAI and an
 `openresponses` server publish nothing, and nothing is shown.
+
+On Ollama the window shown is the one the server runs the model at: a
+loaded model's (`/api/ps`), or a `num_ctx` the model sets, never more
+than the length it was trained to, which is the window only when the
+server says nothing else (`256k context (ollama trained length)`: the
+model is not loaded yet). Past the window it runs at, Ollama drops the
+oldest messages, the task first, and answers as if nothing happened, so
+a budget sized from the trained length would never fold: give the
+window the server runs (`OLLAMA_CONTEXT_LENGTH`) as `context_window`
+or `-context-window`. A model not loaded when dax starts, its usual
+state, still gets the trained length, since the server says nothing
+else of it yet. Whatever the provider, when the server counts
+fewer input tokens for a call than for the one before while the
+conversation grew, dax says so once.
 
 The reasoning effort dax asks for is then fitted to the answer: an
 effort the model does not take becomes the nearest one it does, and dax
@@ -385,6 +407,8 @@ names the file and the field.
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
 | `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN`, `DAX_SERVERS_WORKSPACE_TOKEN`, `DAX_SERVERS_TUNNEL_TOKEN`, a `token_env` of `workspace` or `servers_workspace`, or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
+| `context_window` | the window, in tokens, a model is served at, by model: `{"qwen3.5:9b": 65536}`, for a server that cannot say or says the wrong one; it sizes the default `-compact` budget (three quarters of it). A project's file may only lower one, and to no less than 4096 |
+| `max_turns` | stop each run after this many turns (`[stopped: max_turns]`, exit 3 under `-p`); default none. A project's file may set it only lower than yours |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
@@ -443,13 +467,20 @@ no other account could have written it.
 | `-box-host local\|ssh://[user@]host[:port]`, `-box-profile NAME` | with `-box` or a `box` in your config, override `box.host` and `box.profile` |
 | `-box-confine off\|units\|workspace` | with `-box`, `box.confine` for this run |
 | `-box-internet off\|allow\|on` | with `-box`, narrow the profile's internet for this run; `allow` keeps the profile's hosts (or `box.tighten`'s). It is the box's, so it applies to every session in it |
-| `-pricing-file path` | JSON file of model prices for the terminal client's session cost |
+| `-pricing-file path` | JSON file of model prices for the terminal client's session cost, and for `-max-cost` |
+| `-max-turns N` | overrides `max_turns`; `0` turns it off |
+| `-max-tokens N`, `-max-cost USD` | stop a run before its next model call once the session's model calls have used `N` tokens (input and output) or cost `USD` by the pricing file: stopped, cause `guard`, exit 3 under `-p`. A sub-agent's calls count, and its next call is refused once the limit is reached. A server's compaction counts too, and a resumed session goes on from what its record says it spent. Under `-max-cost` the pricing file must price the model and the sub-agents' model, or dax does not start; a call to a model it does not price (after `/model`, say) stops the run too |
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
+| `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
+| `-trajectory PATH` | with `-p`, write the session as an ATIF trajectory to `PATH` once the run ends (agentsession's export, the RFC 0001 projection), each sub-agent's session embedded and priced by the pricing file when there is one; needs a session store |
+| `-result PATH` | with `-p`, write how the run ended to `PATH` as JSON and exit 0 however it ended (see [Exit status](#exit-status)) |
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
+| `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. Your config is not even parsed unless `-config` brings it back, and `~/.dax/mcp-trust.json` is neither read nor written: a project's MCP servers start only with `-trust-mcp`, for that run. The session's header records the run as bare and what it left out (`dax.profile`) |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
-| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off |
+| `-context-window N` | the main model's window for this run, over `context_window` and what the vendor says |
+| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message you wrote (a prompt, a steer, a note with an answer) up to 8 KiB is kept verbatim through every fold, after the summary, so the task's exact words outlive it; the compaction entry records what it kept. A longer one, a pasted log, is folded like the rest |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
@@ -1354,7 +1385,7 @@ transcript.
 
 ## Commands
 
-A line that starts with a slash is a command to dax, in the terminal
+A line that starts with a slash, or with `!`, is a command to dax, in the terminal
 client and the REPL alike; the model never sees it. Start a line with
 `//` to send the model a line that begins with a slash (`//etc/hosts`
 sends `/etc/hosts`). In the terminal client a command's output shows over
@@ -1381,6 +1412,16 @@ the input until the next line, and an error gives the line back to edit.
 - `/tools`, `/session`, `/help`.
 - `/follow text` queues a follow-up that runs once the model would have
   stopped; `/abort` aborts the run; `/quit` leaves.
+- `!command` runs a command yourself, with bash in the session's
+  workspace (the executor's, the box's or the served one's when the
+  tools act there) and the environment its commands get, not through
+  the policy: you typed it. Its output is shown, and its line, output (at
+  most 50 KiB) and exit status go to the model as your message with the
+  next prompt, or as a follow-up while a run goes; the record holds a
+  `dax.user_command` entry saying you ran it, and a fold does not keep
+  it as your request. `!!text` sends `!text` to the model. `dax attach`
+  refuses it: whoever holds serve's token is not the person at the
+  session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
 the next model call. `/model`, `/think`, `/mcp add` and `/mcp remove`
@@ -1555,8 +1596,56 @@ restarts.
 with the same commands; a permission or a question is answered with `y`
 or `n` on the next line, and what follows the first word is what you say
 with the answer, which the model is told: `y keep it short` allows with a
-note, `n not that file` refuses with a reason. Any other line refuses,
-the whole line its reason. `-p` reads its answers the same way.
+note, `n not that file` refuses with a reason and the run goes on, and
+`s not that file` refuses and ends the run there. Any other line refuses,
+the whole line its reason. A refusal tells the model not to get the same
+result another way (another tool, a script, another path) and to say so
+if it is still needed. `-p` reads its answers the same way; a question
+asked while a call runs has no run to end, so `s` declines it as `n`
+does. Only a line typed after a question is shown answers it: one typed
+ahead (a steer such as "yes, also fix the tests" that crossed a
+sub-agent's question) goes on as the message it was, and the question
+is shown again.
+
+## Exit status
+
+`dax -p` exits with how its run ended, so a script or a harness reading
+`$?` knows what happened:
+
+| status | the run |
+|---|---|
+| 0 | is done |
+| 1 | failed, or dax could not start it (the error is on standard error) |
+| 3 | stopped: the loop ended it (the end line says why, `[stopped: max_turns]`) |
+| 4 | requires input: a call waits on an answer nobody gave |
+| 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
+
+Before the run starts, `-p` says on standard error which session it
+records, `session: <id>`, so a harness whose runs share a store finds
+each one's own, even of a run it killed.
+
+A harness that counts any status but 0 as its own failure gives
+`-result PATH`: dax then writes the run's end to `PATH`, private to you,
+and exits 0 for a run that ended done, stopped, requiring input or
+aborted; a run that ended in an error (the model call failed, say) is
+in the file too, and exits 1 as without it. `-timeout` also ends a wait
+on standard input for an answer, as no answer:
+
+```json
+{
+  "session": "01a112e5-b4df-7081-bd11-baac746b29cc",
+  "reason": "aborted",
+  "error": "timeout: -timeout 12m0s reached",
+  "pending": [],
+  "exit": 5,
+  "usage": { "model_calls": 147, "input_tokens": 5390000, "cached_tokens": 0, "output_tokens": 41200 }
+}
+```
+
+`reason`, `cause`, `error` and `pending` (each call's `call_id`, `name`,
+`arguments` and `why`) are the run's end as the session records it,
+`exit` the status dax would have exited with, and `usage` the main
+agent's model calls and tokens (a sub-agent's are its own session's).
 
 ## Sessions
 
@@ -1756,6 +1845,13 @@ interface, and the rest of dax cannot tell them apart:
   so is an executor's), at its root and with its environment, and end
   with the session; in a workspace that cannot start a process they run
   on this machine, with its environment scrubbed.
+- The session records its context strategy in the header's
+  `dax.context`: the compaction budget (`compact_budget`), where it came
+  from (`budget_from`: `flag`, `window`, three quarters of the window,
+  or `off`), and the window dax believed and where that came from
+  (`window`, `window_from`: `vendor:<name>`, Ollama's served window,
+  `config`, `project config` or `flag`), so two sessions that differ
+  only in `-compact` compare as different configurations.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
@@ -1796,6 +1892,7 @@ What is not there yet:
 ```sh
 make check    # gofmt, go mod tidy -diff, go vet, staticcheck, govulncheck, go test -race
 make build    # ./dax
+make static   # ./dax with CGO_ENABLED=0, as the release's binaries
 ```
 
 In this workspace the module is built outside the go.work:

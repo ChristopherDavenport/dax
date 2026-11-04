@@ -4,16 +4,20 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
@@ -24,24 +28,136 @@ import (
 
 func TestAnswerLine(t *testing.T) {
 	for _, tc := range []struct {
-		line  string
-		allow bool
-		note  string
+		line        string
+		allow, stop bool
+		note        string
 	}{
-		{"y", true, ""},
-		{"Yes", true, ""},
-		{"y keep it short", true, "keep it short"},
-		{"yes, keep it short", true, "keep it short"},
-		{"", false, ""},
-		{"n", false, ""},
-		{"no: wrong file", false, "wrong file"},
-		{"not that one", false, "not that one"},
-		{"yesterday", false, "yesterday"},
+		{"y", true, false, ""},
+		{"Yes", true, false, ""},
+		{"y keep it short", true, false, "keep it short"},
+		{"yes, keep it short", true, false, "keep it short"},
+		{"", false, false, ""},
+		{"n", false, false, ""},
+		{"no: wrong file", false, false, "wrong file"},
+		{"not that one", false, false, "not that one"},
+		{"yesterday", false, false, "yesterday"},
+		// s refuses and stops the run (#150).
+		{"s", false, true, ""},
+		{"S not now", false, true, "not now"},
+		{"stop: leave build alone", false, true, "leave build alone"},
+		{"stopping", false, false, "stopping"},
 	} {
-		allow, note := answerLine(tc.line)
-		if allow != tc.allow || note != tc.note {
-			t.Errorf("answerLine(%q) = %v %q, want %v %q", tc.line, allow, note, tc.allow, tc.note)
+		allow, stop, note := answerLine(tc.line)
+		if allow != tc.allow || stop != tc.stop || note != tc.note {
+			t.Errorf("answerLine(%q) = %v %v %q, want %v %v %q", tc.line, allow, stop, note, tc.allow, tc.stop, tc.note)
 		}
+	}
+}
+
+// toldOfRefusal is what the model was told of the last call on sess's
+// record.
+func toldOfRefusal(t *testing.T, sess *agent.Session) string {
+	t.Helper()
+	r, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for _, e := range rec.Path(rec.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if o, ok := it.Item.(*openresponses.FunctionCallOutput); ok {
+				out = o.Output.Text
+			}
+		}
+	}
+	return out
+}
+
+// n refuses a call and the run goes on, and s refuses it and ends the
+// run; the model is told the same words either way (#150). -p asks in
+// line, so its answer is read only once the question is shown.
+func TestARefusalGoesOnOrStops(t *testing.T) {
+	for _, tc := range []struct {
+		line   string
+		reason agentturn.Reason
+		status int
+	}{
+		{"n not that\n", agentturn.ReasonDone, 0},
+		{"s not that\n", agentturn.ReasonStopped, exitStopped},
+	} {
+		t.Run(tc.line[:1], func(t *testing.T) {
+			ctx := context.Background()
+			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+			sess, dir := printSession(t, ctx, m)
+			f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(tc.line))}
+			err := f.run(ctx, sess, sess)
+			var ended *runEnded
+			switch {
+			case tc.status == 0 && err != nil:
+				t.Fatalf("run: %v, want done", err)
+			case tc.status != 0 && (!errors.As(err, &ended) || ended.status != tc.status):
+				t.Fatalf("run: %v, want exit %d", err, tc.status)
+			}
+			if end := runEndOf(t, sess); end.Reason != string(tc.reason) {
+				t.Errorf("the record ends %s, want %s", end.Reason, tc.reason)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
+				t.Error("the refused call ran")
+			}
+			if out := toldOfRefusal(t, sess); !strings.Contains(out, "Do not get the same result another way") || !strings.HasSuffix(out, "Reason: not that") {
+				t.Errorf("the model was told %q", out)
+			}
+		})
+	}
+}
+
+// The REPL's own n and s, typed once the question is shown: n refuses
+// and the run goes on, s refuses and ends it (#150).
+func TestTheREPLRefusesAndGoesOnOrStops(t *testing.T) {
+	for _, tc := range []struct {
+		line   string
+		reason agentturn.Reason
+	}{
+		{"n not that\n", agentturn.ReasonDone},
+		{"s not that\n", agentturn.ReasonStopped},
+	} {
+		t.Run(tc.line[:1], func(t *testing.T) {
+			ctx := context.Background()
+			m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+			sess, dir := printSession(t, ctx, m)
+			pr, pw := io.Pipe()
+			out := &syncBuf{}
+			f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
+			done := make(chan error, 1)
+			go func() { done <- f.Run(ctx, sess) }()
+			pw.Write([]byte("go\n"))
+			waitIn(t, out, "? allow bash")
+			pw.Write([]byte(tc.line))
+			deadline := time.Now().Add(15 * time.Second)
+			for !strings.Contains(out.String(), "["+string(tc.reason)) {
+				if time.Now().After(deadline) {
+					t.Fatalf("the run never ended %s:\n%s", tc.reason, out.String())
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			pw.Close()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if end := runEndOf(t, sess); end.Reason != string(tc.reason) {
+				t.Errorf("the record ends %s, want %s", end.Reason, tc.reason)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "REFUSED")); err == nil {
+				t.Error("the refused call ran")
+			}
+			if out := toldOfRefusal(t, sess); !strings.HasSuffix(out, "Reason: not that") {
+				t.Errorf("the model was told %q", out)
+			}
+		})
 	}
 }
 
@@ -78,14 +194,13 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 		return nil
 	})()
 	pr, pw := io.Pipe()
-	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr)}
+	out := &syncBuf{}
+	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx, sess) }()
 
-	// The REPL subscribes before it reads a line, so once "go" is read
-	// a subscriber added now is told of a question after the REPL is (or
-	// is sent it on subscribing, when it is already waiting): the answer
-	// written then is read as the question's.
+	// The answer is typed once the question is shown: a line typed
+	// before it would not answer it.
 	pw.Write([]byte("go\n"))
 	asked := make(chan *agentturn.Question, 1)
 	defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
@@ -102,6 +217,7 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("no question was asked")
 	}
+	waitIn(t, out, "? allow write")
 	pw.Write([]byte("y keep it short\n"))
 	select {
 	case end := <-ended:
@@ -216,5 +332,64 @@ func TestPrintStopsWhileAQuestionWaitsOnALine(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
 		t.Error("the call the question was about ran")
+	}
+}
+
+// waitIn waits for sub in what w holds.
+func waitIn(t *testing.T, w *syncBuf, sub string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(w.String(), sub) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never shown:\n%s", sub, w.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A line typed before a question was shown does not answer it: a steer
+// such as "yes, also fix the tests" typed while a sub-agent's call was
+// being asked about must not approve a call nobody saw. It goes on as a
+// message, and the question waits for a line typed after it. The REPL
+// is kept busy (a !sleep) while the question arrives and the line is
+// typed, so both are waiting when it looks.
+func TestALineTypedBeforeAQuestionDoesNotAnswerIt(t *testing.T) {
+	ctx := context.Background()
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"NEVER","content":"x"}`}},
+	}
+	sess, dir := printSession(t, ctx, m)
+	pr, pw := io.Pipe()
+	out := &syncBuf{}
+	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
+	done := make(chan error, 1)
+	go func() { done <- f.Run(ctx, sess) }()
+	waitIn(t, out, "> ")
+	// Subscribed after the REPL, so it has taken the question in (not
+	// shown it) when the line is typed.
+	var busy, typed sync.Once
+	defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		switch e := ev.(type) {
+		case *agentturn.ToolStart:
+			if e.Name == "task" {
+				busy.Do(func() { go pw.Write([]byte("!sleep 1\n")) })
+			}
+		case *agentturn.Question:
+			typed.Do(func() { go pw.Write([]byte("yes, also fix the tests\n")) })
+		}
+		return nil
+	})()
+	pw.Write([]byte("go\n"))
+	waitIn(t, out, "? allow write")
+	time.Sleep(500 * time.Millisecond)
+	pw.Close()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the REPL did not end")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
+		t.Fatalf("a line typed before the question approved the call:\n%s", out.String())
 	}
 }

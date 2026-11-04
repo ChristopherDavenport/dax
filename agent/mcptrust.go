@@ -70,6 +70,20 @@ func serverSetHash(servers []MCPServer, here bool) string {
 // (serverSetHash): given trust, the set is recorded as the project's in
 // file; otherwise it must be the set file holds for the project. What
 // is left out is said once, with how to trust it.
+// trustFile is where o's trusted sets are kept, "" for none
+// (NoMCPTrustFile).
+func (o Options) trustFile() string {
+	switch {
+	case o.NoMCPTrustFile:
+		return ""
+	case o.MCPTrustFile != "":
+		return o.MCPTrustFile
+	}
+	return DefaultMCPTrustFile(DefaultUserDir())
+}
+
+// file "" is no trust file: nothing is read or recorded, and only
+// trust starts the project's servers.
 func trusted(servers []MCPServer, d workspace.Descriptor, here bool, file string, trust bool) []MCPServer {
 	var mine, project []MCPServer
 	for _, m := range servers {
@@ -84,15 +98,21 @@ func trusted(servers []MCPServer, d workspace.Descriptor, here bool, file string
 	}
 	key := recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root}
 	h := serverSetHash(project, here)
+	if trust && file == "" {
+		return servers
+	}
 	if trust {
 		if err := recordTrust(file, key, h); err != nil {
 			fmt.Fprintf(warnings{}, "dax: the project's MCP servers are trusted for this session, but the trust could not be kept: %v\n", err)
 		}
 		return servers
 	}
-	t, err := readTrust(file)
-	if err != nil {
-		fmt.Fprintf(warnings{}, "dax: %v\n", err)
+	var t mcpTrustFile
+	if file != "" {
+		var err error
+		if t, err = readTrust(file); err != nil {
+			fmt.Fprintf(warnings{}, "dax: %v\n", err)
+		}
 	}
 	if slices.Contains(t.Projects, trustedProject{Workspace: key, Servers: h}) {
 		return servers

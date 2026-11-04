@@ -354,6 +354,10 @@ type Rules struct {
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
+	// Stops, when set, says of a call Permit refused whether the
+	// refusal ends the run (Refusal with stop) rather than going on to
+	// the model; nil goes on.
+	Stops func(call *openresponses.FunctionCall) bool
 	// By, when set, names who gave the reply Reply has just given to q,
 	// written beside the answer (agentturn.ContextWithAnswerer):
 	// AtTerminal for a person's answer, a trigger of the controller's
@@ -415,7 +419,7 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		return Refusal(call.CallID, note)
+		return Refusal(call.CallID, note, r.Stops != nil && r.Stops(call))
 	}
 	var end *agentturn.RunEnd
 	var err error
@@ -445,14 +449,21 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 	return end, err
 }
 
-// Refusal is a person's refusal of a call, the model told so and, when
-// note is not empty, why.
-func Refusal(callID, note string) agentturn.Answer {
+// Refusal is a person's refusal of a call, the model told so, told not
+// to get the same result another way, and, when note is not empty, why.
+// With stop the refusal ends the run (agentturn.Refuse) rather than
+// going on to the model; the words are the same either way, so every
+// front that refuses through it tells the model the same thing.
+func Refusal(callID, note string, stop bool) agentturn.Answer {
 	out := deniedOutput
 	if note != "" {
 		out += " Reason: " + note
 	}
-	return agentturn.Output(openresponses.NewFunctionCallOutput(callID, out)).WithBy(agentpolicy.ByHuman)
+	o := openresponses.NewFunctionCallOutput(callID, out)
+	if stop {
+		return agentturn.Refuse(o).WithBy(agentpolicy.ByHuman)
+	}
+	return agentturn.Output(o).WithBy(agentpolicy.ByHuman)
 }
 
 // HeldPermissions are the calls a stopped session left held for

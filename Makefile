@@ -2,11 +2,17 @@ GO ?= go
 STATICCHECK ?= $(GO) run honnef.co/go/tools/cmd/staticcheck@latest
 GOVULNCHECK ?= $(GO) run golang.org/x/vuln/cmd/govulncheck@latest
 
-.PHONY: build install test vet fmt tidy tidy-check lint vuln check \
+.PHONY: build static install test vet fmt tidy tidy-check lint vuln check \
 	guard-test release-guard release clean
 
 build:
 	$(GO) build -o dax ./cmd/dax
+
+# A dax that needs no C library, for a container or a box image without
+# glibc (Alpine, busybox), as the release's binaries are built. Set
+# GOOS and GOARCH for another platform.
+static:
+	CGO_ENABLED=0 $(GO) build -trimpath -o dax ./cmd/dax
 
 install:
 	$(GO) install ./cmd/dax

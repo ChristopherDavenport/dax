@@ -63,7 +63,7 @@ const Version = "0.1.0-dev"
 // about is one nobody can account for.
 const (
 	abortedOutput  = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput   = "Error: the user denied this call."
+	deniedOutput   = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
 	unknownOutput  = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
 	neverRanOutput = "Error: this call was cut off before it reached its tool; it did not run."
 	heldOutput     = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
@@ -94,6 +94,23 @@ type Options struct {
 	SubagentStreamer openresponses.Streamer
 	// Model is the model name the requests carry.
 	Model string
+	// MaxTurns stops each run after this many turns, stopped with
+	// cause max_turns; zero is no limit. The sub-agents keep their own.
+	MaxTurns int
+	// MaxTokens and MaxCost stop a run, stopped with cause guard,
+	// before its next model call once the session's model calls, the
+	// sub-agents' among them, have used this many tokens (input and
+	// output) or cost this many US dollars by Price; a sub-agent's next
+	// call is refused then too. Zero is no limit. Under MaxCost a model
+	// Price does not know refuses the session's start, or stops the run
+	// once a call goes to one.
+	MaxTokens int
+	MaxCost   float64
+	Price     Price
+	// PricedModels are the other models the session's calls go to (the
+	// sub-agents'), each of which Price must know under MaxCost, checked
+	// at start as Model is.
+	PricedModels []string
 	// Fit is the reasoning effort to ask a model for in place of the
 	// one Think implies, from what its vendor says it takes; nil asks
 	// as configured. It is applied where each configuration is built,
@@ -182,9 +199,26 @@ type Options struct {
 	// user's and not the project's, and are not screened; a missing
 	// one is skipped.
 	AgentsMDGlobal []string
+	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
+	// AgentsMD (dax -bare); the repository's files are still read.
+	NoUserAgentsMD bool
+	// Bare names the sources a bare run (dax -bare) left out, which the
+	// header records as dax.profile so two sessions read as the
+	// configurations they were; nil for a run that is not bare.
+	Bare []string
 	// Compact, when positive, is the estimated token budget above which
 	// the transcript is folded before a call.
 	Compact int
+	// CompactFrom says where Compact came from, for the header's
+	// dax.context: "flag" (-compact) or "window" (three quarters of
+	// Window); empty with Compact 0 is "off".
+	CompactFrom string
+	// Window is the context window, in tokens, dax believes the model
+	// has, 0 unknown, and WindowFrom where that came from: the vendor's
+	// figure ("vendor:<name>"), Ollama's served window, or the user's
+	// (config, flag). Both are recorded in the header's dax.context.
+	Window     int64
+	WindowFrom string
 	// CompactServer folds through the server's compaction endpoint
 	// (compact.New) instead of a local summary (compact.NewLocal).
 	CompactServer bool
@@ -214,6 +248,9 @@ type Options struct {
 	// MCPTrustFile is where the trusted sets are kept; empty is
 	// DefaultMCPTrustFile under DefaultUserDir.
 	MCPTrustFile string
+	// NoMCPTrustFile neither reads nor writes the trust file (dax -bare):
+	// a project's servers start only with TrustMCP, for this session.
+	NoMCPTrustFile bool
 	// MaxReadBytes is the most bytes of a file a tool should read,
 	// which extension.ToolEnv carries; zero is tool.DefaultMaxRead.
 	// With an Executor, its tools take ExecutorOptions.MaxReadBytes,
@@ -554,6 +591,20 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	case o.Description == "":
 		o.Description = "An agent built on dax."
 	}
+	if o.MaxTurns < 0 || o.MaxTokens < 0 || o.MaxCost < 0 {
+		return nil, errors.New("a limit on turns, tokens or cost is zero or more")
+	}
+	// Every model call the session makes, a sub-agent's or a fold's
+	// summary among them, goes through the meter.
+	m, err := newMeter(o)
+	if err != nil {
+		return nil, err
+	}
+	if r, ok := store.(agentsession.Reader); ok && m != nil && resume != "" {
+		// A resumed session goes on from what its record says it spent.
+		m.seed(ctx, r, resume, o.Model)
+	}
+	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
 	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
@@ -620,7 +671,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.Executor != nil {
 			dir = ""
 		}
-		mdOpts, refused := agentsMDOptions(ws, dir, o.UserDir, o.AgentsMDGlobal)
+		userDir := o.UserDir
+		if o.NoUserAgentsMD {
+			userDir = ""
+		}
+		mdOpts, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
@@ -649,6 +704,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		agentkit.WithRetry(agentturn.Retry{MaxAttempts: 3}),
 		agentkit.WithInstructions(s.systemPrompt()),
 	)
+	if o.MaxTurns > 0 {
+		kopts = append(kopts, agentkit.WithMaxTurns(o.MaxTurns))
+	}
+	if m != nil {
+		kopts = append(kopts, agentkit.WithBeforeTurn(m.beforeTurn))
+	}
 	// The servers the workspace offers of its own, a box host's units
 	// among them, each connected below as the config's are. Behind a box
 	// host, every MCP unit its handshake names must be one: an older box
@@ -725,12 +786,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	kopts = append(kopts, agentkit.WithToolElicitor(agentpolicy.ByHuman, s.elicit))
 	// Set whether or not a server is configured, since /mcp may add one.
 	kopts = append(kopts, agentkit.WithMCPStderr(os.Stderr))
-	trustFile := o.MCPTrustFile
-	if trustFile == "" {
-		trustFile = DefaultMCPTrustFile(DefaultUserDir())
-	}
 	_, starts := ws.(workspace.Starter)
-	servers := trusted(o.MCP, ws.Descriptor(), !starts, trustFile, o.TrustMCP)
+	servers := trusted(o.MCP, ws.Descriptor(), !starts, o.trustFile(), o.TrustMCP)
 	// Two servers whose tools would be named alike are refused: a rule
 	// for one's tools would be the other's (the -mcp flag's "cli"
 	// beside a configured "cli" among them).
@@ -792,7 +849,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			if !ok {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
-			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact), fold)
+			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(pinPrompts)), fold)
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
 			// under -think is effort low. qwen3.5 then spends most of
@@ -805,7 +862,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			none := compact.WithRequest(func(r *openresponses.Request) {
 				r.Reasoning = o.fit(context.Background(), r.Model, openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone})
 			})
-			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none), fold)
+			// The user's own words are kept through every fold
+			// (pinPrompts), recorded in the compaction entry.
+			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(pinPrompts)), fold)
 		}
 	}
 	if store != nil {
@@ -839,6 +898,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
+	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
 	// The kit's control hands the agent the inputs a stopped session
 	// accepted and no run took, which it takes after the next prompt.
 	// The session's elicitor is the kit's own, so the control leaves

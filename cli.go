@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,6 +109,9 @@ func run(ctx context.Context, args []string, p program) error {
 	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
+	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
+	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
+	resultPath := fs.String("result", "", "with -p, write how the run ended (reason, cause, error, pending calls, usage) to this file as JSON, and exit 0 however it ended")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
 	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's or served workspace's, and exit")
@@ -137,13 +141,18 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
-	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost")
+	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost, and for -max-cost")
+	contextWindow := fs.Int("context-window", 0, "the context window, in tokens, the model is served at, which sizes the default compaction budget; overrides the config's context_window for the model and what the vendor says, 0 leaves them")
+	maxTurns := fs.Int("max-turns", 0, "stop each run after this many turns (stopped, max_turns); overrides max_turns, 0 is no limit")
+	maxTokens := fs.Int("max-tokens", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have used this many tokens; 0 is no limit")
+	maxCost := fs.Float64("max-cost", 0, "stop a run before its next model call once the session's model calls, the sub-agents' among them, have cost this many US dollars by the pricing file, which must price the model; 0 is no limit")
 	listen := fs.String("listen", "127.0.0.1:0", "dax serve: the address to serve the session on, loopback unless -tls-cert and -tls-key are given; port 0 picks one")
 	tlsCert := fs.String("tls-cert", "", "dax serve: serve HTTPS with this certificate (PEM), with -tls-key; then -listen may be any address")
 	tlsKey := fs.String("tls-key", "", "dax serve: the private key (PEM) of -tls-cert")
 	a2aFlag := fs.Bool("a2a", false, "dax serve: also serve the session's agent over A2A (/a2a, its card at /.well-known/agent-card.json) behind a token of its own ($"+a2aTokenEnv+" or a file beside serve's); each A2A conversation is a session of its own")
 	a2aEscalate := fs.Bool("a2a-escalate", false, "dax serve -a2a: put a call the policy asks about to the A2A caller, for a host nobody attaches to; without it a view attached to the served session answers, and with none attached it is refused")
 	a2aURL := fs.String("a2a-url", "", "dax serve -a2a: the base URL callers reach serve at, which the agent card names (https, or http to loopback), as behind a proxy that ends TLS; without it the card names the origin each request reached")
+	bare := fs.Bool("bare", false, "leave out your own config, ~/.dax/AGENTS.md, agents_md_global, skills and memory, for a run that does not depend on your home directory; -config, -agents-md, -agents-md-global, -skills or -memory beside it brings that one back")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -158,6 +167,14 @@ func run(ctx context.Context, args []string, p program) error {
 		if given[name] && !serving {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
+	}
+	for _, name := range []string{"timeout", "result", "trajectory"} {
+		if given[name] && *once == "" {
+			return fmt.Errorf("-%s goes with -p", name)
+		}
+	}
+	if *timeout < 0 {
+		return errors.New("-timeout: want a duration of 0 or more")
 	}
 	if serving && (*once != "" || *frontName != "") {
 		return errors.New("dax serve has no front of its own: drop -p and -front, and attach with dax attach")
@@ -292,6 +309,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 	}
 	flags.PricingFile = str("pricing-file", pricingFile)
+	if given["max-turns"] {
+		flags.MaxTurns = maxTurns
+	}
 	flags.Effort = str("effort", effort)
 	if given["agents"] {
 		flags.Agents = agentsFlag
@@ -315,10 +335,15 @@ func run(ctx context.Context, args []string, p program) error {
 	// With an executor the project is where it runs, and its file is
 	// read through it once it is connected (executorSettings); with a
 	// served workspace, through that once it is dialed.
-	user, err := loadUser(*cfgPath)
+	var leftOut []string
+	if *bare {
+		leftOut = bareLeftOut(given)
+	}
+	user, err := loadUserFor(*cfgPath, leftOut)
 	if err != nil {
 		return err
 	}
+	applyBare(leftOut, &user, &flags, skillsFlag)
 	proj, err := workspace.NewLocal(dir, nil)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
@@ -508,6 +533,9 @@ func run(ctx context.Context, args []string, p program) error {
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
+		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
+		NoMCPTrustFile: leftOut != nil,
+		Bare:           leftOut,
 		AgentsMDGlobal: settings.AgentsMDGlobal,
 		PassEnv:        settings.PassEnv,
 		KeyEnv:         m.KeyEnv,
@@ -540,10 +568,21 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.SubagentStreamer = m.SubagentStreamer
 	}
 	info, modelLine := describeModel(ctx, opts.Streamer, m)
+	if *contextWindow < 0 {
+		return errors.New("-context-window: want a number of tokens, 0 for the vendor's")
+	}
+	if w := info.WithWindow(settings.ContextWindow[m.Name], settings.ProjectContextWindow[m.Name], int64(*contextWindow)); w.WindowFrom != info.WindowFrom {
+		info, modelLine = w, w.String()
+	}
+	opts.CompactFrom = "flag"
 	if !given["compact"] {
 		// The model's window when the vendor reports one; otherwise
 		// compaction stays off, as before.
-		opts.Compact = info.CompactBudget()
+		opts.Compact, opts.CompactFrom = info.CompactBudget(), "window"
+	}
+	opts.Window, opts.WindowFrom = info.ContextWindow, info.WindowFrom
+	if opts.Window > 0 && opts.WindowFrom == "" {
+		opts.WindowFrom = "vendor:" + info.Source
 	}
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)
@@ -553,6 +592,21 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.Instructions = string(data)
 	}
 	opts.MCP = mcpServersOf(settings, *mcp)
+	if *maxTokens < 0 || *maxCost < 0 {
+		return errors.New("-max-tokens and -max-cost: want 0 or more")
+	}
+	opts.MaxTurns, opts.MaxTokens, opts.MaxCost = settings.MaxTurns, *maxTokens, *maxCost
+	if cost != nil {
+		opts.Price = agent.Price(cost)
+	}
+	if hasExtension(exts, agents.Name) && m.SubagentName != "" && m.SubagentName != m.Name {
+		// The sub-agents' calls count toward -max-cost too, so their
+		// model needs a price before anything spends.
+		opts.PricedModels = []string{m.SubagentName}
+	}
+	if *trajectory != "" && *root == "" {
+		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
+	}
 	opts.TrustMCP = *trustMCP
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy
@@ -567,8 +621,8 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once,
-		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
+		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 	}
 	var f front
 	if serving {
@@ -677,6 +731,53 @@ func loadUser(userPath string) (config.Layer, error) {
 		userPath = config.Path()
 	}
 	return config.Load(userPath, false, explicit)
+}
+
+// bareLeftOut is what -bare leaves out of the user's own sources: the
+// config (and with it its MCP servers, peers and rules), ~/.dax/AGENTS.md,
+// agents_md_global, skills and memory, less those a flag given beside
+// it brings back, each its one source: -config, -agents-md,
+// -agents-md-global, -skills, -memory. The repository's own AGENTS.md
+// files and config stay: they are part of the task. Never nil, so a
+// bare run is recorded as one even with every source back.
+func bareLeftOut(given map[string]bool) []string {
+	out := []string{}
+	for _, s := range []struct{ flag, source string }{
+		{"config", "config"}, {"agents-md", "agents_md_home"}, {"agents-md-global", "agents_md_global"}, {"skills", "skills"}, {"memory", "memory"},
+	} {
+		if !given[s.flag] {
+			out = append(out, s.source)
+		}
+	}
+	return out
+}
+
+// loadUserFor is the user's layer, or none, unread, when a bare run
+// leaves the config out: a broken file does not fail it.
+func loadUserFor(userPath string, leftOut []string) (config.Layer, error) {
+	if slices.Contains(leftOut, "config") {
+		return config.Layer{}, nil
+	}
+	return loadUser(userPath)
+}
+
+// applyBare leaves out what leftOut names: the user's layer, the
+// agents_md_global files, the skills and the memory. ~/.dax/AGENTS.md
+// is the session's to leave out (agent.Options.NoUserAgentsMD).
+func applyBare(leftOut []string, user *config.Layer, flags *config.Flags, skills *bool) {
+	for _, s := range leftOut {
+		switch s {
+		case "config":
+			*user = config.Layer{}
+		case "agents_md_global":
+			flags.AgentsMDGlobal = []string{}
+		case "skills":
+			*skills = false
+		case "memory":
+			none := ""
+			flags.MemoryDir = &none
+		}
+	}
 }
 
 // loadSettings folds the user's layer, the project's read through the

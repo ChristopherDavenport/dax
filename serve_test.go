@@ -632,8 +632,14 @@ func TestAnAttachedViewContinuesFromAnEarlierEntry(t *testing.T) {
 	s := startServe(t, &steps{}, policy.Rules{})
 	r := s.attach()
 	r.waitOutput("say something")
+	// Each question waits for the view to show its run ended, not only
+	// for the record: a line typed while the view still shows a run
+	// steers that run instead of starting one, and lands nowhere once
+	// the run has ended (#96).
+	mark := r.mark()
 	r.type_("first question\r")
 	s.waitPath("first question")
+	r.waitOutputSince(mark, "idle")
 	r.type_("second question\r")
 	s.waitPath("first question", "second question")
 	// The row cursor goes up from the last row: the second reply, the

@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The built-in unit and profile: a box host with no config makes the
@@ -136,7 +138,16 @@ type Unit struct {
 	// Exfiltration is ExfiltrationAccepted on a unit with the project
 	// and any internet (rule 2).
 	Exfiltration string `json:"exfiltration,omitempty"`
+	// Description says what an MCP unit's server is for, for a person
+	// choosing among them: the session lists it with the unit's name
+	// (/mcp). One line of at most MaxDescriptionBytes, no control
+	// characters, since it reaches the terminal.
+	Description string `json:"description,omitempty"`
 }
+
+// MaxDescriptionBytes bounds a unit's description, as dax's config
+// bounds an MCP server's.
+const MaxDescriptionBytes = 1024
 
 // Files is what a unit mounts: the project at its own path, read-only
 // or read-write, and a state directory the box host keeps for the unit
@@ -257,6 +268,9 @@ type Settings struct {
 	Rules           Rules
 	Secrets         map[string]string
 	Command         []string
+	// Description is the unit's, for the session's listing; not part
+	// of the declaration, since the container does not depend on it.
+	Description string
 	// Decl is a hash of the unit's declaration, so a container made from
 	// another is refused.
 	Decl string
@@ -449,6 +463,7 @@ func (h HostConfig) filled(name string, u Unit) Settings {
 		s.Secrets = maps.Clone(u.Secrets)
 	}
 	s.Command = slices.Clone(u.Command)
+	s.Description = u.Description
 	// The declaration, defaults in, without the internet, which a session
 	// changes without making the container again; secrets by reference.
 	decl, _ := json.Marshal(struct {
@@ -462,6 +477,21 @@ func (h HostConfig) filled(name string, u Unit) Settings {
 	sum := sha256.Sum256(decl)
 	s.Decl = hex.EncodeToString(sum[:])[:16]
 	return s
+}
+
+// checkDescription refuses a description that is too long or holds a
+// control character (a newline among them) or invalid UTF-8: it is one
+// line a person reads in a listing.
+func checkDescription(d string) error {
+	if len(d) > MaxDescriptionBytes {
+		return fmt.Errorf("%d bytes; at most %d", len(d), MaxDescriptionBytes)
+	}
+	for _, r := range d {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return fmt.Errorf("%q holds a control character or invalid UTF-8", d)
+		}
+	}
+	return nil
 }
 
 // unitName is what a unit may be called: its container's name, its
@@ -586,6 +616,14 @@ func (h HostConfig) checkUnit(name string, u Unit) error {
 	for _, a := range u.Command {
 		if a == "" || strings.ContainsRune(a, 0) {
 			return fmt.Errorf("%s.command: an empty argument", field)
+		}
+	}
+	if u.Description != "" {
+		if kind == KindWorkspace {
+			return fmt.Errorf("%s.description: a workspace unit is not listed as a server; description is an MCP unit's", field)
+		}
+		if err := checkDescription(u.Description); err != nil {
+			return fmt.Errorf("%s.description: %w", field, err)
 		}
 	}
 	s := h.filled(name, u)

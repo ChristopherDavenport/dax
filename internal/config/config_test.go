@@ -541,6 +541,68 @@ func TestPassEnv(t *testing.T) {
 	}
 }
 
+// max_turns is the user's, the project's only when lower, and the
+// flag's over both (#139).
+func TestMaxTurnsPrecedence(t *testing.T) {
+	user := parse(t, `{"max_turns":50}`, false)
+	lower := parse(t, `{"max_turns":20}`, true)
+	higher := parse(t, `{"max_turns":80}`, true)
+	n := func(v int) *int { return &v }
+	for _, tc := range []struct {
+		name   string
+		layers []Layer
+		flag   *int
+		want   int
+	}{
+		{"none", nil, nil, 0},
+		{"the user's", []Layer{user}, nil, 50},
+		{"a project's lower one", []Layer{user, lower}, nil, 20},
+		{"a project's higher one is no tighter", []Layer{user, higher}, nil, 50},
+		{"a project's where the user set none", []Layer{higher}, nil, 80},
+		{"the flag's", []Layer{user, lower}, n(100), 100},
+		{"the flag's 0 turns it off", []Layer{user}, n(0), 0},
+	} {
+		s, err := Resolve(tc.layers, Flags{MaxTurns: tc.flag}, "")
+		if err != nil || s.MaxTurns != tc.want {
+			t.Errorf("%s: max_turns %d (%v), want %d", tc.name, s.MaxTurns, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(`{"max_turns":-1}`), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_turns") {
+		t.Errorf("a negative max_turns: %v", err)
+	}
+}
+
+// context_window is per model: the user's sets it, and a project's may
+// only lower it, kept apart so the session can hold it to the vendor's
+// figure too (#171).
+func TestContextWindowPrecedence(t *testing.T) {
+	user := parse(t, `{"context_window":{"qwen3.5:9b":65536,"big":200000}}`, false)
+	proj := parse(t, `{"context_window":{"qwen3.5:9b":32768,"big":300000,"other":4096}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ContextWindow["qwen3.5:9b"] != 65536 || s.ContextWindow["big"] != 200000 || len(s.ContextWindow) != 2 {
+		t.Errorf("the user's windows %v", s.ContextWindow)
+	}
+	if got := s.ProjectContextWindow; got["qwen3.5:9b"] != 32768 || got["big"] != 0 || got["other"] != 4096 {
+		t.Errorf("the project's windows %v, want only those lower than the user's", got)
+	}
+	// A project's window has a floor: one of 1 would turn compaction
+	// off, and one of 2 fold on every call (#171).
+	if _, err := Parse([]byte(`{"context_window":{"m":2}}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Errorf("a project's window of 2: %v", err)
+	}
+	if _, err := Parse([]byte(`{"context_window":{"m":4096}}`), "/p/.dax/config.json", true); err != nil {
+		t.Errorf("a project's window of 4096: %v", err)
+	}
+	for _, bad := range []string{`{"context_window":{"m":0}}`, `{"context_window":{"m":-1}}`, `{"context_window":{"":100}}`} {
+		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "context_window") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
 func TestMaxReadBytes(t *testing.T) {
 	user := parse(t, `{"max_read_bytes":4096}`, false)
 	if s, err := Resolve([]Layer{user}, Flags{}, ""); err != nil || s.MaxReadBytes != 4096 {

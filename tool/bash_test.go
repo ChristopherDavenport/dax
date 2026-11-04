@@ -75,3 +75,32 @@ func TestBashProgressIsWindowedAndBounded(t *testing.T) {
 		t.Errorf("the last report is not the command's output:\n%q", partial[len(partial)-1])
 	}
 }
+
+// A workspace with no bash says so as the call's output, which the
+// model reads and can act on (the file tools still work), rather than
+// failing every call with exec's error (#143). No sh fallback: the
+// analyzer and the stamp read bash's grammar.
+func TestBashSaysWhenTheWorkspaceHasNoBash(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, result, err := runBash(t, t.TempDir(), "ls")
+	if err != nil {
+		t.Fatalf("the call failed: %v", err)
+	}
+	if !strings.Contains(result, "this workspace has no bash") || !strings.Contains(result, "read, write and edit still work") {
+		t.Errorf("the model is told %q", result)
+	}
+}
+
+// A command that leaves a job running in the background with the
+// output open ends the call after the workspace's wait with what it
+// printed and a note that the job is still running, not with exec's
+// WaitDelay error (#153, the bash half).
+func TestBashSaysABackgroundJobHeldItsOutput(t *testing.T) {
+	_, result, err := runBash(t, t.TempDir(), "sleep 5 & echo started")
+	if err != nil {
+		t.Fatalf("the call failed: %v", err)
+	}
+	if !strings.Contains(result, "started") || !strings.Contains(result, "still holds its output") {
+		t.Errorf("the model is told %q", result)
+	}
+}

@@ -52,7 +52,7 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 			t.Errorf("lifts %q, not one of its tools", l)
 		}
 	}
-	for _, w := range []string{"glob", "grep", "ls", "Read before you edit"} {
+	for _, w := range []string{"glob", "grep", "ls", "Read before you edit", "never search from / or $HOME", "run the checks the project's instructions name"} {
 		if !strings.Contains(e.Instructions, w) {
 			t.Errorf("instructions lack %q: %s", w, e.Instructions)
 		}

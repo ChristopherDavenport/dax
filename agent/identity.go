@@ -50,6 +50,11 @@ const (
 	// servers-only grant is told the served directory's last name
 	// alone, and nothing of the session acts there.
 	headerServers = "dax.servers_workspace"
+	// headerProfile is a bare run's: {"bare": true, "left_out": [...]}.
+	headerProfile = "dax.profile"
+	// headerContext is the context strategy the session started with:
+	// {"compact_budget", "budget_from", "window", "window_from"}.
+	headerContext = "dax.context"
 )
 
 // recordedServers is a servers workspace as the header holds it.
@@ -114,6 +119,23 @@ func normalURL(endpoint string) string {
 	return u.String()
 }
 
+// recordedContext is the session's context strategy as the header
+// records it, so two sessions that differ only in it compare as the
+// configurations they were.
+type recordedContext struct {
+	Budget     int    `json:"compact_budget"`
+	BudgetFrom string `json:"budget_from"`
+	Window     int64  `json:"window,omitempty"`
+	WindowFrom string `json:"window_from,omitempty"`
+}
+
+// recordedProfile is a bare run's profile as the header records it:
+// what it left out of the user's own sources.
+type recordedProfile struct {
+	Bare    bool     `json:"bare"`
+	LeftOut []string `json:"left_out"`
+}
+
 // extras are the header members dax records of a new session: its
 // workspace, and the address of the executor its tools run through.
 func (s *Session) extras() map[string]json.RawMessage {
@@ -130,6 +152,18 @@ func (s *Session) extras() map[string]json.RawMessage {
 	if ex := s.opts.Executor; ex != nil {
 		if raw := ex.r.Box(); len(raw) > 0 && json.Valid(raw) {
 			out[headerBox] = raw
+		}
+	}
+	from := s.opts.CompactFrom
+	if s.opts.Compact <= 0 {
+		from = "off"
+	}
+	if raw, err := json.Marshal(recordedContext{Budget: max(s.opts.Compact, 0), BudgetFrom: from, Window: s.opts.Window, WindowFrom: s.opts.WindowFrom}); err == nil {
+		out[headerContext] = raw
+	}
+	if s.opts.Bare != nil {
+		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: s.opts.Bare}); err == nil {
+			out[headerProfile] = raw
 		}
 	}
 	if sw := s.sw; sw != nil {

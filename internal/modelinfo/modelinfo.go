@@ -50,6 +50,12 @@ type Info struct {
 	DefaultEffort openresponses.ReasoningEffort
 	// ContextWindow and MaxOutput are token limits; zero is unknown.
 	ContextWindow, MaxOutput int64
+	// WindowFrom says where ContextWindow came from, for the record:
+	// "ollama /api/ps" (the window a loaded model is served at),
+	// "ollama num_ctx", "ollama trained length" (the server said
+	// nothing else), "flag" or "config" (set by the user); empty is the
+	// vendor's own figure, Source's.
+	WindowFrom string
 }
 
 // Known reports whether any vendor answered for the model.
@@ -117,6 +123,9 @@ func (i Info) Fit(requested openresponses.ReasoningEffort) openresponses.Reasoni
 // its limits, or "" when nothing is known.
 func (i Info) String() string {
 	if !i.Known() {
+		if i.ContextWindow > 0 {
+			return tokens(i.ContextWindow) + " context (" + i.WindowFrom + ")"
+		}
 		return ""
 	}
 	var parts []string
@@ -145,12 +154,32 @@ func (i Info) String() string {
 		parts = append(parts, "default "+string(i.DefaultEffort))
 	}
 	if i.ContextWindow > 0 {
-		parts = append(parts, tokens(i.ContextWindow)+" context")
+		w := tokens(i.ContextWindow) + " context"
+		if i.WindowFrom != "" {
+			w += " (" + i.WindowFrom + ")"
+		}
+		parts = append(parts, w)
 	}
 	if i.MaxOutput > 0 {
 		parts = append(parts, tokens(i.MaxOutput)+" out")
 	}
 	return strings.Join(parts, " · ") + " (" + i.Source + ")"
+}
+
+// WithWindow is i with the window the user set for model: theirs
+// (config) wins, and the flag's over it; a project's (proj) only where
+// it is lower than the window that leaves. 0 for each is not set.
+func (i Info) WithWindow(user, proj, flag int64) Info {
+	if user > 0 {
+		i.ContextWindow, i.WindowFrom = user, "config"
+	}
+	if proj > 0 && (i.ContextWindow == 0 || proj < i.ContextWindow) {
+		i.ContextWindow, i.WindowFrom = proj, "project config"
+	}
+	if flag > 0 {
+		i.ContextWindow, i.WindowFrom = flag, "flag"
+	}
+	return i
 }
 
 // CompactBudget is the compaction budget the model's context window

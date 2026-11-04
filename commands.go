@@ -19,18 +19,26 @@ import (
 // two slashes goes to the model with one of them dropped, for a prompt
 // that begins with a path.
 
-// isCommand is whether line is for dax rather than the model.
+// isCommand is whether line is for dax rather than the model: a slash
+// command, or a command of the user's own to run (!cmd).
 func isCommand(line string) bool {
-	return strings.HasPrefix(line, "/") && !strings.HasPrefix(line, "//")
+	return strings.HasPrefix(line, "/") && !strings.HasPrefix(line, "//") ||
+		strings.HasPrefix(line, "!") && !strings.HasPrefix(line, "!!")
 }
 
-// userText is what the model is sent for line: line, less the slash
-// that escaped a leading one.
+// userText is what the model is sent for line: line, less the slash or
+// the ! that escaped a leading one.
 func userText(line string) string {
-	if strings.HasPrefix(line, "//") {
+	if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "!!") {
 		return line[1:]
 	}
 	return line
+}
+
+// userCommander is a session that runs a command of the user's own: the
+// session in this process (agent.Session), never one over a wire.
+type userCommander interface {
+	RunUserCommand(ctx context.Context, line string) (agent.UserCommand, error)
 }
 
 // commandHelp lists the commands, for /help and an unknown command.
@@ -45,7 +53,8 @@ const commandHelp = `commands:
   /follow <text>            a follow-up, taken when the model would stop
   /abort                    abort the run
   /quit                     leave
-  //text                    send /text to the model`
+  !<command>                run a command yourself; its output goes with the next prompt
+  //text, !!text            send /text, !text to the model`
 
 // commandResult is what a command did: out is what it says, quit
 // whether the front should end.
@@ -70,6 +79,9 @@ func command(ctx context.Context, t agentturn.Control, ctl agent.Controls, line 
 }
 
 func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, line string, running bool) (commandResult, error) {
+	if cmd, ok := strings.CutPrefix(line, "!"); ok {
+		return userCommand(ctx, ctl, cmd)
+	}
 	name, arg, _ := strings.Cut(line, " ")
 	arg = strings.TrimSpace(arg)
 	idle := func() error {
@@ -171,4 +183,35 @@ func mcpCommand(ctx context.Context, ctl agent.Controls, arg string) (commandRes
 		return commandResult{out: strings.Join(assemblyLines(ctl.Info()), "\n")}, nil
 	}
 	return commandResult{}, errors.New("usage: /mcp, /mcp add <name> <command line>, or /mcp remove <label>")
+}
+
+// userCommand runs cmd, a "!" line, as the user's own: in the session's
+// workspace and not through the policy, its output, line and exit
+// status queued as the user's message for the next prompt, or as a
+// follow-up while a run goes. Only the session's own front runs one:
+// over dax attach a token holder is not the person at the host, and the
+// policy is the only check on that path.
+func userCommand(ctx context.Context, ctl agent.Controls, cmd string) (commandResult, error) {
+	if strings.TrimSpace(cmd) == "" {
+		return commandResult{}, errors.New("usage: !<command>, run in the workspace by you, its output sent with the next prompt")
+	}
+	r, ok := ctl.(userCommander)
+	if !ok {
+		return commandResult{}, errors.New("! runs a command on the session's own machine; it is not offered over dax attach")
+	}
+	c, err := r.RunUserCommand(ctx, cmd)
+	if err != nil {
+		return commandResult{}, err
+	}
+	out := strings.TrimRight(c.Output, "\n")
+	switch {
+	case c.TimedOut:
+		out += "\n[killed; sent with the next prompt]"
+	default:
+		out += fmt.Sprintf("\n[exit %d; sent with the next prompt]", c.ExitCode)
+	}
+	if c.Cut > 0 {
+		out += fmt.Sprintf(" [%d bytes cut]", c.Cut)
+	}
+	return commandResult{out: strings.TrimLeft(out, "\n")}, nil
 }
