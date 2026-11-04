@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"slices"
@@ -78,6 +79,10 @@ type frontInfo struct {
 	// Result (-result) is where -p writes how its run ended, as JSON;
 	// with it, a run that ended exits 0 however it ended.
 	Result string
+	// Trajectory (-trajectory) is where -p writes the session as an
+	// ATIF document once its run ends; Price prices it, nil for none.
+	Trajectory string
+	Price      agent.Price
 	// Policy is a line saying what policy is in force.
 	Policy string
 	// Cost prices the terminal client's session pane and status line; nil
@@ -159,6 +164,8 @@ func (f *replFront) Prepare(*agent.Options)  {}
 type printFront struct {
 	info frontInfo
 	in   *bufio.Scanner
+	// stderr is where the session's line goes; nil is os.Stderr.
+	stderr io.Writer
 }
 
 func (f *printFront) Run(ctx context.Context, sess *agent.Session) error {
@@ -177,7 +184,18 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		defer cancel()
 	}
 	abortOnInterrupt(t)
-	showAssembly(ctl.Info())
+	info := ctl.Info()
+	if info.Recorded {
+		// On standard error, so standard output stays the run's, and
+		// before the run, so a run killed at its deadline still said
+		// which session it is.
+		stderr := f.stderr
+		if stderr == nil {
+			stderr = os.Stderr
+		}
+		fmt.Fprintf(stderr, "session: %s\n", info.ID)
+	}
+	showAssembly(info)
 	showPending(t, "resumed")
 	// The questions the person typed an answer to, by ID.
 	var answered sync.Map
@@ -215,6 +233,19 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		},
 	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
+	if end != nil && f.info.Trajectory != "" {
+		w, ok := t.(interface {
+			WriteTrajectory(context.Context, string, agent.Price) error
+		})
+		if !ok {
+			return errors.Join(err, errors.New("-trajectory: this session cannot be exported"))
+		}
+		// Written under the caller's context: -timeout's deadline has
+		// passed by now for a run it ended.
+		if werr := w.WriteTrajectory(context.WithoutCancel(ctx), f.info.Trajectory, f.info.Price); werr != nil {
+			return errors.Join(err, werr)
+		}
+	}
 	if end != nil && f.info.Result != "" {
 		if werr := writeResult(f.info.Result, sessionIDOf(t), end, usage.total()); werr != nil {
 			return errors.Join(err, werr)

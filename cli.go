@@ -109,6 +109,7 @@ func run(ctx context.Context, args []string, p program) error {
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
+	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
 	resultPath := fs.String("result", "", "with -p, write how the run ended (reason, cause, error, pending calls, usage) to this file as JSON, and exit 0 however it ended")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
@@ -164,7 +165,7 @@ func run(ctx context.Context, args []string, p program) error {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
 	}
-	for _, name := range []string{"timeout", "result"} {
+	for _, name := range []string{"timeout", "result", "trajectory"} {
 		if given[name] && *once == "" {
 			return fmt.Errorf("-%s goes with -p", name)
 		}
@@ -576,6 +577,9 @@ func run(ctx context.Context, args []string, p program) error {
 	if cost != nil {
 		opts.Price = agent.Price(cost)
 	}
+	if *trajectory != "" && *root == "" {
+		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
+	}
 	opts.TrustMCP = *trustMCP
 	if !settings.Policy.Off {
 		opts.Policy = &settings.Policy
@@ -590,8 +594,8 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath,
-		Policy: policySummary(settings.Policy, exts), Cost: cost, Verbose: *verbose,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
+		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 	}
 	var f front
 	if serving {

@@ -450,6 +450,7 @@ no other account could have written it.
 | `-no-policy` | run every tool call without asking; ignores the config's policy |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
+| `-trajectory PATH` | with `-p`, write the session as an ATIF trajectory to `PATH` once the run ends (agentsession's export, the RFC 0001 projection), each sub-agent's session embedded and priced by the pricing file when there is one; needs a session store |
 | `-result PATH` | with `-p`, write how the run ended to `PATH` as JSON and exit 0 however it ended (see [Exit status](#exit-status)) |
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
@@ -1575,6 +1576,10 @@ the whole line its reason. `-p` reads its answers the same way.
 | 3 | stopped: the loop ended it (the end line says why, `[stopped: max_turns]`) |
 | 4 | requires input: a call waits on an answer nobody gave |
 | 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
+
+Before the run starts, `-p` says on standard error which session it
+records, `session: <id>`, so a harness whose runs share a store finds
+each one's own, even of a run it killed.
 
 A harness that counts any status but 0 as its own failure gives
 `-result PATH`: dax then writes the run's end to `PATH`, private to you,

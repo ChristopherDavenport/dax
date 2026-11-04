@@ -168,10 +168,72 @@ func TestPrintResultMatchesTheRecord(t *testing.T) {
 
 // -timeout and -result are -p's.
 func TestTimeoutAndResultGoWithPrint(t *testing.T) {
-	for _, flag := range [][]string{{"-timeout", "1m"}, {"-result", "r.json"}} {
+	for _, flag := range [][]string{{"-timeout", "1m"}, {"-result", "r.json"}, {"-trajectory", "t.json"}} {
 		err := run(t.Context(), append(flag, "-sessions", ""), program{name: "dax", version: "test"})
 		if err == nil || !strings.Contains(err.Error(), flag[0]+" goes with -p") {
 			t.Errorf("%v without -p: %v", flag, err)
+		}
+	}
+}
+
+// sharedSession is a recorded session for -p in a store root of the
+// caller's, with the sub-agents on.
+func sharedSession(t *testing.T, root string, streamer openresponses.Streamer) *agent.Session {
+	t.Helper()
+	base := t.TempDir()
+	o := agent.Options{
+		Model: "scripted", Streamer: streamer, Dir: filepath.Join(base, "project"), Root: root,
+		UserDir:    filepath.Join(base, "user"),
+		Extensions: []extension.Extension{coding.New(0), agents.New(agents.Options{})},
+		Policy:     &policy.Settings{Builtin: true, Fallback: "allow"},
+	}
+	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := agent.New(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	return sess
+}
+
+// -p says which session it records, on standard error before the run,
+// and -trajectory writes that session as ATIF with a delegated child
+// embedded: two runs sharing one store each find their own (#140).
+func TestPrintNamesItsSessionAndWritesItsTrajectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	for i := range 2 {
+		m := &steps{parent: [][2]string{{"task", `{"input":"say hi"}`}}}
+		sess := sharedSession(t, root, m)
+		path := filepath.Join(t.TempDir(), "trajectory.json")
+		var stderr strings.Builder
+		f := &printFront{info: frontInfo{Name: "dax", Prompt: "go", Trajectory: path}, in: bufio.NewScanner(strings.NewReader("")), stderr: &stderr}
+		if err := f.run(t.Context(), sess, sess); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if want := "session: " + sess.ID() + "\n"; !strings.Contains(stderr.String(), want) {
+			t.Errorf("run %d: standard error %q lacks %q", i, stderr.String(), want)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			SessionID string `json:"session_id"`
+			Subagents []struct {
+				SessionID string `json:"session_id"`
+				Steps     []any  `json:"steps"`
+			} `json:"subagent_trajectories"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if doc.SessionID != sess.ID() {
+			t.Errorf("run %d: the trajectory is session %q, want %q", i, doc.SessionID, sess.ID())
+		}
+		if len(doc.Subagents) != 1 || doc.Subagents[0].SessionID == "" || doc.Subagents[0].SessionID == sess.ID() || len(doc.Subagents[0].Steps) == 0 {
+			t.Errorf("run %d: the trajectory does not embed the task's session:\n%s", i, data)
 		}
 	}
 }

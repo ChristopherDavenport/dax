@@ -58,6 +58,11 @@ versions may break flags and the config file.
   refuses the start. Each ends the run stopped, exit 3 under `-p` (#139).
 - Added: `agent.Options.MaxTurns`, `MaxTokens`, `MaxCost` and `Price`,
   and `agent.Price`.
+- Added: `dax -p` prints `session: <id>` on standard error before its
+  run, when the session is recorded, and `-trajectory PATH` writes the
+  session as an ATIF trajectory once the run ends, each sub-agent's
+  session embedded and priced by `-pricing-file` (#140).
+- Added: `agent.Session.WriteTrajectory`.
 
 ## v0.0.32 - 2026-10-26
 
