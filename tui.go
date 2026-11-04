@@ -317,6 +317,12 @@ func submitLine(t agentturn.Control, ctl agent.Controls, quit func()) func(conte
 			if r.quit {
 				quit()
 			}
+			if err == nil && r.send != nil {
+				if l.Running {
+					return console.Submit{Steer: []openresponses.Item{r.send}}, nil
+				}
+				return console.Submit{Prompt: []openresponses.Item{r.send}}, nil
+			}
 			return console.Submit{Reply: r.out}, err
 		}
 		item := openresponses.UserText(userText(l.Text))

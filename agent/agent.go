@@ -411,6 +411,8 @@ func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 type Session struct {
 	Kit *agentkit.Kit
 
+	// templates are the prompt templates it offers (Templates).
+	templates []PromptTemplate
 	// forwards are the ports Forward put on this machine's loopback, by
 	// the workspace's port; each ends with the session.
 	fwdMu    sync.Mutex
@@ -650,6 +652,17 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 	}
 	s.live.think, s.live.main = o.Think, o.Model
+	// The user's own templates are of the home directory a bare run
+	// leaves out; the project's are part of its task.
+	userDir := o.UserDir
+	if o.Bare != nil {
+		userDir = ""
+	}
+	var wsFS fs.FS
+	if !config.ServersAlone(ws) {
+		wsFS = ws.FS()
+	}
+	s.templates = loadTemplates(userDir, wsFS, func(msg string) { fmt.Fprintf(warnings{}, "dax: %s\n", msg) })
 	ok := false
 	defer func() {
 		if !ok {

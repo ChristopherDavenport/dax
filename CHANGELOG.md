@@ -48,6 +48,13 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: prompt templates. `/<name> args` sends `~/.dax/prompts/<name>.md`
+  or the project's `.dax/prompts/<name>.md` with `$ARGUMENTS` and `$1`
+  to `$9` filled in; the message is recorded as composed from that file
+  (`instructions_part`, agentturn's `WithProvenance`), a project's
+  marked untrusted, never as your words; `/help` lists them.
+  `agent.Session.Templates`, `Template`, `agent.PromptTemplate` and
+  `agent.Commands` (#168).
 - Added: `/port N` reaches a port on the loopback of wherever the tools
   act, a box's dev server among them, from this machine's loopback
   (`http://127.0.0.1:<p>`, printed), over whatever carries the

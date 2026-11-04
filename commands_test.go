@@ -277,3 +277,34 @@ func TestServedCompact(t *testing.T) {
 		t.Errorf("served compact asked %q", got)
 	}
 }
+
+// templateControls offers one prompt template, the project's.
+type templateControls struct{ fakeControls }
+
+func (*templateControls) Templates() []agent.PromptTemplate {
+	return []agent.PromptTemplate{{Name: "review", Path: ".dax/prompts/review.md", Project: true}}
+}
+
+func (*templateControls) Template(name, args string) (openresponses.Item, error) {
+	return openresponses.UserText(name + ": " + args), nil
+}
+
+// A prompt template is a command that sends its message; /help lists
+// it, marking the project's (#168).
+func TestAPromptTemplateIsACommand(t *testing.T) {
+	ctl := &templateControls{}
+	r, err := command(context.Background(), &fakeTurn{}, ctl, "/review internal/box tool", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.send.(*openresponses.Message); !ok || m.Text() != "review: internal/box tool" {
+		t.Errorf("sent %#v", r.send)
+	}
+	h, _ := command(context.Background(), &fakeTurn{}, ctl, "/help", false)
+	if !strings.Contains(h.out, "/review [args]") || !strings.Contains(h.out, "the project's") {
+		t.Errorf("/help:\n%s", h.out)
+	}
+	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/nope", false); err == nil || !strings.Contains(err.Error(), "/review") {
+		t.Errorf("unknown command: %v", err)
+	}
+}

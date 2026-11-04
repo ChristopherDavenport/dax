@@ -583,6 +583,23 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				}
+				if item := r.send; err == nil && item != nil {
+					// A prompt template's message, sent as a typed line
+					// is, marked with the file it came from.
+					if running {
+						if err := t.Queue(ctx, agentturn.QueueSteer, item); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else {
+							fmt.Fprintln(w, "[queued as steering]")
+						}
+						continue
+					}
+					// Not kept as the run's prompt text: were calls held,
+					// the template is sent again once they are answered.
+					sent = ""
+					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, item) })
+					continue
+				}
 				if r.quit {
 					if running {
 						t.Abort()

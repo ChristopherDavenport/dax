@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -64,6 +65,9 @@ const commandHelp = `commands:
 type commandResult struct {
 	out  string
 	quit bool
+	// send is a message the front sends as a prompt, or a steer while
+	// a run goes: a prompt template's, marked with where it came from.
+	send openresponses.Item
 }
 
 // command runs a slash line against the session. While a run goes, a
@@ -95,7 +99,7 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 	}
 	switch name {
 	case "/help":
-		return commandResult{out: commandHelp}, nil
+		return commandResult{out: commandHelp + templateHelp(ctl)}, nil
 	case "/quit", "/exit":
 		return commandResult{quit: true}, nil
 	case "/abort":
@@ -185,7 +189,42 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		}
 		return mcpCommand(ctx, ctl, arg)
 	}
-	return commandResult{}, fmt.Errorf("unknown command %s\n%s", name, commandHelp)
+	if tp, ok := ctl.(templater); ok && name != "/" {
+		if slices.ContainsFunc(tp.Templates(), func(p agent.PromptTemplate) bool { return "/"+p.Name == name }) {
+			item, err := tp.Template(strings.TrimPrefix(name, "/"), arg)
+			if err != nil {
+				return commandResult{}, err
+			}
+			return commandResult{send: item}, nil
+		}
+	}
+	return commandResult{}, fmt.Errorf("unknown command %s\n%s%s", name, commandHelp, templateHelp(ctl))
+}
+
+// templater is what a prompt template asks of the session's controls:
+// the session's own (agent.Session.Templates and Template), which read
+// the templates where the session runs; dax attach offers none.
+type templater interface {
+	Templates() []agent.PromptTemplate
+	Template(name, args string) (openresponses.Item, error)
+}
+
+// templateHelp lists the session's prompt templates for /help, the
+// project's marked, since its text is the repository's.
+func templateHelp(ctl agent.Controls) string {
+	tp, ok := ctl.(templater)
+	if !ok || len(tp.Templates()) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nprompt templates ($ARGUMENTS, $1…$9 filled in):")
+	for _, p := range tp.Templates() {
+		fmt.Fprintf(&b, "\n  /%-24s %s", p.Name+" [args]", p.Path)
+		if p.Project {
+			b.WriteString(" (the project's: its text is the repository's)")
+		}
+	}
+	return b.String()
 }
 
 // forwarder is what /port asks of the session's controls: the

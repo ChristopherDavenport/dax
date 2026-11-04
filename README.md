@@ -1393,6 +1393,17 @@ client and the REPL alike; the model never sees it. Start a line with
 sends `/etc/hosts`). In the terminal client a command's output shows over
 the input until the next line, and an error gives the line back to edit.
 
+- `/<name> args` runs a prompt template: a markdown file
+  `~/.dax/prompts/<name>.md`, or the project's `.dax/prompts/<name>.md`
+  (yours wins a name both have), sent with `$ARGUMENTS` replaced by
+  everything after the name and `$1` to `$9` by its words, as a prompt,
+  or a steer while a run goes. The message is recorded as composed from
+  that file (its `instructions_part`), never as words you wrote, and a
+  project's is marked untrusted (`trust`): it is the repository's text,
+  sent only when you type its command. `/help` lists the templates and
+  marks the project's. A name is lowercase letters, digits, `-` and `_`;
+  one of dax's own commands, or a file over 64 KiB, is left out and
+  said once. `-bare` leaves out yours; `dax attach` offers none.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
 - `/port N` reaches port `N` on the loopback of wherever the tools act

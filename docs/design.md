@@ -750,8 +750,6 @@ Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
 tree to navigate; an RPC mode and ACP for editors; a container or
 remote workspace (agentworkspace has the interface and `Local`, not
-those);
-prompt templates
-(`/name args`); a model catalogue with context windows; extension points
+those); a model catalogue with context windows; extension points
 for slash commands, the REPL's renderer, or the config's schema. Each
 would be a front or an assembly option, not a change to the rules above.
