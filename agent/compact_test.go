@@ -93,3 +93,46 @@ func TestCompactWithoutCompactionIsRefused(t *testing.T) {
 		t.Errorf("Compact = %v, want compaction off named", err)
 	}
 }
+
+// pausing is a model whose first call waits until it is let go; the
+// rest answer at once.
+type pausing struct {
+	scripted
+	once    sync.Once
+	in, out chan struct{}
+}
+
+func (m *pausing) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.once.Do(func() {
+		m.in <- struct{}{}
+		<-m.out
+	})
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+// Compact waits for the run: the kit's next request of any agent
+// would take the fold, a sub-agent's among them (review L4).
+func TestCompactWaitsForTheRun(t *testing.T) {
+	ctx := context.Background()
+	m := &pausing{in: make(chan struct{}), out: make(chan struct{})}
+	o := options(t, m)
+	o.Compact = 20000
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	done := make(chan error, 1)
+	go func() { _, err := promptOn(ctx, s, "hi", nil); done <- err }()
+	<-m.in
+	if err := s.Compact(ctx, ""); err == nil || !strings.Contains(err.Error(), "waits for the run") {
+		t.Errorf("Compact during a run = %v", err)
+	}
+	close(m.out)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Compact(ctx, ""); err != nil {
+		t.Errorf("Compact after the run = %v", err)
+	}
+}

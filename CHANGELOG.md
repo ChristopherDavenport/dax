@@ -29,9 +29,11 @@ versions may break flags and the config file.
     leave them out (`WithoutMCPInstructions`), so the model reads what
     a server says of its own tools, marked as text a third party wrote.
     The request, and its hash, changes for a session with such a server.
-  - `explore` and `task` decide under a grant scope of their own: an
-    "allow for this session" given in the main conversation no longer
-    lets a sub-agent run the tool unasked (agentkit v0.0.16, #109).
+  - `explore` and `task` decide under a grant scope of their own
+    (agentkit v0.0.16, #109). dax offers no "allow for this session"
+    today, and its skill grants were already the sub-agent's own, so
+    nothing you see changes; once session grants come (#146), one
+    given in the main conversation will not reach a sub-agent.
   - Memory: a link inside the memory directory is not followed, so a
     committed `project/x.md` pointing at `~/.ssh/id_ed25519` is not read
     into the block; a scope directory that is a link is an error. The
@@ -71,7 +73,10 @@ versions may break flags and the config file.
   (`instructions_part`, agentturn's `WithProvenance`), a project's
   marked untrusted, never as your words; `/help` lists them.
   `agent.Session.Templates`, `Template`, `agent.PromptTemplate` and
-  `agent.Commands` (#168).
+  `agent.Commands` (#168). A template's name may not hold a double
+  underscore, so a project's cannot stand in for an MCP prompt's
+  command; in the REPL, a template sent while calls wait for approval
+  says it was not sent.
 - Added: `/port N` reaches a port on the loopback of wherever the tools
   act, a box's dev server among them, from this machine's loopback
   (`http://127.0.0.1:<p>`, printed), over whatever carries the
@@ -137,8 +142,8 @@ versions may break flags and the config file.
   same (`… on <host>`); a header from before compares by kind, ref and
   root. `-list`, memory and the MCP trust still go by kind, ref and
   root.
-- Changed: the release workflow's binaries job checks out without
-  keeping the token in `.git/config`.
+- Changed: the release workflow's jobs check out without keeping the
+  token in `.git/config`.
 
 - Dependencies: agenttool, mcpclient and mcpserver v0.0.26, up from
   v0.0.25 (a call to an MCP server cut because its connection closed

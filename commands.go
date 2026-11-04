@@ -244,7 +244,7 @@ func templateHelp(ctx context.Context, ctl agent.Controls) string {
 			for _, p := range prompts {
 				fmt.Fprintf(&b, "\n  /%s", p.Command)
 				for _, a := range p.Arguments {
-					b.WriteString(" <" + a + ">")
+					b.WriteString(" <" + oneLine(a, maxField) + ">")
 				}
 				if p.Description != "" {
 					b.WriteString("  " + oneLine(p.Description, maxDescription))

@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -30,6 +31,9 @@ type MCPPrompt struct {
 	server    string
 }
 
+// promptName is a prompt name a slash command can carry.
+var promptName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 // mcpPromptSource is the instructions layer source of an MCP prompt's
 // messages on the record.
 const mcpPromptSource = "dax.mcp_prompt"
@@ -48,6 +52,11 @@ func (s *Session) MCPPrompts(ctx context.Context) []MCPPrompt {
 		for p, err := range sess.Prompts(ctx, nil) {
 			if err != nil {
 				break
+			}
+			// A name that is not one a line can type, or that would
+			// carry a terminal's controls, is not a command.
+			if !promptName.MatchString(p.Name) {
+				continue
 			}
 			var args []string
 			for _, a := range p.Arguments {

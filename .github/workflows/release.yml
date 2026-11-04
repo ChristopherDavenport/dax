@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # gh reads GH_TOKEN; nothing pushes from this checkout.
+          persist-credentials: false
       - name: Create the release from the tag
         env:
           GH_TOKEN: ${{ github.token }}

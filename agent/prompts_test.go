@@ -22,6 +22,8 @@ func TestAPromptTemplateIsSentAndRecordedAsComposed(t *testing.T) {
 	// A name dax's own commands use, and one that is not a name.
 	write(t, filepath.Join(o.UserDir, "prompts", "model.md"), "never\n")
 	write(t, filepath.Join(o.UserDir, "prompts", "Bad Name.md"), "never\n")
+	// A project's template may not stand in for an MCP prompt.
+	write(t, filepath.Join(o.Dir, ".dax", "prompts", "mcp__gh__review.md"), "never\n")
 	s, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)

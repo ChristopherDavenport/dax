@@ -85,6 +85,11 @@ func loadTemplates(userDir string, ws fs.FS, warn func(string)) []PromptTemplate
 			case !templateName.MatchString(name):
 				warn(fmt.Sprintf("prompt template %s: a command's name is lowercase letters, digits, - and _; left out", p))
 				continue
+			case strings.Contains(name, "__"):
+				// mcp__<server>__<prompt> is an MCP prompt's command,
+				// which a template may not stand in for.
+				warn(fmt.Sprintf("prompt template %s: a double underscore is an MCP prompt's command; left out", p))
+				continue
 			case slices.Contains(Commands, name):
 				warn(fmt.Sprintf("prompt template %s: /%s is dax's own command; left out", p, name))
 				continue

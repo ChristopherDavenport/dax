@@ -1288,6 +1288,11 @@ func (s *Session) SetThink(on bool) error {
 // call; a sub-agent's call in that run comes after it. With compaction
 // off it returns agentkit.ErrNoCompaction.
 func (s *Session) Compact(ctx context.Context, instructions string) error {
+	// The kit's next request of any agent takes the fold, a sub-agent's
+	// among them, so it is asked for only between runs.
+	if s.ag.State().Running {
+		return errors.New("compact waits for the run to end")
+	}
 	if err := s.ctl.Compact(ctx, instructions); err != nil {
 		if errors.Is(err, agentkit.ErrNoCompaction) {
 			return fmt.Errorf("compaction is off for this session (-compact 0, or the model's window is not known; give -compact N): %w", err)

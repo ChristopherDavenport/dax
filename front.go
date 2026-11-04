@@ -395,6 +395,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	var answers []agentturn.Answer // the permissions answered so far
 	var steerText string           // a prompt held while held calls are answered
 	var sent string                // the prompt of the run in flight
+	var sentCommand string         // the command whose message the run in flight was prompted with, if any
 	prompt := func() {
 		if !running && len(asks) == 0 {
 			fmt.Fprint(w, "\n> ")
@@ -458,6 +459,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				// The session stopped with calls held for approval: they
 				// are answered first, and the prompt steers that run.
 				steerText = sent
+				if sentCommand != "" {
+					// Its message is marked with where it came from, which
+					// a steer of text would lose: it is not sent.
+					fmt.Fprintf(w, "[calls wait for approval; %s was not sent: run it again once they are answered]\n", render.Clean(sentCommand))
+				}
 				if perms := agent.HeldPermissions(t); len(perms) > 0 {
 					ask(perms)
 					continue
@@ -468,8 +474,10 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				text := steerText
 				steerText = ""
 				start(func() (*agentturn.RunEnd, error) {
-					if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
-						return nil, err
+					if text != "" {
+						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+							return nil, err
+						}
 					}
 					return t.Resume(ctx)
 				})
@@ -593,9 +601,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 						continue
 					}
 					// Not kept as the run's prompt text, which would send
-					// it again unmarked: were calls held, they are asked
-					// and the template is not sent; run it again after.
-					sent = ""
+					// it again unmarked: were calls held, they are asked,
+					// and the REPL says the command was not sent.
+					sent, sentCommand = "", strings.Fields(line)[0]
 					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, items...) })
 					continue
 				}
@@ -620,7 +628,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				}
 				continue
 			}
-			sent = text
+			sent, sentCommand = text, ""
 			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(text)) })
 		}
 	}
