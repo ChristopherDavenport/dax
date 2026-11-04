@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -302,6 +304,14 @@ func TestPrintAtTheEndOfItsInputAnswersForNobody(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkRecordedQuestion(t, sess, "the task sub-agent asks", "write", "decline", "", agentsession.Trigger{})
+	// Nobody answered, so the sub-agent is not told the user denied
+	// its call (the decider is the rule's, as for the main agent's).
+	m.mu.Lock()
+	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
+	m.mu.Unlock()
+	if strings.Contains(saw, "user denied") || !strings.Contains(saw, "nobody") {
+		t.Errorf("the sub-agent was told %q, want that nobody answered", saw)
+	}
 }
 
 // An interrupt stops a -p run while a question waits on a line: the

@@ -104,7 +104,8 @@ versions may break flags and the config file.
   refused by dax's rule, the record naming `policy` as the decider, and
   the model is told nobody was there to approve it, not that you
   denied it. A question declined or cancelled for the same reason names
-  `policy` too.
+  `policy` too, and so does a sub-agent's call refused that way: the
+  sub-agent is told nobody answered.
 - Added: `agent.Rules.PermitBy`, who decided the permit `Permit` gave
   (`agentpolicy.ByHuman`, `ByPolicy`); a rule's refusal tells the model
   nobody answered.

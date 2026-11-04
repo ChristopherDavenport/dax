@@ -2065,6 +2065,11 @@ func (s *Session) askChild(ctx context.Context, name string, info agentturn.Tool
 		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
 	case ok && d.Action == agentturn.Allow:
 		return d
+	case ok && d.Action == agentturn.Block && d.By != "" && d.By != agentpolicy.ByHuman:
+		// Refused by a rule (nobody was left to answer: -p's input
+		// ended, its -timeout), not by the person: said so, and
+		// recorded under that decider, as the main agent's are.
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: unansweredOutput, By: d.By}
 	case ok && d.Action == agentturn.Block:
 		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
 		out := deniedOutput
