@@ -63,6 +63,10 @@ versions may break flags and the config file.
   session as an ATIF trajectory once the run ends, each sub-agent's
   session embedded and priced by `-pricing-file` (#140).
 - Added: `agent.Session.WriteTrajectory`.
+- Added: a release carries static binaries (`CGO_ENABLED=0`, `-trimpath`)
+  for linux and darwin on amd64 and arm64, `dax_<tag>_<os>_<arch>`, and
+  a `SHA256SUMS`; the release workflow checks each is stamped with the
+  tag. `make static` builds the same locally (#142).
 
 ## v0.0.32 - 2026-10-26
 

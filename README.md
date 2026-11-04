@@ -35,6 +35,11 @@ go install github.com/ChristopherDavenport/dax/cmd/dax@latest
 make install
 ```
 
+Each release also carries static binaries for linux and darwin on amd64
+and arm64 (`dax_<tag>_<os>_<arch>`, with a `SHA256SUMS`), built with
+`CGO_ENABLED=0`, so they run in a container without glibc (Alpine,
+busybox) as `dax execute` does; `make static` builds the same here.
+
 Go 1.26 or later. With no flags dax talks to Ollama on
 `localhost:11434` and runs `qwen3.5:9b`.
 
@@ -1839,6 +1844,7 @@ What is not there yet:
 ```sh
 make check    # gofmt, go mod tidy -diff, go vet, staticcheck, govulncheck, go test -race
 make build    # ./dax
+make static   # ./dax with CGO_ENABLED=0, as the release's binaries
 ```
 
 In this workspace the module is built outside the go.work:
