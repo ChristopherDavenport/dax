@@ -35,6 +35,10 @@ const (
 	startSettle = time.Second
 )
 
+// stopWait is how long stop, and the tool's close, wait for a process
+// they ended to be reported ended.
+var stopWait = 5 * time.Second
+
 // ProcessArgs are the background tool's arguments.
 type ProcessArgs struct {
 	Action  string `json:"action" enum:"start,list,output,stop" desc:"start a command in the background, list the processes, read a process's new output, or stop one"`
@@ -78,6 +82,10 @@ type proc struct {
 	command string
 	started time.Time
 	p       workspace.Process
+
+	// redact says it runs an auto-allowed plan, whose output loses a
+	// URL's credentials, as bash's does.
+	redact bool
 
 	mu      sync.Mutex
 	out     []byte // the last processKeep bytes of its output
@@ -162,7 +170,11 @@ func (p *processes) run(ctx context.Context, in ProcessArgs) (string, error) {
 			return "", err
 		}
 		r.p.Close()
-		<-r.done
+		select {
+		case <-r.done:
+		case <-time.After(stopWait):
+			return r.report(true) + "\n[stopped, but the workspace did not say it ended]", nil
+		}
 		return r.report(true), nil
 	}
 	return "", fmt.Errorf("action %q: want start, list, output or stop", in.Action)
@@ -176,7 +188,7 @@ func (p *processes) start(ctx context.Context, in ProcessArgs) (string, error) {
 	if !ok {
 		return "", errors.New("this workspace cannot run a process in the background; run the command with bash")
 	}
-	cmd, _, err := command(ctx, p.an, BashArgs{Command: in.Command, Stamp: in.Stamp})
+	cmd, plan, err := command(ctx, p.an, BashArgs{Command: in.Command, Stamp: in.Stamp})
 	if err != nil {
 		return "", err
 	}
@@ -196,7 +208,7 @@ func (p *processes) start(ctx context.Context, in ProcessArgs) (string, error) {
 		return "", fmt.Errorf("%d processes are running; stop one first", running)
 	}
 	p.next++
-	r := &proc{id: p.next, command: in.Command, started: time.Now(), done: make(chan struct{})}
+	r := &proc{id: p.next, command: in.Command, started: time.Now(), done: make(chan struct{}), redact: plan}
 	p.byID[r.id] = r
 	p.mu.Unlock()
 
@@ -296,6 +308,9 @@ func (r *proc) report(advance bool) string {
 	if advance {
 		r.read = r.total
 	}
+	if r.redact {
+		text = []byte(redactUserinfo(string(text)))
+	}
 	var b strings.Builder
 	b.WriteString(head)
 	switch {
@@ -336,7 +351,7 @@ func (p *processes) close() error {
 		// close says it ended; a wire that never says so is let go.
 		select {
 		case <-r.done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(stopWait):
 		}
 	}
 	p.cancel()

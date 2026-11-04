@@ -80,8 +80,11 @@ versions may break flags and the config file.
   process's new output and stops it; they end with the session. A
   start is decided as bash's call of its line, with bash's rules and
   stamp; dax-coding ships `background(list)`, `background(output)` and
-  `background(stop)` as allow rules. It works on this machine, in an
-  executor or a box, and in a served or tunnelled workspace (#153).
+  `background(stop)` as allow rules. An auto-allowed start's output
+  loses a URL's credentials, as bash's does, and `stop` waits at most
+  five seconds for the workspace to say the process ended. It works on
+  this machine, in an executor or a box, and in a served or tunnelled
+  workspace (#153).
 - Changed: a sub-agent's call the policy asks about is put to whoever
   answers the `task` or `explore` call's questions through agentturn's
   `tools/agent.WithAskParent`, which also settles the calls held only
