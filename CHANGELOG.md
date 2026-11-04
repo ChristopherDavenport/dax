@@ -126,6 +126,12 @@ versions may break flags and the config file.
   the record holds a `dax.user_command` entry, and a fold does not pin
   it. `!!` escapes a leading `!`; `dax attach` refuses `!` (#169).
 - Added: `agent.Session.RunUserCommand` and `agent.UserCommand`.
+- Security: in the REPL a line typed before a question was shown no
+  longer answers it. Each line is numbered as it is read, and a
+  question takes only a line read after it was shown; a line typed
+  ahead (a steer that crossed a sub-agent's question, say) goes on as a
+  message and the question is shown again. A steer starting "yes" could
+  approve a call nobody had seen.
 
 ## v0.0.32 - 2026-10-26
 

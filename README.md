@@ -1597,7 +1597,10 @@ the whole line its reason. A refusal tells the model not to get the same
 result another way (another tool, a script, another path) and to say so
 if it is still needed. `-p` reads its answers the same way; a question
 asked while a call runs has no run to end, so `s` declines it as `n`
-does.
+does. Only a line typed after a question is shown answers it: one typed
+ahead (a steer such as "yes, also fix the tests" that crossed a
+sub-agent's question) goes on as the message it was, and the question
+is shown again.
 
 ## Exit status
 

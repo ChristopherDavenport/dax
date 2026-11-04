@@ -30,6 +30,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -195,8 +196,8 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		}
 		fmt.Fprintf(stderr, "session: %s\n", info.ID)
 	}
-	showAssembly(info)
-	showPending(t, "resumed")
+	showAssembly(os.Stdout, info)
+	showPending(os.Stdout, t, "resumed")
 	// The questions the person typed an answer to, by ID, and the calls
 	// they refused with s, which ends the run.
 	var answered, stops sync.Map
@@ -263,7 +264,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	if err != nil {
 		return err
 	}
-	ended(t, end)
+	ended(os.Stdout, t, end)
 	if status := exitStatus(end); status != 0 && f.info.Result == "" {
 		return &runEnded{status: status, reason: end.Reason}
 	}
@@ -275,6 +276,8 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 type replFront struct {
 	info frontInfo
 	in   *bufio.Scanner
+	// out is where the REPL writes; nil is os.Stdout.
+	out io.Writer
 }
 
 // waiting is something the REPL asked the user and waits on a line for:
@@ -287,6 +290,16 @@ type waiting struct {
 	// ask is the question's elicitation, which says whether it asks
 	// for text.
 	ask agenttool.Elicitation
+	// shown is how many lines had been read when the question was last
+	// shown: only a line read after it answers it.
+	shown uint64
+}
+
+// typedLine is a line of the REPL's input and when it was read: its
+// place among the lines read so far.
+type typedLine struct {
+	text string
+	seq  uint64
 }
 
 // result is how a run the REPL started ended.
@@ -302,21 +315,25 @@ func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
 }
 
 func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
-	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
+	w := f.out
+	if w == nil {
+		w = os.Stdout
+	}
+	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think}).Handle)()
 	abortOnInterrupt(t)
 	info := ctl.Info()
-	fmt.Printf("%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
+	fmt.Fprintf(w, "%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
 	if f.info.ModelInfo != "" {
-		fmt.Printf("model: %s\n", f.info.ModelInfo)
+		fmt.Fprintf(w, "model: %s\n", f.info.ModelInfo)
 	}
 	for _, l := range elsewhereLines(f.info) {
-		fmt.Println(render.Clean(l))
+		fmt.Fprintln(w, render.Clean(l))
 	}
 	if info.Recorded {
-		fmt.Printf("session %s\n", info.ID)
+		fmt.Fprintf(w, "session %s\n", info.ID)
 	}
-	showAssembly(info)
-	showPending(t, "resumed")
+	showAssembly(w, info)
+	showPending(w, t, "resumed")
 	// The questions asked and closed while a call runs, in order, off
 	// the loop's goroutine.
 	var qmu sync.Mutex
@@ -335,11 +352,15 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		}
 		return nil
 	})()
-	lines := make(chan string)
+	// Each line is numbered as it is read, ahead of the loop, so a line
+	// typed before a question was shown is known for one even when the
+	// loop takes it after: it never answers that question.
+	var read atomic.Uint64
+	lines := make(chan typedLine, 256)
 	go func() {
 		defer close(lines)
 		for f.in.Scan() {
-			lines <- f.in.Text()
+			lines <- typedLine{text: f.in.Text(), seq: read.Add(1)}
 		}
 	}()
 	done := make(chan result, 1)
@@ -350,12 +371,13 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	var sent string                // the prompt of the run in flight
 	prompt := func() {
 		if !running && len(asks) == 0 {
-			fmt.Print("\n> ")
+			fmt.Fprint(w, "\n> ")
 		}
 	}
 	next := func() {
 		if len(asks) > 0 {
-			fmt.Print(asks[0].q)
+			asks[0].shown = read.Load()
+			fmt.Fprint(w, asks[0].q)
 		}
 	}
 	start := func(run func() (*agentturn.RunEnd, error)) {
@@ -436,25 +458,56 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					ask(perms)
 					continue
 				}
-				ended(t, r.end)
+				ended(w, t, r.end)
 			default:
-				ended(t, r.end)
+				ended(w, t, r.end)
 			}
 			prompt()
-		case line, ok := <-lines:
+		case typed, ok := <-lines:
 			if !ok {
 				if running {
 					t.Abort()
 					<-done
 				}
-				fmt.Println()
+				fmt.Fprintln(w)
 				return nil
 			}
-			line = strings.TrimSpace(line)
-			// A question asked before the line was read is what the
-			// line answers, not a run to steer.
+			line := strings.TrimSpace(typed.text)
+			// A question shown before the line was read is what the
+			// line answers, not a run to steer. One the line was typed
+			// ahead of, shown since or not shown yet, is not: the line
+			// goes on as what it would have been, and the question
+			// waits for a line typed after it.
 			takeQuestions()
-			if len(asks) > 0 {
+			fresh := len(asks) > 0 && typed.seq > asks[0].shown
+			if len(asks) > 0 && !fresh {
+				if line != "" && !isCommand(line) {
+					text := userText(line)
+					switch {
+					case running:
+						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else {
+							fmt.Fprintln(w, "\n[typed before the question: queued as steering]")
+						}
+					default:
+						// Sent with the answers, as a prompt typed while
+						// held calls wait is.
+						if steerText != "" {
+							steerText += "\n"
+						}
+						steerText += text
+						fmt.Fprintln(w, "\n[typed before the question: sent with your answer]")
+					}
+					next()
+					continue
+				}
+				if line == "" {
+					continue
+				}
+				// A command typed ahead runs as a command.
+			}
+			if fresh {
 				a := asks[0]
 				asks = asks[1:]
 				allow, stop, note := answerLine(line)
@@ -468,7 +521,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					}
 					answers = append(answers, ans)
 				default:
-					fmt.Printf("  ✗ %s denied\n", render.Clean(a.call.Name))
+					fmt.Fprintf(w, "  ✗ %s denied\n", render.Clean(a.call.Name))
 					answers = append(answers, agent.Refusal(a.call.CallID, note, stop))
 				}
 				if len(asks) > 0 {
@@ -497,7 +550,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 			if isCommand(line) {
 				r, err := command(ctx, t, ctl, line, running)
 				if r.out != "" {
-					fmt.Println(r.out)
+					fmt.Fprintln(w, r.out)
 				}
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
@@ -519,7 +572,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				} else {
-					fmt.Println("[queued as steering]")
+					fmt.Fprintln(w, "[queued as steering]")
 				}
 				continue
 			}
@@ -628,22 +681,22 @@ func abortOnInterrupt(t agentturn.Control) {
 
 // ended says what a run's end leaves the user to know: the calls an
 // abort cut off, which the next prompt answers, and why a run stopped.
-func ended(t agentturn.Control, end *agentturn.RunEnd) {
+func ended(w io.Writer, t agentturn.Control, end *agentturn.RunEnd) {
 	switch end.Reason {
 	case agentturn.ReasonAborted:
-		showPending(t, "aborted")
+		showPending(w, t, "aborted")
 	case agentturn.ReasonInputRequired:
 		for _, p := range end.Pending {
-			fmt.Printf("[input required: %s %s]\n", render.Clean(p.Call.Name), render.Clean(p.Call.Arguments))
+			fmt.Fprintf(w, "[input required: %s %s]\n", render.Clean(p.Call.Name), render.Clean(p.Call.Arguments))
 		}
 	case agentturn.ReasonStopped:
-		fmt.Printf("[stopped: %s]\n", end.Cause)
+		fmt.Fprintf(w, "[stopped: %s]\n", end.Cause)
 	}
 	if te := (*timeoutError)(nil); end.Reason == agentturn.ReasonAborted && errors.As(end.Err, &te) {
-		fmt.Printf("[%v]\n", te)
+		fmt.Fprintf(w, "[%v]\n", te)
 	}
 	if h := hint(end.Err); end.Err != nil && h != "" {
-		fmt.Printf("[%s]\n", h)
+		fmt.Fprintf(w, "[%s]\n", h)
 	}
 }
 
@@ -736,21 +789,21 @@ func oneLine(s string, limit int) string {
 	return s
 }
 
-func showAssembly(info agent.Info) {
+func showAssembly(w io.Writer, info agent.Info) {
 	for _, l := range assemblyLines(info) {
-		fmt.Println(render.Clean(l))
+		fmt.Fprintln(w, render.Clean(l))
 	}
 }
 
 // showPending tells the user which calls are unanswered and why, since
 // the next prompt answers them in those terms.
-func showPending(t agentturn.Control, why string) {
+func showPending(w io.Writer, t agentturn.Control, why string) {
 	pending := t.State().Pending
 	if len(pending) == 0 {
 		return
 	}
-	fmt.Printf("[%s; %d tool call(s) unanswered, answered on the next prompt]\n", why, len(pending))
+	fmt.Fprintf(w, "[%s; %d tool call(s) unanswered, answered on the next prompt]\n", why, len(pending))
 	for _, p := range pending {
-		fmt.Printf("  ⏸ %s\n", render.Clean(agent.Describe(p)))
+		fmt.Fprintf(w, "  ⏸ %s\n", render.Clean(agent.Describe(p)))
 	}
 }

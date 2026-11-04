@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,14 +140,13 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 		return nil
 	})()
 	pr, pw := io.Pipe()
-	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr)}
+	out := &syncBuf{}
+	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
 	done := make(chan error, 1)
 	go func() { done <- f.Run(ctx, sess) }()
 
-	// The REPL subscribes before it reads a line, so once "go" is read
-	// a subscriber added now is told of a question after the REPL is (or
-	// is sent it on subscribing, when it is already waiting): the answer
-	// written then is read as the question's.
+	// The answer is typed once the question is shown: a line typed
+	// before it would not answer it.
 	pw.Write([]byte("go\n"))
 	asked := make(chan *agentturn.Question, 1)
 	defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
@@ -163,6 +163,7 @@ func TestTheREPLAnswersAQuestionWithANote(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("no question was asked")
 	}
+	waitIn(t, out, "? allow write")
 	pw.Write([]byte("y keep it short\n"))
 	select {
 	case end := <-ended:
@@ -277,5 +278,64 @@ func TestPrintStopsWhileAQuestionWaitsOnALine(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
 		t.Error("the call the question was about ran")
+	}
+}
+
+// waitIn waits for sub in what w holds.
+func waitIn(t *testing.T, w *syncBuf, sub string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(w.String(), sub) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never shown:\n%s", sub, w.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A line typed before a question was shown does not answer it: a steer
+// such as "yes, also fix the tests" typed while a sub-agent's call was
+// being asked about must not approve a call nobody saw. It goes on as a
+// message, and the question waits for a line typed after it. The REPL
+// is kept busy (a !sleep) while the question arrives and the line is
+// typed, so both are waiting when it looks.
+func TestALineTypedBeforeAQuestionDoesNotAnswerIt(t *testing.T) {
+	ctx := context.Background()
+	m := &steps{
+		parent: [][2]string{{"task", `{"input":"write the file"}`}},
+		child:  [][2]string{{"write", `{"path":"NEVER","content":"x"}`}},
+	}
+	sess, dir := printSession(t, ctx, m)
+	pr, pw := io.Pipe()
+	out := &syncBuf{}
+	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
+	done := make(chan error, 1)
+	go func() { done <- f.Run(ctx, sess) }()
+	waitIn(t, out, "> ")
+	// Subscribed after the REPL, so it has taken the question in (not
+	// shown it) when the line is typed.
+	var busy, typed sync.Once
+	defer sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		switch e := ev.(type) {
+		case *agentturn.ToolStart:
+			if e.Name == "task" {
+				busy.Do(func() { go pw.Write([]byte("!sleep 1\n")) })
+			}
+		case *agentturn.Question:
+			typed.Do(func() { go pw.Write([]byte("yes, also fix the tests\n")) })
+		}
+		return nil
+	})()
+	pw.Write([]byte("go\n"))
+	waitIn(t, out, "? allow write")
+	time.Sleep(500 * time.Millisecond)
+	pw.Close()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the REPL did not end")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
+		t.Fatalf("a line typed before the question approved the call:\n%s", out.String())
 	}
 }
