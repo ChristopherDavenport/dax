@@ -205,6 +205,16 @@ type Options struct {
 	// Compact, when positive, is the estimated token budget above which
 	// the transcript is folded before a call.
 	Compact int
+	// CompactFrom says where Compact came from, for the header's
+	// dax.context: "flag" (-compact) or "window" (three quarters of
+	// Window); empty with Compact 0 is "off".
+	CompactFrom string
+	// Window is the context window, in tokens, dax believes the model
+	// has, 0 unknown, and WindowFrom where that came from: the vendor's
+	// figure ("vendor:<name>"), Ollama's served window, or the user's
+	// (config, flag). Both are recorded in the header's dax.context.
+	Window     int64
+	WindowFrom string
 	// CompactServer folds through the server's compaction endpoint
 	// (compact.New) instead of a local summary (compact.NewLocal).
 	CompactServer bool

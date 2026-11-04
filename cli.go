@@ -573,10 +573,15 @@ func run(ctx context.Context, args []string, p program) error {
 	if w := info.WithWindow(settings.ContextWindow[m.Name], settings.ProjectContextWindow[m.Name], int64(*contextWindow)); w.WindowFrom != info.WindowFrom {
 		info, modelLine = w, w.String()
 	}
+	opts.CompactFrom = "flag"
 	if !given["compact"] {
 		// The model's window when the vendor reports one; otherwise
 		// compaction stays off, as before.
-		opts.Compact = info.CompactBudget()
+		opts.Compact, opts.CompactFrom = info.CompactBudget(), "window"
+	}
+	opts.Window, opts.WindowFrom = info.ContextWindow, info.WindowFrom
+	if opts.Window > 0 && opts.WindowFrom == "" {
+		opts.WindowFrom = "vendor:" + info.Source
 	}
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)

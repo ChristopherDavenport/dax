@@ -112,6 +112,13 @@ versions may break flags and the config file.
   window a server cannot say. The session warns once when the server
   counts fewer input tokens than for the call before while the
   conversation grew (#171).
+- Added: the session's header records its context strategy as
+  `dax.context`: the compaction budget, where it came from (`flag`,
+  `window`, `off`), and the window dax believed and where that came from,
+  so sessions that differ only in `-compact` compare as different
+  configurations (#174; the tool-output caps join it with #172, and
+  agenteval's diff of header extras is agenteval#69).
+- Added: `agent.Options.CompactFrom`, `Window` and `WindowFrom`.
 
 ## v0.0.32 - 2026-10-26
 

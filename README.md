@@ -1824,6 +1824,13 @@ interface, and the rest of dax cannot tell them apart:
   so is an executor's), at its root and with its environment, and end
   with the session; in a workspace that cannot start a process they run
   on this machine, with its environment scrubbed.
+- The session records its context strategy in the header's
+  `dax.context`: the compaction budget (`compact_budget`), where it came
+  from (`budget_from`: `flag`, `window`, three quarters of the window,
+  or `off`), and the window dax believed and where that came from
+  (`window`, `window_from`: `vendor:<name>`, Ollama's served window,
+  `config`, `project config` or `flag`), so two sessions that differ
+  only in `-compact` compare as different configurations.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
