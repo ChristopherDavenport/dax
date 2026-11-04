@@ -1395,6 +1395,16 @@ the input until the next line, and an error gives the line back to edit.
 
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/port N` reaches port `N` on the loopback of wherever the tools act
+  (this machine, an executor, a box, a served or tunnelled workspace)
+  from this machine's loopback, and prints the URL, `port 5173:
+  http://127.0.0.1:41733`: a dev server the model started in a box,
+  whose network publishes nothing, opens in your browser. Each
+  connection is a stream over whatever carries the workspace
+  (agentworkspace's `Forward`); the listener is on 127.0.0.1 alone, and
+  ends with the session. It is yours to open, as running a command is:
+  no tool opens one, and `dax attach` refuses it, since it would listen
+  on the serving machine. It works during a run.
 - `/mcp` (or `/mcp list`) lists the session's MCP servers, one a line:
   the name, where it runs (on this machine, in the workspace, at a URL's
   origin, offered by the workspace, or offered by the servers

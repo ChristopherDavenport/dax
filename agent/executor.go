@@ -255,6 +255,7 @@ type executorView struct {
 
 var (
 	_ workspace.Starter        = (*executorView)(nil)
+	_ workspace.Connector      = (*executorView)(nil)
 	_ workspace.ServerProvider = (*executorView)(nil)
 )
 
@@ -280,6 +281,14 @@ func (v *executorView) Exec(context.Context, workspace.Command) (*workspace.Outp
 // do; it is never started here instead.
 func (v *executorView) Start(ctx context.Context, cmd workspace.Command) (workspace.Process, error) {
 	return v.r.Start(ctx, cmd)
+}
+
+// Connect opens a stream to port on the executor's loopback, over the
+// connection (agentworkspace's Connector), so the session forwards a
+// server started where the tools act; an executor without the process
+// methods refuses it as unsupported.
+func (v *executorView) Connect(ctx context.Context, port int) (workspace.PortConn, error) {
+	return v.r.Connect(ctx, port)
 }
 
 // Servers lists the MCP servers the executor's workspace offers: a box

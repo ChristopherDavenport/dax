@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -409,6 +410,11 @@ func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 // (Controls), and the store it is written to.
 type Session struct {
 	Kit *agentkit.Kit
+
+	// forwards are the ports Forward put on this machine's loopback, by
+	// the workspace's port; each ends with the session.
+	fwdMu    sync.Mutex
+	forwards map[int]net.Listener
 
 	opts    Options
 	live    live
@@ -1274,12 +1280,45 @@ func (s *Session) Compact(ctx context.Context, instructions string) error {
 	return nil
 }
 
+// Forward puts port on the workspace's loopback, a server something
+// started where the tools act (a dev server in a box, say), on this
+// machine's loopback alone, and returns its URL there, http://127.0.0.1:<p>
+// (agentworkspace's Forward, RFC 0001 §9): each connection to it is a
+// stream to the port, over whatever carries the workspace. It is the
+// person's act, as running a command is; no tool opens one. A port
+// forwarded already gives the URL it has; every forward ends with the
+// session. A workspace that cannot connect to a port refuses, as
+// unsupported.
+func (s *Session) Forward(ctx context.Context, port int) (string, error) {
+	s.fwdMu.Lock()
+	defer s.fwdMu.Unlock()
+	if ln, ok := s.forwards[port]; ok {
+		return "http://" + ln.Addr().String(), nil
+	}
+	// The forward outlives the call that asked for it.
+	ln, err := workspace.Forward(context.WithoutCancel(ctx), s.ws, port)
+	if err != nil {
+		return "", err
+	}
+	if s.forwards == nil {
+		s.forwards = map[int]net.Listener{}
+	}
+	s.forwards[port] = ln
+	return "http://" + ln.Addr().String(), nil
+}
+
 // Close detaches the recorder and releases the MCP server and the
 // store.
 func (s *Session) Close() error {
 	if s.detach != nil {
 		s.detach()
 	}
+	s.fwdMu.Lock()
+	for port, ln := range s.forwards {
+		ln.Close()
+		delete(s.forwards, port)
+	}
+	s.fwdMu.Unlock()
 	err := s.Kit.Close()
 	if s.set != nil {
 		s.set.ReleaseAll()

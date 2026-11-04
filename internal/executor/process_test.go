@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -351,5 +352,43 @@ func TestTheProcessMethodsAreNotTools(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("something started the project's MCP server: %v", err)
+	}
+}
+
+// A stream to a port on the executor's loopback, a server a command
+// started there, is opened over the session's connection
+// (mcpworkspace's process.connect, agentworkspace RFC 0001 §9), so the
+// session can forward it (#154).
+func TestRemoteConnectsToAPortInTheExecutor(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		b, _ := io.ReadAll(c)
+		c.Write([]byte("echo: " + string(b)))
+	}()
+	s := newServer(t)
+	r, _ := s.remote(t)
+	pc, err := r.Connect(context.Background(), ln.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if _, err := pc.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if err := pc.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(pc)
+	if err != nil || string(got) != "echo: ping" {
+		t.Errorf("read %q, %v", got, err)
 	}
 }

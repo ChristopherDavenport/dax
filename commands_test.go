@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -70,6 +71,11 @@ func (f *fakeControls) RemoveMCP(label string) error {
 func (f *fakeControls) Compact(_ context.Context, instructions string) error {
 	f.did = append(f.did, "compact "+instructions)
 	return nil
+}
+
+func (f *fakeControls) Forward(_ context.Context, port int) (string, error) {
+	f.did = append(f.did, fmt.Sprintf("forward %d", port))
+	return "http://127.0.0.1:41733", nil
 }
 
 func (f *fakeControls) Info() agent.Info {
@@ -149,6 +155,11 @@ func TestCommands(t *testing.T) {
 		{line: "/compact", out: "[the next request folds the conversation]", did: "compact "},
 		{line: "/compact keep the failing test names", out: "[the next request folds the conversation, with your instructions]", did: "compact keep the failing test names"},
 		{line: "/compact", running: true, err: "/compact waits for the run to end"},
+		// A port where the tools act, on this machine's loopback (#154).
+		{line: "/port 5173", out: "port 5173: http://127.0.0.1:41733", did: "forward 5173"},
+		{line: "/port 5173", running: true, out: "port 5173: http://127.0.0.1:41733", did: "forward 5173"},
+		{line: "/port", err: "usage: /port <port>"},
+		{line: "/port x", err: "usage: /port <port>"},
 		// Controls that cannot run the user's command, as over dax
 		// attach, refuse it.
 		{line: "!ls", err: "dax attach"},

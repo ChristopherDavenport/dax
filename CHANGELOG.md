@@ -48,6 +48,12 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: `/port N` reaches a port on the loopback of wherever the tools
+  act, a box's dev server among them, from this machine's loopback
+  (`http://127.0.0.1:<p>`, printed), over whatever carries the
+  workspace (agentworkspace's `Forward` and `process.connect`); it ends
+  with the session, and `dax attach` refuses it. `agent.Session.Forward`;
+  the executor's workspace is an agentworkspace `Connector` (#154).
 - Fixed: a session's env entry records the workspace's host and
   instance beside its kind and ref (agentsession's `workspace.host` and
   `workspace.instance`): this machine's name for a local workspace, so

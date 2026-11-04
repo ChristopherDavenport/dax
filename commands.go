@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentturn"
@@ -51,6 +52,7 @@ const commandHelp = `commands:
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
   /compact [instructions]   fold the conversation at the next request, keeping what you say
+  /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
   /abort                    abort the run
   /quit                     leave
@@ -140,6 +142,21 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
+	case "/port":
+		// A forward changes nothing the run does, so it works during one.
+		port, err := strconv.Atoi(arg)
+		if err != nil || port < 1 || port > 65535 {
+			return commandResult{}, errors.New("usage: /port <port>, a port on the workspace's loopback (1 to 65535)")
+		}
+		f, ok := ctl.(forwarder)
+		if !ok {
+			return commandResult{}, errors.New("/port forwards to the session's own machine; it is not offered over dax attach")
+		}
+		url, err := f.Forward(ctx, port)
+		if err != nil {
+			return commandResult{}, err
+		}
+		return commandResult{out: fmt.Sprintf("port %d: %s", port, url)}, nil
 	case "/compact":
 		if err := idle(); err != nil {
 			return commandResult{}, err
@@ -169,6 +186,14 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		return mcpCommand(ctx, ctl, arg)
 	}
 	return commandResult{}, fmt.Errorf("unknown command %s\n%s", name, commandHelp)
+}
+
+// forwarder is what /port asks of the session's controls: the
+// session's own (agent.Session.Forward). Over dax attach the forward
+// would listen on the serving machine, not the attaching one, so the
+// attached controls offer none.
+type forwarder interface {
+	Forward(ctx context.Context, port int) (string, error)
 }
 
 // compacter is what /compact asks of the session's controls: the
