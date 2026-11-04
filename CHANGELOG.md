@@ -95,6 +95,11 @@ versions may break flags and the config file.
   the workspace's two-second wait with what it printed and a note that
   the job keeps running, in place of failing with exec's "WaitDelay
   expired" (#153; the `process` tool is still to come).
+- Changed: a fold keeps every message you wrote (a prompt, a steer, a
+  note with an answer) up to 8 KiB verbatim after its summary
+  (`compact.WithPin`), so a task's exact paths, format and constraints
+  outlive the summary; the compaction entry records what it pinned. A
+  longer message, a pasted log, is folded like the rest (#173).
 
 ## v0.0.32 - 2026-10-26
 

@@ -832,7 +832,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			if !ok {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
-			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact), fold)
+			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(pinPrompts)), fold)
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
 			// under -think is effort low. qwen3.5 then spends most of
@@ -845,7 +845,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			none := compact.WithRequest(func(r *openresponses.Request) {
 				r.Reasoning = o.fit(context.Background(), r.Model, openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone})
 			})
-			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none), fold)
+			// The user's own words are kept through every fold
+			// (pinPrompts), recorded in the compaction entry.
+			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(pinPrompts)), fold)
 		}
 	}
 	if store != nil {
