@@ -42,7 +42,9 @@ const allowRules = "read glob grep ls " +
 	// listing, reading and stopping the session's own processes look
 	// at nothing else and run (a policy test says what a compound
 	// start does).
-	"background(list) background(output) background(stop)"
+	"background(list) background(output) background(stop) " +
+	// A cut tool result's whole, from the session's own blobs.
+	"read_output"
 
 // secretPaths are names that look like they hold a credential or a
 // key. Reading one asks, whichever tool reads it: Read(...) names read,

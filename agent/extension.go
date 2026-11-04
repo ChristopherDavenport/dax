@@ -333,12 +333,27 @@ type sessionEnv struct {
 
 var _ extension.Env = (*sessionEnv)(nil)
 
+// capped are ts with their results cut to their caps, as the main
+// agent's are, for a sub-agent's configuration.
+func (e *sessionEnv) capped(ts []agenttool.Tool) []agenttool.Tool {
+	out := make([]agenttool.Tool, len(ts))
+	for i, t := range ts {
+		out[i] = e.s.capTool(t)
+	}
+	return out
+}
+
+// ToolOutput implements extension.Env.
+func (e *sessionEnv) ToolOutput(ctx context.Context, ref string) ([]byte, error) {
+	return e.s.ToolOutput(ctx, ref)
+}
+
 func (e *sessionEnv) ToolEnv() extension.ToolEnv           { return e.te }
 func (e *sessionEnv) Name() string                         { return e.s.opts.Name }
 func (e *sessionEnv) Dir() string                          { return e.s.opts.Dir }
 func (e *sessionEnv) UserDir() string                      { return e.s.opts.UserDir }
-func (e *sessionEnv) Tools() []agenttool.Tool              { return slices.Clone(e.a.tools) }
-func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return slices.Clone(e.a.readOnly) }
+func (e *sessionEnv) Tools() []agenttool.Tool              { return e.capped(e.a.tools) }
+func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return e.capped(e.a.readOnly) }
 func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
 func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
 func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }

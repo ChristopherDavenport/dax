@@ -304,7 +304,7 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 			names = append(names, tl.Name)
 		}
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken"}; !slices.Equal(names, want) {
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if om := s.Omitted(); len(om) != 0 {

@@ -122,6 +122,14 @@ type Config struct {
 	// MaxTurns stops a run after this many turns; 0, the default, is
 	// no limit. A project's file may set it only lower than the user's.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// BashMaxOutput is the most bytes of a bash call's output the model
+	// is sent, its first and last halves, and ToolMaxOutput the most of
+	// a result of a tool that is not dax's own (an MCP server's, a
+	// sub-agent's, a peer's); what is left out is kept with the session.
+	// 0 is the default (DefaultBashMaxOutput, DefaultToolMaxOutput). A
+	// project's file may set either only lower.
+	BashMaxOutput int `json:"bash_max_output,omitempty"`
+	ToolMaxOutput int `json:"mcp_max_output,omitempty"`
 	// ContextWindow is the context window, in tokens, a model is served
 	// at, by model name, for a server that cannot say or says the wrong
 	// one (Ollama's trained length): the compaction budget is sized
@@ -734,6 +742,15 @@ func MCPNamesCollide(a, b string) bool { return a == b }
 // which separates the server from the tool, or one that begins or ends
 // with an underscore, whose tools mcp__a____<tool> would read as
 // another server's.
+// The caps on what a tool result sends the model (bash_max_output,
+// mcp_max_output): the defaults, and the range a setting must be in.
+const (
+	DefaultBashMaxOutput = 30000
+	DefaultToolMaxOutput = 100000
+	MinMaxOutput         = 2048
+	MaxMaxOutput         = 1 << 20
+)
+
 func CheckMCPName(name string) error {
 	switch {
 	case !mcpName.MatchString(name):
@@ -767,6 +784,11 @@ func (l *Layer) validate() error {
 	}
 	if c.MaxTurns < 0 {
 		return errors.New("max_turns: want a number of turns, 0 for no limit")
+	}
+	for name, n := range map[string]int{"bash_max_output": c.BashMaxOutput, "mcp_max_output": c.ToolMaxOutput} {
+		if n != 0 && (n < MinMaxOutput || n > MaxMaxOutput) {
+			return fmt.Errorf("%s: want a number of bytes from %d to %d", name, MinMaxOutput, MaxMaxOutput)
+		}
 	}
 	for m, n := range c.ContextWindow {
 		if strings.TrimSpace(m) == "" || n <= 0 {
@@ -1869,6 +1891,10 @@ type Settings struct {
 	MaxReadBytes     int64
 	// MaxTurns is the limit on a run's turns, 0 for none.
 	MaxTurns int
+	// BashMaxOutput and ToolMaxOutput are the caps on what a bash call's
+	// and another tool's result send the model, in bytes, the defaults
+	// when no layer set one.
+	BashMaxOutput, ToolMaxOutput int
 	// ContextWindow is the user's context_window by model, and
 	// ProjectContextWindow the project's where it is lower than the
 	// user's or the user set none: the session takes the project's only
@@ -1903,6 +1929,7 @@ type Rules = policy.Rules
 func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
+		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
@@ -1994,6 +2021,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 				}
 				s.ProjectContextWindow[m] = n
 			}
+		}
+		// Tighten only: a project's cap stands where it is lower than
+		// the one in force, the default's when the user set none.
+		if n := l.BashMaxOutput; n != 0 && (!l.Project || n < s.BashMaxOutput) {
+			s.BashMaxOutput = n
+		}
+		if n := l.ToolMaxOutput; n != 0 && (!l.Project || n < s.ToolMaxOutput) {
+			s.ToolMaxOutput = n
 		}
 		if l.MaxTurns != 0 {
 			// Tighten only: a project's limit stands where it is lower

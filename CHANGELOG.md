@@ -50,6 +50,21 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Changed: what one tool result sends the model is capped and cut at
+  both ends. A `bash` result over `bash_max_output` (default 30000
+  bytes), and a result of a tool that is not dax's own (an MCP
+  server's, a sub-agent's, a peer's) over `mcp_max_output` (default
+  100000), is sent as its first and last halves with how much was left
+  out between them, where bash kept its first 50 KiB and dropped the
+  end, the error of a long build or test among it, and other tools were
+  not capped. The whole is kept as a typed blob of the session, named
+  in the result as `sidecar:sha256:…`, and dax-coding's new
+  `read_output` reads it back, by lines or by a pattern; it never lands
+  in the repository or a remote workspace. `read` returns at most
+  100 KiB a call, down from 200 KiB. Both settings are the user's, and
+  a project's file may only lower them. `extension.Env.ToolOutput`,
+  `agent.Session.ToolOutput`, `agent.Options.BashMaxOutput` and
+  `ToolMaxOutput` (#172).
 - Added: dax-coding's `background` tool starts a long-lived command (a
   dev server, a watcher) in the workspace, lists the processes, reads a
   process's new output and stops it; they end with the session. A

@@ -33,6 +33,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
 	"github.com/ChristopherDavenport/agentsmd"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
@@ -203,6 +204,11 @@ type Options struct {
 	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
 	// AgentsMD (dax -bare); the repository's files are still read.
 	NoUserAgentsMD bool
+	// BashMaxOutput and ToolMaxOutput cap what a bash call's result, and
+	// a result of a tool that is not dax's own, send the model, in bytes
+	// (bash_max_output, mcp_max_output); 0 is config's default. What is
+	// cut is kept with the session (Session.ToolOutput).
+	BashMaxOutput, ToolMaxOutput int
 	// OneShot is a run nobody replies to (-p): the model is told so in a
 	// part of its own (PartOneShot), recorded with the instructions, so
 	// it finishes the task rather than ending on a question.
@@ -410,6 +416,8 @@ func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 type Session struct {
 	Kit *agentkit.Kit
 
+	// outs are the tool outputs it cut and kept (ToolOutput).
+	outs keptOutputs
 	// templates are the prompt templates it offers (Templates).
 	templates []PromptTemplate
 	// forwards are the ports Forward put on this machine's loopback, by
@@ -734,6 +742,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		agentsText = agentsmd.Render(res.Files)
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
+	// Every tool's result is cut to its cap, an MCP server's and a
+	// child agent's among them, in every placement (outputcap.go).
+	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(t) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {

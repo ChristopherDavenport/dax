@@ -230,6 +230,10 @@ type Env interface {
 	Omit(o agentkit.Omission)
 	// Log is a note for the user, as the front shows them.
 	Log(format string, args ...any)
+	// ToolOutput is the whole of a tool result the session cut to its
+	// cap, by the reference the cut result names
+	// (sidecar:sha256:<hex>): only an output this session kept.
+	ToolOutput(ctx context.Context, ref string) ([]byte, error)
 }
 
 // Renderers are the extensions' renderers for a session rooted at dir,

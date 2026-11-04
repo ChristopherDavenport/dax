@@ -12,6 +12,8 @@ package coding
 import (
 	"strings"
 
+	"github.com/ChristopherDavenport/agentkit"
+
 	"github.com/ChristopherDavenport/agenttool"
 
 	"github.com/ChristopherDavenport/dax/extension"
@@ -54,7 +56,13 @@ func New(maxRead int64) extension.Extension {
 		Tools: func(e extension.ToolEnv) []agenttool.Tool {
 			return tool.Builtins(e.Files, maxRead)
 		},
-		ReadOnly:     []string{"read", "glob", "grep", "ls", "bash"},
+		ReadOnly: []string{"read", "glob", "grep", "ls", "bash"},
+		// read_output reads the session's own kept outputs, so it runs
+		// where the session does, through the kit.
+		Owns: []string{"read_output"},
+		Kit: func(env extension.Env) ([]agentkit.Option, error) {
+			return []agentkit.Option{agentkit.WithTools(tool.ReadOutput(env.ToolOutput))}, nil
+		},
 		Matchers:     extension.FixedMatchers(matchers()),
 		Aliases:      aliases,
 		Policy:       policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},

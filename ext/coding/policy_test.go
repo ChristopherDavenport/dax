@@ -40,6 +40,7 @@ func shipped(t *testing.T, dir string) policy.Shipped {
 		owns = append(owns, tl.Name())
 	}
 	owns = append(owns, slices.Collect(maps.Keys(e.Aliases))...)
+	owns = append(owns, e.Owns...)
 	return policy.Shipped{Name: e.Name, Rules: e.Policy, Owns: owns, Lifts: e.Lifts}
 }
 
@@ -143,6 +144,8 @@ func TestDefaultPolicy(t *testing.T) {
 		{"glob", `{"pattern":"**/*.go"}`, agentturn.Allow},
 		{"grep", `{"pattern":"x"}`, agentturn.Allow},
 		{"ls", `{}`, agentturn.Allow},
+		// A cut result's whole, from the session's own outputs (#172).
+		{"read_output", `{"ref":"sidecar:sha256:00"}`, agentturn.Allow},
 		// Writes ask.
 		{"write", `{"path":"a.go","content":""}`, agentturn.Defer},
 		{"edit", `{"path":"a.go","old_string":"a","new_string":"b"}`, agentturn.Defer},

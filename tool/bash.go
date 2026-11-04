@@ -21,7 +21,11 @@ import (
 
 const (
 	defaultBashTimeout = 2 * time.Minute
-	maxBashBytes       = 50 << 10
+	// maxBashBytes bounds what a command's output keeps in memory, its
+	// first and last halves; the session cuts what the model sees much
+	// lower (bash_max_output), keeping the whole as a blob of the
+	// session.
+	maxBashBytes = 1 << 20
 	// progressEvery is how often a running command's output is reported
 	// as progress, and progressBytes the most a report holds: what the
 	// command printed since the last one, or its last progressBytes when
@@ -214,13 +218,16 @@ func command(ctx context.Context, an *Analyzer, in BashArgs) (cmd workspace.Comm
 	return asTyped, false, nil
 }
 
-// capWriter keeps the first max bytes written to it and counts the
-// rest, so the output of a command is bounded in memory.
+// capWriter keeps the first and the last max/2 bytes written to it and
+// counts the rest between them, so the output of a command is bounded in
+// memory and its end, where a build or a test says what failed, is
+// kept.
 type capWriter struct {
 	redact  bool
 	mu      sync.Mutex
 	max     int
-	buf     bytes.Buffer
+	buf     bytes.Buffer // the head
+	tail    []byte       // the last bytes after the head, at most max/2
 	dropped int
 }
 
@@ -228,12 +235,17 @@ func (c *capWriter) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	n := len(p)
-	if room := c.max - c.buf.Len(); room > 0 {
+	half := c.max / 2
+	if room := half - c.buf.Len(); room > 0 {
 		k := min(room, len(p))
 		c.buf.Write(p[:k])
 		p = p[k:]
 	}
-	c.dropped += len(p)
+	c.tail = append(c.tail, p...)
+	if over := len(c.tail) - (c.max - half); over > 0 {
+		c.dropped += over
+		c.tail = append(c.tail[:0], c.tail[over:]...)
+	}
 	return n, nil
 }
 
@@ -241,11 +253,13 @@ func (c *capWriter) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := c.buf.String()
-	if c.redact {
-		s = redactUserinfo(s)
-	}
 	if c.dropped > 0 {
-		s += fmt.Sprintf("\n... [truncated, %d bytes omitted]", c.dropped)
+		s += fmt.Sprintf("\n... [%d bytes left out] ...\n", c.dropped)
+	}
+	s += string(c.tail)
+	if c.redact {
+		// The tail goes through the same redaction as the head.
+		s = redactUserinfo(s)
 	}
 	return s
 }
