@@ -1380,7 +1380,7 @@ transcript.
 
 ## Commands
 
-A line that starts with a slash is a command to dax, in the terminal
+A line that starts with a slash, or with `!`, is a command to dax, in the terminal
 client and the REPL alike; the model never sees it. Start a line with
 `//` to send the model a line that begins with a slash (`//etc/hosts`
 sends `/etc/hosts`). In the terminal client a command's output shows over
@@ -1407,6 +1407,16 @@ the input until the next line, and an error gives the line back to edit.
 - `/tools`, `/session`, `/help`.
 - `/follow text` queues a follow-up that runs once the model would have
   stopped; `/abort` aborts the run; `/quit` leaves.
+- `!command` runs a command yourself, with bash in the session's
+  workspace (the executor's, the box's or the served one's when the
+  tools act there) and the environment its commands get, not through
+  the policy: you typed it. Its output is shown, and its line, output (at
+  most 50 KiB) and exit status go to the model as your message with the
+  next prompt, or as a follow-up while a run goes; the record holds a
+  `dax.user_command` entry saying you ran it, and a fold does not keep
+  it as your request. `!!text` sends `!text` to the model. `dax attach`
+  refuses it: whoever holds serve's token is not the person at the
+  session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
 the next model call. `/model`, `/think`, `/mcp add` and `/mcp remove`

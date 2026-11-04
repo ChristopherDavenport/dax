@@ -119,6 +119,13 @@ versions may break flags and the config file.
   configurations (#174; the tool-output caps join it with #172, and
   agenteval's diff of header extras is agenteval#69).
 - Added: `agent.Options.CompactFrom`, `Window` and `WindowFrom`.
+- Added: `!command` in the terminal client and the REPL runs a command
+  yourself in the session's workspace, not through the policy, and
+  sends its line, output (at most 50 KiB) and exit status to the model
+  as your message with the next prompt, or as a follow-up during a run;
+  the record holds a `dax.user_command` entry, and a fold does not pin
+  it. `!!` escapes a leading `!`; `dax attach` refuses `!` (#169).
+- Added: `agent.Session.RunUserCommand` and `agent.UserCommand`.
 
 ## v0.0.32 - 2026-10-26
 
