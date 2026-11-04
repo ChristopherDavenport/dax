@@ -50,6 +50,13 @@ versions may break flags and the config file.
   - The terminal client's permission and question panels take no
     answer for half a second after they open, so a `y` typed in the
     middle of a line is not an approval (agentconsole v0.0.15).
+- Added: dax-coding's `background` tool starts a long-lived command (a
+  dev server, a watcher) in the workspace, lists the processes, reads a
+  process's new output and stops it; they end with the session. A
+  start is decided as bash's call of its line, with bash's rules and
+  stamp; dax-coding ships `background(list)`, `background(output)` and
+  `background(stop)` as allow rules. It works on this machine, in an
+  executor or a box, and in a served or tunnelled workspace (#153).
 - Changed: a sub-agent's call the policy asks about is put to whoever
   answers the `task` or `explore` call's questions through agentturn's
   `tools/agent.WithAskParent`, which also settles the calls held only

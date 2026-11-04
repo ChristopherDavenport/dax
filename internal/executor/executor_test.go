@@ -108,7 +108,7 @@ func TestTheToolsComeInTheExtensionsOrder(t *testing.T) {
 	for i, want := range inner {
 		g := got[i]
 		ext := "acme"
-		if i < 7 {
+		if i < 8 {
 			ext = coding.Name
 		}
 		if g.Name() != want.Name() || g.Extension != ext {
@@ -118,8 +118,8 @@ func TestTheToolsComeInTheExtensionsOrder(t *testing.T) {
 			t.Errorf("%s: definition %+v, want %+v", g.Name(), g.Definition, agenttool.Definition(want))
 		}
 		_, replayable := want.(agenttool.Replayable)
-		if g.ReadOnly != slices.Contains(readOnly, g.Name()) || g.Sequential || g.Barrier != (g.Name() == "bash") ||
-			g.Factual != (i < 7) || g.Replayable != replayable || g.Resource != agenttool.ResourceOf(want) ||
+		if g.ReadOnly != slices.Contains(readOnly, g.Name()) || g.Sequential || g.Barrier != (g.Name() == "bash" || g.Name() == "background") ||
+			g.Factual != (i < 8) || g.Replayable != replayable || g.Resource != agenttool.ResourceOf(want) ||
 			g.Annotations != agenttool.AnnotationsOf(want) {
 			t.Errorf("%s: %+v", g.Name(), g)
 		}

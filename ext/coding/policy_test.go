@@ -349,3 +349,31 @@ func TestNoBuiltinDropsTheAllowListButKeepsTheAsks(t *testing.T) {
 		t.Errorf("git status without the allow list = %v (%s), want asked", got, why)
 	}
 }
+
+// A background start is decided as bash's call of its command, so a line
+// bash would run unasked starts unasked and the rest ask, a compound
+// line by its worst part; listing, reading and stopping the session's
+// own processes run (#153).
+func TestTheBackgroundToolsDecisions(t *testing.T) {
+	start := func(cmd string) string {
+		b, _ := json.Marshal(map[string]string{"action": "start", "command": cmd})
+		return string(b)
+	}
+	for _, tc := range []struct {
+		args string
+		want agentturn.ToolAction
+	}{
+		{start("git status"), agentturn.Allow},
+		{start("npm run dev"), agentturn.Defer},
+		{start("git status && rm -rf x"), agentturn.Defer},
+		{start("cat .env"), agentturn.Defer},
+		{`{"action":"list"}`, agentturn.Allow},
+		{`{"action":"output","id":1}`, agentturn.Allow},
+		{`{"action":"stop","id":1}`, agentturn.Allow},
+		{`{"action":"Start","command":"rm -rf x"}`, agentturn.Defer},
+	} {
+		if got, reason := decide(t, defaults, "background", tc.args); got != tc.want {
+			t.Errorf("background %s = %v (%s), want %v", tc.args, got, reason, tc.want)
+		}
+	}
+}

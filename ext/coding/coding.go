@@ -28,6 +28,7 @@ const Name = "dax-coding"
 const instructions = "Use the tools to inspect and change files and run commands; do not guess at file contents. " +
 	"Prefer glob, grep and ls over shell commands to find and list files. File tools reach only the working directory. " +
 	"Read before you edit. " +
+	"Start a server or a watcher with the background tool, not with & in bash, read its output with it, and stop it when done. " +
 	"Keep shell searches to the working directory and paths you name; never search from / or $HOME. " +
 	"After a change, run the checks the project's instructions name (AGENTS.md, a Makefile target) before calling it done, and say which ran and how they ended."
 

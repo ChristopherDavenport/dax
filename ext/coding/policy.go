@@ -37,7 +37,12 @@ const allowRules = "read glob grep ls " +
 	"bash(git branch:*) bash(git rev-parse:*) bash(git ls-files:*) bash(git remote:*) bash(git blame:*) " +
 	"bash(git stash list:*) bash(git tag:*) bash(git describe:*) bash(git shortlog:*) bash(git config:*) " +
 	"bash(cat:*) bash(head:*) bash(tail:*) bash(wc:*) bash(grep:*) bash(sort:*) bash(uniq:*) bash(cut:*) bash(cd:*) " +
-	"bash(ls:*) bash(pwd)"
+	"bash(ls:*) bash(pwd) " +
+	// The background tool's start is decided as bash's call of its line;
+	// listing, reading and stopping the session's own processes look
+	// at nothing else and run (a policy test says what a compound
+	// start does).
+	"background(list) background(output) background(stop)"
 
 // secretPaths are names that look like they hold a credential or a
 // key. Reading one asks, whichever tool reads it: Read(...) names read,
@@ -83,10 +88,12 @@ var lifts = []string{"read", "grep", "glob", "ls"}
 func matchers() map[string]agentpolicy.ToolMatcher {
 	path := agentpolicy.ToolMatcher{Match: pathMatcher}
 	return map[string]agentpolicy.ToolMatcher{
-		"bash":  {Match: agentpolicy.GlobMatcher("command")},
-		"read":  path,
-		"write": path,
-		"edit":  path,
+		"bash": {Match: agentpolicy.GlobMatcher("command")},
+		// The background tool by its action; a start's claim is bash's.
+		"background": {Match: agentpolicy.GlobMatcher("action")},
+		"read":       path,
+		"write":      path,
+		"edit":       path,
 		// A search is matched on where it looks, not on its pattern: its
 		// facts name the directory, "." when it names none.
 		"glob": path,

@@ -262,7 +262,7 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	if !strings.Contains(s.Agent().Config().Instructions, "let sub-agents do") {
 		t.Error("the main agent's instructions lack the guide to its sub-agents")
 	}
-	if got := requestTools(req); got != "read,write,edit,glob,grep,ls,bash" {
+	if got := requestTools(req); got != "read,write,edit,glob,grep,ls,bash,background" {
 		t.Errorf("child tools %s; want the built-ins and no sub-agents of its own", got)
 	}
 	// The AGENTS.md text the child is told is the part the kit renders
@@ -548,7 +548,7 @@ func TestTheSubagentsTakeEveryExtensionsTools(t *testing.T) {
 	if !strings.Contains(ex.Instructions, "using the read, glob, grep, ls, bash and peek tools") {
 		t.Errorf("explore's prompt does not name its tools:\n%s", ex.Instructions)
 	}
-	if got := requestTools(tk); got != "read,write,edit,glob,grep,ls,bash,peek,poke" {
+	if got := requestTools(tk); got != "read,write,edit,glob,grep,ls,bash,background,peek,poke" {
 		t.Errorf("task's tools %s", got)
 	}
 	if !strings.Contains(tk.Instructions, "You are a sub-agent of acme.") || !strings.Contains(tk.Instructions, "You are acme, a coding agent") {

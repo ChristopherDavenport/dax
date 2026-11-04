@@ -29,7 +29,7 @@ import (
 // order the system prompt lists them. The file tools are confined to
 // f's workspace; bash runs at its root but is not confined.
 func Builtins(f *Files, maxRead int64, bash ...BashOption) []agenttool.Tool {
-	return []agenttool.Tool{Read(f, WithMaxRead(maxRead)), Write(f), Edit(f, WithMaxRead(maxRead)), Glob(f), Grep(f), LS(f), Bash(f, append([]BashOption{WithMaxFile(maxRead)}, bash...)...)}
+	return []agenttool.Tool{Read(f, WithMaxRead(maxRead)), Write(f), Edit(f, WithMaxRead(maxRead)), Glob(f), Grep(f), LS(f), Bash(f, append([]BashOption{WithMaxFile(maxRead)}, bash...)...), Process(f, maxRead)}
 }
 
 // ReadOnly returns the tools that only look: read, glob, grep and ls.

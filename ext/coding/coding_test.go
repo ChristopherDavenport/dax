@@ -29,7 +29,7 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	for _, tl := range e.Tools(env) {
 		names = append(names, tl.Name())
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash"}; !slices.Equal(names, want) {
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if want := []string{"read", "glob", "grep", "ls", "bash"}; !slices.Equal(e.ReadOnly, want) {

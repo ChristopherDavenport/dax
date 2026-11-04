@@ -184,10 +184,10 @@ func TestTheExecutorSaysWhatMCPCannot(t *testing.T) {
 		}
 		return n
 	}
-	if n := names(got.Tools); !slices.Equal(n, []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "status", "deploy", "ask"}) {
+	if n := names(got.Tools); !slices.Equal(n, []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "status", "deploy", "ask"}) {
 		t.Errorf("order %v", n)
 	}
-	if status := got.Tools[7]; !status.ReadOnly || status.Facts || status.Extension != "acme" {
+	if status := got.Tools[8]; !status.ReadOnly || status.Facts || status.Extension != "acme" {
 		t.Errorf("status %+v", status)
 	}
 
