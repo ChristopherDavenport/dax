@@ -724,17 +724,24 @@ var mcpName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 const MCPFlagName = "cli"
 
 // MCPNamesCollide reports whether servers called a and b would offer
-// tools under one prefix, mcp__<name>__<tool>: one name is the other,
-// or the other and one underscore, whose tools mcp__<b>___<tool> start
-// as b's do. No name has a double underscore, so no other pair does.
-func MCPNamesCollide(a, b string) bool { return a == b || a == b+"_" || b == a+"_" }
+// tools under one prefix, mcp__<name>__<tool>: only when the names are
+// one, since CheckMCPName refuses a double underscore and a name that
+// begins or ends with one, so no name and an underscore is another's.
+func MCPNamesCollide(a, b string) bool { return a == b }
 
+// CheckMCPName refuses a server name agentpolicy's server glob cannot
+// name alone (RFC 0001, the grammar): one with a double underscore,
+// which separates the server from the tool, or one that begins or ends
+// with an underscore, whose tools mcp__a____<tool> would read as
+// another server's.
 func CheckMCPName(name string) error {
 	switch {
 	case !mcpName.MatchString(name):
 		return fmt.Errorf("MCP server name %q: use letters, digits, - and _", name)
 	case strings.Contains(name, "__"):
 		return fmt.Errorf("MCP server name %q: a double underscore separates the server from the tool", name)
+	case strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_"):
+		return fmt.Errorf("MCP server name %q: it may not begin or end with an underscore, which would join the separator", name)
 	}
 	return nil
 }

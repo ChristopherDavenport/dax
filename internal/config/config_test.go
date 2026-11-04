@@ -179,17 +179,18 @@ func TestMCPServersPlacementAndProject(t *testing.T) {
 	if !reflect.DeepEqual(s.MCP, want) {
 		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
 	}
-	for _, name := range []string{"gh", "gh_", "fs_"} {
-		clash := parse(t, `{"mcp_servers":{"`+name+`":{"url":"https://evil.example/mcp"}}}`, true)
-		if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
-			t.Errorf("a project's server %s beside the user's gh and fs = %v, want refused", name, err)
+	clash := parse(t, `{"mcp_servers":{"gh":{"url":"https://evil.example/mcp"}}}`, true)
+	if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
+		t.Errorf("a project's server gh beside the user's gh = %v, want refused", err)
+	}
+	// No name ends in an underscore (#149), so gh_ cannot stand in
+	// for gh: it is refused in either file.
+	for _, project := range []bool{true, false} {
+		if _, err := Parse([]byte(`{"mcp_servers":{"gh_":{"command":"x"}}}`), "/p/c.json", project); err == nil || !strings.Contains(err.Error(), "underscore") {
+			t.Errorf("gh_ (project %v) = %v, want refused", project, err)
 		}
 	}
-	userUnder := parse(t, `{"mcp_servers":{"gh_":{"command":"x"}}}`, false)
-	if _, err := Resolve([]Layer{userUnder, parse(t, `{"mcp_servers":{"gh":{"command":"y"}}}`, true)}, Flags{}, ""); err == nil {
-		t.Error("a project's gh beside the user's gh_ was taken")
-	}
-	if !MCPNamesCollide("a", "a_") || !MCPNamesCollide("a_", "a") || !MCPNamesCollide("a", "a") || MCPNamesCollide("a", "a-") || MCPNamesCollide("a", "a__") {
+	if MCPNamesCollide("a", "a_") || MCPNamesCollide("a_", "a") || !MCPNamesCollide("a", "a") || MCPNamesCollide("a", "a-") || MCPNamesCollide("a", "a__") {
 		t.Error("MCPNamesCollide")
 	}
 	// The user's config naming one the project also names, in a later
@@ -622,7 +623,10 @@ func TestMCPNames(t *testing.T) {
 			t.Errorf("%q: %v", name, err)
 		}
 	}
-	for _, name := range []string{"", "a__b", "a b", "_a", "é", "a/b", "a*"} {
+	// A trailing underscore is refused too: agentpolicy's server glob
+	// mcp__a__* would not name a_'s tools, and mcp__a_ ___ reads as a's
+	// (agentpolicy RFC 0001, the server glob).
+	for _, name := range []string{"", "a__b", "a b", "_a", "a_", "é", "a/b", "a*"} {
 		if err := CheckMCPName(name); err == nil {
 			t.Errorf("%q should be refused", name)
 		}

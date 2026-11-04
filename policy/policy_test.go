@@ -227,3 +227,39 @@ func TestBoxRules(t *testing.T) {
 		}
 	}
 }
+
+// A user's allow of one server's every tool, mcp__gh__*, runs them
+// unasked (agentpolicy's server glob, #149), and reaches no further: a
+// project's deny of one of them still denies, a box's ask for a unit's
+// tools still asks, and another server's tool still asks.
+func TestAnAllowOfAServersEveryTool(t *testing.T) {
+	user := func(edit func(*Settings)) Settings {
+		s := Settings{Builtin: true, Fallback: "ask", User: Rules{Allow: []string{"mcp__gh__*"}}}
+		if edit != nil {
+			edit(&s)
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name string
+		s    Settings
+		tool string
+		want agentturn.ToolAction
+	}{
+		{"its tools run unasked", user(nil), "mcp__gh__list_issues", agentturn.Allow},
+		{"one added later too", user(nil), "mcp__gh__create_issue", agentturn.Allow},
+		{"another server's still asks", user(nil), "mcp__slack__post", agentturn.Defer},
+		{"a project's deny still denies", user(func(s *Settings) { s.Project.Deny = []string{"mcp__gh__create_issue"} }), "mcp__gh__create_issue", agentturn.Block},
+		{"a box's ask still asks", user(func(s *Settings) { s.Box = []string{"mcp__gh__*"} }), "mcp__gh__list_issues", agentturn.Defer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if v := verdict(t, tc.s, tc.tool, `{}`); v.Action != tc.want {
+				t.Errorf("= %v (%s), want %v", v.Action, v.Reason, tc.want)
+			}
+		})
+	}
+	// A project may not allow one.
+	if v := verdict(t, Settings{Fallback: "ask", Project: Rules{Allow: []string{"mcp__gh__*"}}}, "mcp__gh__list_issues", `{}`); v.Action != agentturn.Defer {
+		t.Errorf("a project's server allow = %v, want withheld", v.Action)
+	}
+}
