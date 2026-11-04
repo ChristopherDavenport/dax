@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -150,6 +151,7 @@ func run(ctx context.Context, args []string, p program) error {
 	a2aFlag := fs.Bool("a2a", false, "dax serve: also serve the session's agent over A2A (/a2a, its card at /.well-known/agent-card.json) behind a token of its own ($"+a2aTokenEnv+" or a file beside serve's); each A2A conversation is a session of its own")
 	a2aEscalate := fs.Bool("a2a-escalate", false, "dax serve -a2a: put a call the policy asks about to the A2A caller, for a host nobody attaches to; without it a view attached to the served session answers, and with none attached it is refused")
 	a2aURL := fs.String("a2a-url", "", "dax serve -a2a: the base URL callers reach serve at, which the agent card names (https, or http to loopback), as behind a proxy that ends TLS; without it the card names the origin each request reached")
+	bare := fs.Bool("bare", false, "leave out your own config, ~/.dax/AGENTS.md, agents_md_global, skills and memory, for a run that does not depend on your home directory; -config, -agents-md, -agents-md-global, -skills or -memory beside it brings that one back")
 	verbose := fs.Bool("v", false, "terminal client: print the start lines before it and what dax noted during the run after it, not only the resume command")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -335,6 +337,11 @@ func run(ctx context.Context, args []string, p program) error {
 	user, err := loadUser(*cfgPath)
 	if err != nil {
 		return err
+	}
+	var leftOut []string
+	if *bare {
+		leftOut = bareLeftOut(given)
+		applyBare(leftOut, &user, &flags, skillsFlag)
 	}
 	proj, err := workspace.NewLocal(dir, nil)
 	if err != nil {
@@ -525,6 +532,8 @@ func run(ctx context.Context, args []string, p program) error {
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
+		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
+		Bare:           leftOut,
 		AgentsMDGlobal: settings.AgentsMDGlobal,
 		PassEnv:        settings.PassEnv,
 		KeyEnv:         m.KeyEnv,
@@ -704,6 +713,44 @@ func loadUser(userPath string) (config.Layer, error) {
 		userPath = config.Path()
 	}
 	return config.Load(userPath, false, explicit)
+}
+
+// bareLeftOut is what -bare leaves out of the user's own sources: the
+// config (and with it its MCP servers, peers and rules), ~/.dax/AGENTS.md,
+// agents_md_global, skills and memory, less those a flag given beside
+// it brings back, each its one source: -config, -agents-md,
+// -agents-md-global, -skills, -memory. The repository's own AGENTS.md
+// files and config stay: they are part of the task. Never nil, so a
+// bare run is recorded as one even with every source back.
+func bareLeftOut(given map[string]bool) []string {
+	out := []string{}
+	for _, s := range []struct{ flag, source string }{
+		{"config", "config"}, {"agents-md", "agents_md_home"}, {"agents-md-global", "agents_md_global"}, {"skills", "skills"}, {"memory", "memory"},
+	} {
+		if !given[s.flag] {
+			out = append(out, s.source)
+		}
+	}
+	return out
+}
+
+// applyBare leaves out what leftOut names: the user's layer, the
+// agents_md_global files, the skills and the memory. ~/.dax/AGENTS.md
+// is the session's to leave out (agent.Options.NoUserAgentsMD).
+func applyBare(leftOut []string, user *config.Layer, flags *config.Flags, skills *bool) {
+	for _, s := range leftOut {
+		switch s {
+		case "config":
+			*user = config.Layer{}
+		case "agents_md_global":
+			flags.AgentsMDGlobal = []string{}
+		case "skills":
+			*skills = false
+		case "memory":
+			none := ""
+			flags.MemoryDir = &none
+		}
+	}
 }
 
 // loadSettings folds the user's layer, the project's read through the

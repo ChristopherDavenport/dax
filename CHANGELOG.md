@@ -67,6 +67,14 @@ versions may break flags and the config file.
   for linux and darwin on amd64 and arm64, `dax_<tag>_<os>_<arch>`, and
   a `SHA256SUMS`; the release workflow checks each is stamped with the
   tag. `make static` builds the same locally (#142).
+- Added: `-bare` leaves out your config (its MCP servers, peers and
+  rules with it), `~/.dax/AGENTS.md`, `agents_md_global`, skills and
+  memory, so a run does not depend on your home directory; the
+  repository's `AGENTS.md` files and config stay. `-config`,
+  `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it
+  brings that one source back. The header records the run as
+  `dax.profile`, `{"bare": true, "left_out": [...]}` (#141).
+- Added: `agent.Options.NoUserAgentsMD` and `agent.Options.Bare`.
 
 ## v0.0.32 - 2026-10-26
 

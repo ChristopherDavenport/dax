@@ -195,6 +195,13 @@ type Options struct {
 	// user's and not the project's, and are not screened; a missing
 	// one is skipped.
 	AgentsMDGlobal []string
+	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
+	// AgentsMD (dax -bare); the repository's files are still read.
+	NoUserAgentsMD bool
+	// Bare names the sources a bare run (dax -bare) left out, which the
+	// header records as dax.profile so two sessions read as the
+	// configurations they were; nil for a run that is not bare.
+	Bare []string
 	// Compact, when positive, is the estimated token budget above which
 	// the transcript is folded before a call.
 	Compact int
@@ -643,7 +650,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.Executor != nil {
 			dir = ""
 		}
-		mdOpts, refused := agentsMDOptions(ws, dir, o.UserDir, o.AgentsMDGlobal)
+		userDir := o.UserDir
+		if o.NoUserAgentsMD {
+			userDir = ""
+		}
+		mdOpts, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
