@@ -224,3 +224,18 @@ func TestAnUnlistedSessionIsNotSaidToHaveNoServers(t *testing.T) {
 		t.Errorf("/mcp = %q", r.out)
 	}
 }
+
+// dax attach's own controls cannot run a command of the user's: a "!"
+// line from an attached view is refused there, and nothing on the wire
+// runs one, so a token holder cannot reach the workspace past the
+// policy (#169).
+func TestAttachRefusesAUserCommand(t *testing.T) {
+	var ctl agent.Controls = &remoteControls{}
+	if _, ok := ctl.(userCommander); ok {
+		t.Fatal("attach's controls run a command of the user's")
+	}
+	_, err := command(context.Background(), &fakeTurn{}, ctl, "!touch PWNED", false)
+	if err == nil || !strings.Contains(err.Error(), "not offered over dax attach") {
+		t.Errorf("a ! line over attach: %v", err)
+	}
+}
