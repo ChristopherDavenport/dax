@@ -39,6 +39,9 @@ Each release also carries static binaries for linux and darwin on amd64
 and arm64 (`dax_<tag>_<os>_<arch>`, with a `SHA256SUMS`), built with
 `CGO_ENABLED=0`, so they run in a container without glibc (Alpine,
 busybox) as `dax execute` does; `make static` builds the same here.
+The darwin binaries are not signed: macOS refuses one downloaded with
+a browser until you clear its quarantine (`xattr -d
+com.apple.quarantine dax_...`).
 
 Go 1.26 or later. With no flags dax talks to Ollama on
 `localhost:11434` and runs `qwen3.5:9b`.

@@ -45,11 +45,13 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          # The latest 1.26 patch, not go.mod's floor (1.26.0): a binary
+          # carries the standard library it was built with, and setup-go
+          # installs an exact version as given, check-latest or not.
+          go-version: "1.26.x"
           check-latest: true
-      - name: Build, check the stamp and upload
+      - name: Build and check the stamp
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
@@ -65,4 +67,17 @@ jobs:
               || { echo "$out is not stamped $TAG:"; go version -m "$out"; exit 1; }
           done
           (cd dist && sha256sum dax_* > SHA256SUMS)
-          gh release upload "$TAG" dist/* --clobber
+      - name: Check the binaries for known vulnerabilities
+        # What each binary was built with, its standard library and its
+        # modules, as shipped; GOOS and GOARCH are read from the binary.
+        run: |
+          set -eu
+          for bin in dist/dax_*; do
+            go run golang.org/x/vuln/cmd/govulncheck@latest -mode=binary "$bin"
+          done
+      - name: Upload
+        # The token is this step's alone, never the build's.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/* --clobber

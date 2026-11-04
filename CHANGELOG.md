@@ -65,8 +65,9 @@ versions may break flags and the config file.
 - Added: `agent.Session.WriteTrajectory`.
 - Added: a release carries static binaries (`CGO_ENABLED=0`, `-trimpath`)
   for linux and darwin on amd64 and arm64, `dax_<tag>_<os>_<arch>`, and
-  a `SHA256SUMS`; the release workflow checks each is stamped with the
-  tag. `make static` builds the same locally (#142).
+  a `SHA256SUMS`, built with the latest Go 1.26 patch and checked with
+  `govulncheck -mode=binary`; the release workflow checks each is
+  stamped with the tag. `make static` builds the same locally (#142).
 - Added: `-bare` leaves out your config (its MCP servers, peers and
   rules with it), `~/.dax/AGENTS.md`, `agents_md_global`, skills and
   memory, so a run does not depend on your home directory; the
