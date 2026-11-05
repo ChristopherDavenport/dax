@@ -16,8 +16,16 @@ versions may break flags and the config file.
   mcpworkspace and tunnel v0.0.11, up from v0.0.9; agenttool, mcpclient
   and mcpserver v0.0.29, up from v0.0.26; openresponses and its
   anthropic and gemini providers v0.0.18, up from v0.0.16;
-  agentredact/secrets v0.0.3, up from v0.0.1; agenteval v0.0.13, up
-  from v0.0.11. What changes for you:
+  agentredact/secrets v0.0.4, up from v0.0.1; agenteval v0.0.13, up
+  from v0.0.11; and agentredact v0.0.4, new, for a test alone. What
+  changes for you:
+  - A kept output (#172) leaves your store only redacted: an
+    agentredact pass (v0.0.4, default profile `default@3`) reads the
+    blob a `dax.output_kept` entry names, redacts it through the
+    profile's string rules into a blob of the redaction's own, and a
+    publish or export carries that one, never the original; agentredact
+    before v0.0.4 would have published the whole output unredacted, so
+    redact dax's sessions with v0.0.4 or later.
   - Sessions are written as `agentsession/0.20`, and a session dax
     appends to is raised to it, after which a reader built on an older
     agentsession (an older dax, agenteval before v0.0.12, agentconsole

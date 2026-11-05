@@ -24,8 +24,10 @@ github.com/ChristopherDavenport/agentmemory v0.0.12 h1:X4sT0HbPezUmuvsTJK49SiEFK
 github.com/ChristopherDavenport/agentmemory v0.0.12/go.mod h1:VRGVmTQTpY8AqPVLUNOcqLty3HSOCnOiGMBIMObz2pw=
 github.com/ChristopherDavenport/agentpolicy v0.0.19 h1:cgG5kDz/49PfIX5rf5p1vZqJNZm1OlI8T7NeMOpSysc=
 github.com/ChristopherDavenport/agentpolicy v0.0.19/go.mod h1:BxrbKX7SvW5lW8EqgBn1I1uVhTIa6nUY6IenPSPYtO4=
-github.com/ChristopherDavenport/agentredact/secrets v0.0.3 h1:T3ExaNIbN14RSNZCgaCsduU1FNdeCreYc3KE9lp2ev4=
-github.com/ChristopherDavenport/agentredact/secrets v0.0.3/go.mod h1:7OiSEvCQTOCrByjsq0MF3K03lnrgU9h0YiNfS2XHQ4o=
+github.com/ChristopherDavenport/agentredact v0.0.4 h1:LBwaUIBmdYmlEAb5m0Q5QEt7HUGzvvJ70zx1bwnJ6vQ=
+github.com/ChristopherDavenport/agentredact v0.0.4/go.mod h1:7gBwC3PtAt0eKboYB4ZTl26qRFsow2eaL2k3RMp2Rq8=
+github.com/ChristopherDavenport/agentredact/secrets v0.0.4 h1:C49uUCOmDX1fFkGxi/z9WkjFqX4vaq4ME/SitMuSUdw=
+github.com/ChristopherDavenport/agentredact/secrets v0.0.4/go.mod h1:7OiSEvCQTOCrByjsq0MF3K03lnrgU9h0YiNfS2XHQ4o=
 github.com/ChristopherDavenport/agentsession v0.0.37 h1:KyOI487tjTO7M7wX3UHY2CWPJYxSq7dljK8/a2Xxpe0=
 github.com/ChristopherDavenport/agentsession v0.0.37/go.mod h1:SEJEvLEVVKBGUyML5Kr6SMmoU2v1dBPzbQPPTkAN2T4=
 github.com/ChristopherDavenport/agentskill v0.0.12 h1:8rAmdk+CC5TNnbGjKjfEObAZM9ZzsXd0iyz5kp3wAsE=
