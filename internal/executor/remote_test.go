@@ -85,7 +85,7 @@ func TestConnectBuildsTheToolsInTheExecutorsOrder(t *testing.T) {
 		names = append(names, tl.Name())
 		byName[tl.Name()] = tl
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "status", "deploy", "ask"}; !slices.Equal(names, want) {
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "status", "deploy", "ask"}; !slices.Equal(names, want) {
 		t.Errorf("order %v, want %v", names, want)
 	}
 	if b := byName["bash"]; b.Extension != coding.Name || !b.ReadOnly || !b.Factual || !b.Barrier || b.Sequential {

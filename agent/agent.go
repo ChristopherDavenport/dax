@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -62,11 +63,12 @@ const Version = "0.1.0-dev"
 // a call found unanswered in a transcript the record says nothing
 // about is one nobody can account for.
 const (
-	abortedOutput  = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput   = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
-	unknownOutput  = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
-	neverRanOutput = "Error: this call was cut off before it reached its tool; it did not run."
-	heldOutput     = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
+	abortedOutput    = "Error: this call was cut off while it was running; it may have taken effect."
+	deniedOutput     = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
+	unknownOutput    = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
+	neverRanOutput   = "Error: this call was cut off before it reached its tool; it did not run."
+	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. Do not get the same result another way; if it is still needed, say so."
+	heldOutput       = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
 )
 
 // Options configure a session.
@@ -202,6 +204,15 @@ type Options struct {
 	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
 	// AgentsMD (dax -bare); the repository's files are still read.
 	NoUserAgentsMD bool
+	// BashMaxOutput and ToolMaxOutput cap what a bash call's result, and
+	// a result of a tool that is not dax's own, send the model, in bytes
+	// (bash_max_output, mcp_max_output); 0 is config's default. What is
+	// cut is kept with the session (Session.ToolOutput).
+	BashMaxOutput, ToolMaxOutput int
+	// OneShot is a run nobody replies to (-p): the model is told so in a
+	// part of its own (PartOneShot), recorded with the instructions, so
+	// it finishes the task rather than ending on a question.
+	OneShot bool
 	// Bare names the sources a bare run (dax -bare) left out, which the
 	// header records as dax.profile so two sessions read as the
 	// configurations they were; nil for a run that is not bare.
@@ -316,6 +327,9 @@ type MCPServer struct {
 	offeredBy workspace.ServerProvider
 	offeredAs Placement
 	offeredAt string
+	// offeredSecrets is the offering's mark that it gives the server
+	// secrets there, for the listing.
+	offeredSecrets bool
 	// SecretEnv names variables a command's server is given from this
 	// process's environment, which every other child of the session
 	// loses (Secrets): it is started as a workspace's offered server is
@@ -373,10 +387,12 @@ type MCPServerInfo struct {
 	Description string
 	// Secrets says this session gives it secrets (MCPServer.SecretEnv)
 	// and starts it on this machine, redacting them from what it
-	// writes. A server a workspace offers is never marked, even one
-	// that holds secrets there: agentworkspace does not tell a client
-	// that an offered server does (agentworkspace#23).
+	// writes.
 	Secrets bool
+	// HoldsSecrets says the workspace that offers it gives it secrets
+	// there (agentworkspace's Server.Secrets): it informs the listing
+	// alone, since a server not marked may still hold one.
+	HoldsSecrets bool
 	// Added is the label RemoveMCP takes, for a server AddMCP started;
 	// empty for one the session opened with.
 	Added string
@@ -399,6 +415,15 @@ func DefaultRoot() string { return filepath.Join(DefaultUserDir(), "sessions") }
 // (Controls), and the store it is written to.
 type Session struct {
 	Kit *agentkit.Kit
+
+	// outs are the tool outputs it cut and kept (ToolOutput).
+	outs keptOutputs
+	// templates are the prompt templates it offers (Templates).
+	templates []PromptTemplate
+	// forwards are the ports Forward put on this machine's loopback, by
+	// the workspace's port; each ends with the session.
+	fwdMu    sync.Mutex
+	forwards map[int]net.Listener
 
 	opts    Options
 	live    live
@@ -488,6 +513,27 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 		return inner(ctx, info)
 	}
 	return cfg
+}
+
+// PartOneShot is the id of the instructions part a one-shot run
+// (Options.OneShot) adds.
+const PartOneShot = "one-shot"
+
+// oneShotLine is what a one-shot run's model is told.
+const oneShotLine = "This is a one-shot run: nobody will reply to your last message, and the run ends with it. " +
+	"Act on your best judgement and finish the task rather than ending with a question or a list of options; " +
+	"say what you chose and why in your final report."
+
+// answerOf is the output the model is given for an unanswered call: a
+// call whose tool returned before a stop is owed what it returned
+// (#162), and every other call what is known of it.
+func answerOf(p agentturn.PendingCall) *openresponses.FunctionCallOutput {
+	if p.Reason == agentturn.PendingReturned && p.Ran != nil {
+		out := *p.Ran
+		out.CallID = p.Call.CallID
+		return &out
+	}
+	return openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))
 }
 
 // output is what the model is told about an unanswered call.
@@ -613,6 +659,17 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 	}
 	s.live.think, s.live.main = o.Think, o.Model
+	// The user's own templates are of the home directory a bare run
+	// leaves out; the project's are part of its task.
+	userDir := o.UserDir
+	if o.Bare != nil {
+		userDir = ""
+	}
+	var wsFS fs.FS
+	if !config.ServersAlone(ws) {
+		wsFS = ws.FS()
+	}
+	s.templates = loadTemplates(userDir, wsFS, func(msg string) { fmt.Fprintf(warnings{}, "dax: %s\n", msg) })
 	ok := false
 	defer func() {
 		if !ok {
@@ -683,8 +740,18 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
 		agentsText = agentsmd.Render(res.Files)
+		// The files below the start directory reach the model as the
+		// work reaches their directories (nestedmd.go).
+		var start []string
+		for _, f := range res.Files {
+			start = append(start, f.Path)
+		}
+		kopts = append(kopts, agentkit.WithBeforeTurn(nestedAgentsMD(s.files, mdOpts, start)))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
+	// Every tool's result is cut to its cap, an MCP server's and a
+	// child agent's among them, in every placement (outputcap.go).
+	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(t) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
@@ -706,6 +773,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	)
 	if o.MaxTurns > 0 {
 		kopts = append(kopts, agentkit.WithMaxTurns(o.MaxTurns))
+	}
+	if o.OneShot {
+		kopts = append(kopts, agentkit.WithPart(PartOneShot, "dax", func(context.Context) (agentkit.PartRender, error) {
+			return agentkit.PartRender{Text: oneShotLine}, nil
+		}))
 	}
 	if m != nil {
 		kopts = append(kopts, agentkit.WithBeforeTurn(m.beforeTurn))
@@ -840,6 +912,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 				o.log("[not compacted: %v; %d tokens sent unfolded]", f.Err, f.TokensBefore)
 			case f.Err != nil:
 				o.log("[compaction failed after %d call(s): %v]", f.Attempts, f.Err)
+			case f.Summary != nil && f.Forced:
+				o.log("[compacted on request: %d item(s) folded, %d tokens before]", f.Split, f.TokensBefore)
 			case f.Summary != nil:
 				o.log("[compacted: %d item(s) folded, %d tokens before]", f.Split, f.TokensBefore)
 			}
@@ -894,7 +968,15 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		engine.Store(e)
 	}
-	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), kit.AgentOptions()...)
+	// The session as the store holds it now, not New's reading: an
+	// agent seeded from an older reading would hold an item the record's
+	// omit leaves out since, a quarantine's, and send it again.
+	seed, err := kit.ReadAgentOptions(ctx)
+	if err != nil {
+		kit.Close()
+		return nil, err
+	}
+	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), seed...)
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
@@ -933,7 +1015,10 @@ func (s *Session) envOption() session.Option {
 	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
 		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
-		e.SetWorkspace(d.Kind, d.Ref)
+		// The machine and the file system's instance too, which the
+		// substitution rule compares (agentworkspace RFC 0001 §12).
+		w := e.SetWorkspace(d.Kind, d.Ref)
+		w.Host, w.Instance = d.Host, d.Instance
 		return e, nil
 	})
 }
@@ -1026,8 +1111,13 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// the same path. One recorded before dax wrote its workspace says
 	// only its cwd, which is compared with the root as before.
 	now := s.x.Descriptor()
-	if was, ok := recordedIn(sess.Header()); ok && was != now {
-		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", where(was), where(now))
+	if was, ok := recordedIn(sess.Header()); ok && !sameWorkspace(was, now) {
+		// Named by host and instance only when they are the change.
+		name := where
+		if sameProject(was, now) {
+			name = placed
+		}
+		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", name(was), name(now))
 	} else if cwd := sess.Header().CWD; !ok && cwd != "" && cwd != now.Root {
 		fmt.Fprintf(warnings{}, "dax: session was recorded in %s, continuing in %s\n", cwd, where(now))
 	}
@@ -1209,12 +1299,66 @@ func (s *Session) SetThink(on bool) error {
 	return a.SetConfig(cfg)
 }
 
+// Compact has the next request fold the conversation whatever the
+// compaction budget, with instructions, when not empty, for that fold
+// alone (/compact): the fold a request over budget makes, noted and
+// recorded as one. The next request is the main agent's next model
+// call; a sub-agent's call in that run comes after it. With compaction
+// off it returns agentkit.ErrNoCompaction.
+func (s *Session) Compact(ctx context.Context, instructions string) error {
+	// The kit's next request of any agent takes the fold, a sub-agent's
+	// among them, so it is asked for only between runs.
+	if s.ag.State().Running {
+		return errors.New("compact waits for the run to end")
+	}
+	if err := s.ctl.Compact(ctx, instructions); err != nil {
+		if errors.Is(err, agentkit.ErrNoCompaction) {
+			return fmt.Errorf("compaction is off for this session (-compact 0, or the model's window is not known; give -compact N): %w", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// Forward puts port on the workspace's loopback, a server something
+// started where the tools act (a dev server in a box, say), on this
+// machine's loopback alone, and returns its URL there, http://127.0.0.1:<p>
+// (agentworkspace's Forward, RFC 0001 §9): each connection to it is a
+// stream to the port, over whatever carries the workspace. It is the
+// person's act, as running a command is; no tool opens one. A port
+// forwarded already gives the URL it has; every forward ends with the
+// session. A workspace that cannot connect to a port refuses, as
+// unsupported.
+func (s *Session) Forward(ctx context.Context, port int) (string, error) {
+	s.fwdMu.Lock()
+	defer s.fwdMu.Unlock()
+	if ln, ok := s.forwards[port]; ok {
+		return "http://" + ln.Addr().String(), nil
+	}
+	// The forward outlives the call that asked for it.
+	ln, err := workspace.Forward(context.WithoutCancel(ctx), s.ws, port)
+	if err != nil {
+		return "", err
+	}
+	if s.forwards == nil {
+		s.forwards = map[int]net.Listener{}
+	}
+	s.forwards[port] = ln
+	return "http://" + ln.Addr().String(), nil
+}
+
 // Close detaches the recorder and releases the MCP server and the
 // store.
 func (s *Session) Close() error {
 	if s.detach != nil {
 		s.detach()
 	}
+	s.fwdMu.Lock()
+	for port, ln := range s.forwards {
+		ln.Close()
+		delete(s.forwards, port)
+	}
+	s.fwdMu.Unlock()
 	err := s.Kit.Close()
 	if s.set != nil {
 		s.set.ReleaseAll()
@@ -1416,7 +1560,7 @@ func offeredServers(ctx context.Context, sp workspace.ServerProvider, by string,
 		if slices.ContainsFunc(out, func(m MCPServer) bool { return m.Name == u.Name }) {
 			return nil, fmt.Errorf("%s offers two MCP servers called %s", by, u.Name)
 		}
-		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp, offeredAs: placed, offeredAt: at})
+		out = append(out, MCPServer{Name: u.Name, Description: u.Description, offeredBy: sp, offeredAs: placed, offeredAt: at, offeredSecrets: u.Secrets})
 	}
 	return out, nil
 }
@@ -1529,7 +1673,7 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 // machine, as an executor that cannot start one fails it. Your own
 // servers keep the rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
-	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0}
+	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0, HoldsSecrets: m.offeredSecrets}
 	placed := func(p Placement, at string, dial mcpDial, err error) (mcpDial, MCPServerInfo, error) {
 		info.Placement, info.Where = p, at
 		return dial, info, err
@@ -1873,7 +2017,11 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 				args = h.Args
 			}
 			set.Release(bctx)
-			return s.askChild(ctx, name, info, why, subject, args), nil
+			// The deferral stands, and tools/agent's WithAskParent puts
+			// it to the task call's elicitor with agentturn.Ask: the
+			// question the fronts show is this reason (elicit), and
+			// with nobody to ask the sub-agent ends input-required.
+			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy}, nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -1905,59 +2053,16 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 	_, _ = rec.Annotate(ctx, ns, json.RawMessage(data))
 }
 
-// askChild puts a sub-agent's call the policy or a hook asks about to
-// the fronts answering the session's questions, from inside the
-// sub-agent's run: an agentturn.Question about the call, answered with
-// Reply. Its context is the call's, so an abort gives the question up.
-// With nobody to ask, the call is refused, and the model is told to make
-// it itself, where it can be put to the user. An approved call runs with
-// args, the hooks' rewrite, when there is one, as an allowed call does
-// and as the main agent's approved call does: a file tool's call carries
-// the stamp of the facts it was asked about, and a stamp the model
-// forged never reaches the tool. What the person said with the answer
-// reaches the model: a refusal's reason in its output, an approval's
-// note as their own message after the batch's outputs. The question and
-// its answer are on the record, under the call they are about, as a
-// tool's own question is.
-func (s *Session) askChild(ctx context.Context, name string, info agentturn.ToolCallInfo, why, subject string, args json.RawMessage) *agentturn.ToolDecision {
-	// What the question is about is the asked call's decision's Subject,
-	// which each front shows beside the question; the question's text,
-	// which is recorded, is the sub-agent's and the policy's own.
-	reason := "the " + name + " sub-agent asks: " + why
-	cannot := &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the " + name + " sub-agent cannot ask you (" + why + "); make this call yourself, so that it can be put to the user", By: agentpolicy.ByPolicy}
-	call := agentturn.AskedCall{Parent: info.Parent, CallID: info.Call.CallID, Name: info.Call.Name, Args: json.RawMessage(info.Call.Arguments),
-		Decision: &agentturn.ToolDecision{Action: agentturn.Defer, Reason: why, Subject: subject, Args: args, By: agentpolicy.ByPolicy}}
-	// agentturn.Ask puts it, so what the person says with an approval is
-	// theirs, a user message held with the call and appended after the
-	// batch's outputs, not a line of the decision's note; the question
-	// is dax's own text, put through the kit's recorded elicitor.
-	var (
-		ans    agenttool.Answer
-		askErr error
-	)
-	elicit := func(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
-		q.Message = reason
-		ans, askErr = s.askRecorded(ctx, q)
-		return ans, askErr
-	}
-	d, ok := agentturn.Ask(agenttool.ContextWithElicitor(ctx, elicit), call)
-	switch {
-	case errors.Is(askErr, errNoOne):
-		return cannot
-	case askErr != nil:
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the run was cut off while the " + name + " sub-agent waited for your answer", By: agentpolicy.ByPolicy}
-	case ok && d.Action == agentturn.Allow:
-		return d
-	case ok && d.Action == agentturn.Block:
-		s.opts.log("  ✗ %s denied (%s)", info.Call.Name, name)
-		out := deniedOutput
-		if ans.Note != "" {
-			out += " Reason: " + ans.Note
-		}
-		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: out, By: agentpolicy.ByHuman}
-	}
-	// Cancelled: the front could not answer it.
-	return cannot
+// childAsks is the question a sub-agent's deferred call puts, as the
+// fronts show it and the record keeps it: the sub-agent's name, then
+// the policy's reason.
+func childAsks(name, why string) string { return "the " + name + " sub-agent asks: " + why }
+
+// isChildAsk reports whether reason is a sub-agent's question
+// (childAsks).
+func isChildAsk(reason string) bool {
+	rest, ok := strings.CutPrefix(reason, "the ")
+	return ok && strings.Contains(rest, " sub-agent asks: ")
 }
 
 // secrets are the variables taken out of the environment the session's

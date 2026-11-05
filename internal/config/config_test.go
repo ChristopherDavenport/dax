@@ -179,17 +179,18 @@ func TestMCPServersPlacementAndProject(t *testing.T) {
 	if !reflect.DeepEqual(s.MCP, want) {
 		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
 	}
-	for _, name := range []string{"gh", "gh_", "fs_"} {
-		clash := parse(t, `{"mcp_servers":{"`+name+`":{"url":"https://evil.example/mcp"}}}`, true)
-		if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
-			t.Errorf("a project's server %s beside the user's gh and fs = %v, want refused", name, err)
+	clash := parse(t, `{"mcp_servers":{"gh":{"url":"https://evil.example/mcp"}}}`, true)
+	if _, err := Resolve([]Layer{user, clash}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "may not stand in") {
+		t.Errorf("a project's server gh beside the user's gh = %v, want refused", err)
+	}
+	// No name ends in an underscore (#149), so gh_ cannot stand in
+	// for gh: it is refused in either file.
+	for _, project := range []bool{true, false} {
+		if _, err := Parse([]byte(`{"mcp_servers":{"gh_":{"command":"x"}}}`), "/p/c.json", project); err == nil || !strings.Contains(err.Error(), "underscore") {
+			t.Errorf("gh_ (project %v) = %v, want refused", project, err)
 		}
 	}
-	userUnder := parse(t, `{"mcp_servers":{"gh_":{"command":"x"}}}`, false)
-	if _, err := Resolve([]Layer{userUnder, parse(t, `{"mcp_servers":{"gh":{"command":"y"}}}`, true)}, Flags{}, ""); err == nil {
-		t.Error("a project's gh beside the user's gh_ was taken")
-	}
-	if !MCPNamesCollide("a", "a_") || !MCPNamesCollide("a_", "a") || !MCPNamesCollide("a", "a") || MCPNamesCollide("a", "a-") || MCPNamesCollide("a", "a__") {
+	if MCPNamesCollide("a", "a_") || MCPNamesCollide("a_", "a") || !MCPNamesCollide("a", "a") || MCPNamesCollide("a", "a-") || MCPNamesCollide("a", "a__") {
 		t.Error("MCPNamesCollide")
 	}
 	// The user's config naming one the project also names, in a later
@@ -622,7 +623,10 @@ func TestMCPNames(t *testing.T) {
 			t.Errorf("%q: %v", name, err)
 		}
 	}
-	for _, name := range []string{"", "a__b", "a b", "_a", "é", "a/b", "a*"} {
+	// A trailing underscore is refused too: agentpolicy's server glob
+	// mcp__a__* would not name a_'s tools, and mcp__a_ ___ reads as a's
+	// (agentpolicy RFC 0001, the server glob).
+	for _, name := range []string{"", "a__b", "a b", "_a", "a_", "é", "a/b", "a*"} {
 		if err := CheckMCPName(name); err == nil {
 			t.Errorf("%q should be refused", name)
 		}
@@ -1543,5 +1547,34 @@ func TestServersWorkspacePrecedence(t *testing.T) {
 	// variable either.
 	if _, err := Parse([]byte(`{"mcp_servers":{"gh":{"command":"gh-mcp","in":"host","secret_env":["DAX_SERVERS_TUNNEL_TOKEN"]}}}`), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), "is a served workspace's token") {
 		t.Errorf("secret_env DAX_SERVERS_TUNNEL_TOKEN: %v", err)
+	}
+}
+
+// bash_max_output and mcp_max_output are the user's or the default, a
+// project's only when lower than what is in force (#172).
+func TestOutputCapPrecedence(t *testing.T) {
+	user := parse(t, `{"bash_max_output":50000,"mcp_max_output":200000}`, false)
+	lower := parse(t, `{"bash_max_output":10000,"mcp_max_output":20000}`, true)
+	higher := parse(t, `{"bash_max_output":900000,"mcp_max_output":900000}`, true)
+	for _, tc := range []struct {
+		name       string
+		layers     []Layer
+		bash, tool int
+	}{
+		{"the defaults", nil, DefaultBashMaxOutput, DefaultToolMaxOutput},
+		{"the user's", []Layer{user}, 50000, 200000},
+		{"a project's lower ones", []Layer{user, lower}, 10000, 20000},
+		{"a project's higher ones are no tighter", []Layer{user, higher}, 50000, 200000},
+		{"nor over the defaults", []Layer{higher}, DefaultBashMaxOutput, DefaultToolMaxOutput},
+	} {
+		s, err := Resolve(tc.layers, Flags{}, "")
+		if err != nil || s.BashMaxOutput != tc.bash || s.ToolMaxOutput != tc.tool {
+			t.Errorf("%s: %d, %d (%v), want %d, %d", tc.name, s.BashMaxOutput, s.ToolMaxOutput, err, tc.bash, tc.tool)
+		}
+	}
+	for _, bad := range []string{`{"bash_max_output":100}`, `{"mcp_max_output":-1}`, `{"bash_max_output":99999999}`} {
+		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_output") {
+			t.Errorf("%s: %v", bad, err)
+		}
 	}
 }

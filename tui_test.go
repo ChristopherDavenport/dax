@@ -373,7 +373,21 @@ func (r *tuiRig) quit() {
 func (r *tuiRig) waitPanel() {
 	r.t.Helper()
 	r.waitOutput("[y] approve")
+	settle()
 }
+
+// waitAsked waits for sub, a question's panel, and for the panel to
+// take an answer.
+func (r *tuiRig) waitAsked(sub string) {
+	r.t.Helper()
+	r.waitOutput(sub)
+	settle()
+}
+
+// settle outlasts agentconsole's panel settle: a panel takes no answer
+// for half a second after it opens, so a key typed in the middle of a
+// line is not taken as one (agentconsole v0.0.15).
+func settle() { time.Sleep(700 * time.Millisecond) }
 
 // With -v the start lines are printed before the client takes the
 // screen; without it, the client leaves only the command that resumes
@@ -541,7 +555,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	}
 	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
-	r.waitOutput("Question (1/1): bash")
+	r.waitAsked("Question (1/1): bash")
 	r.waitOutput("the explore sub-agent asks")
 	// What it asks about is the decision's subject, shown beside the
 	// question rather than written into its text.
@@ -553,7 +567,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 	// first closes and the second opens between two renders, and the
 	// renderer then writes only the cells that changed: "read …" after
 	// the "Question (1/1): " already on the screen. Wait for that part.
-	r.waitOutput(`read {"path":".env"}`)
+	r.waitAsked(`read {"path":".env"}`)
 	r.type_("n\r")
 	r.waitOutput("all done")
 	r.quit()
@@ -561,7 +575,7 @@ func TestTheExploreChildsHeldCallsAreAskedOnTheScreen(t *testing.T) {
 		t.Error("the child's touch ran")
 	}
 	saw := m.sawInChild()
-	if strings.Count(saw, "the user denied this call") != 2 {
+	if strings.Count(saw, "declined when asked") != 2 {
 		t.Errorf("the child saw %q, want both calls denied", saw)
 	}
 	if strings.Contains(saw, "abc123") {
@@ -582,6 +596,12 @@ var atTerminal = agentsession.Trigger{Kind: "human", Source: "terminal"}
 
 func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action, note string, who agentsession.Trigger) {
 	t.Helper()
+	// An answer someone gave is a person's; one nobody gave is dax's
+	// rule's (agenttool.ByPolicy), never the person's.
+	by := "human"
+	if who.Kind == "" && who.Ref == "" && who.Source == "" {
+		by = "policy"
+	}
 	var asked, answered *session.Elicitation
 	for _, e := range recordedCustom(t, sess, session.ElicitationNS) {
 		var q session.Elicitation
@@ -589,7 +609,9 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 			t.Fatal(err)
 		}
 		switch {
-		case q.Phase == session.ElicitationAsk && strings.HasPrefix(q.Message, want):
+		// agentturn.Ask frames a sub-agent's question ("Allow write
+		// with arguments …?") before dax's text, on the record (#163).
+		case q.Phase == session.ElicitationAsk && strings.Contains(q.Message, want):
 			asked = &q
 		case q.Phase == session.ElicitationAnswer && asked != nil && q.Call == asked.Call:
 			answered = &q
@@ -597,13 +619,13 @@ func checkRecordedQuestion(t *testing.T, sess *agent.Session, want, tool, action
 	}
 	switch {
 	case asked == nil:
-		t.Fatalf("no recorded question starts %q", want)
+		t.Fatalf("no recorded question holds %q", want)
 	case asked.Tool != tool || asked.Call == "":
 		t.Errorf("the recorded question is about %q (call %q), want a call to %s", asked.Tool, asked.Call, tool)
 	case answered == nil:
 		t.Fatal("the question's answer is not on the record")
-	case answered.Action != action || answered.Note != note || answered.By != "human":
-		t.Errorf("recorded answer %q, note %q, by %q; want %q, %q, by human", answered.Action, answered.Note, answered.By, action, note)
+	case answered.Action != action || answered.Note != note || answered.By != by:
+		t.Errorf("recorded answer %q, note %q, by %q; want %q, %q, by %s", answered.Action, answered.Note, answered.By, action, note, by)
 	case who.Kind == "" && who.Ref == "" && who.Source == "" && answered.Source != nil:
 		// An answer nobody gave names nobody.
 		t.Errorf("recorded answerer %+v, want none", answered.Source)
@@ -853,7 +875,7 @@ func TestASubagentsAskIsAnsweredOnTheScreen(t *testing.T) {
 	}
 	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
-	r.waitOutput("Question (1/1): write")
+	r.waitAsked("Question (1/1): write")
 	r.waitOutput("the task sub-agent asks")
 	r.waitFile("FROM_TASK", false)
 	r.type_("y")
@@ -869,7 +891,7 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	}
 	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
-	r.waitOutput("Question (1/1): write")
+	r.waitAsked("Question (1/1): write")
 	r.type_("n")
 	r.waitOutput("Reason for refusing")
 	r.type_("wrong file\r")
@@ -880,7 +902,9 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	m.mu.Lock()
 	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
 	m.mu.Unlock()
-	if !strings.Contains(saw, "Reason: wrong file") {
+	// agentturn.Ask's decline text; dax's #150 sentence waits on
+	// agentturn#304.
+	if !strings.Contains(saw, "the user said: wrong file") {
 		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
 	}
 	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)
@@ -896,7 +920,7 @@ func TestAllowingASubagentsAskWithANoteTellsIt(t *testing.T) {
 	}
 	r := startTUI(t, m, policy.Rules{}, nil)
 	r.type_("go\r")
-	r.waitOutput("Question (1/1): write")
+	r.waitAsked("Question (1/1): write")
 	r.type_("a")
 	r.waitOutput("A note with the answer")
 	r.type_("keep it short\r")

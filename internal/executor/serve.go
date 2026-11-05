@@ -120,7 +120,11 @@ type capabilityFiles struct {
 type capabilityDescriptor struct {
 	Kind string `json:"kind"`
 	Ref  string `json:"ref,omitempty"`
-	Root string `json:"root"`
+	// Host and Instance are the machine and the file system's instance
+	// (agentworkspace RFC 0001 §12), which the session records.
+	Host     string `json:"host,omitempty"`
+	Instance string `json:"instance,omitempty"`
+	Root     string `json:"root"`
 }
 
 // capabilityTool is what the capability says of one tool.
@@ -235,7 +239,7 @@ func NewServer(o ServeOptions, exts Extensions, env extension.ToolEnv) (*Server,
 	if d == (workspace.Descriptor{}) {
 		d = env.Workspace.Descriptor()
 	}
-	s.desc = capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}
+	s.desc = capabilityDescriptor{Kind: d.Kind, Ref: d.Ref, Host: d.Host, Instance: d.Instance, Root: d.Root}
 	x, _, err := s.build(s.ceiling)
 	if err != nil {
 		return nil, err

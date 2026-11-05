@@ -320,10 +320,12 @@ func TestATrustFileOthersCouldWriteTrustsNothing(t *testing.T) {
 // /mcp add may not take a configured server's name.
 func TestServersNamedAlikeAreRefused(t *testing.T) {
 	ctx := context.Background()
-	for _, pair := range [][2]string{{"cli", "cli"}, {"a", "a_"}, {"b_", "b"}} {
+	// A name and an underscore is no longer a name at all (#149), so it
+	// is refused before any two are compared.
+	for _, pair := range [][3]string{{"cli", "cli", "named alike"}, {"a", "a_", "underscore"}, {"b_", "b", "underscore"}} {
 		o := options(t, &scripted{})
 		o.MCP = []MCPServer{{Name: pair[0], Command: "x"}, {Name: pair[1], Command: "y"}}
-		if s, err := New(ctx, o); err == nil || !strings.Contains(err.Error(), "named alike") {
+		if s, err := New(ctx, o); err == nil || !strings.Contains(err.Error(), pair[2]) {
 			if s != nil {
 				s.Close()
 			}
@@ -338,8 +340,8 @@ func TestServersNamedAlikeAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	for _, name := range []string{"cfg", "cfg_"} {
-		if _, err := s.AddMCP(ctx, name, os.Args[0]); err == nil || !strings.Contains(err.Error(), "configured server cfg") {
+	for name, want := range map[string]string{"cfg": "configured server cfg", "cfg_": "underscore"} {
+		if _, err := s.AddMCP(ctx, name, os.Args[0]); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("/mcp add %s beside the configured cfg: %v", name, err)
 		}
 	}

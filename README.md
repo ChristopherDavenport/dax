@@ -408,6 +408,7 @@ names the file and the field.
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
 | `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN`, `DAX_SERVERS_WORKSPACE_TOKEN`, `DAX_SERVERS_TUNNEL_TOKEN`, a `token_env` of `workspace` or `servers_workspace`, or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
 | `context_window` | the window, in tokens, a model is served at, by model: `{"qwen3.5:9b": 65536}`, for a server that cannot say or says the wrong one; it sizes the default `-compact` budget (three quarters of it). A project's file may only lower one, and to no less than 4096 |
+| `bash_max_output`, `mcp_max_output` | the most bytes of a `bash` call's result (default 30000), and of a result of a tool that is not dax's own (an MCP server's, a sub-agent's, a peer's; default 100000), the model is sent: a longer one is sent as its first and last halves, with how much was left out between them, so the end of a log, where the error is, arrives. The whole is kept with the session, never in the workspace, named in the result by an output id (`out_…`; the session's record maps it to the blob in a `dax.output_kept` entry), and the model reads it with `read_output`. 2048 to 1048576; a project's file may only lower them |
 | `max_turns` | stop each run after this many turns (`[stopped: max_turns]`, exit 3 under `-p`); default none. A project's file may set it only lower than yours |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
@@ -446,8 +447,9 @@ or a server more, is untrusted again; until it is trusted, dax starts
 your own servers, says which of the project's it left out, and starts
 none of them. A project's server may not name a `token_env` (it would
 send your credential where the repository says) or take a name your
-config gives a server (nor that name and an underscore, whose tools
-your rules for it would cover). dax believes the trust file only while
+config gives a server. No server's name may begin or end with an
+underscore, or hold two, so no name and an underscore is another's
+(agentpolicy's server glob, `mcp__gh__*`, names one server alone). dax believes the trust file only while
 no other account could have written it.
 
 | flag | |
@@ -478,7 +480,7 @@ no other account could have written it.
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. Your config is not even parsed unless `-config` brings it back, and `~/.dax/mcp-trust.json` is neither read nor written: a project's MCP servers start only with `-trust-mcp`, for that run. The session's header records the run as bare and what it left out (`dax.profile`) |
-| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
+| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain; an `AGENTS.md` below where the session starts reaches the model the turn after a file tool touches a path in its directory, once, as a message the record holds as composed from that file, never as your words), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-context-window N` | the main model's window for this run, over `context_window` and what the vendor says |
 | `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message you wrote (a prompt, a steer, a note with an answer) up to 8 KiB is kept verbatim through every fold, after the summary, so the task's exact words outlive it; the compaction entry records what it kept. A longer one, a pasted log, is folded like the rest |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
@@ -497,6 +499,8 @@ no other account could have written it.
 | `grep` | a regular expression over files: `path`, `include` (a glob), `ignore_case`, `max_results`; prints `path:line:text` |
 | `ls` | one directory, sorted, directories with `/`, files with their size |
 | `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs |
+| `read_output` | the whole of a result that was cut to `bash_max_output` or `mcp_max_output`, by the output id (`out_…`) it names: numbered lines from an offset, or the lines matching a pattern. It reads only an output this session kept, never a blob by its hash or another session's, where the session runs |
+| `background` | a long-lived command (a dev server, a watcher) started in the background (`start`), listed (`list`), its new output read (`output`, the last 16 KiB of what came since the last read) and stopped (`stop`); at most 8 running, each ended with the session. A start is decided as `bash`'s call of its line (the same rules, the same stamp), so `git status` starts unasked and `npm run dev` asks; `list`, `output` and `stop` of the session's own processes run. In a workspace that cannot start a process, run the command with `bash` |
 
 The file tools are confined to the working directory. A path that is
 absolute outside it, climbs out with `..`, or goes out through a
@@ -632,6 +636,7 @@ closed. A signal stops it, and every session's processes with it.
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
 | `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod. With `-kind` and `-root` it is the project's identity for `-list` and memory, so give one that outlives a recreated container |
+| `-host`, `-instance` | none | the machine the workspace is on and its file system's instance (a container's ID), which the session's env entry records beside kind and ref (`workspace.host`, `workspace.instance`), so a restart into a new file system is on the record; not part of the project's identity |
 | `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
 | `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |
 
@@ -1086,7 +1091,7 @@ file arguments):
 - `cat`, `head`, `tail`, `wc` and `grep` (not recursive) on named files.
   Each file must be a regular file inside the working directory no larger
   than `max_read_bytes` (default 2 MiB), checked when the call is decided,
-  and what bash returns is capped at 50 KiB however big it is; `grep -r`
+  and what bash returns is cut to `bash_max_output` however big it is; `grep -r`
   asks, use the `grep` tool.
 - `cd <directory inside the workspace> && ...`: the directory is checked,
   and what follows is checked relative to it.
@@ -1346,7 +1351,7 @@ drawn as the client draws any call, its name and arguments.
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
-| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter |
+| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
@@ -1372,7 +1377,13 @@ questions while the run goes, ahead of any permission:
 - A call a **sub-agent** (`explore` or `task`) makes that the policy asks
   about: `y` allows it, `a` allows it with a note, `n` refuses it with an
   optional reason, and `Esc` goes back. The sub-agent sees the note with
-  the call's result, and the reason in place of it.
+  the call's result, and the reason in place of it ("declined when
+  asked: …; the user said: …"). A call held only beside the one asked
+  about follows your answer. With nobody to ask (a served session with
+  no view attached, `-p` at the end of its input), the call is not run:
+  the sub-agent stops, and its `task` or `explore` call fails naming the
+  call that waits, so the main agent's model sees an error rather than
+  making the call itself under the conversation's grants.
 - A **question a tool asks mid-call** (MCP elicitation) that is yes or no.
   dax's own question for a line of text (a peer's question) is answered
   with `a` and the text, or `y` for "yes"; any other form, an MCP
@@ -1391,8 +1402,39 @@ client and the REPL alike; the model never sees it. Start a line with
 sends `/etc/hosts`). In the terminal client a command's output shows over
 the input until the next line, and an error gives the line back to edit.
 
+- `/<name> args` runs a prompt template: a markdown file
+  `~/.dax/prompts/<name>.md`, or the project's `.dax/prompts/<name>.md`
+  (yours wins a name both have), sent with `$ARGUMENTS` replaced by
+  everything after the name and `$1` to `$9` by its words, as a prompt,
+  or a steer while a run goes. The message is recorded as composed from
+  that file (its `instructions_part`), never as words you wrote, and a
+  project's is marked untrusted (`trust`): it is the repository's text,
+  sent only when you type its command. `/help` lists the templates and
+  marks the project's. A name is lowercase letters, digits, `-` and `_`;
+  one of dax's own commands, or a file over 64 KiB, is left out and
+  said once. `-bare` leaves out yours; `dax attach` offers none.
+- `/mcp__<server>__<prompt> args` runs a prompt an MCP server offers
+  (`prompts/get`), its arguments the prompt's declared ones in order,
+  split on white space, the last taking the rest; its messages are sent
+  as a prompt, or a steer while a run goes, recorded as composed from
+  that prompt (`instructions_part`, source `dax.mcp_prompt`) and marked
+  untrusted: a third party's text, never words you wrote. `/help` lists
+  the servers' prompts as they offer them now. `dax attach` offers none.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/port N` reaches port `N` on the loopback of wherever the tools act
+  (this machine, an executor, a box, a served or tunnelled workspace)
+  from this machine's loopback, and prints the URL, `port 5173:
+  http://127.0.0.1:41733`: a dev server the model started in a box,
+  whose network publishes nothing, opens in your browser. Each
+  connection is a stream over whatever carries the workspace
+  (agentworkspace's `Forward`); the listener is on 127.0.0.1 alone, and
+  ends with the session. A browser sends a page on 127.0.0.1 the
+  cookies of every other 127.0.0.1 site whatever its port, so open a
+  forward only to a server you trust with them. It is yours to open,
+  as running a command is:
+  no tool opens one, and `dax attach` refuses it, since it would listen
+  on the serving machine. It works during a run.
 - `/mcp` (or `/mcp list`) lists the session's MCP servers, one a line:
   the name, where it runs (on this machine, in the workspace, at a URL's
   origin, offered by the workspace, or offered by the servers
@@ -1400,9 +1442,10 @@ the input until the next line, and an error gives the line back to edit.
   label `/mcp remove` takes for one `/mcp add` started, and its
   description. The listing looks the same whatever the placement. A URL
   is shown by its scheme and host alone, since a hosted server's key is
-  often in its path. A server a workspace offers is never marked as
-  given secrets, even one that holds them there: the workspace does not
-  say. Each field is the server's, its offerer's or a served
+  often in its path. A server a workspace offers is marked `holds
+  secrets there` when the workspace says its offering gives it secrets
+  (a `dax workspace -servers` server with `secret_env`); the mark only
+  informs, since an older workspace says nothing. Each field is the server's, its offerer's or a served
   workspace's text, so it is cleaned, kept to one line and cut, a
   description at 160 columns and the rest at 80. Attached to a `dax
   serve` older than `/mcp`, the listing says the servers are not
@@ -1424,10 +1467,22 @@ the input until the next line, and an error gives the line back to edit.
   session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think`, `/mcp add` and `/mcp remove`
-wait for the run to end; the rest, the `/mcp` listing among them, work
+the next model call. `/model`, `/think`, `/compact`, `/mcp add` and
+`/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
 during one. An unknown command is an error, not a
-prompt. `/compact` does not exist (use `-compact N`).
+prompt.
+
+`/compact [instructions]` has the next request fold the conversation
+whatever the `-compact` budget, as a fold over budget does (your
+messages up to 8 KiB kept, the fold noted and recorded), with what
+follows the command as instructions for that fold's summary alone:
+`/compact keep the failing test names`. It waits for the run to end
+and folds at the next prompt's first model call, the main agent's,
+before any sub-agent's. A conversation whose older part is under an
+eighth of the budget is left as it is, as it would be over budget. With
+compaction off (`-compact 0`, or a model
+whose window is not known) it says so. `dax attach` sends it to the
+served session.
 
 ## Serving a session: `dax serve` and `dax attach`
 
@@ -1605,7 +1660,11 @@ asked while a call runs has no run to end, so `s` declines it as `n`
 does. Only a line typed after a question is shown answers it: one typed
 ahead (a steer such as "yes, also fix the tests" that crossed a
 sub-agent's question) goes on as the message it was, and the question
-is shown again.
+is shown again. When `-p`'s input has ended, or `-timeout` ends the
+wait, nobody answered: the call is refused, or the question declined,
+by dax's rule, and the record names the rule (`policy`), not you, as
+the decider. The model is told nobody was there to approve the call,
+not that you denied it.
 
 ## Exit status
 
@@ -1619,6 +1678,12 @@ is shown again.
 | 3 | stopped: the loop ended it (the end line says why, `[stopped: max_turns]`) |
 | 4 | requires input: a call waits on an answer nobody gave |
 | 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
+
+`-p` tells the model, in a part of the instructions of its own
+(`one-shot`, source `dax`, kept on the record), that nobody will reply
+to its last message, so it acts on its best judgement and finishes the
+task rather than ending on a question or a list of options; the REPL
+and the terminal client do not.
 
 Before the run starts, `-p` says on standard error which session it
 records, `session: <id>`, so a harness whose runs share a store finds

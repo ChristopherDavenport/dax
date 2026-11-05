@@ -542,6 +542,9 @@ func run(ctx context.Context, args []string, p program) error {
 		MaxReadBytes:   settings.MaxReadBytes,
 		Compact:        *compactAt,
 		CompactServer:  *compactServer,
+		OneShot:        *once != "",
+		BashMaxOutput:  settings.BashMaxOutput,
+		ToolMaxOutput:  settings.ToolMaxOutput,
 		Log:            func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
 	if p.named {

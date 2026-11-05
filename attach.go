@@ -385,6 +385,12 @@ func (r *remoteControls) RemoveMCP(label string) error {
 	return err
 }
 
+// Compact has the served session fold at its next request.
+func (r *remoteControls) Compact(ctx context.Context, instructions string) error {
+	_, err := r.call(ctx, cmdCompact, compactArgs{Instructions: instructions})
+	return err
+}
+
 // ContinueFrom moves the served session's head to the entry.
 func (r *remoteControls) ContinueFrom(ctx context.Context, entryID string) error {
 	_, err := r.call(ctx, cmdContinueFrom, continueArgs{Entry: entryID})

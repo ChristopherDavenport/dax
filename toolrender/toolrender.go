@@ -44,6 +44,8 @@ func Renderers(dir string) toolview.Renderers {
 		"grep":  grepRenderer{p},
 		"ls":    lsRenderer{p},
 		"bash":  bashRenderer{},
+		// background start shows its command as bash does.
+		"background": backgroundRenderer{},
 	}
 }
 

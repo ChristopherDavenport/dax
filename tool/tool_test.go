@@ -413,11 +413,13 @@ func TestAutoAllowedGoDoesNotSwitchToolchains(t *testing.T) {
 }
 
 func TestBashOutputIsBoundedInMemory(t *testing.T) {
-	out, err := call(context.Background(), Bash(newWS(t, t.TempDir())), `{"command":"head -c 5000000 /dev/zero | tr '\\0' x"}`)
+	out, err := call(context.Background(), Bash(newWS(t, t.TempDir())), `{"command":"head -c 5000000 /dev/zero | tr '\\0' x; echo; echo ERR"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) > maxBashBytes+200 || !strings.Contains(out, "truncated, 4948800 bytes omitted") || !strings.Contains(out, "[exit 0]") {
+	// The head and the tail are kept, so the end, where a build or a
+	// test says what failed, arrives (#172).
+	if len(out) > maxBashBytes+200 || !strings.Contains(out, "[3951429 bytes left out]") || !strings.Contains(out, "ERR\n[exit 0]") {
 		t.Errorf("output of %d bytes, tail %q", len(out), out[max(0, len(out)-80):])
 	}
 }

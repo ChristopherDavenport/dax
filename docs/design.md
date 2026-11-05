@@ -400,8 +400,11 @@ answered with `Resume`, and every question asked while a call runs is
 an `agentturn.Question` event, answered with `Reply`, what the user said
 with it in the answer's `Note`. A front that answers questions says so
 (`Session.Answering`); with none answering, a tool's question is
-cancelled and a sub-agent's call the policy asks about is refused with
-a note to make it from the main agent.
+cancelled and a sub-agent's call the policy asks about stays deferred:
+the sub-agent ends input-required and its task call fails naming the
+call (tools/agent's `WithAskParent`, agentturn RFC 0001 Composition),
+never handed to the main agent to make under the conversation's
+grants.
 
 ## Workspaces
 
@@ -750,8 +753,6 @@ Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
 tree to navigate; an RPC mode and ACP for editors; a container or
 remote workspace (agentworkspace has the interface and `Local`, not
-those);
-prompt templates
-(`/name args`); a model catalogue with context windows; extension points
+those); a model catalogue with context windows; extension points
 for slash commands, the REPL's renderer, or the config's schema. Each
 would be a front or an assembly option, not a change to the rules above.

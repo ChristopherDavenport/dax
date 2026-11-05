@@ -641,6 +641,13 @@ func (w identifiedStarter) Start(ctx context.Context, c workspace.Command) (work
 	return w.st.Start(ctx, c)
 }
 
+// Connect opens a stream to a port in the workspace when the client
+// can (remote's starter clients are Connectors); one that cannot
+// refuses it as unsupported, as agentworkspace's Connect does.
+func (w identifiedStarter) Connect(ctx context.Context, port int) (workspace.PortConn, error) {
+	return workspace.Connect(ctx, w.st, port)
+}
+
 type identifiedServers struct {
 	identified
 	sp workspace.ServerProvider

@@ -51,8 +51,8 @@ var ErrHeld = errors.New("calls held for approval when the session stopped wait 
 //     fronts answer with a line) or a page to visit is cancelled, and
 //     noted, and with no front
 //     answering questions (Answering) a tool's question is cancelled and
-//     a sub-agent's call the policy asks about is refused with a note
-//     to make it from the main agent.
+//     a sub-agent's call the policy asks about stays deferred, so its
+//     task call fails input-required (agentturn RFC 0001 Composition).
 //
 // Questions asked while a call runs are agentturn.Question events,
 // answered with Reply; what the user says with an answer is its Note.
@@ -102,7 +102,7 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	}
 	outs := make([]openresponses.Item, 0, len(pending)+len(items))
 	for _, p := range pending {
-		outs = append(outs, openresponses.NewFunctionCallOutput(p.Call.CallID, output(p)))
+		outs = append(outs, answerOf(p))
 	}
 	return s.ctl.Prompt(ctx, append(outs, items...)...)
 }
@@ -118,7 +118,7 @@ func (s *Session) Resume(ctx context.Context, answers ...agentturn.Answer) (*age
 	}
 	for _, p := range s.ag.State().Pending {
 		if !held(p) && !given[p.Call.CallID] {
-			answers = append(answers, agentturn.Output(openresponses.NewFunctionCallOutput(p.Call.CallID, output(p))))
+			answers = append(answers, agentturn.Output(answerOf(p)))
 		}
 	}
 	return s.ctl.Resume(ctx, answers...)
@@ -193,8 +193,8 @@ func (s *Session) ContinueFrom(ctx context.Context, entryID string) error {
 // Answering says a front answers the questions asked while a call
 // runs, until the returned func is called. With none answering, a
 // question is not asked: a tool's is cancelled, and a sub-agent's call
-// the policy asks about is refused with a note to make it from the main
-// agent, where a run that ends for input can put it to the user.
+// the policy asks about stays deferred, its task call failing
+// input-required, naming the call, for the main agent's model.
 func (s *Session) Answering() (done func()) {
 	s.answering.Add(1)
 	var once sync.Once
@@ -219,25 +219,6 @@ func (s *Session) ask(ctx context.Context, q agenttool.Elicitation) (agenttool.A
 	return orNoOne(ctx)(s.ag.QuestionElicitor()(ctx, q))
 }
 
-// askRecorded asks as ask does, through the kit's recorded question
-// elicitor (agentkit's Control.Elicitor): the question is on the run's
-// record before anyone is asked, and the answer, its note and who gave
-// it after, as a tool's own question is through the elicitor the kit
-// wraps. A question with no front answering is not asked, and so not
-// recorded as asked.
-func (s *Session) askRecorded(ctx context.Context, q agenttool.Elicitation) (agenttool.Answer, error) {
-	if s.answering.Load() == 0 {
-		return agenttool.Answer{}, errNoOne
-	}
-	ctx, done, ok := s.peerAsk(ctx)
-	if !ok {
-		return agenttool.Answer{}, errNoOne
-	}
-	defer done()
-	q.Message = forPeer(ctx, q.Message)
-	return orNoOne(ctx)(s.ctl.Elicitor()(ctx, q))
-}
-
 // errNoOne is a question asked with no front answering questions.
 var errNoOne = errors.New("nobody is answering questions")
 
@@ -257,8 +238,19 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
 	// A call an A2A caller's conversation asks about (front/a2a puts
-	// it with agentturn.Ask) is the policy's question, not a tool's.
-	if call, ok := agentturn.AskedCallFrom(ctx); !ok || call.Parent != "" {
+	// it with agentturn.Ask) is the policy's question, not a tool's; so
+	// is a sub-agent's call (tools/agent's WithAskParent puts it), whose
+	// question is dax's own text, the sub-agent and the policy's
+	// reason, as before agentturn.Ask framed it.
+	call, asked := agentturn.AskedCallFrom(ctx)
+	switch {
+	case asked && call.Parent == "" && call.Decision != nil && isChildAsk(call.Decision.Reason):
+		q.Message = call.Decision.Reason
+		// The fronts show the call as the sub-agent made it: the stamp
+		// its facts claim added for the run is dax's, not the call's.
+		call.Args = unstamped(call.Args)
+		ctx = agentturn.ContextWithAskedCall(ctx, call)
+	case !asked || call.Parent != "":
 		q.Message = "a tool asks: " + q.Message
 	}
 	ans, err := s.ask(ctx, q)
@@ -349,8 +341,8 @@ type Rules struct {
 	// call the policy asks about (q.Call), a tool's own question. What
 	// it says with the answer is its Note, which the model is told of an
 	// answer about a call. Nil leaves the questions unasked: a
-	// sub-agent's call is refused with a note to make it from the main
-	// agent, and a tool's question is cancelled.
+	// sub-agent's call stays deferred, its task call failing
+	// input-required, and a tool's question is cancelled.
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
@@ -366,6 +358,14 @@ type Rules struct {
 	// of the input) name the person only for what the person said. The
 	// zero Trigger, or a nil By, leaves the reply unattributed.
 	By func(q agentturn.Question) agentturn.Trigger
+	// PermitBy, when set, names who decided the permit Permit has just
+	// given for call, the decider the record writes: agentpolicy.ByHuman
+	// for a person's answer, ByPolicy for the controller's own rule,
+	// such as a refusal because nobody was left to ask (the end of -p's
+	// input, its -timeout). A rule's refusal tells the model nobody
+	// answered, not that the user denied the call. Nil or "" is
+	// ByHuman.
+	PermitBy func(call *openresponses.FunctionCall) string
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -409,8 +409,14 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Permit != nil {
 			allow, note = r.Permit(call, reason)
 		}
+		by := agentpolicy.ByHuman
+		if r.PermitBy != nil {
+			if b := r.PermitBy(call); b != "" {
+				by = b
+			}
+		}
 		if allow {
-			a := agentturn.Approve(call.CallID).WithBy(agentpolicy.ByHuman)
+			a := agentturn.Approve(call.CallID).WithBy(by)
 			if note != "" {
 				a = a.WithNote(note)
 			}
@@ -419,7 +425,15 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		return Refusal(call.CallID, note, r.Stops != nil && r.Stops(call))
+		stop := r.Stops != nil && r.Stops(call)
+		if by != agentpolicy.ByHuman {
+			o := openresponses.NewFunctionCallOutput(call.CallID, unansweredOutput)
+			if stop {
+				return agentturn.Refuse(o).WithBy(by)
+			}
+			return agentturn.Output(o).WithBy(by)
+		}
+		return Refusal(call.CallID, note, stop)
 	}
 	var end *agentturn.RunEnd
 	var err error
@@ -521,6 +535,25 @@ func PermissionsOf(c agentturn.Control, end *agentturn.RunEnd) []Permission {
 			perm.Reason = about(d.Reason, d.Subject)
 		}
 		out = append(out, perm)
+	}
+	return out
+}
+
+// unstamped is args without dax's stamp (dax_stamp), the rewrite a
+// file tool's or bash's facts claim adds for the call to run with; args
+// as they are when they hold none or are not an object.
+func unstamped(args json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return args
+	}
+	if _, ok := m["dax_stamp"]; !ok {
+		return args
+	}
+	delete(m, "dax_stamp")
+	out, err := json.Marshal(m)
+	if err != nil {
+		return args
 	}
 	return out
 }

@@ -200,7 +200,9 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	showPending(os.Stdout, t, "resumed")
 	// The questions the person typed an answer to, by ID, and the calls
 	// they refused with s, which ends the run.
-	var answered, stops sync.Map
+	// The calls refused because nobody was left to answer, whose
+	// refusal is dax's rule, not the person's.
+	var answered, stops, unanswered sync.Map
 	// One reader scans standard input for every answer, so a wait on a
 	// line ends with the run's context (-timeout) as no answer.
 	lines := make(chan string)
@@ -224,6 +226,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
+				unanswered.Store(c.CallID, true)
 				return false, ""
 			}
 			allow, stop, note := answerLine(line)
@@ -236,18 +239,22 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			_, ok := stops.LoadAndDelete(c.CallID)
 			return ok
 		},
+		PermitBy: func(c *openresponses.FunctionCall) string {
+			if _, ok := unanswered.LoadAndDelete(c.CallID); ok {
+				return agentpolicy.ByPolicy
+			}
+			return agentpolicy.ByHuman
+		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
-				if q.Call == nil {
-					// A tool's own question: nobody is left to answer
-					// it, which is not a no.
-					return agenttool.Answer{Action: agenttool.ActionCancel}
-				}
-				// Nobody is left to answer: the decline is dax's.
-				return agenttool.Answer{Action: agenttool.ActionDecline}
+				// Nobody is left to answer, which is not a no: a tool's
+				// own question is cancelled, and a sub-agent's call
+				// stays deferred, so its task call fails input-required
+				// (agentturn RFC 0001 Composition).
+				return agenttool.Answer{Action: agenttool.ActionCancel, By: agenttool.ByPolicy}
 			}
 			answered.Store(q.ID, true)
 			return replyOf(q.Elicitation, line)
@@ -388,6 +395,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	var answers []agentturn.Answer // the permissions answered so far
 	var steerText string           // a prompt held while held calls are answered
 	var sent string                // the prompt of the run in flight
+	var sentCommand string         // the command whose message the run in flight was prompted with, if any
 	prompt := func() {
 		if !running && len(asks) == 0 {
 			fmt.Fprint(w, "\n> ")
@@ -451,6 +459,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				// The session stopped with calls held for approval: they
 				// are answered first, and the prompt steers that run.
 				steerText = sent
+				if sentCommand != "" {
+					// Its message is marked with where it came from, which
+					// a steer of text would lose: it is not sent.
+					fmt.Fprintf(w, "[calls wait for approval; %s was not sent: run it again once they are answered]\n", render.Clean(sentCommand))
+				}
 				if perms := agent.HeldPermissions(t); len(perms) > 0 {
 					ask(perms)
 					continue
@@ -461,8 +474,10 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				text := steerText
 				steerText = ""
 				start(func() (*agentturn.RunEnd, error) {
-					if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
-						return nil, err
+					if text != "" {
+						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+							return nil, err
+						}
 					}
 					return t.Resume(ctx)
 				})
@@ -574,6 +589,24 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				}
+				if items := r.send; err == nil && len(items) > 0 {
+					// A prompt template's message, sent as a typed line
+					// is, marked with the file it came from.
+					if running {
+						if err := t.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else {
+							fmt.Fprintln(w, "[queued as steering]")
+						}
+						continue
+					}
+					// Not kept as the run's prompt text, which would send
+					// it again unmarked: were calls held, they are asked,
+					// and the REPL says the command was not sent.
+					sent, sentCommand = "", strings.Fields(line)[0]
+					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, items...) })
+					continue
+				}
 				if r.quit {
 					if running {
 						t.Abort()
@@ -595,7 +628,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				}
 				continue
 			}
-			sent = text
+			sent, sentCommand = text, ""
 			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(text)) })
 		}
 	}
@@ -758,6 +791,9 @@ func mcpLines(info agent.Info) []string {
 		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
 		if m.Secrets {
 			l += ", given secrets (secret_env)"
+		}
+		if m.HoldsSecrets {
+			l += ", holds secrets there"
 		}
 		if m.Added != "" {
 			l += ", added as " + oneLine(m.Added, maxField)

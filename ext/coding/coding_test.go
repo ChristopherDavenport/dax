@@ -29,7 +29,7 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	for _, tl := range e.Tools(env) {
 		names = append(names, tl.Name())
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash"}; !slices.Equal(names, want) {
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if want := []string{"read", "glob", "grep", "ls", "bash"}; !slices.Equal(e.ReadOnly, want) {
@@ -60,8 +60,10 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	if e.Renderers == nil || len(e.Renderers(ws.Root())) != len(names) {
 		t.Errorf("renderers do not draw its %d tools", len(names))
 	}
-	if e.Kit != nil || len(e.Owns) != 0 {
-		t.Error("dax-coding adds nothing through the kit")
+	// Through the kit it adds read_output alone, which reads the
+	// session's own kept outputs where the session runs (#172).
+	if e.Kit == nil || !slices.Equal(e.Owns, []string{"read_output"}) {
+		t.Errorf("dax-coding owns %v through the kit, want read_output", e.Owns)
 	}
 	// The policy reads the machine only through the tools: each claims
 	// its facts, and dax-coding brings no subjects and no hook of its own.

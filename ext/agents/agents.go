@@ -69,8 +69,12 @@ func New(o Options) extension.Extension {
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			ctx := context.Background()
 			return []agentkit.Option{
-				agentkit.WithChildAgent(o.explore(ctx, env), childagent.WithCallConfig(o.exploreCall(env))),
-				agentkit.WithChildAgent(o.task(ctx, env), childagent.WithCallConfig(o.taskCall(env))),
+				// A call the session's policy asks about inside a
+				// sub-agent is put to whoever answers the task call's
+				// questions, and with nobody to ask the call fails
+				// input-required (agentturn RFC 0001 Composition).
+				agentkit.WithChildAgent(o.explore(ctx, env), childagent.WithCallConfig(o.exploreCall(env)), childagent.WithAskParent()),
+				agentkit.WithChildAgent(o.task(ctx, env), childagent.WithCallConfig(o.taskCall(env)), childagent.WithAskParent()),
 			}, nil
 		},
 		Renderers: func(string) toolview.Renderers { return toolrender.SubAgents() },

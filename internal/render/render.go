@@ -74,6 +74,19 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 	case *agentturn.ModelRetry:
 		p.close()
 		fmt.Fprintf(p.w(), "[model call failed (attempt %d): %v; retrying in %s]\n", e.Attempt, e.Err, e.Delay.Round(time.Millisecond))
+	case *agentturn.ModelBlocked:
+		// A guard refused the model call: no response ends, and the
+		// tokens the provider may have billed for it count.
+		p.close()
+		if u := e.Usage; u != nil {
+			p.in += u.InputTokens
+			p.out += u.OutputTokens
+		}
+		fmt.Fprintf(p.w(), "[model call refused: %v]\n", e.Err)
+	case *agentturn.QuarantineAdded:
+		// Made between runs, so no run's end says it.
+		p.close()
+		fmt.Fprintf(p.w(), "[quarantined %d item(s): left out of every request from now on]\n", len(e.Items))
 	case *agentturn.ResponseEnd:
 		p.close()
 		p.turns++

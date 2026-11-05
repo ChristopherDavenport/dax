@@ -621,3 +621,31 @@ func TestAWorkspaceOfferingOneNameTwiceIsRefused(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// holdingOffered lists one server its offering gives a secret.
+type holdingOffered struct{ *workspace.Local }
+
+func (holdingOffered) Servers(context.Context) ([]workspace.Server, error) {
+	return []workspace.Server{{Name: "vault", Secrets: true}, {Name: "plain"}}, nil
+}
+
+func (holdingOffered) StartServer(context.Context, string, io.Writer) (workspace.Process, error) {
+	return nil, errors.New("not started")
+}
+
+// A server the workspace says it gives a secret is listed so, for /mcp
+// (agentworkspace's Server.Secrets); one it says nothing of is not.
+func TestAnOfferedSecretHolderIsMarked(t *testing.T) {
+	list, err := offeredServers(context.Background(), holdingOffered{}, "the workspace", PlacedOffered, "remote x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || !list[0].offeredSecrets || list[1].offeredSecrets {
+		t.Fatalf("offered %+v, want vault marked and plain not", list)
+	}
+	s := &Session{}
+	_, info, _ := s.mcpDialOf(list[0])
+	if !info.HoldsSecrets || info.Secrets {
+		t.Errorf("listed %+v, want held there, not given by this session", info)
+	}
+}

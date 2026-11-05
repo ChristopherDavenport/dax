@@ -7,6 +7,187 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Dependencies, in one step, since agentsession v0.0.37 writes a format
+  older readers refuse: agentkit v0.0.16, up from v0.0.15; agentturn,
+  agentturn/session, front/a2a and tools/a2a v0.0.37, up from v0.0.34;
+  agentsession v0.0.37, up from v0.0.30; agentconsole v0.0.15, up from
+  v0.0.14; agentpolicy v0.0.19, up from v0.0.17; agentmemory v0.0.12,
+  up from v0.0.10; agentsmd v0.0.4, up from v0.0.3; agentworkspace,
+  mcpworkspace and tunnel v0.0.11, up from v0.0.9; agenttool, mcpclient
+  and mcpserver v0.0.29, up from v0.0.26; openresponses and its
+  anthropic and gemini providers v0.0.18, up from v0.0.16;
+  agentredact/secrets v0.0.4, up from v0.0.1; agenteval v0.0.13, up
+  from v0.0.11; and agentredact v0.0.4, new, for a test alone. What
+  changes for you:
+  - A kept output (#172) leaves your store only redacted: an
+    agentredact pass (v0.0.4, default profile `default@3`) reads the
+    blob a `dax.output_kept` entry names, redacts it through the
+    profile's string rules into a blob of the redaction's own, and a
+    publish or export carries that one, never the original; agentredact
+    before v0.0.4 would have published the whole output unredacted, so
+    redact dax's sessions with v0.0.4 or later.
+  - Sessions are written as `agentsession/0.20`, and a session dax
+    appends to is raised to it, after which a reader built on an older
+    agentsession (an older dax, agenteval before v0.0.12, agentconsole
+    before v0.0.15) refuses it. Upgrade every reader of a store first.
+  - Each MCP server's instructions are sent to the model, as a part of
+    their own labelled `untrusted`, while the session offers that
+    server's tools (agentkit v0.0.16). dax keeps that default: it
+    names no server trusted (`WithTrustedMCPInstructions`) and does not
+    leave them out (`WithoutMCPInstructions`), so the model reads what
+    a server says of its own tools, marked as text a third party wrote.
+    The request, and its hash, changes for a session with such a server.
+  - `explore` and `task` decide under a grant scope of their own
+    (agentkit v0.0.16, #109). dax offers no "allow for this session"
+    today, and its skill grants were already the sub-agent's own, so
+    nothing you see changes; once session grants come (#146), one
+    given in the main conversation will not reach a sub-agent.
+  - Memory: a link inside the memory directory is not followed, so a
+    committed `project/x.md` pointing at `~/.ssh/id_ed25519` is not read
+    into the block; a scope directory that is a link is an error. The
+    block's entries are labelled `untrusted` on the record, `memory_search`
+    reads untrusted text by its flow, and a heading or a `<` that starts
+    a line of an entry is escaped, so the block's bytes, and the prompt
+    cache's prefix, change once (agentmemory v0.0.12).
+  - `AGENTS.md` is matched byte for byte: on macOS an `agents.md` is no
+    longer read for it (agentsmd v0.0.4).
+  - A served workspace dialled with a token that lacks `read` gives no
+    root (`""`) rather than its last element (agentworkspace v0.0.11),
+    and a box unit's process takes every signal the wire names (`HUP`,
+    `USR1`, `WINCH` and the rest), refusing another as unsupported.
+  - The terminal client's permission and question panels take no
+    answer for half a second after they open, so a `y` typed in the
+    middle of a line is not an approval (agentconsole v0.0.15).
+- Added: an `AGENTS.md` below the directory the session started in, a
+  package's in a monorepo, reaches the model the turn after a file
+  tool (`read`, `write`, `edit`, `ls`, `glob`, `grep`) touches a path
+  in or below its directory, once, as a message the record holds as
+  composed from that file (`instructions_part`, source `agentsmd`),
+  never as your words; the system prompt and its cache stay as they
+  are. A `bash` command's paths do not count yet, and the sub-agents
+  are not given them (#170).
+- Changed: what one tool result sends the model is capped and cut at
+  both ends. A `bash` result over `bash_max_output` (default 30000
+  bytes), and a result of a tool that is not dax's own (an MCP
+  server's, a sub-agent's, a peer's) over `mcp_max_output` (default
+  100000), is sent as its first and last halves with how much was left
+  out between them, where bash kept its first 50 KiB and dropped the
+  end, the error of a long build or test among it, and other tools were
+  not capped. The whole is kept as a typed blob of the session, named
+  in the result by an opaque output id (`out_…`), never by the blob's
+  hash, which a `dax.output_kept` entry maps to the blob; dax-coding's
+  new `read_output` reads it back by that id alone, only an output this
+  session kept, by lines or by a pattern; it never lands in the
+  repository or a remote workspace. `read` returns at most
+  100 KiB a call, down from 200 KiB. Both settings are the user's, and
+  a project's file may only lower them. `extension.Env.ToolOutput`,
+  `agent.Session.ToolOutput`, `agent.Options.BashMaxOutput` and
+  `ToolMaxOutput` (#172).
+- Added: dax-coding's `background` tool starts a long-lived command (a
+  dev server, a watcher) in the workspace, lists the processes, reads a
+  process's new output and stops it; they end with the session. A
+  start is decided as bash's call of its line, with bash's rules and
+  stamp; dax-coding ships `background(list)`, `background(output)` and
+  `background(stop)` as allow rules. An auto-allowed start's output
+  loses a URL's credentials, as bash's does, and `stop` waits at most
+  five seconds for the workspace to say the process ended. It works on
+  this machine, in an executor or a box, and in a served or tunnelled
+  workspace (#153).
+- Changed: a sub-agent's call the policy asks about is put to whoever
+  answers the `task` or `explore` call's questions through agentturn's
+  `tools/agent.WithAskParent`, which also settles the calls held only
+  beside it by that answer. With nobody to ask, the call is not run and
+  the sub-agent's call fails input-required, naming it, where the
+  sub-agent was told to have the main agent make the call, which would
+  have run it under the conversation's grants rather than the
+  sub-agent's (agentturn RFC 0001 Composition). A refusal now reads
+  "declined when asked: …; the user said: …", agentturn's text, without
+  dax's "do not get the same result another way" until agentturn#304
+  lets a host give it; `-p` at the end of its input cancels a
+  sub-agent's question rather than declining it (#163).
+- Added: an MCP server's prompts are slash commands,
+  `/mcp__<server>__<prompt> args`, whose messages are sent recorded as
+  composed from the prompt and untrusted, never as your words; `/help`
+  lists them. `agent.Session.MCPPrompts`, `MCPPrompt` and
+  `agent.MCPPrompt` (#176; resources as `@` mentions are still to come).
+- Added: prompt templates. `/<name> args` sends `~/.dax/prompts/<name>.md`
+  or the project's `.dax/prompts/<name>.md` with `$ARGUMENTS` and `$1`
+  to `$9` filled in; the message is recorded as composed from that file
+  (`instructions_part`, agentturn's `WithProvenance`), a project's
+  marked untrusted, never as your words; `/help` lists them.
+  `agent.Session.Templates`, `Template`, `agent.PromptTemplate` and
+  `agent.Commands` (#168). A template's name may not hold a double
+  underscore, so a project's cannot stand in for an MCP prompt's
+  command; in the REPL, a template sent while calls wait for approval
+  says it was not sent.
+- Added: `/port N` reaches a port on the loopback of wherever the tools
+  act, a box's dev server among them, from this machine's loopback
+  (`http://127.0.0.1:<p>`, printed), over whatever carries the
+  workspace (agentworkspace's `Forward` and `process.connect`); it ends
+  with the session, and `dax attach` refuses it. `agent.Session.Forward`;
+  the executor's workspace is an agentworkspace `Connector` (#154).
+- Fixed: a session's env entry records the workspace's host and
+  instance beside its kind and ref (agentsession's `workspace.host` and
+  `workspace.instance`): this machine's name for a local workspace, so
+  a session resumed on another machine reads as another file system.
+  An executor's capability carries both, and `dax execute` takes
+  `-host` and `-instance` (#155, the recording half; a box's ref is
+  still its name).
+- Added: `-p` tells the model nobody will reply to its last message, so
+  it finishes the task rather than ending on a question, in an
+  instructions part of its own (`one-shot`, source `dax`) that the
+  record keeps; `agent.Options.OneShot` and `agent.PartOneShot` (#137).
+- Changed: an allow rule for one MCP server's every tool,
+  `"allow": ["mcp__gh__*"]`, runs them unasked, a tool the server adds
+  later included (agentpolicy's server glob); a project's deny of one
+  still denies, a box's ask still asks, and another server's tools still
+  ask. A server's name may no longer begin or end with an underscore
+  (`gh_`), which the glob could not tell from another's (#149).
+- Added: `/compact [instructions]` has the next request fold the
+  conversation whatever the budget, with the instructions for that
+  fold's summary alone (agentkit's `Control.Compact`); it waits for the
+  run to end, says so when compaction is off, and is a command `dax
+  serve` offers, so `dax attach` sends it. A fold asked for is noted
+  `[compacted on request: …]` (#165).
+- Added: `agent.Session.Compact`.
+- Fixed: a call whose tool returned while the rest of its batch ran,
+  when dax stopped before the batch ended, is answered on the next
+  prompt with what it returned, and not run again, where the model was
+  told "whether it ran is not recorded" (#162).
+- Fixed: Ollama, OpenAI and OpenRouter are no longer sent an item
+  another provider's adapter made, such as Claude's redacted thinking
+  kept from before `/model` moved the session, which they refuse; an
+  `openresponses` server, which may be a proxy over that adapter, still
+  gets every item (openresponses `WithProviderSlugs`).
+- Fixed: a call `-p` asked about when its input had ended, or when
+  `-timeout` ended the wait, was recorded as refused by you; it is
+  refused by dax's rule, the record naming `policy` as the decider, and
+  the model is told nobody was there to approve it, not that you
+  denied it. A question declined or cancelled for the same reason names
+  `policy` too, and so does a sub-agent's call refused that way: the
+  sub-agent is told nobody answered.
+- Added: `agent.Rules.PermitBy`, who decided the permit `Permit` gave
+  (`agentpolicy.ByHuman`, `ByPolicy`); a rule's refusal tells the model
+  nobody answered.
+- Fixed (security): the session's agent is seeded from the session as
+  the store holds it when the agent is built (agentkit's
+  `ReadAgentOptions`), so an item a quarantine took out of the
+  conversation is not sent again.
+- Added: the REPL and `-p` say when a guard refused a model call
+  (`[model call refused: …]`, its tokens counted) and when an item was
+  quarantined between runs.
+- Added: `/mcp` marks a server a workspace offers `holds secrets there`
+  when the workspace says its offering gives it secrets
+  (agentworkspace's `Server.Secrets`); `agent.MCPServerInfo.HoldsSecrets`.
+- Changed: the session's header records its workspace's host and
+  instance (`dax.workspace`), and resuming says the session moved when
+  its machine or container instance differs, though the path is the
+  same (`… on <host>`); a header from before compares by kind, ref and
+  root. `-list`, memory and the MCP trust still go by kind, ref and
+  root.
+- Changed: the release workflow's jobs check out without keeping the
+  token in `.git/config`.
+
 - Dependencies: agenttool, mcpclient and mcpserver v0.0.26, up from
   v0.0.25 (a call to an MCP server cut because its connection closed
   returns only once the server's session has ended, waiting at most

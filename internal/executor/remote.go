@@ -301,7 +301,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	}
 	cn := &conn{c: c, server: server, byName: map[string]agenttool.Tool{}, start: cp.Start, servers: cp.Servers || len(cp.Box) > 0}
 	sh := shape{
-		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Root: cp.Descriptor.Root},
+		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Host: cp.Descriptor.Host, Instance: cp.Descriptor.Instance, Root: cp.Descriptor.Root},
 		extensions: slices.Clone(cp.Extensions),
 		maxRead:    cp.MaxReadBytes,
 		box:        cp.Box,

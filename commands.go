@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentturn"
@@ -50,6 +52,8 @@ const commandHelp = `commands:
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
+  /compact [instructions]   fold the conversation at the next request, keeping what you say
+  /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
   /abort                    abort the run
   /quit                     leave
@@ -61,6 +65,10 @@ const commandHelp = `commands:
 type commandResult struct {
 	out  string
 	quit bool
+	// send is what the front sends as a prompt, or a steer while a run
+	// goes: a prompt template's message or an MCP prompt's, marked with
+	// where it came from.
+	send []openresponses.Item
 }
 
 // command runs a slash line against the session. While a run goes, a
@@ -92,7 +100,7 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 	}
 	switch name {
 	case "/help":
-		return commandResult{out: commandHelp}, nil
+		return commandResult{out: commandHelp + templateHelp(ctx, ctl)}, nil
 	case "/quit", "/exit":
 		return commandResult{quit: true}, nil
 	case "/abort":
@@ -139,6 +147,36 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
+	case "/port":
+		// A forward changes nothing the run does, so it works during one.
+		port, err := strconv.Atoi(arg)
+		if err != nil || port < 1 || port > 65535 {
+			return commandResult{}, errors.New("usage: /port <port>, a port on the workspace's loopback (1 to 65535)")
+		}
+		f, ok := ctl.(forwarder)
+		if !ok {
+			return commandResult{}, errors.New("/port forwards to the session's own machine; it is not offered over dax attach")
+		}
+		url, err := f.Forward(ctx, port)
+		if err != nil {
+			return commandResult{}, err
+		}
+		return commandResult{out: fmt.Sprintf("port %d: %s", port, url)}, nil
+	case "/compact":
+		if err := idle(); err != nil {
+			return commandResult{}, err
+		}
+		c, ok := ctl.(compacter)
+		if !ok {
+			return commandResult{}, errors.New("/compact is not offered by this session")
+		}
+		if err := c.Compact(ctx, arg); err != nil {
+			return commandResult{}, err
+		}
+		if arg != "" {
+			return commandResult{out: "[the next request folds the conversation, with your instructions]"}, nil
+		}
+		return commandResult{out: "[the next request folds the conversation]"}, nil
 	case "/mcp":
 		// The listing changes nothing, so it works during a run.
 		if sub, rest, _ := strings.Cut(arg, " "); sub == "" || sub == "list" {
@@ -152,7 +190,83 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		}
 		return mcpCommand(ctx, ctl, arg)
 	}
-	return commandResult{}, fmt.Errorf("unknown command %s\n%s", name, commandHelp)
+	if tp, ok := ctl.(templater); ok && name != "/" {
+		if slices.ContainsFunc(tp.Templates(), func(p agent.PromptTemplate) bool { return "/"+p.Name == name }) {
+			item, err := tp.Template(strings.TrimPrefix(name, "/"), arg)
+			if err != nil {
+				return commandResult{}, err
+			}
+			return commandResult{send: []openresponses.Item{item}}, nil
+		}
+	}
+	if mp, ok := ctl.(mcpPrompter); ok && strings.HasPrefix(name, "/mcp__") {
+		items, err := mp.MCPPrompt(ctx, strings.TrimPrefix(name, "/"), arg)
+		if err != nil {
+			return commandResult{}, err
+		}
+		return commandResult{send: items}, nil
+	}
+	return commandResult{}, fmt.Errorf("unknown command %s\n%s%s", name, commandHelp, templateHelp(ctx, ctl))
+}
+
+// mcpPrompter is what an MCP prompt's command asks of the session's
+// controls: the session's own (agent.Session.MCPPrompts and
+// MCPPrompt), which hold its servers; dax attach offers none.
+type mcpPrompter interface {
+	MCPPrompts(ctx context.Context) []agent.MCPPrompt
+	MCPPrompt(ctx context.Context, command, args string) (openresponses.Items, error)
+}
+
+// templater is what a prompt template asks of the session's controls:
+// the session's own (agent.Session.Templates and Template), which read
+// the templates where the session runs; dax attach offers none.
+type templater interface {
+	Templates() []agent.PromptTemplate
+	Template(name, args string) (openresponses.Item, error)
+}
+
+// templateHelp lists the session's prompt templates for /help, the
+// project's marked, since its text is the repository's.
+func templateHelp(ctx context.Context, ctl agent.Controls) string {
+	var b strings.Builder
+	if tp, ok := ctl.(templater); ok && len(tp.Templates()) > 0 {
+		b.WriteString("\nprompt templates ($ARGUMENTS, $1…$9 filled in):")
+		for _, p := range tp.Templates() {
+			fmt.Fprintf(&b, "\n  /%-24s %s", p.Name+" [args]", p.Path)
+			if p.Project {
+				b.WriteString(" (the project's: its text is the repository's)")
+			}
+		}
+	}
+	if mp, ok := ctl.(mcpPrompter); ok {
+		if prompts := mp.MCPPrompts(ctx); len(prompts) > 0 {
+			b.WriteString("\nMCP prompts (a server's text, sent as its own):")
+			for _, p := range prompts {
+				fmt.Fprintf(&b, "\n  /%s", p.Command)
+				for _, a := range p.Arguments {
+					b.WriteString(" <" + oneLine(a, maxField) + ">")
+				}
+				if p.Description != "" {
+					b.WriteString("  " + oneLine(p.Description, maxDescription))
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
+// forwarder is what /port asks of the session's controls: the
+// session's own (agent.Session.Forward). Over dax attach the forward
+// would listen on the serving machine, not the attaching one, so the
+// attached controls offer none.
+type forwarder interface {
+	Forward(ctx context.Context, port int) (string, error)
+}
+
+// compacter is what /compact asks of the session's controls: the
+// session's own (agent.Session.Compact) or a served one's command.
+type compacter interface {
+	Compact(ctx context.Context, instructions string) error
 }
 
 // mcpCommand is /mcp add and /mcp remove; runCommand answers /mcp and

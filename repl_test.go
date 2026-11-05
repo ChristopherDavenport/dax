@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -296,12 +298,24 @@ func TestPrintAtTheEndOfItsInputAnswersForNobody(t *testing.T) {
 		parent: [][2]string{{"task", `{"input":"write the file"}`}},
 		child:  [][2]string{{"write", `{"path":"NEVER","content":"x"}`}},
 	}
-	sess, _ := printSession(t, ctx, m)
+	sess, dir := printSession(t, ctx, m)
 	f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(""))}
 	if err := f.run(ctx, sess, sess); err != nil {
 		t.Fatal(err)
 	}
-	checkRecordedQuestion(t, sess, "the task sub-agent asks", "write", "decline", "", agentsession.Trigger{})
+	checkRecordedQuestion(t, sess, "the task sub-agent asks", "write", "cancel", "", agentsession.Trigger{})
+	// Nobody answered, so the sub-agent is not told the user denied
+	// its call: its call stays deferred and the task call fails
+	// input-required (#163).
+	m.mu.Lock()
+	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
+	m.mu.Unlock()
+	if strings.Contains(saw, "user denied") {
+		t.Errorf("the sub-agent was told %q", saw)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "NEVER")); err == nil {
+		t.Error("the unanswered write ran")
+	}
 }
 
 // An interrupt stops a -p run while a question waits on a line: the

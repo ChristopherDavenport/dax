@@ -2,7 +2,9 @@ package dax
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -64,6 +66,16 @@ func (f *fakeControls) AddMCP(_ context.Context, name, command string) (string, 
 func (f *fakeControls) RemoveMCP(label string) error {
 	f.did = append(f.did, "remove "+label)
 	return nil
+}
+
+func (f *fakeControls) Compact(_ context.Context, instructions string) error {
+	f.did = append(f.did, "compact "+instructions)
+	return nil
+}
+
+func (f *fakeControls) Forward(_ context.Context, port int) (string, error) {
+	f.did = append(f.did, fmt.Sprintf("forward %d", port))
+	return "http://127.0.0.1:41733", nil
 }
 
 func (f *fakeControls) Info() agent.Info {
@@ -138,7 +150,16 @@ func TestCommands(t *testing.T) {
 		{line: "/quit", quit: true},
 		{line: "/exit", running: true, quit: true},
 		{line: "/help", out: "//text"},
-		{line: "/compact", err: "unknown command /compact"},
+		// The next request folds, with what follows as that fold's
+		// instructions (#165).
+		{line: "/compact", out: "[the next request folds the conversation]", did: "compact "},
+		{line: "/compact keep the failing test names", out: "[the next request folds the conversation, with your instructions]", did: "compact keep the failing test names"},
+		{line: "/compact", running: true, err: "/compact waits for the run to end"},
+		// A port where the tools act, on this machine's loopback (#154).
+		{line: "/port 5173", out: "port 5173: http://127.0.0.1:41733", did: "forward 5173"},
+		{line: "/port 5173", running: true, out: "port 5173: http://127.0.0.1:41733", did: "forward 5173"},
+		{line: "/port", err: "usage: /port <port>"},
+		{line: "/port x", err: "usage: /port <port>"},
 		// Controls that cannot run the user's command, as over dax
 		// attach, refuse it.
 		{line: "!ls", err: "dax attach"},
@@ -184,7 +205,7 @@ func TestTheMCPListing(t *testing.T) {
 		{Name: "lint", Placement: agent.PlacedWorkspace, Where: "/src/p"},
 		{Name: "wide", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/" + strings.Repeat("d/", 60), Description: strings.Repeat("字", 100)},
 		{Name: "web", Placement: agent.PlacedURL, Where: "https://mcp.example/mcp", Description: "Web search"},
-		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database"},
+		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database", HoldsSecrets: true},
 		{Name: "vault", Placement: agent.PlacedServersWorkspace, Where: "remote https://vault.example:/", Description: strings.Repeat("long ", 50)},
 		{Name: "scratch", Placement: agent.PlacedWorkspace, Where: "/src/p", Added: "mcp:#6 x"},
 		{Name: "next", Placement: "elsewhere", Where: "a place"},
@@ -200,7 +221,7 @@ func TestTheMCPListing(t *testing.T) {
 		// Each field is cut by the columns it takes, a wide character two.
 		"  wide: offered by the workspace remote https://ws.example:/" + strings.Repeat("d/", 26) + "…" + " — " + strings.Repeat("字", 79) + "…",
 		"  web: at https://mcp.example/mcp — Web search",
-		"  db: offered by the workspace remote https://ws.example:/srv/p — The team's database",
+		"  db: offered by the workspace remote https://ws.example:/srv/p, holds secrets there — The team's database",
 		"  vault: offered by the servers workspace remote https://vault.example:/ — " + strings.TrimSpace(strings.Repeat("long ", 32)) + "…",
 		"  scratch: in the workspace /src/p, added as mcp:#6 x",
 		"  next: elsewhere a place",
@@ -237,5 +258,78 @@ func TestAttachRefusesAUserCommand(t *testing.T) {
 	_, err := command(context.Background(), &fakeTurn{}, ctl, "!touch PWNED", false)
 	if err == nil || !strings.Contains(err.Error(), "not offered over dax attach") {
 		t.Errorf("a ! line over attach: %v", err)
+	}
+}
+
+// dax serve offers /compact as a named command, so dax attach sends it.
+func TestServedCompact(t *testing.T) {
+	ctl := &fakeControls{}
+	cmd, ok := serveCommands(ctl, nil, "")[cmdCompact]
+	if !ok {
+		t.Fatal("no compact command served")
+	}
+	for _, raw := range []string{`{"instructions":"keep X"}`, ``} {
+		if _, err := cmd.Run(context.Background(), json.RawMessage(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Join(ctl.did, ";"); got != "compact keep X;compact " {
+		t.Errorf("served compact asked %q", got)
+	}
+}
+
+// templateControls offers one prompt template, the project's.
+type templateControls struct{ fakeControls }
+
+func (*templateControls) Templates() []agent.PromptTemplate {
+	return []agent.PromptTemplate{{Name: "review", Path: ".dax/prompts/review.md", Project: true}}
+}
+
+func (*templateControls) Template(name, args string) (openresponses.Item, error) {
+	return openresponses.UserText(name + ": " + args), nil
+}
+
+func (*templateControls) MCPPrompts(context.Context) []agent.MCPPrompt {
+	return []agent.MCPPrompt{{Command: "mcp__team__review_pr", Description: "review a pull request", Arguments: []string{"number"}}}
+}
+
+func (*templateControls) MCPPrompt(_ context.Context, command, args string) (openresponses.Items, error) {
+	if command != "mcp__team__review_pr" {
+		return nil, errors.New("no MCP prompt /" + command)
+	}
+	return openresponses.Items{openresponses.UserText("PR " + args), openresponses.AssistantText("ok")}, nil
+}
+
+// A prompt template is a command that sends its message; /help lists
+// it, marking the project's (#168).
+func TestAPromptTemplateIsACommand(t *testing.T) {
+	ctl := &templateControls{}
+	r, err := command(context.Background(), &fakeTurn{}, ctl, "/review internal/box tool", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.send) != 1 {
+		t.Fatalf("sent %d item(s)", len(r.send))
+	}
+	if m, ok := r.send[0].(*openresponses.Message); !ok || m.Text() != "review: internal/box tool" {
+		t.Errorf("sent %#v", r.send)
+	}
+	h, _ := command(context.Background(), &fakeTurn{}, ctl, "/help", false)
+	if !strings.Contains(h.out, "/review [args]") || !strings.Contains(h.out, "the project's") {
+		t.Errorf("/help:\n%s", h.out)
+	}
+	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/nope", false); err == nil || !strings.Contains(err.Error(), "/review") {
+		t.Errorf("unknown command: %v", err)
+	}
+	// An MCP server's prompt too (#176).
+	if !strings.Contains(h.out, "/mcp__team__review_pr <number>  review a pull request") {
+		t.Errorf("/help lists no MCP prompt:\n%s", h.out)
+	}
+	m, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp__team__review_pr 456", false)
+	if err != nil || len(m.send) != 2 {
+		t.Errorf("an MCP prompt sent %d item(s), %v", len(m.send), err)
+	}
+	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp__team__nope", false); err == nil {
+		t.Error("an MCP prompt the server does not offer was run")
 	}
 }

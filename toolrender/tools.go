@@ -430,3 +430,26 @@ func (peerRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	}
 	return agentRenderer{props: []string{"input"}}.Body(c, expanded)
 }
+
+// backgroundRenderer draws the background tool's call: the action, and
+// for a start its command line as bash's head draws one; the result as
+// the client draws any.
+type backgroundRenderer struct{}
+
+func (backgroundRenderer) Head(c view.Call) (toolview.Line, bool) {
+	a := parseArgs(c.Args)
+	action := a.str("action")
+	if !fits(c.Schema, "action", "command", "id") || action == "" {
+		return nil, false
+	}
+	switch action {
+	case "start":
+		ls := lines(strings.TrimSpace(a.str("command")))
+		return toolview.Line{toolview.S(toolview.Dim, "background $ "), toolview.S(toolview.Emphasis, ls[0])}, true
+	case "output", "stop":
+		return toolview.Line{toolview.S(toolview.Dim, "background "), toolview.S(toolview.Emphasis, fmt.Sprintf("%s %d", action, a.num("id")))}, true
+	}
+	return toolview.Line{toolview.S(toolview.Dim, "background "), toolview.S(toolview.Emphasis, action)}, true
+}
+
+func (backgroundRenderer) Body(view.Call, bool) ([]toolview.Line, bool) { return nil, false }

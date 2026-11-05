@@ -77,6 +77,36 @@ func (r *Remote) Start(ctx context.Context, cmd workspace.Command) (workspace.Pr
 	return p, nil
 }
 
+// Connect opens a stream to port on the executor's workspace's
+// loopback (agentworkspace's Connector; mcpworkspace's
+// process.connect), over the current connection, a new one if that was
+// lost; the stream lives on that connection alone, as a started
+// process does. An executor without the process methods refuses it as
+// unsupported.
+func (r *Remote) Connect(ctx context.Context, port int) (workspace.PortConn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cn, err := r.conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cn.start == nil {
+		return nil, fmt.Errorf("executor (%s %s) cannot connect to a port (no start in %s); update dax execute where it runs: %w", cn.server.Name, cn.server.Version, CapabilityKey, errors.ErrUnsupported)
+	}
+	c, err := mcpworkspace.Connect(ctx, mcpworkspace.Conn{
+		Session: cn.c.Session(),
+		Bounds:  *cn.start,
+		Done:    cn.procs,
+		Lost:    errProcessLost,
+		Err:     cn.lostErr,
+	}, port)
+	if err != nil {
+		return nil, fmt.Errorf("executor: %w", err)
+	}
+	return c, nil
+}
+
 // Servers lists the MCP servers the executor's workspace offers
 // (mcpworkspace.ListServers): a box host's units, answered by the box
 // host in front of the executor, or the servers its own workspace

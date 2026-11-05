@@ -40,6 +40,7 @@ func shipped(t *testing.T, dir string) policy.Shipped {
 		owns = append(owns, tl.Name())
 	}
 	owns = append(owns, slices.Collect(maps.Keys(e.Aliases))...)
+	owns = append(owns, e.Owns...)
 	return policy.Shipped{Name: e.Name, Rules: e.Policy, Owns: owns, Lifts: e.Lifts}
 }
 
@@ -143,6 +144,8 @@ func TestDefaultPolicy(t *testing.T) {
 		{"glob", `{"pattern":"**/*.go"}`, agentturn.Allow},
 		{"grep", `{"pattern":"x"}`, agentturn.Allow},
 		{"ls", `{}`, agentturn.Allow},
+		// A cut result's whole, from the session's own outputs (#172).
+		{"read_output", `{"ref":"out_0000000000000000"}`, agentturn.Allow},
 		// Writes ask.
 		{"write", `{"path":"a.go","content":""}`, agentturn.Defer},
 		{"edit", `{"path":"a.go","old_string":"a","new_string":"b"}`, agentturn.Defer},
@@ -347,5 +350,33 @@ func TestNoBuiltinDropsTheAllowListButKeepsTheAsks(t *testing.T) {
 	s.Fallback = "ask"
 	if got, why := decide(t, s, "bash", bash("git status")); got != agentturn.Defer {
 		t.Errorf("git status without the allow list = %v (%s), want asked", got, why)
+	}
+}
+
+// A background start is decided as bash's call of its command, so a line
+// bash would run unasked starts unasked and the rest ask, a compound
+// line by its worst part; listing, reading and stopping the session's
+// own processes run (#153).
+func TestTheBackgroundToolsDecisions(t *testing.T) {
+	start := func(cmd string) string {
+		b, _ := json.Marshal(map[string]string{"action": "start", "command": cmd})
+		return string(b)
+	}
+	for _, tc := range []struct {
+		args string
+		want agentturn.ToolAction
+	}{
+		{start("git status"), agentturn.Allow},
+		{start("npm run dev"), agentturn.Defer},
+		{start("git status && rm -rf x"), agentturn.Defer},
+		{start("cat .env"), agentturn.Defer},
+		{`{"action":"list"}`, agentturn.Allow},
+		{`{"action":"output","id":1}`, agentturn.Allow},
+		{`{"action":"stop","id":1}`, agentturn.Allow},
+		{`{"action":"Start","command":"rm -rf x"}`, agentturn.Defer},
+	} {
+		if got, reason := decide(t, defaults, "background", tc.args); got != tc.want {
+			t.Errorf("background %s = %v (%s), want %v", tc.args, got, reason, tc.want)
+		}
 	}
 }

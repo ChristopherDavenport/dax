@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultReadLines = 2000
-	maxReadBytes     = 200 << 10
+	maxReadBytes     = 100 << 10
 )
 
 // ReadArgs are the arguments of the read tool.

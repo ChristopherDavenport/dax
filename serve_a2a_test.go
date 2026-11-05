@@ -764,8 +764,10 @@ func TestASubagentsQuestionInAnA2AConversationNeedsAView(t *testing.T) {
 						got = append(got, decisions(child)...)
 					}
 				}
-				if got := strings.Join(got, "\n"); !strings.Contains(got, "cannot ask you") {
-					t.Errorf("the conversation's decisions:\n%s\nwant the sub-agent told nobody could be asked", got)
+				// Nobody could be asked: the sub-agent's call stays held,
+				// and its task call fails input-required (#163).
+				if got := strings.Join(got, "\n"); !strings.Contains(got, "hold by policy: the task sub-agent asks") || strings.Contains(got, "allow by") {
+					t.Errorf("the conversation's decisions:\n%s\nwant the sub-agent's call held, unrun", got)
 				}
 			}
 		})

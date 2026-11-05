@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # gh reads GH_TOKEN; nothing pushes from this checkout.
+          persist-credentials: false
       - name: Create the release from the tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,6 +46,9 @@ jobs:
           # The tag and its history, so the build stamps the tag as the
           # module's version.
           fetch-depth: 0
+          # The build runs the module's code; it gets no token in
+          # .git/config to push with. The upload uses GH_TOKEN alone.
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           # The latest 1.26 patch, not go.mod's floor (1.26.0): a binary

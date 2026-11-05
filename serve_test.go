@@ -187,7 +187,7 @@ func TestASubagentsQuestionIsAnsweredWithANoteFromAnAttachedView(t *testing.T) {
 	s := startServe(t, m, policy.Rules{})
 	r := s.attach()
 	r.type_("go\r")
-	r.waitOutput("Question (1/1): write")
+	r.waitAsked("Question (1/1): write")
 	r.type_("a")
 	r.waitOutput("A note with the answer")
 	r.type_("keep it short\r")

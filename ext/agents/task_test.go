@@ -175,9 +175,9 @@ func requestTools(req openresponses.Request) string {
 // known by the preamble in its instructions. It keeps the child's
 // requests.
 type taskModels struct {
-	parent, child scripted
-	mu            sync.Mutex
-	childReqs     []openresponses.Request
+	parent, child         scripted
+	mu                    sync.Mutex
+	childReqs, parentReqs []openresponses.Request
 }
 
 func (m *taskModels) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
@@ -187,7 +187,26 @@ func (m *taskModels) CreateStream(ctx context.Context, req openresponses.Request
 		m.mu.Unlock()
 		return m.child.CreateStream(ctx, req, sink)
 	}
+	m.mu.Lock()
+	m.parentReqs = append(m.parentReqs, req)
+	m.mu.Unlock()
 	return m.parent.CreateStream(ctx, req, sink)
+}
+
+// parentToldOf reports whether the main agent's last request carries a
+// call output holding want.
+func (m *taskModels) parentToldOf(want string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.parentReqs) == 0 {
+		return false
+	}
+	for _, it := range m.parentReqs[len(m.parentReqs)-1].Input {
+		if out, ok := it.(*openresponses.FunctionCallOutput); ok && strings.Contains(out.Output.Text, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func runTask(t *testing.T, childCalls [][2]string, rules policy.Rules, fallback string, approve func(*openresponses.FunctionCall, string) bool) (agent.Options, *taskModels, *agent.Session) {
@@ -243,7 +262,7 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	if !strings.Contains(s.Agent().Config().Instructions, "let sub-agents do") {
 		t.Error("the main agent's instructions lack the guide to its sub-agents")
 	}
-	if got := requestTools(req); got != "read,write,edit,glob,grep,ls,bash" {
+	if got := requestTools(req); got != "read,write,edit,glob,grep,ls,bash,background" {
 		t.Errorf("child tools %s; want the built-ins and no sub-agents of its own", got)
 	}
 	// The AGENTS.md text the child is told is the part the kit renders
@@ -279,22 +298,16 @@ func TestATaskSubagentIsGovernedByThePolicy(t *testing.T) {
 		t.Error("a write the user refused ran")
 	}
 
-	// A front that cannot ask (the terminal client) refuses, and says so.
+	// With nobody to ask, the sub-agent's call stays deferred and the
+	// task call fails input-required, naming it, so the main agent sees
+	// an error (agentturn RFC 0001 Composition, as a tool; #163); it is
+	// not told to make the call itself, under the conversation's grants.
 	o, model, _ := runTask(t, [][2]string{{"write", `{"path":"hello.txt","content":"hi\n"}`}}, policy.Rules{}, "ask", nil)
 	if _, err := os.Stat(filepath.Join(o.Dir, "hello.txt")); err == nil {
 		t.Error("an asked write ran with nobody to ask")
 	}
-	model.mu.Lock()
-	defer model.mu.Unlock()
-	last := model.childReqs[len(model.childReqs)-1]
-	found := false
-	for _, it := range last.Input {
-		if out, ok := it.(*openresponses.FunctionCallOutput); ok && strings.Contains(out.Output.Text, "the task sub-agent cannot ask you") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("the child was not told why its call was refused")
+	if !model.parentToldOf("needs input before it can finish") || !model.parentToldOf("write(") {
+		t.Error("the main agent was not told the task waits on the write")
 	}
 }
 
@@ -384,14 +397,15 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 		err   error
 	}
 	for name, tc := range map[string]struct {
-		ask      outcome
-		wrote    bool
-		childSaw string
+		ask       outcome
+		wrote     bool
+		childSaw  string
+		parentSaw string
 	}{
-		"allowed":             {outcome{allow: true}, true, ""},
-		"refused":             {outcome{note: "not now"}, false, "Reason: not now"},
-		"allowed with a note": {outcome{allow: true, note: "keep it short"}, true, `{"type":"message","role":"user","content":[{"type":"input_text","text":"keep it short"}]}`},
-		"nobody to ask":       {outcome{err: errors.New("no client")}, false, "cannot ask you"},
+		"allowed":             {outcome{allow: true}, true, "", ""},
+		"refused":             {outcome{note: "not now"}, false, "not now", ""},
+		"allowed with a note": {outcome{allow: true, note: "keep it short"}, true, `{"type":"message","role":"user","content":[{"type":"input_text","text":"keep it short"}]}`, ""},
+		"nobody to ask":       {outcome{err: errors.New("no client")}, false, "", "needs input before it can finish"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			model := &taskModels{
@@ -426,7 +440,7 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 			switch {
 			case tc.ask.err != nil && len(asked) != 0:
 				// Nobody holds the questions: nothing is asked, and the
-				// sub-agent is told to have the main agent make the call.
+				// task call fails input-required.
 				t.Errorf("asked %q with nobody holding the questions", asked)
 			case tc.ask.err == nil && (len(asked) != 1 || !strings.HasPrefix(asked[0], "write: the task sub-agent asks")):
 				t.Errorf("asked %q", asked)
@@ -434,6 +448,9 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 			_, err = os.Stat(filepath.Join(o.Dir, "hello.txt"))
 			if (err == nil) != tc.wrote {
 				t.Errorf("hello.txt written: %v, want %v", err == nil, tc.wrote)
+			}
+			if tc.parentSaw != "" && !model.parentToldOf(tc.parentSaw) {
+				t.Errorf("the main agent was not told %q", tc.parentSaw)
 			}
 			if tc.childSaw != "" {
 				model.mu.Lock()
@@ -531,7 +548,7 @@ func TestTheSubagentsTakeEveryExtensionsTools(t *testing.T) {
 	if !strings.Contains(ex.Instructions, "using the read, glob, grep, ls, bash and peek tools") {
 		t.Errorf("explore's prompt does not name its tools:\n%s", ex.Instructions)
 	}
-	if got := requestTools(tk); got != "read,write,edit,glob,grep,ls,bash,peek,poke" {
+	if got := requestTools(tk); got != "read,write,edit,glob,grep,ls,bash,background,peek,poke" {
 		t.Errorf("task's tools %s", got)
 	}
 	if !strings.Contains(tk.Instructions, "You are a sub-agent of acme.") || !strings.Contains(tk.Instructions, "You are acme, a coding agent") {
