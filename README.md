@@ -1896,6 +1896,14 @@ dax serve -a2a -listen 127.0.0.1:7878
 - **Not your conversations.** A caller's `conversation_search`, or its
   sub-agents', fails before anything is searched: the store holds every
   session you had, and a caller reads none of them.
+- **Not your files under `~/.dax`.** `dax serve -a2a` does not start
+  when the workspace is this machine's directory and holds dax's user
+  directory (`~/.dax`: memory, learned skills, grants), a `memory_dir`
+  or the session store, as serving from your home directory would: a
+  caller's `read`, `grep`, `glob`, `ls` and allowed `bash` reads act
+  anywhere in the workspace, and a search from its root walks every
+  directory below, which no path rule holds. Serve from the project's
+  directory, or keep those directories out of it.
 - **Not your memory or your learned skills.** Your memory (its `user`
   scope holds what you told dax across every project) is yours alone: a
   caller's requests, and its sub-agents', carry no memory block, and its

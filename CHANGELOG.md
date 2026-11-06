@@ -7,6 +7,10 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: `dax serve -a2a` refuses to start over this machine's directory
+  when it holds `~/.dax`, the `memory_dir` or the session store (serving
+  from the home directory, say), where a caller's reads and searches
+  would reach the person's memory, learned skills and sessions (#157).
 - Added: `dax serve -a2a` warns at start when the catalogue lists skills
   the model wrote (`~/.dax/learned`), naming them: callers are refused
   their bodies but still read their names and descriptions (#159).

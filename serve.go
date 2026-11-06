@@ -101,6 +101,9 @@ type serveFront struct {
 	a2a, a2aEscalate          bool
 	a2aURL                    string
 	a2aDir, sessions, hostDir string
+	// memoryDir is dax-memory's directory, the person's own, which an
+	// A2A caller's workspace may not hold (checkA2AWorkspace).
+	memoryDir string
 }
 
 // Prepare leaves the session's notes printed as they come: nothing
@@ -146,6 +149,9 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		defer cleanupA2A()
 		if a2aToken == token {
 			return errors.New("dax serve: $" + a2aTokenEnv + " is serve's token; A2A takes a token of its own")
+		}
+		if err := checkA2AWorkspace(si.Workspace, sess.UserDir(), f.memoryDir, storeRoot(sess, f.sessions)); err != nil {
+			return err
 		}
 		var base *neturl.URL
 		if f.a2aURL != "" {

@@ -13,6 +13,7 @@ import (
 	"github.com/ChristopherDavenport/agentmemory/filestore"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -239,5 +240,40 @@ func TestServeWarnsOfLearnedSkillsListedToCallers(t *testing.T) {
 	}, nil, false)
 	if w := learnedWarning(plain.sess); w != "" {
 		t.Errorf("with no learned skill: %q", w)
+	}
+}
+
+// dax serve -a2a does not start over this machine's directory when it
+// holds the person's own files: the user directory, the memory or the
+// session store; a project beside them, or a workspace elsewhere, is
+// served (#157's review, L-a).
+func TestA2AIsNotServedOverThePersonsOwnFiles(t *testing.T) {
+	home := t.TempDir()
+	user, project := filepath.Join(home, ".dax"), filepath.Join(home, "project")
+	for _, d := range []string{user, project} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local := func(root string) workspace.Descriptor {
+		return workspace.Descriptor{Kind: workspace.KindLocal, Root: root}
+	}
+	for _, tc := range []struct {
+		name string
+		ws   workspace.Descriptor
+		own  []string
+		ok   bool
+	}{
+		{"the home directory", local(home), []string{user}, false},
+		{"the user directory itself", local(user), []string{user}, false},
+		{"a memory_dir in the project", local(project), []string{user, filepath.Join(project, "notes", "memory")}, false},
+		{"the sessions in the project", local(project), []string{user, "", filepath.Join(project, ".sessions")}, false},
+		{"a project beside them", local(project), []string{user, filepath.Join(home, "memory")}, true},
+		{"a box", workspace.Descriptor{Kind: workspace.KindContainer, Ref: "dax-x", Root: home}, []string{user}, true},
+	} {
+		err := checkA2AWorkspace(tc.ws, tc.own...)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: %v, want served %v", tc.name, err, tc.ok)
+		}
 	}
 }
