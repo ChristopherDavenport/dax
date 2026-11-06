@@ -254,6 +254,27 @@ func (s *Session) peerFloor(ctx context.Context, info agentturn.ToolCallInfo) (*
 	return &agentturn.ToolDecision{Action: v.Action, Reason: v.Reason, Subject: v.Subject, By: agentpolicy.ByPolicy}, nil
 }
 
+// PersonOnlyNote is the reason an A2A caller's call of a tool an
+// extension keeps to the person (extension.Extension.PersonOnly) is
+// refused with, behind the tool's name.
+const PersonOnlyNote = "is the person's own (their memory, the skills written for them): an A2A caller cannot use it. " + policy.NoWorkAround
+
+// personOnlyRefusal is the hook, folded into the session's engine
+// beside peerFloor, that refuses an A2A caller's call, or its
+// sub-agent's, of a tool an extension keeps to the person
+// (extension.Extension.PersonOnly): the memory tools, skill_manage.
+// It refuses outright, whatever the rules and the mode, and asks no
+// one: the person's memory and learned skills reach every later
+// session of theirs, and one approval in an attached view would let a
+// caller read or write them. A refusal is not an ask, so it holds none
+// of the batch's other calls.
+func (s *Session) personOnlyRefusal(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	if _, peer := callerOf(ctx); !peer || info.Call == nil || !s.personOnly[info.Call.Name] {
+		return nil, nil
+	}
+	return &agentturn.ToolDecision{Action: agentturn.Block, Reason: info.Call.Name + " " + PersonOnlyNote, By: agentpolicy.ByPolicy}, nil
+}
+
 // asCalled is info with the arguments the model gave: a hook is handed
 // the call's rewrite (bash's stamp), which a decision of its own reads
 // from the call's facts claim again.

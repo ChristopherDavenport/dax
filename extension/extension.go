@@ -86,6 +86,17 @@ type Extension struct {
 	// name's rules, and annotated read-only and not destructive. They are
 	// built over the session's Env before any extension's Kit runs.
 	SubagentTools func(Env) ([]agenttool.Tool, error)
+	// PersonOnly names tools of the extension's (its Tools or names in
+	// Owns) that read or change what is the person's own beyond the
+	// workspace and this conversation: their memory, the skills the
+	// model wrote for them. An A2A caller's conversation, and its
+	// sub-agents', is refused every call of one outright, whatever the
+	// rules say, with policy.NoWorkAround's note, and no one is asked
+	// (agent's personOnly): one approval would otherwise let a caller
+	// read, or write into, what every later session of the person's
+	// reads. dax-memory names its memory tools and dax-skills
+	// skill_manage.
+	PersonOnly []string
 
 	// Matchers say how a rule's specifier matches a call of one of the
 	// extension's tools: bash(git status:*) is dax-coding's bash matcher
@@ -236,6 +247,14 @@ type Env interface {
 	// searches the store sets it on every search, so a caller never
 	// reads the person's conversations.
 	SearchScope(ctx context.Context, q *agentsession.Query) error
+	// Caller says whether ctx is an A2A caller's conversation, or one of
+	// its sub-agents' (dax serve -a2a), and names it: who and the
+	// session that records it. A caller is not the person: an extension
+	// that holds the person's own data beyond the workspace shows a
+	// caller none of it, as dax-memory's store does, which reads empty
+	// on a caller's context, so a caller's requests carry no memory
+	// block (PersonOnly refuses the tools).
+	Caller(ctx context.Context) (who string, ok bool)
 	// ReloadSkills asks the session to discover its skills again
 	// (agentkit's Kit.ReloadSkills) at the main agent's next turn,
 	// before its model call, when none of its calls is being decided:

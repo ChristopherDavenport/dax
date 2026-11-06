@@ -88,6 +88,8 @@ func TestWhatAnExtensionClaimsIsChecked(t *testing.T) {
 		{"a matcher for another's tool", []extension.Extension{{Name: "a", Tools: tools("deploy")}, {Name: "b", Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": matcher})}}, `matcher for "deploy", which is not one of its tools`},
 		{"a matcher for a tool it owns", []extension.Extension{{Name: "a", Owns: []string{"deploy"}, Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": matcher})}}, ""},
 		{"a lift of another's tool", []extension.Extension{coding.New(0), {Name: "b", Lifts: []string{"read"}}}, `lifts "read", which is not one of its tools`},
+		{"a person-only tool it owns", []extension.Extension{{Name: "a", Owns: []string{"recall"}, PersonOnly: []string{"recall"}}}, ""},
+		{"a person-only name of another's tool", []extension.Extension{coding.New(0), {Name: "b", PersonOnly: []string{"read"}}}, `keeps "read" to the person, which is not one of its tools`},
 		{"a nil tool", []extension.Extension{{Name: "a", Tools: func(extension.ToolEnv) []agenttool.Tool { return []agenttool.Tool{nil} }}}, "extension a: a nil tool"},
 		{"an owned name another's tool has", []extension.Extension{{Name: "a", Tools: tools("skill")}, {Name: "b", Owns: []string{"skill"}}}, `"skill": extension a has that name`},
 		{"an owned name in two extensions", []extension.Extension{{Name: "a", Owns: []string{"memory_save"}}, {Name: "b", Owns: []string{"Memory_Save"}}}, `"Memory_Save": extension a has that name`},

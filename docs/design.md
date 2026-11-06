@@ -442,7 +442,17 @@ naming the conversation it is about. Those sessions are in the
 person's store, so a search of it is scoped by its caller
 (`Session.SearchScope`, the `Env.SearchScope` every extension that
 searches the store passes agentkit's `SearchScope`): the person reads
-the project's top-level sessions, a caller none.
+the project's top-level sessions, a caller none. What is the person's
+own beyond the workspace is not a caller's either: an extension's
+`PersonOnly` tools (dax-memory's memory tools, dax-skills'
+`skill_manage`) are refused to a caller and its sub-agents outright by
+a hook beside the default-mode floor (`personOnlyRefusal`), asking no
+one; dax-memory's store reads empty on a caller's context
+(`Env.Caller`), so the kit renders a caller's requests with no memory
+block; and dax-skills serves a caller only installed skills. The kit
+renders one skill catalogue for every conversation, so a learned
+skill's name and description still reach a caller's instructions until
+agentkit can leave a part out per conversation.
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal

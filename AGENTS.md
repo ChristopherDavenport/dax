@@ -126,8 +126,10 @@ before changing the shape.
   status|down|pull`, which ask it; and `dax box up|ls|down NAME|proxy`
   on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
-- `extension`: the `Extension` type, `ToolEnv` (what tools are built
-  over), `Env` (the session as kit options see it), `Renderers`,
+- `extension`: the `Extension` type (its `PersonOnly` tools, refused
+  to an A2A caller), `ToolEnv` (what tools are built over), `Env` (the
+  session as kit options see it; `Caller` names an A2A caller's
+  context), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
   `TextQuestion`, `IsTextQuestion`, `TextAnswer` and `TextContent`,
   dax's own marked form asking for a line of text, which every front
@@ -168,8 +170,10 @@ before changing the shape.
   during a run applied at its next turn, the `dax.mode` entry and the
   model's note at the next turn (`modeTurn`); `peerFloor`, which holds an A2A
   caller's calls to the default mode through a second engine of the
-  same rules that no switch touches, and `dontAskRefusal`, which
-  refuses a would-ask call, the caller's too, in dontAsk.
+  same rules that no switch touches, `personOnlyRefusal`, which
+  refuses a caller the extensions' `PersonOnly` tools outright, and
+  `dontAskRefusal`, which refuses a would-ask call, the caller's too,
+  in dontAsk.
   `agent/grants.go`: "yes, always", `GrantOffer` (a rule only when the
   deferred verdict names none; the extension's `GrantRule` or the
   tool's name) and `Grant` (a session grant set under the kit's grant
@@ -219,8 +223,10 @@ before changing the shape.
   project's, grants under `-trust-skills`; `skill_manage` (`manage.go`)
   over `~/.dax/learned` through an `os.Root`, reloaded at the next turn
   (`Env.ReloadSkills`, the session's `skillsTurn`), and `Approve`, the
-  approvals by frontmatter digest that `/skills approve` writes.
-- `ext/memory` (dax-memory): the store, the scopes (the project's is
+  approvals by frontmatter digest that `/skills approve` writes;
+  `callerReads`, an A2A caller's `skill` held to the installed skills.
+- `ext/memory` (dax-memory): the store (`personal`: empty to an A2A
+  caller), the scopes (the project's is
   its workspace's) and their archives, the memory tools,
   `memory_search` for the sub-agents, and `conversation_search` under
   `Env.SearchScope` (`agent/search.go`: this project's top-level

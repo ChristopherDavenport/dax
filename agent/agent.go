@@ -457,6 +457,9 @@ type Session struct {
 	grants grants
 	// grantRules are the extensions' GrantRule by tool (GrantOffer).
 	grantRules map[string]func(context.Context, string, json.RawMessage) string
+	// personOnly are the tools an A2A caller is refused
+	// (personOnlyRefusal).
+	personOnly map[string]bool
 	env        []string // what an MCP server outside the workspace starts with
 	offered    []string // the MCP servers the workspace offers, connected at open
 	// beside are the servers workspaces, by name, each with its
@@ -777,6 +780,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}
 	s.set = a.set
 	s.grantRules = a.grantRules
+	s.personOnly = a.personOnly
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -971,10 +975,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if s.modes.peers, err = agentpolicy.Build(pp, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), lookup}, confine...)...); err != nil {
 			return nil, err
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor, s.dontAskRefusal)}, confine...)...))
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor, s.personOnlyRefusal, s.dontAskRefusal)}, confine...)...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
+	} else {
+		// With the policy off nothing is asked, and a caller is still
+		// refused what is the person's own.
+		kopts = append(kopts, agentkit.WithBeforeToolCall(s.personOnlyRefusal))
 	}
 	// A tool's question mid-call is a question event to the fronts
 	// answering, past the session's rules (elicit).

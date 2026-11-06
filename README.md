@@ -325,14 +325,16 @@ the calling session, which the model has in context, and never another
 project's. It runs unasked, as `memory_search` does, and its results
 are marked as untrusted text, since earlier models, tools and pages
 wrote them. It is dax-memory's, so `-memory off` and `-bare` leave it
-out; an A2A caller cannot use it (see Serving peers).
+out; an A2A caller cannot use it, nor any memory tool, and its
+requests carry no memory block (see Serving peers).
 
 ## Skills the model writes
 
 dax-skills offers the model `skill_manage`, which creates, updates or
 deletes a skill of its own in `~/.dax/learned`, on this machine, never
 in the repository's `.dax/skills` or your `~/.dax/skills`; a name either
-of those (or `skills_dirs`) holds is refused. Every call asks. The skill
+of those (or `skills_dirs`) holds is refused. Every call asks, and an
+A2A caller is refused it outright (see Serving peers). The skill
 is checked before it is written (its name, its frontmatter, its
 `allowed-tools`), written whole and moved into place, and the catalogue
 lists it from the model's next turn, in the run that wrote it, so "save
@@ -1877,8 +1879,21 @@ dax serve -a2a -listen 127.0.0.1:7878
   the rules alone; under `default` it does, as before.
 - **Not your conversations.** A caller's `conversation_search`, or its
   sub-agents', fails before anything is searched: the store holds every
-  session you had, and a caller reads none of them. Your memory block
-  and `memory_search` are the served agent's, as its instructions are.
+  session you had, and a caller reads none of them.
+- **Not your memory or your learned skills.** Your memory (its `user`
+  scope holds what you told dax across every project) is yours alone: a
+  caller's requests, and its sub-agents', carry no memory block, and its
+  conversation's record holds none of it. `memory_search`,
+  `memory_save`, `memory_patch`, `memory_forget`, `memory_insert` and
+  `skill_manage` are refused to a caller and its sub-agents outright,
+  whatever your rules and mode, and no view is asked, since one
+  approval would let a caller read or write what every later session of
+  yours reads. The `skill` tool serves a caller only the skills you
+  installed (the project's, `~/.dax/skills`, `skills_dirs`), never one
+  the model wrote for you under `~/.dax/learned`. The catalogue in a
+  caller's instructions still lists a learned skill's name and
+  description, since the kit renders one catalogue for every
+  conversation; leaving it out per conversation needs agentkit.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the

@@ -6,10 +6,13 @@
 package memory
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"iter"
 	"path"
 	"path/filepath"
 	"strings"
@@ -46,6 +49,10 @@ func New(dir string) extension.Extension {
 		Name:   Name,
 		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
 		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
+		// The memory is the person's: an A2A caller is refused every
+		// memory tool outright (conversation_search refuses it through
+		// Env.SearchScope), and the store reads empty on its context.
+		PersonOnly: []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool},
 		SubagentTools: func(env extension.Env) ([]agenttool.Tool, error) {
 			mem, scopes, err := open(dir, env)
 			if err != nil {
@@ -92,10 +99,11 @@ func open(dir string, env extension.Env) (agentmemory.Store, []agentmemory.Scope
 	if err := private.SecureDir(dir); err != nil {
 		return nil, nil, fmt.Errorf("memory: %w", err)
 	}
-	mem, err := filestore.Open(dir)
+	fs, err := filestore.Open(dir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("memory: %w", err)
 	}
+	mem := personal{Store: fs, caller: env.Caller}
 	project := ProjectScope(env.Dir())
 	if ws := env.ToolEnv().Workspace; ws != nil {
 		project = WorkspaceScope(ws.Descriptor(), env.Dir())
@@ -163,4 +171,91 @@ func scope(base string, sum []byte) agentmemory.Scope {
 // finding again and not worth reading every turn.
 func ArchiveScope(scope agentmemory.Scope) agentmemory.Scope {
 	return scope + "-archive"
+}
+
+// errCaller refuses a write to the person's memory on an A2A caller's
+// context.
+var errCaller = errors.New("the memory is the person's: an A2A caller cannot change it")
+
+// personal is the store as the session reads it: the person's own, so
+// on an A2A caller's context, or its sub-agent's (Env.Caller), it
+// reads empty and refuses every write. The kit renders the memory
+// block through it for each request, so a caller's requests carry no
+// block, and its conversation records no manifest of the person's
+// entries; the memory tools are refused to a caller before they run
+// (PersonOnly), and this holds behind them.
+//
+// It is a filestore's, and keeps the store's own search options
+// (agentmemory.Searcher) and its last sequence number
+// (agentmemory.LastSeqer), so the person's memory_search takes the
+// same options through it.
+type personal struct {
+	*filestore.Store
+	caller func(context.Context) (string, bool)
+}
+
+var (
+	_ agentmemory.Searcher  = personal{}
+	_ agentmemory.LastSeqer = personal{}
+)
+
+func (p personal) isCaller(ctx context.Context) bool {
+	_, ok := p.caller(ctx)
+	return ok
+}
+
+func (p personal) Get(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Entry, error) {
+	if p.isCaller(ctx) {
+		return nil, agentmemory.ErrNotFound
+	}
+	return p.Store.Get(ctx, scope, name)
+}
+
+func (p personal) List(ctx context.Context, scope agentmemory.Scope) ([]agentmemory.Entry, error) {
+	if p.isCaller(ctx) {
+		return nil, nil
+	}
+	return p.Store.List(ctx, scope)
+}
+
+func (p personal) Search(ctx context.Context, scopes []agentmemory.Scope, query string, limit int) ([]agentmemory.Entry, error) {
+	if p.isCaller(ctx) {
+		return nil, nil
+	}
+	return p.Store.Search(ctx, scopes, query, limit)
+}
+
+func (p personal) Put(ctx context.Context, e agentmemory.Entry, opts ...agentmemory.PutOption) (*agentmemory.Change, error) {
+	if p.isCaller(ctx) {
+		return nil, errCaller
+	}
+	return p.Store.Put(ctx, e, opts...)
+}
+
+func (p personal) Forget(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Change, error) {
+	if p.isCaller(ctx) {
+		return nil, errCaller
+	}
+	return p.Store.Forget(ctx, scope, name)
+}
+
+func (p personal) Journal(ctx context.Context, after uint64) iter.Seq2[agentmemory.Change, error] {
+	if p.isCaller(ctx) {
+		return func(func(agentmemory.Change, error) bool) {}
+	}
+	return p.Store.Journal(ctx, after)
+}
+
+func (p personal) SearchWith(ctx context.Context, scopes []agentmemory.Scope, query string, limit int, opts agentmemory.SearchOptions) ([]agentmemory.Entry, error) {
+	if p.isCaller(ctx) {
+		return nil, nil
+	}
+	return p.Store.SearchWith(ctx, scopes, query, limit, opts)
+}
+
+func (p personal) LastSeq(ctx context.Context) (uint64, error) {
+	if p.isCaller(ctx) {
+		return 0, nil
+	}
+	return p.Store.LastSeq(ctx)
 }

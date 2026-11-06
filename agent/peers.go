@@ -9,11 +9,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
@@ -43,10 +45,30 @@ import (
 func (s *Session) PeerConfig() agentturn.Config {
 	cfg := s.ag.Config()
 	cfg.ToolRecorder = nil
+	// The person's memory is not a caller's: the store reads empty on
+	// a caller's context (extension.Env.Caller), so the kit renders
+	// each of its requests with no memory block, and the text a run
+	// starts with, which its record keeps, holds none either.
+	cfg.Instructions = agentsession.JoinInstructions(withoutMemory(s.Kit.Parts()))
 	// The person's mode switches are told to the session's model, not
 	// a caller's (modeTurn).
 	cfg.BeforeTurn = s.Kit.Config().BeforeTurn
 	return cfg
+}
+
+// withoutMemory is parts without the memory block's (agentkit's
+// PartMemory group: its parts and the usage paragraph).
+func withoutMemory(parts []agentkit.Part) []agentkit.Part {
+	var out []agentkit.Part
+	for _, p := range parts {
+		switch {
+		case p.ID == agentkit.PartMemory, p.ID == agentkit.PartMemoryUsage,
+			strings.HasPrefix(p.ID, agentkit.PartMemory+"/"), strings.HasPrefix(p.ID, agentkit.PartMemory+":"):
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // PeerRecord is the record of one A2A caller's conversation: a dax
@@ -120,6 +142,14 @@ func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string)
 }
 
 type peerKey struct{}
+
+// callerOf names the A2A caller's conversation ctx is, its own or one
+// of its sub-agents' (peerKey rides into a sub-agent's run), with ok
+// false for the person's.
+func callerOf(ctx context.Context) (string, bool) {
+	who, ok := ctx.Value(peerKey{}).(string)
+	return who, ok
+}
 
 // forPeer puts the conversation a question comes from ahead of it,
 // when it comes from an A2A caller's: the fronts answering are the

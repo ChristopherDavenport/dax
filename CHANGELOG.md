@@ -7,6 +7,21 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: an A2A caller (`dax serve -a2a`) no longer reads or writes the
+  person's memory or learned skills. Its requests, and its
+  sub-agents', carry no memory block (the `user` scope included), and
+  its conversation's record holds none; `memory_search`,
+  `memory_save`, `memory_patch`, `memory_forget`, `memory_insert` and
+  `skill_manage` are refused to it outright, asking no view; the
+  `skill` tool serves it only installed skills, never one under
+  `~/.dax/learned`. A learned skill's name and description are still
+  in a caller's catalogue until agentkit can leave a part out per
+  conversation (#157, #158, #159, #161).
+- Changed: `extension.Extension` has `PersonOnly`, the extension's
+  tools an A2A caller is refused outright, and `extension.Env` has
+  `Caller`, which says whether a context is an A2A caller's.
+  `agent.PersonOnlyNote` is the refusal's reason.
+
 - Added: images. `read` returns a PNG, JPEG, GIF or WebP file (by name
   and first bytes, up to 5 MiB) as the image, through the workspace's
   files on any workspace, and the session shows it only to a model

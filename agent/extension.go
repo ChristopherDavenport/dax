@@ -47,6 +47,9 @@ type assembly struct {
 	// always" grants for a call of it. An extension's tool with none is
 	// offered its bare name.
 	grantRules map[string]func(context.Context, string, json.RawMessage) string
+	// personOnly are the extensions' PersonOnly tools, which an A2A
+	// caller is refused (Session.personOnlyRefusal).
+	personOnly map[string]bool
 }
 
 // ownedName is a name an extension owns: whose it is, and whether its
@@ -96,7 +99,7 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 	if err != nil {
 		return nil, err
 	}
-	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}, grantRules: map[string]func(context.Context, string, json.RawMessage) string{}}
+	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}, grantRules: map[string]func(context.Context, string, json.RawMessage) string{}, personOnly: map[string]bool{}}
 	extNames := map[string]bool{}
 	claimed := map[string]string{} // lower-case name -> the extension that has it
 	claim := func(ext, name, what string) error {
@@ -245,6 +248,12 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 			if !own[n] {
 				return nil, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
 			}
+		}
+		for _, n := range e.PersonOnly {
+			if !own[n] {
+				return nil, fmt.Errorf("extension %s: keeps %q to the person, which is not one of its tools", e.Name, n)
+			}
+			a.personOnly[n] = true
 		}
 		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts)+len(e.ModeRules) > 0 {
 			slices.Sort(ruleNames)
@@ -415,11 +424,13 @@ func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStart
 func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
 	return e.s.SearchScope(ctx, q)
 }
-func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
-func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
-func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }
-func (e *sessionEnv) Log(format string, args ...any)       { e.s.opts.log("%s", logText(format, args...)) }
-func (e *sessionEnv) SystemPrompt(except ...string) string { return e.s.systemPrompt(except...) }
+
+func (e *sessionEnv) Caller(ctx context.Context) (string, bool) { return callerOf(ctx) }
+func (e *sessionEnv) AgentsMD() string                          { return e.agentsMD }
+func (e *sessionEnv) Model() openresponses.Streamer             { return e.s.opts.Streamer }
+func (e *sessionEnv) Omit(o agentkit.Omission)                  { e.s.refused = append(e.s.refused, o) }
+func (e *sessionEnv) Log(format string, args ...any)            { e.s.opts.log("%s", logText(format, args...)) }
+func (e *sessionEnv) SystemPrompt(except ...string) string      { return e.s.systemPrompt(except...) }
 
 func (e *sessionEnv) SubagentModel() openresponses.Streamer {
 	if s := e.s.opts.SubagentStreamer; s != nil {
