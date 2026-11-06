@@ -90,6 +90,9 @@ func TestABoxSessionRecordsItsImageAndKeepsItsName(t *testing.T) {
 			}
 		}
 	}
+	if ids[0] == ids[1] {
+		t.Errorf("both box runs recorded session %s, want two sessions", ids[0])
+	}
 	if scopes[0] != scopes[1] {
 		t.Errorf("memory scopes %q and %q across a rebuild, want one", scopes[0], scopes[1])
 	}
