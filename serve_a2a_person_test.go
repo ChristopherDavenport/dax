@@ -224,3 +224,20 @@ func TestAnA2ACallersRequestsCarryNoMemory(t *testing.T) {
 		t.Errorf("after a caller's run, the person's requests carry no memory block:\n%s", mine)
 	}
 }
+
+// dax serve -a2a says at start which skills the model wrote are listed
+// to callers by name and description, and says nothing when none are
+// (#159's review).
+func TestServeWarnsOfLearnedSkillsListedToCallers(t *testing.T) {
+	rig := startRig(t, &steps{}, policy.Rules{}, withThePersonsOwn(t), nil, false)
+	w := learnedWarning(rig.sess)
+	if !strings.Contains(w, "1 skill(s)") || !strings.Contains(w, "secret-recipe") || strings.Contains(w, "house-style") {
+		t.Errorf("warning %q, want the learned skill alone", w)
+	}
+	plain := startRig(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
+		o.Extensions = append(o.Extensions, skills.New(skills.Options{}))
+	}, nil, false)
+	if w := learnedWarning(plain.sess); w != "" {
+		t.Errorf("with no learned skill: %q", w)
+	}
+}

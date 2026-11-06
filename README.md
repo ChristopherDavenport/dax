@@ -1910,6 +1910,8 @@ dax serve -a2a -listen 127.0.0.1:7878
   caller's instructions still lists a learned skill's name and
   description, since the kit renders one catalogue for every
   conversation; leaving it out per conversation needs agentkit.
+  `dax serve -a2a` says so at start, naming those skills, when
+  `~/.dax/learned` holds any the catalogue lists.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the

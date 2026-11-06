@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agentturn"
 	fronta2a "github.com/ChristopherDavenport/agentturn/front/a2a"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -40,6 +41,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
 )
@@ -125,6 +127,48 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 	}
 	p.exec = fronta2a.New(p.cfg, opts...)
 	return p, nil
+}
+
+// learnedWarning is what dax serve -a2a says at start when the
+// session's skill catalogue lists skills the model wrote
+// (~/.dax/learned): a caller is refused their bodies, but its
+// instructions still carry each one's name and description, since the
+// kit renders one catalogue for every conversation, until agentkit can
+// leave a part out per conversation. "" when it lists none.
+func learnedWarning(sess *agent.Session) string {
+	names := learnedListed(sess)
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("a2a: warning: %d skill(s) the model wrote (%s, in %s) are listed to callers by name and description; their bodies are not served to callers", len(names), strings.Join(names, ", "), skills.LearnedDir(sess.UserDir()))
+}
+
+// learnedListed are the names of the skills under ~/.dax/learned that
+// the session's catalogue lists as those skills (not one of the same
+// name from elsewhere).
+func learnedListed(sess *agent.Session) []string {
+	if sess.Kit == nil || sess.UserDir() == "" {
+		return nil
+	}
+	cat := sess.Kit.Catalog()
+	if cat == nil {
+		return nil
+	}
+	src, err := agentskill.Dir(skills.LearnedDir(sess.UserDir()))
+	if err != nil {
+		return nil
+	}
+	learned, err := agentskill.Discover(src)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range learned.Listed() {
+		if s, ok := cat.Lookup(l.Name); ok && s.Location == l.Location {
+			out = append(out, l.Name)
+		}
+	}
+	return out
 }
 
 // mount serves the JSON-RPC endpoint and the card on mux, both behind

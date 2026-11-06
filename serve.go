@@ -197,6 +197,9 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		} else {
 			fmt.Fprintln(out, "a2a token: $"+a2aTokenEnv)
 		}
+		if w := learnedWarning(sess); w != "" {
+			fmt.Fprintln(out, render.Clean(w))
+		}
 	}
 	// A certificate the attaching machine does not trust is named to it
 	// with -tls-ca.

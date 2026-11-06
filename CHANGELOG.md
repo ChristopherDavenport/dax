@@ -7,6 +7,9 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `dax serve -a2a` warns at start when the catalogue lists skills
+  the model wrote (`~/.dax/learned`), naming them: callers are refused
+  their bodies but still read their names and descriptions (#159).
 - Fixed: an A2A caller (`dax serve -a2a`) no longer reads or writes the
   person's memory or learned skills. Its requests, and its
   sub-agents', carry no memory block (the `user` scope included), and
