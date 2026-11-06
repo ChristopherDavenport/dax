@@ -132,10 +132,10 @@ func TestThePolicyLineNamesEachExtensionsRules(t *testing.T) {
 		{Name: "acme-docs"},
 		{Name: "acme-ops", Policy: policy.Rules{Allow: []string{"rollback"}}},
 	}
-	if got := policySummary(policy.Settings{Builtin: true, Fallback: "ask"}, exts); !strings.HasPrefix(got, "2 rule(s) from extension:acme-deploy, 1 rule(s) from extension:acme-ops; ") {
+	if got := policySummary(policy.Settings{Builtin: true, Fallback: "ask"}, exts); !strings.HasPrefix(got, "mode default, 2 rule(s) from extension:acme-deploy, 1 rule(s) from extension:acme-ops; ") {
 		t.Errorf("policy line %q", got)
 	}
-	if got := policySummary(policy.Settings{Fallback: "ask"}, exts); !strings.HasPrefix(got, "1 rule(s) from extension:acme-deploy, no shipped allow rules; ") {
+	if got := policySummary(policy.Settings{Fallback: "ask"}, exts); !strings.HasPrefix(got, "mode default, 1 rule(s) from extension:acme-deploy, no shipped allow rules; ") {
 		t.Errorf("policy line without the shipped allow rules %q", got)
 	}
 }

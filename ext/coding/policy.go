@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // allowRules is the allow list dax-coding ships. go test, build, vet and
@@ -74,6 +76,34 @@ func askRules() string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// protectedPaths are what a write or an edit asks about in acceptEdits
+// mode: what changes what runs or is trusted beyond the project's
+// source (git's hooks and config, dax's project config, an environment
+// file a shell or tool loads, CI, editor tasks), as a box's
+// confinement takes them (tool/confine.go's protectedNames). A name has
+// a form for the workspace root and one below it, each the name and
+// what is under it.
+var protectedPaths = []string{
+	".git", ".dax", ".github", ".circleci", ".husky", ".vscode", ".idea", ".gitlab-ci.yml", ".pre-commit-config.yaml",
+}
+
+// acceptEditsRules are dax-coding's rules in acceptEdits mode: write and
+// edit run unasked, but for a secret-looking or protected path; bash
+// and the rest still ask. Edit names edit and write.
+func acceptEditsRules() policy.Rules {
+	var ask []string
+	for _, s := range secretPaths {
+		ask = append(ask, "Edit(ci:"+s+")")
+		if !strings.HasPrefix(s, "*") {
+			ask = append(ask, "Edit(ci:*/"+s+")")
+		}
+	}
+	for _, n := range protectedPaths {
+		ask = append(ask, "Edit(ci:"+n+")", "Edit(ci:"+n+"/**)", "Edit(ci:*/"+n+")", "Edit(ci:*/"+n+"/**)")
+	}
+	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
 }
 
 // lifts are the tools whose asks a user's allow rule with a specifier

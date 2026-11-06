@@ -379,6 +379,7 @@ Settings come from three layers, each overriding the one before:
   "policy": {
     "builtin": true,
     "fallback": "ask",
+    "default_mode": "default",
     "allow": ["bash(make:*)", "write(docs/**)"],
     "ask": ["bash(go test -race:*)"],
     "deny": ["bash(git push --force:*)"]
@@ -429,17 +430,17 @@ names the file and the field.
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `status` | the terminal client's status line: `{"position": "bottom", "style": "powerline", "segments": ["user", "dir", "git", "model", "context", "cost"], "colors": {"git": "cyan", "context": {"50": "yellow", "80": "red"}}}`; see [The status line](#the-status-line). Your file only |
-| `policy` | see below |
+| `policy` | see below; `policy.default_mode` is the [permission mode](#permission-modes) a session starts in |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
 it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 (no `allow`, and no `!` carve-out of any rule), set `"builtin": false` to
 drop the shipped allow rules (their asks and denies stay), and set
-`"fallback"` to `ask` or `deny` when
+`"fallback"` to `ask` or `deny`, and `"default_mode"` to `dontAsk`, when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace` or `peers`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `peers` or `status`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -481,7 +482,8 @@ no other account could have written it.
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost, and for `-max-cost` |
 | `-max-turns N` | overrides `max_turns`; `0` turns it off |
 | `-max-tokens N`, `-max-cost USD` | stop a run before its next model call once the session's model calls have used `N` tokens (input and output) or cost `USD` by the pricing file: stopped, cause `guard`, exit 3 under `-p`. A sub-agent's calls count, and its next call is refused once the limit is reached. A server's compaction counts too, and a resumed session goes on from what its record says it spent. Under `-max-cost` the pricing file must price the model and the sub-agents' model, or dax does not start; a call to a model it does not price (after `/model`, say) stops the run too |
-| `-no-policy` | run every tool call without asking; ignores the config's policy |
+| `-mode NAME` | the permission mode to start in: `default`, `acceptEdits`, `dontAsk` or `bypassPermissions` (see [Permission modes](#permission-modes)); over `policy.default_mode` |
+| `-no-policy` | the old name of `-mode bypassPermissions`: every call no deny rule refuses runs without asking. The deny rules hold, and `/mode` can leave it |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
 | `-trajectory PATH` | with `-p`, write the session as an ATIF trajectory to `PATH` once the run ends (agentsession's export, the RFC 0001 projection), each sub-agent's session embedded and priced by the pricing file when there is one; needs a session store |
@@ -1212,6 +1214,34 @@ Path rules (`read(.env)`, `write(docs/**)`, `Read(secrets/**)`) are written rela
 An asked call prints `? allow bash {"command":"..."} (reason) [y/N]`.
 Your answer is recorded in the session as a person's.
 
+### Permission modes
+
+A mode is the same rules made stricter or looser as a whole, which you
+pick at start (`-mode`, or `policy.default_mode` in your config) and
+change in the session with `/mode NAME`, or Shift-Tab in the terminal
+client, which moves to the next one:
+
+| mode | what it does |
+|---|---|
+| `default` | the rules as they are: what no rule allows asks |
+| `acceptEdits` | `write` and `edit` run without asking, but for a path that changes what runs or is trusted (`.git`, `.dax`, `.github`, `.circleci`, `.husky`, `.vscode`, `.idea`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, at any depth) or looks like a secret (the paths a read asks about, `.env*` among them); commands and other tools still ask |
+| `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. It is what `-p` does with every question once its input ends |
+| `bypassPermissions` | nothing asks: what no deny rule refuses runs |
+
+A deny rule, an extension's or yours, holds in every mode, and a grant
+for the session (a skill's) survives a switch. A project's
+`default_mode` may only be stricter than yours (`dontAsk`), and
+`-mode` is over both. The policy changes for the next call decided: a
+switch typed during a run waits for the run's next turn, so no batch of
+calls is decided under two policies. Each switch is on the record, as
+agentpolicy's replacement of the policy (`replaced the policy: mode
+acceptEdits (/mode)`) and a `dax.mode` entry, which a session started in
+a mode other than `default` also holds from its start, and the model is
+told of it with the next prompt. `/mode` alone says the mode in force,
+and the one waiting for the run's next turn; the status line's `mode`
+segment shows both. `dax attach` switches the served session's mode the
+same way.
+
 ## Security model
 
 dax gives a model the ability to read your files, change them and run
@@ -1366,7 +1396,9 @@ tokens, cost, model, retry, turn, session. Your config can make it up:
   at all, saying so, when the repository's own config names a program
   git status would run) and `executor` (where the tools act: the
   executor's or the served workspace's line, or `here`; shown there,
-  it is no longer printed before the client takes the screen). `model`
+  it is no longer printed before the client takes the screen) and
+  `mode` (the permission mode, with the one waiting for the run's next
+  turn, `default → acceptEdits`). `model`
   names the model dax runs next, and `context` divides by the window
   dax believes that model has.
 - `colors`, by segment: a color (`black`, `red`, `green`, `yellow`,
@@ -1407,6 +1439,7 @@ drawn as the client draws any call, its name and arguments.
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
 | drag | select text anywhere on the screen; it stays drawn until the next key or press |
+| Shift-Tab | the next permission mode: default, acceptEdits, dontAsk, bypassPermissions (see [Permission modes](#permission-modes)) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and
@@ -1470,6 +1503,10 @@ the input until the next line, and an error gives the line back to edit.
   the servers' prompts as they offer them now. `dax attach` offers none.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/mode [name]`: the permission mode, or a switch to `default`,
+  `acceptEdits`, `dontAsk` or `bypassPermissions` (see [Permission
+  modes](#permission-modes)); during a run it takes effect at the run's
+  next turn. `dax attach` sends it to the served session.
 - `/port N` reaches port `N` on the loopback of wherever the tools act
   (this machine, an executor, a box, a served or tunnelled workspace)
   from this machine's loopback, and prints the URL, `port 5173:

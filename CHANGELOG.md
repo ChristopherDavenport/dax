@@ -98,6 +98,25 @@ versions may break flags and the config file.
   block the line is the client's default. Your file only.
   `tool.GitHead`, `agent.Session.Git` and `agent.Session.Model` give a
   front built on dax the same (#182).
+- Added: permission modes (#145). `default`, `acceptEdits` (`write`
+  and `edit` run unasked but for a protected or secret-looking path;
+  commands still ask), `dontAsk` (what would ask is refused, the model
+  told not to work around it) and `bypassPermissions` (nothing asks).
+  Pick one with `-mode` or `policy.default_mode` (a project's only
+  stricter), change it with `/mode NAME`, Shift-Tab in the terminal
+  client (agentconsole's `client.NextMode`) or over `dax attach` (the
+  served `mode` command). The policy is rebuilt from the session's
+  settings and replaces the engine's through agentpolicy's
+  `SetPolicy`, recorded with the mode as its reason and a `dax.mode`
+  entry; a switch during a run waits for its next turn; deny rules and
+  scoped grants hold in every mode; the model is told at the next
+  prompt; the status line's `mode` segment shows it. An extension adds
+  rules in a mode with `extension.Extension.ModeRules`, held to its own
+  tools; `agent.Session` gains `Mode`, `SetMode` and `NextMode`.
+- Changed: `-no-policy` is `-mode bypassPermissions`: the policy is
+  always built, the deny rules hold, and `/mode` can leave it, where
+  before no policy ran at all for the session. `policy.Settings.Off` is
+  gone, in favour of `Settings.Mode`.
 
 ## v0.0.33 - 2026-11-04
 

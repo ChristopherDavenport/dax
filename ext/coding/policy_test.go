@@ -41,7 +41,7 @@ func shipped(t *testing.T, dir string) policy.Shipped {
 	}
 	owns = append(owns, slices.Collect(maps.Keys(e.Aliases))...)
 	owns = append(owns, e.Owns...)
-	return policy.Shipped{Name: e.Name, Rules: e.Policy, Owns: owns, Lifts: e.Lifts}
+	return policy.Shipped{Name: e.Name, Rules: e.Policy, Owns: owns, Lifts: e.Lifts, Modes: e.ModeRules}
 }
 
 // local opens dir as a local workspace for the test, and its tools'

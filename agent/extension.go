@@ -231,9 +231,9 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 				return nil, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
 			}
 		}
-		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts) > 0 {
+		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts)+len(e.ModeRules) > 0 {
 			slices.Sort(ruleNames)
-			a.shipped = append(a.shipped, policy.Shipped{Name: e.Name, Rules: p, Owns: ruleNames, Lifts: e.Lifts})
+			a.shipped = append(a.shipped, policy.Shipped{Name: e.Name, Rules: p, Owns: ruleNames, Lifts: e.Lifts, Modes: e.ModeRules})
 		}
 		if e.BeforeToolCall != nil {
 			if h := e.BeforeToolCall(env); h != nil {

@@ -437,6 +437,7 @@ type Session struct {
 
 	opts    Options
 	live    live
+	modes   modes
 	env     []string // what an MCP server outside the workspace starts with
 	offered []string // the MCP servers the workspace offers, connected at open
 	// served are the MCP servers the servers workspace offers,
@@ -858,6 +859,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if err != nil {
 			return nil, err
 		}
+		// The settings stay with the session, so a mode switch
+		// rebuilds the same rules (SetMode).
+		s.modes.settings, s.modes.mode = &settings, settings.Mode
+		if s.modes.mode == "" {
+			s.modes.mode = policy.ModeDefault
+		}
 		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases)}, confine...)...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
@@ -993,6 +1000,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
 	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
+	// A mode asked for during a run starts at its next turn.
+	s.ag.Subscribe(s.modeAtTurn)
+	if s.modes.settings != nil && s.modes.mode != policy.ModeDefault {
+		s.annotateMode(ctx, modeEntry{Mode: s.modes.mode, Reason: "start"})
+	}
 	// The kit's control hands the agent the inputs a stopped session
 	// accepted and no run took, which it takes after the next prompt.
 	// The session's elicitor is the kit's own, so the control leaves

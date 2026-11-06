@@ -36,7 +36,7 @@ func TestDefaults(t *testing.T) {
 	if s.Provider != "ollama" || s.Model != "" || s.BaseURL != "" || !s.Think || s.MemoryDir != "/mem" {
 		t.Fatalf("defaults: %+v", s)
 	}
-	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Off {
+	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Mode != "default" {
 		t.Fatalf("policy defaults: %+v", s.Policy)
 	}
 	if s.Sources["provider"] != "default" {
@@ -238,8 +238,8 @@ func TestAProjectCanOnlyTighten(t *testing.T) {
 
 func TestNoPolicyFlag(t *testing.T) {
 	s, _ := Resolve(nil, Flags{NoPolicy: true}, "")
-	if !s.Policy.Off {
-		t.Fatal("-no-policy did not turn the policy off")
+	if s.Policy.Mode != "bypassPermissions" {
+		t.Fatal("-no-policy is not -mode bypassPermissions")
 	}
 }
 

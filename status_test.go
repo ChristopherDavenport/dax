@@ -18,12 +18,14 @@ import (
 
 // fakeStatusSession is what the status line reads of a session.
 type fakeStatusSession struct {
-	git   tool.Git
-	model string
+	git           tool.Git
+	model         string
+	mode, pending string
 }
 
 func (f *fakeStatusSession) Git(context.Context) (tool.Git, error) { return f.git, nil }
 func (f *fakeStatusSession) Model() string                         { return f.model }
+func (f *fakeStatusSession) Mode() (string, string)                { return f.mode, f.pending }
 func (f *fakeStatusSession) Subscribe(func(context.Context, agentturn.Event) error) func() {
 	return func() {}
 }

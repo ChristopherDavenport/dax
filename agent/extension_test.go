@@ -371,7 +371,8 @@ func TestTheSessionClosesTheExtensionsTools(t *testing.T) {
 }
 
 // An extension's BeforeToolCall is part of the policy: it runs for the
-// main agent's calls when a policy is on, and not under -no-policy.
+// main agent's calls when a policy is on, and not on a session built
+// with none (Options.Policy nil).
 func TestAnExtensionsHookRunsOnlyWithAPolicy(t *testing.T) {
 	for _, withPolicy := range []bool{true, false} {
 		var mu sync.Mutex

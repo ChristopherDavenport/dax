@@ -314,6 +314,19 @@ installed, `~/.dax/skills` and `skills_dirs`, are the user's and are
 not held. What is not covered yet: the moment between the decision and
 the skill tool's read, in which a link can change.
 
+A permission mode is the same sources made stricter or looser as a
+whole (`policy/mode.go`): `acceptEdits` adds each extension's
+`ModeRules` for the mode (dax-coding's: write and edit allowed, protected
+and secret-looking paths asked), `dontAsk` turns every ask into a deny
+with a note and the default into a deny, `bypassPermissions` drops the
+asks and allows by default. A deny holds in every mode. The session
+keeps the settings it built the policy from (the box's confinement
+included) and a switch rebuilds them and replaces the engine's policy
+with agentpolicy's `SetPolicy`, journaled with the mode as its reason,
+so the sub-agents, which decide through the same engine, follow; a
+switch asked for during a run waits for the run's next `TurnStart`, so
+no batch straddles two policies.
+
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
 the write tool on the file it opens (normalised from the directory a

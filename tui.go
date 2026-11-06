@@ -243,16 +243,40 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
+	var redraw func()
 	if f.info.Status != nil {
 		h := newStatus(f.info, sess)
 		opts = append(opts, console.WithStatus(h.line()))
-		if f.info.Status.Shows("git") {
+		redraw = h.redraw
+		if f.info.Status.Shows("git") || f.info.Status.Shows("mode") {
 			sctx, stop := context.WithCancel(ctx)
 			defer stop()
 			go h.run(sctx)
 		}
 	}
-	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess, sess, opts)
+	act := withModes(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess, redraw)
+	return runConsole(ctx, f.run, rec, sess, act, sess, sess, opts)
+}
+
+// withModes is act with Shift-Tab's intent (client.NextMode, which
+// client.Direct refuses) taken by the session's modes: the next mode,
+// at once or from the run's next turn, then changed (the status line's
+// redraw). A session with no modes leaves the intent to act.
+func withModes(act client.Controller, ctl agent.Controls, changed func()) client.Controller {
+	m, ok := ctl.(moder)
+	if !ok {
+		return act
+	}
+	return func(ctx context.Context, in client.Intent) error {
+		if _, ok := in.(client.NextMode); !ok {
+			return act(ctx, in)
+		}
+		_, err := m.NextMode(ctx)
+		if err == nil && changed != nil {
+			changed()
+		}
+		return err
+	}
 }
 
 // answeredBy is act with by claimed for what the person sends: the

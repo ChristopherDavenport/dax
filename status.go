@@ -20,12 +20,13 @@ import (
 type statusSession interface {
 	Git(ctx context.Context) (tool.Git, error)
 	Model() string
+	Mode() (mode, pending string)
 	Subscribe(fn func(context.Context, agentturn.Event) error) func()
 }
 
 // statusHost is dax's side of the terminal client's status line
 // (console.WithStatus, from the config's status block): the host
-// segments user, dir, git and executor, the model dax runs next, and
+// segments user, dir, git, executor and mode, the model dax runs next, and
 // the window it believes each model has. The git segment is read
 // through the session's workspace, cached, and read again after each
 // tool run, never as the line is drawn.
@@ -54,6 +55,7 @@ func (h *statusHost) line() console.StatusLine {
 		"user": func() console.Segment { return console.Segment{Text: user, Color: h.color("user", "0")} },
 		"dir":  func() console.Segment { return console.Segment{Text: dir, Color: h.color("dir", "4")} },
 		"git":  h.gitSegment,
+		"mode": h.modeSegment,
 		"executor": func() console.Segment {
 			if b := elsewhereBanner(h.info); b != "" {
 				_, where, _ := strings.Cut(b, ": ")
@@ -87,6 +89,18 @@ func (h *statusHost) gitSegment() console.Segment {
 		return console.Segment{Text: render.Clean(g.Branch) + " ±", Color: color("3")}
 	}
 	return console.Segment{Text: render.Clean(g.Branch), Color: color("2")}
+}
+
+// modeSegment is the permission mode, and the one waiting for the
+// run's next turn: magenta for acceptEdits, yellow for dontAsk, red for
+// bypassPermissions, unless the config colors it.
+func (h *statusHost) modeSegment() console.Segment {
+	mode, pending := h.sess.Mode()
+	text := mode
+	if pending != "" {
+		text += " → " + pending
+	}
+	return console.Segment{Text: render.Clean(text), Color: h.color("mode", map[string]string{"acceptEdits": "5", "dontAsk": "3", "bypassPermissions": "1"}[mode])}
 }
 
 // color is a host segment's own color, def, or "" when the config
@@ -125,20 +139,30 @@ func (h *statusHost) redraw() {
 	}
 }
 
-// run reads the repository now and after each tool run until ctx
-// ends; it is started only when the line shows git.
+// run reads the repository now and after each tool run, and redraws
+// the line at each turn's start and each run's end, when a mode asked
+// for during the run comes into force, until ctx ends; it is started
+// only when the line shows git or mode.
 func (h *statusHost) run(ctx context.Context) {
+	git := h.info.Status.Shows("git")
 	defer h.sess.Subscribe(func(_ context.Context, ev agentturn.Event) error {
 		switch ev.(type) {
+		case *agentturn.TurnStart:
+			h.redraw()
 		case *agentturn.ToolEnd, *agentturn.RunEnd:
-			select {
-			case h.kick <- struct{}{}:
-			default:
+			h.redraw()
+			if git {
+				select {
+				case h.kick <- struct{}{}:
+				default:
+				}
 			}
 		}
 		return nil
 	})()
-	h.refresh(ctx)
+	if git {
+		h.refresh(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():

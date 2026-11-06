@@ -100,9 +100,13 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	if slices.ContainsFunc(pending, held) {
 		return nil, ErrHeld
 	}
-	outs := make([]openresponses.Item, 0, len(pending)+len(items))
+	outs := make([]openresponses.Item, 0, len(pending)+len(items)+1)
 	for _, p := range pending {
 		outs = append(outs, answerOf(p))
+	}
+	// A mode switch since the last prompt is said first.
+	if n := s.modeNote(); n != nil {
+		outs = append(outs, n)
 	}
 	return s.ctl.Prompt(ctx, append(outs, items...)...)
 }

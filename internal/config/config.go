@@ -598,10 +598,14 @@ type Policy struct {
 	Builtin *bool `json:"builtin,omitempty"`
 	// Fallback is what a call no rule names does: ask (the default),
 	// allow or deny.
-	Fallback string   `json:"fallback,omitempty"`
-	Allow    []string `json:"allow,omitempty"`
-	Ask      []string `json:"ask,omitempty"`
-	Deny     []string `json:"deny,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
+	// DefaultMode is the permission mode a session starts in:
+	// default, acceptEdits, dontAsk or bypassPermissions. A project's
+	// may only be stricter than the user's.
+	DefaultMode string   `json:"default_mode,omitempty"`
+	Allow       []string `json:"allow,omitempty"`
+	Ask         []string `json:"ask,omitempty"`
+	Deny        []string `json:"deny,omitempty"`
 }
 
 // Path is where the user's file is: $XDG_CONFIG_HOME/dax/config.json,
@@ -929,6 +933,16 @@ func (l *Layer) validate() error {
 		}
 		if l.Project && p.Fallback == "allow" {
 			return errors.New(`policy.fallback "allow": a project file may only make the fallback stricter`)
+		}
+		if p.DefaultMode != "" {
+			m, err := policy.ParseMode(p.DefaultMode)
+			if err != nil {
+				return fmt.Errorf("policy.default_mode: %w", err)
+			}
+			if l.Project && policy.Stricter(policy.ModeDefault, m) {
+				return fmt.Errorf("policy.default_mode %q: a project file may only pick a stricter mode (%s)", p.DefaultMode, policy.ModeDontAsk)
+			}
+			p.DefaultMode = m
 		}
 		if l.Project && len(p.Allow) > 0 {
 			return fmt.Errorf("policy.allow: a project file may not allow anything; put allow rules in your own config (%s)", Path())
@@ -1851,8 +1865,11 @@ type Flags struct {
 	// not given and empty clears it. A relative path is the working
 	// directory's.
 	AgentsMDGlobal []string
-	// NoPolicy turns the policy off: every call runs.
+	// NoPolicy is Mode bypassPermissions, its old name: every call runs
+	// that no deny rule refuses.
 	NoPolicy bool
+	// Mode replaces the permission mode the layers chose (-mode).
+	Mode *string
 	// MaxTurns replaces max_turns; 0 turns the limit off.
 	MaxTurns *int
 }
@@ -1940,7 +1957,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput,
-		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
+		Policy:  PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
 	servers := map[string]MCP{}
@@ -2085,6 +2102,11 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			if p.Fallback != "" {
 				if !l.Project || strictness[p.Fallback] > strictness[s.Policy.Fallback] {
 					s.Policy.Fallback = p.Fallback
+				}
+			}
+			if p.DefaultMode != "" {
+				if m, err := policy.ParseMode(p.DefaultMode); err == nil && (!l.Project || policy.Stricter(m, s.Policy.Mode)) {
+					s.Policy.Mode = m
 				}
 			}
 			dst := &s.Policy.User
@@ -2238,7 +2260,19 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			}
 		}
 	}
-	s.Policy.Off = f.NoPolicy
+	if f.NoPolicy && f.Mode != nil {
+		return s, errors.New("-no-policy is -mode bypassPermissions; give one")
+	}
+	if f.NoPolicy {
+		s.Policy.Mode = policy.ModeBypass
+	}
+	if f.Mode != nil {
+		m, err := policy.ParseMode(*f.Mode)
+		if err != nil {
+			return s, fmt.Errorf("-mode: %w", err)
+		}
+		s.Policy.Mode = m
+	}
 	for _, n := range sortedKeys(servers) {
 		s.MCP = append(s.MCP, servers[n])
 	}

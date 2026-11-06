@@ -13,6 +13,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/render"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // A line that starts with a slash is dax's, never the model's: every
@@ -52,6 +53,7 @@ const commandHelp = `commands:
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
+  /mode [name]              the permission mode, or switch to default, acceptEdits, dontAsk or bypassPermissions
   /compact [instructions]   fold the conversation at the next request, keeping what you say
   /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
@@ -147,6 +149,10 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
+	case "/mode":
+		// A switch during a run waits for its next turn, so it works
+		// during one.
+		return modeCommand(ctx, ctl, arg)
 	case "/port":
 		// A forward changes nothing the run does, so it works during one.
 		port, err := strconv.Atoi(arg)
@@ -253,6 +259,45 @@ func templateHelp(ctx context.Context, ctl agent.Controls) string {
 		}
 	}
 	return b.String()
+}
+
+// moder is what /mode and Shift-Tab ask of the session's controls: the
+// session's own (agent.Session) or a served one's command.
+type moder interface {
+	Mode() (mode, pending string)
+	SetMode(ctx context.Context, name string) (pending bool, err error)
+	NextMode(ctx context.Context) (string, error)
+}
+
+// modeCommand is /mode: with no name the mode in force, the one waiting
+// for the run's next turn and the modes there are; with one, the
+// switch.
+func modeCommand(ctx context.Context, ctl agent.Controls, arg string) (commandResult, error) {
+	m, ok := ctl.(moder)
+	if !ok {
+		return commandResult{}, errors.New("/mode is not offered by this session")
+	}
+	if arg == "" {
+		return commandResult{out: modeLine(m.Mode()) + "\nmodes: " + strings.Join(policy.Modes, ", ")}, nil
+	}
+	pending, err := m.SetMode(ctx, arg)
+	if err != nil {
+		return commandResult{}, err
+	}
+	mode, wait := m.Mode()
+	if pending {
+		return commandResult{out: "[mode " + wait + " from the run's next turn]"}, nil
+	}
+	return commandResult{out: "[mode " + mode + "]"}, nil
+}
+
+// modeLine says the mode in force, and the one waiting for the next
+// turn.
+func modeLine(mode, pending string) string {
+	if pending != "" {
+		return "mode " + mode + " (" + pending + " from the run's next turn)"
+	}
+	return "mode " + mode
 }
 
 // forwarder is what /port asks of the session's controls: the

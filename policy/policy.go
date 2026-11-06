@@ -42,8 +42,8 @@ func SourceExtension(name string) string { return "extension:" + name }
 // Settings are the policy's rules, folded across the config's layers,
 // and the extensions'.
 type Settings struct {
-	// Off runs every call without asking; Build is not called.
-	Off bool
+	// Mode is the permission mode (Modes); "" is ModeDefault.
+	Mode string
 	// Builtin keeps the allow rules the extensions ship. Without it
 	// their asks and denies still apply, so a repository that turns it
 	// off loosens nothing.
@@ -80,6 +80,11 @@ type Shipped struct {
 	// Lifts are its tools whose asks a user's allow rule with a
 	// specifier for the same tool lifts.
 	Lifts []string
+	// Modes are the rules it adds in a mode, by the mode's name: only
+	// ModeAcceptEdits takes any. They are held to Owns as its rules
+	// are, and kept whether or not Builtin is, since the user chose the
+	// mode.
+	Modes map[string]Rules
 }
 
 // Ranks of the sources: the user's config above the extensions, the
@@ -95,6 +100,10 @@ const (
 // allow rules are withheld, its ask and deny rules apply, and a
 // carve-out in it cannot cancel a rule of theirs.
 func Build(s Settings) (agentpolicy.Policy, error) {
+	mode, err := ParseMode(s.Mode)
+	if err != nil || (s.Mode != "" && s.Mode != mode) {
+		return agentpolicy.Policy{}, fmt.Errorf("policy: mode %q: want one of %s", s.Mode, strings.Join(Modes, ", "))
+	}
 	parse := func(what string, rules []string) ([]agentpolicy.Rule, error) {
 		out, err := agentpolicy.ParseRules(strings.Join(rules, " "))
 		if err != nil {
@@ -135,6 +144,29 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		}
 		if !s.Builtin {
 			set.Allow = nil
+		}
+		for m := range sh.Modes {
+			if _, ok := strictness[m]; !ok || m != ModeAcceptEdits {
+				return agentpolicy.Policy{}, fmt.Errorf("policy extension %s: rules for mode %q: only %s takes an extension's rules", sh.Name, m, ModeAcceptEdits)
+			}
+		}
+		if mr, ok := sh.Modes[mode]; ok {
+			for _, l := range []struct {
+				what string
+				in   []string
+				out  *[]agentpolicy.Rule
+			}{{"allow", mr.Allow, &set.Allow}, {"ask", mr.Ask, &set.Ask}, {"deny", mr.Deny, &set.Deny}} {
+				rules, err := parse("extension "+sh.Name+" "+mode+" "+l.what, l.in)
+				if err != nil {
+					return agentpolicy.Policy{}, err
+				}
+				for _, r := range rules {
+					if err := owned(sh, r); err != nil {
+						return agentpolicy.Policy{}, fmt.Errorf("policy extension %s %s %s %s: %w", sh.Name, mode, l.what, ruleText(r), err)
+					}
+				}
+				*l.out = append(*l.out, rules...)
+			}
 		}
 		for _, t := range sh.Lifts {
 			lifts[strings.ToLower(t)] = true
@@ -196,7 +228,7 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 	default:
 		p.Default = agentpolicy.Ask()
 	}
-	return p, nil
+	return shape(mode, s.Fallback, p), nil
 }
 
 // NoWorkAround is what the model is told with a refusal, a person's or

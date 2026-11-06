@@ -107,7 +107,8 @@ func run(ctx context.Context, args []string, p program) error {
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
-	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
+	noPolicy := fs.Bool("no-policy", false, "the old name of -mode bypassPermissions: run every call no deny rule refuses, without asking")
+	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
@@ -328,6 +329,9 @@ func run(ctx context.Context, args []string, p program) error {
 		flags.MemoryDir = &m
 	}
 	flags.NoPolicy = *noPolicy
+	if given["mode"] {
+		flags.Mode = modeFlag
+	}
 	// The project's config is the repository's, so it is read through
 	// a workspace over the project, as the session reads AGENTS.md and
 	// the project's skills, and not from this machine's directory. The
@@ -612,9 +616,9 @@ func run(ctx context.Context, args []string, p program) error {
 		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
 	}
 	opts.TrustMCP = *trustMCP
-	if !settings.Policy.Off {
-		opts.Policy = &settings.Policy
-	}
+	// The policy is always built, so a session in bypassPermissions
+	// (-no-policy's old meaning) can leave it.
+	opts.Policy = &settings.Policy
 	renderers, err := extension.Renderers(wsRoot, exts)
 	if err != nil {
 		return err
@@ -964,10 +968,7 @@ func describeUnhashed(c agent.UnhashedCause) string {
 // policySummary says in a line what policy is in force: the rules each
 // extension ships, the user's and the project's.
 func policySummary(p config.PolicySettings, exts []extension.Extension) string {
-	if p.Off {
-		return "off (-no-policy): every call runs"
-	}
-	var parts []string
+	parts := []string{"mode " + modeName(p.Mode)}
 	for _, e := range exts {
 		allow, rest := len(e.Policy.Allow), len(e.Policy.Ask)+len(e.Policy.Deny)
 		if !p.Builtin {
@@ -987,6 +988,14 @@ func policySummary(p config.PolicySettings, exts []extension.Extension) string {
 		parts = append(parts, fmt.Sprintf("%d rule(s) from the project", n))
 	}
 	return strings.Join(parts, ", ") + "; anything else: " + p.Fallback
+}
+
+// modeName is a mode as a front names it, "" being the default.
+func modeName(m string) string {
+	if m == "" {
+		return policy.ModeDefault
+	}
+	return m
 }
 
 // describeModel is what the model's vendor says about it, and the

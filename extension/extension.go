@@ -101,6 +101,13 @@ type Extension struct {
 	// A rule may name only the extension's own tools and aliases, and
 	// may not be a carve-out.
 	Policy policy.Rules
+	// ModeRules are the rules the extension adds in a permission mode,
+	// by the mode's name; only policy.ModeAcceptEdits takes any:
+	// dax-coding allows write and edit there and asks about the paths
+	// that change what runs or is trusted. They are held to the
+	// extension's own tools and aliases as Policy is, and kept with
+	// "builtin": false, since the user chose the mode.
+	ModeRules map[string]policy.Rules
 	// Lifts are the extension's tools whose asks a user's allow rule
 	// with a specifier lifts: allowing read(.env) means reading .env,
 	// though dax-coding asks about secret-looking paths.

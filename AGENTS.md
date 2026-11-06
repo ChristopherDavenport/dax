@@ -160,6 +160,10 @@ before changing the shape.
   host's envelopes and the user's opt-in alone, with the `dax:box`
   bare asks that make it matter and a baseline engine without them, so
   nothing allowed today asks; sub-agents' decisions are not claimed.
+  `agent/mode.go`: the permission mode, the policy settings kept and
+  rebuilt into the engine on a switch (`SetMode`, `NextMode`), a switch
+  during a run applied at its next turn, the `dax.mode` entry and the
+  model's note at the next prompt.
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left
@@ -173,7 +177,8 @@ before changing the shape.
   questions name the conversation and are asked only of a view
   attached (`Viewing`, `SubscribeView`), waiting `Options.ViewGrace`
   for one to come back.
-- `policy`: generic. Merges one source per extension
+- `policy`: generic. The permission modes (`mode.go`: what each does
+  to the merged rules, an extension's `ModeRules`). Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern
   or a carve-out; `dax:box` is `box.confine`'s bare asks, bash, write,

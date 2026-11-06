@@ -499,6 +499,9 @@ const (
 	cmdMCPAdd    = "mcp-add"
 	cmdMCPRemove = "mcp-remove"
 	cmdCompact   = "compact"
+	// cmdMode reads or switches the permission mode, or moves to the
+	// next one.
+	cmdMode = "mode"
 	// cmdContinueFrom moves the session's head: the tree of an attached
 	// view continues from an entry, as a local view's does.
 	cmdContinueFrom = "continue-from"
@@ -510,6 +513,21 @@ type modelArgs struct {
 
 type thinkArgs struct {
 	On bool `json:"on"`
+}
+
+// modeArgs name a mode to switch to, ask for the next one, or neither,
+// which reads the mode.
+type modeArgs struct {
+	Name string `json:"name,omitempty"`
+	Next bool   `json:"next,omitempty"`
+}
+
+// modeState is the mode in force and the one waiting for the run's
+// next turn, and whether the switch asked for waits.
+type modeState struct {
+	Mode    string `json:"mode"`
+	Pending string `json:"pending,omitempty"`
+	Waits   bool   `json:"waits,omitempty"`
 }
 
 type compactArgs struct {
@@ -620,6 +638,37 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 					return nil, errors.New("this session does not compact on request")
 				}
 				return nil, c.Compact(ctx, a.Instructions)
+			},
+		},
+		cmdMode: {
+			Description: "the permission mode: read it, switch to one by name (default, acceptEdits, dontAsk, bypassPermissions) or to the next; during a run the switch waits for its next turn",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"next":{"type":"boolean"}}}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+				var a modeArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &a); err != nil {
+						return nil, err
+					}
+				}
+				m, ok := ctl.(moder)
+				if !ok {
+					return nil, errors.New("this session has no modes")
+				}
+				var st modeState
+				var err error
+				switch {
+				case a.Next && a.Name != "":
+					return nil, errors.New("give a mode's name or next, not both")
+				case a.Next:
+					_, err = m.NextMode(ctx)
+				case a.Name != "":
+					st.Waits, err = m.SetMode(ctx, a.Name)
+				}
+				if err != nil {
+					return nil, err
+				}
+				st.Mode, st.Pending = m.Mode()
+				return json.Marshal(st)
 			},
 		},
 		cmdMCPRemove: {

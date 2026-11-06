@@ -207,7 +207,7 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 		opts = append(opts, console.WithCost(f.cost))
 	}
 	rec := &remoteRecord{store: store, controls: controls}
-	err = runConsole(ctx, f.run, rec, ctl, attachController(ctl, controls), ctl, controls, opts)
+	err = runConsole(ctx, f.run, rec, ctl, withModes(attachController(ctl, controls), controls, nil), ctl, controls, opts)
 	out := f.out
 	if out == nil {
 		out = os.Stdout
@@ -393,6 +393,44 @@ func (r *remoteControls) RemoveMCP(label string) error {
 func (r *remoteControls) Compact(ctx context.Context, instructions string) error {
 	_, err := r.call(ctx, cmdCompact, compactArgs{Instructions: instructions})
 	return err
+}
+
+// mode asks the served session for its mode, switching it first as a
+// says.
+func (r *remoteControls) mode(ctx context.Context, a modeArgs) (modeState, error) {
+	raw, err := r.call(ctx, cmdMode, a)
+	if err != nil {
+		return modeState{}, err
+	}
+	var st modeState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return modeState{}, fmt.Errorf("mode: %w", err)
+	}
+	return st, nil
+}
+
+// Mode is the served session's permission mode, "" when it cannot be
+// asked.
+func (r *remoteControls) Mode() (mode, pending string) {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	st, _ := r.mode(ctx, modeArgs{})
+	return st.Mode, st.Pending
+}
+
+// SetMode switches the served session's permission mode.
+func (r *remoteControls) SetMode(ctx context.Context, name string) (bool, error) {
+	st, err := r.mode(ctx, modeArgs{Name: name})
+	return st.Waits, err
+}
+
+// NextMode moves the served session to its next permission mode.
+func (r *remoteControls) NextMode(ctx context.Context) (string, error) {
+	st, err := r.mode(ctx, modeArgs{Next: true})
+	if st.Pending != "" {
+		return st.Pending, err
+	}
+	return st.Mode, err
 }
 
 // ContinueFrom moves the served session's head to the entry.
