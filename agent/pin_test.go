@@ -182,3 +182,97 @@ func TestAFoldKeepsATemplatesAndAnMCPPromptsRequestVerbatim(t *testing.T) {
 		}
 	}
 }
+
+// A record written before format 0.21 claims no typed line as the
+// person's, and neither does -p's prompt in any record: a fold after a
+// resume keeps such an unclaimed message verbatim, within agentturn's
+// bound and total for the person's own, as the record allows a host to
+// (agentsession 0.21: an unclaimed message MAY be taken as unclaimed
+// input). The output of a ! command, which an older dax sent unclaimed
+// too, is folded like the rest (#173).
+func TestAFoldAfterAResumeKeepsUnclaimedPrompts(t *testing.T) {
+	task := "write `u001 7` to answer.txt, one space, then a newline"
+	command := userCommandLead + "echo from-a-command\nfrom-a-command\n[exit 0]"
+	for _, tc := range []struct {
+		name string
+		// older rewrites the record as format 0.20 and imports it.
+		older bool
+		send  func(context.Context, *Session) error
+	}{
+		{"recorded before 0.21", true, func(ctx context.Context, s *Session) error {
+			for _, p := range []string{task, command} {
+				if _, err := s.Prompt(ctx, openresponses.UserText(p)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"-p's prompt, resumed", false, func(ctx context.Context, s *Session) error {
+			if _, err := promptOn(ctx, s, task, nil); err != nil {
+				return err
+			}
+			_, err := s.Prompt(ctx, openresponses.UserText(command))
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := options(t, &echo.Adapter{})
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := s.ID()
+			if err := tc.send(ctx, s); err != nil {
+				t.Fatal(err)
+			}
+			if tc.older {
+				data := projected(t, o, s)
+				older := strings.Replace(string(data), `"format":"agentsession/0.21"`, `"format":"agentsession/0.20"`, 1)
+				if older == string(data) {
+					t.Fatal("the record names no format 0.21")
+				}
+				file := filepath.Join(t.TempDir(), "older.jsonl")
+				if err := os.WriteFile(file, []byte(older), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				o.Root = filepath.Join(t.TempDir(), "store")
+				if id, err = Import(ctx, o.Root, file); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			m := &seeing{}
+			o.Streamer = m
+			// A budget the pasted log alone passes, with room for the
+			// person's messages, as in the fold test above.
+			o.Compact = 20000
+			r, err := Resume(ctx, o, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			pasted := "a log line\n" + strings.Repeat("x y ", 25000)
+			for _, p := range []string{pasted, "and say done"} {
+				if _, err := r.Prompt(ctx, openresponses.UserText(p)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m.mu.Lock()
+			seen := userTexts(m.last)
+			m.mu.Unlock()
+			if !slices.Contains(seen, task) {
+				t.Errorf("the last request lost the earlier prompt: it carries %q", seen)
+			}
+			for _, s := range seen {
+				if s == command {
+					t.Error("a command's output was kept as a prompt")
+				}
+				if s == pasted {
+					t.Error("a prompt past the bound was kept whole")
+				}
+			}
+		})
+	}
+}

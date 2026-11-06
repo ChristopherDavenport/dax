@@ -215,9 +215,15 @@ var AtTerminal = agentturn.Trigger{Kind: "human", Source: "terminal"}
 
 // ContinueFrom moves the session's head to the entry: the next prompt
 // continues the conversation from there, on a branch of the session,
-// with the skill grants of that branch (agentkit.Control.ContinueFrom).
+// with the skill grants of that branch (agentkit.Control.ContinueFrom),
+// and the branch's unclaimed prompts kept through a fold, as a resume
+// keeps them.
 func (s *Session) ContinueFrom(ctx context.Context, entryID string) error {
-	return s.ctl.ContinueFrom(ctx, entryID)
+	if err := s.ctl.ContinueFrom(ctx, entryID); err != nil {
+		return err
+	}
+	s.claimUnclaimed()
+	return nil
 }
 
 // Answering says a front answers the questions asked while a call

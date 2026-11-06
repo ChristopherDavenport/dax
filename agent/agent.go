@@ -1009,6 +1009,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), seed...)
+	// A fold keeps the record's unclaimed prompts too: an older
+	// record's typed lines, -p's prompt.
+	s.claimUnclaimed()
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)

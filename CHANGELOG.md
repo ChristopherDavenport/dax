@@ -48,7 +48,12 @@ versions may break flags and the config file.
   which are not your words but are what you chose to send; where dax
   pinned every user message it did not know to be a `!` command's
   output, whoever sent it. Another message dax composed (an `AGENTS.md`
-  below the start) is now folded like the rest (#173).
+  below the start) is now folded like the rest (#173). A session
+  recorded before this release names no prompt as yours, and nor does
+  any record `-p`'s: after `-resume` or a head move, a compaction keeps
+  a prompt the record leaves unclaimed as it keeps yours, within the
+  same bound and total, but not a `!` command's output, which an older
+  dax recorded unclaimed too, nor a message dax composed (#173).
 - Changed: `dax serve` lets its own token claim who typed a line
   (agentturn's `WithTriggerClaims`, under dax's scope `dax.typed`), so
   what you type and answer in `dax attach` is recorded as your words,

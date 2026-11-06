@@ -1865,12 +1865,17 @@ beside a running dax. `-sessions ""` disables recording.
 The record says whose words each message is. What you type at the
 REPL or in the terminal client, a prompt, a steer or a note with an
 answer, is recorded as yours (a trigger of kind `human`, source
-`terminal`). A message dax composes (a prompt template's, an MCP
-prompt's, an `AGENTS.md` below the start, the output of a `!` command)
-is recorded as composed, never as your words. So is what you type in
-`dax attach` (see [Serving a session](#serving-a-session-dax-serve-and-dax-attach)). `-p`'s prompt claims
-nobody, since a script may have given it, though a compaction keeps it
-as it keeps yours.
+`terminal`), and so is what you type in `dax attach` (see
+[Serving a session](#serving-a-session-dax-serve-and-dax-attach)). A
+message dax composes (a prompt template's, an MCP prompt's, an
+`AGENTS.md` below the start) is recorded as composed, never as your
+words; the output of a `!` command claims nobody. `-p`'s prompt claims
+nobody either, since a script may have given it, though a compaction
+keeps it as it keeps yours. A session recorded before this release
+claims no line as yours; after `-resume` (or a head move) a compaction
+keeps such an unclaimed prompt, and `-p`'s, as it keeps yours, within
+the same 8 KiB and quarter of the budget, but never a `!` command's
+output or a message dax composed.
 
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
 `skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files

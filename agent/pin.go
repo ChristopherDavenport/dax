@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 )
@@ -63,5 +66,71 @@ func (t *tasks) pin(it openresponses.Item) bool {
 func pinTasks(c agentturn.Control, items []openresponses.Item) {
 	if s, ok := c.(*Session); ok {
 		s.tasks.add(items)
+	}
+}
+
+// unclaimed returns the user messages of transcript that the record at
+// sess's leaf holds as unclaimed input, for the agent to take as the
+// person's own (Agent.SetPersonMessages), so a fold keeps them within
+// agentturn's bound and total for those: a typed line a record written
+// before format 0.21 claims for nobody, and -p's prompt after a resume,
+// which tasks no longer holds. agentsession 0.21 lets a host treat an
+// unclaimed message so (WordsUnclaimed). Not a message composed (from
+// instruction layers, a peer link, or under a trigger of another
+// kind), hidden or copied, and not a ! command's output, which an
+// older dax sent unclaimed too. The transcript's messages are not the
+// record's, so they are matched by their JSON; one that matches a
+// message the record holds otherwise as well is left out.
+func unclaimed(sess *agentsession.Session, transcript agentturn.Transcript) agentturn.PersonMessages {
+	if sess == nil || len(transcript) == 0 {
+		return nil
+	}
+	free, other := map[string]bool{}, map[string]bool{}
+	for _, e := range sess.Path(sess.Leaf()) {
+		ie, ok := e.(*agentsession.ItemEntry)
+		if !ok {
+			continue
+		}
+		m, ok := ie.Item.(*openresponses.Message)
+		if !ok || m.Role != openresponses.RoleUser {
+			continue
+		}
+		data, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		switch w := agentsession.WordsOf(ie); {
+		case w == agentsession.WordsPerson:
+		case w == agentsession.WordsUnclaimed && ie.CopiedFrom == nil && (ie.Visible == nil || *ie.Visible) && !strings.HasPrefix(m.Text(), userCommandLead):
+			free[string(data)] = true
+		default:
+			other[string(data)] = true
+		}
+	}
+	var out agentturn.PersonMessages
+	for _, it := range transcript {
+		m, ok := it.(*openresponses.Message)
+		if !ok || m.Role != openresponses.RoleUser {
+			continue
+		}
+		data, err := json.Marshal(m)
+		if err != nil || !free[string(data)] || other[string(data)] {
+			continue
+		}
+		if out == nil {
+			out = agentturn.PersonMessages{}
+		}
+		out[m] = true
+	}
+	return out
+}
+
+// claimUnclaimed gives the agent the record's unclaimed messages of its
+// transcript as the person's own (unclaimed), after a resume or a head
+// move seeded it from the record.
+func (s *Session) claimUnclaimed() {
+	if m := unclaimed(s.Kit.Session(), s.ag.State().Transcript); len(m) > 0 {
+		// Seeded between runs: ErrRunning cannot happen.
+		_ = s.ag.SetPersonMessages(m)
 	}
 }
