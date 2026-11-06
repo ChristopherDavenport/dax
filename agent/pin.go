@@ -82,10 +82,54 @@ func pinTasks(c agentturn.Control, items []openresponses.Item) {
 // record's, so they are matched by their JSON; one that matches a
 // message the record holds otherwise as well is left out.
 func unclaimed(sess *agentsession.Session, transcript agentturn.Transcript) agentturn.PersonMessages {
+	var out agentturn.PersonMessages
+	for _, m := range recordedAs(sess, transcript, func(ie *agentsession.ItemEntry, m *openresponses.Message, w agentsession.Words) bool {
+		return w == agentsession.WordsUnclaimed && !strings.HasPrefix(m.Text(), userCommandLead)
+	}) {
+		if out == nil {
+			out = agentturn.PersonMessages{}
+		}
+		out[m] = true
+	}
+	return out
+}
+
+// requested returns the user messages of transcript that the record at
+// sess's leaf holds as a prompt template's or an MCP prompt's request
+// (Template, MCPPrompt): composed, from those layers alone, under the
+// person's trigger or one of no kind (the recorder keeps a composed
+// message's trigger without its kind). Sending one pinned it (tasks); after a
+// resume or a head move the record says which they were, so they are
+// pinned again.
+func requested(sess *agentsession.Session, transcript agentturn.Transcript) []openresponses.Item {
+	var out []openresponses.Item
+	for _, m := range recordedAs(sess, transcript, func(ie *agentsession.ItemEntry, _ *openresponses.Message, w agentsession.Words) bool {
+		layers := ie.Layers()
+		if w != agentsession.WordsComposed || len(layers) == 0 || ie.FromLink != "" || ie.Source != nil && ie.Source.Kind != "" && ie.Source.Kind != agentsession.TriggerHuman {
+			return false
+		}
+		for _, l := range layers {
+			if l.Source != templateSource && l.Source != mcpPromptSource {
+				return false
+			}
+		}
+		return true
+	}) {
+		out = append(out, m)
+	}
+	return out
+}
+
+// recordedAs returns the user messages of transcript that the record at
+// sess's leaf holds in an entry take accepts, visible and not copied.
+// The transcript's messages are not the record's, so they are matched
+// by their JSON; one that matches a message the record holds otherwise
+// as well is left out, and so is one the record holds as the person's.
+func recordedAs(sess *agentsession.Session, transcript agentturn.Transcript, take func(*agentsession.ItemEntry, *openresponses.Message, agentsession.Words) bool) []*openresponses.Message {
 	if sess == nil || len(transcript) == 0 {
 		return nil
 	}
-	free, other := map[string]bool{}, map[string]bool{}
+	taken, other := map[string]bool{}, map[string]bool{}
 	for _, e := range sess.Path(sess.Leaf()) {
 		ie, ok := e.(*agentsession.ItemEntry)
 		if !ok {
@@ -101,36 +145,36 @@ func unclaimed(sess *agentsession.Session, transcript agentturn.Transcript) agen
 		}
 		switch w := agentsession.WordsOf(ie); {
 		case w == agentsession.WordsPerson:
-		case w == agentsession.WordsUnclaimed && ie.CopiedFrom == nil && (ie.Visible == nil || *ie.Visible) && !strings.HasPrefix(m.Text(), userCommandLead):
-			free[string(data)] = true
+		case ie.CopiedFrom == nil && (ie.Visible == nil || *ie.Visible) && take(ie, m, w):
+			taken[string(data)] = true
 		default:
 			other[string(data)] = true
 		}
 	}
-	var out agentturn.PersonMessages
+	var out []*openresponses.Message
 	for _, it := range transcript {
 		m, ok := it.(*openresponses.Message)
 		if !ok || m.Role != openresponses.RoleUser {
 			continue
 		}
 		data, err := json.Marshal(m)
-		if err != nil || !free[string(data)] || other[string(data)] {
+		if err != nil || !taken[string(data)] || other[string(data)] {
 			continue
 		}
-		if out == nil {
-			out = agentturn.PersonMessages{}
-		}
-		out[m] = true
+		out = append(out, m)
 	}
 	return out
 }
 
 // claimUnclaimed gives the agent the record's unclaimed messages of its
-// transcript as the person's own (unclaimed), after a resume or a head
+// transcript as the person's own (unclaimed), and pins its templates'
+// and MCP prompts' requests again (requested), after a resume or a head
 // move seeded it from the record.
 func (s *Session) claimUnclaimed() {
-	if m := unclaimed(s.Kit.Session(), s.ag.State().Transcript); len(m) > 0 {
+	st := s.ag.State().Transcript
+	if m := unclaimed(s.Kit.Session(), st); len(m) > 0 {
 		// Seeded between runs: ErrRunning cannot happen.
 		_ = s.ag.SetPersonMessages(m)
 	}
+	s.tasks.add(requested(s.Kit.Session(), st))
 }

@@ -276,3 +276,59 @@ func TestAFoldAfterAResumeKeepsUnclaimedPrompts(t *testing.T) {
 		})
 	}
 }
+
+// After a resume a fold still keeps a template's and an MCP prompt's
+// request verbatim: the record names each as composed from dax.prompts
+// or dax.mcp_prompt, which is what pins it, as sending it did (#173).
+func TestAFoldAfterAResumeKeepsATemplatesAndAnMCPPromptsRequest(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	o := options(t, &echo.Adapter{})
+	o.MCP = []MCPServer{{Name: "team", Command: os.Args[0]}}
+	write(t, filepath.Join(o.UserDir, "prompts", "review.md"), "Review $ARGUMENTS for races; start with $1.\n")
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	byPerson := agentturn.ContextWithTrigger(ctx, AtTerminal)
+	tmpl, err := s.Template("review", "internal/box tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prompt(byPerson, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	mp, err := s.MCPPrompt(ctx, "mcp__team__review_pr", "456 the error paths")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prompt(byPerson, mp...); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m := &seeing{}
+	o.Streamer = m
+	o.Compact = 1
+	r, err := Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for _, p := range []string{"a line no trigger claims", "another", "and another"} {
+		if _, err := r.Prompt(ctx, openresponses.UserText(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.mu.Lock()
+	seen := userTexts(m.last)
+	m.mu.Unlock()
+	joined := strings.Join(seen, "\n\x00")
+	for _, want := range []string{"Review internal/box tool for races; start with internal/box.", "Review PR 456 for the error paths."} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("after the resume the last request lost the request %q: it carries %q", want, seen)
+		}
+	}
+}

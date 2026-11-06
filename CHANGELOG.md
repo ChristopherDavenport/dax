@@ -53,7 +53,10 @@ versions may break flags and the config file.
   any record `-p`'s: after `-resume` or a head move, a compaction keeps
   a prompt the record leaves unclaimed as it keeps yours, within the
   same bound and total, but not a `!` command's output, which an older
-  dax recorded unclaimed too, nor a message dax composed (#173).
+  dax recorded unclaimed too, nor a message dax composed but a prompt
+  template's or an MCP prompt's request, which the record names by its
+  layer (`dax.prompts`, `dax.mcp_prompt`) and which is kept as when it
+  was sent (#173).
 - Changed: `dax serve` lets its own token claim who typed a line
   (agentturn's `WithTriggerClaims`, under dax's scope `dax.typed`), so
   what you type and answer in `dax attach` is recorded as your words,
