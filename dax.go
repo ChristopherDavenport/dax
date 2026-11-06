@@ -48,6 +48,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // Option configures Main.
@@ -108,7 +109,12 @@ func Main(ctx context.Context, args []string, opts ...Option) int {
 		if errors.As(err, &ended) {
 			return ended.status
 		}
-		fmt.Fprintf(os.Stderr, "%s: %v\n", p.name, err)
+		if s, ok := render.Explain(err); ok {
+			// The provider's raw JSON is the record's, not the user's.
+			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, s)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", p.name, err)
+		}
 		if h := hint(err); h != "" {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, h)
 		}

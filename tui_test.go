@@ -1042,3 +1042,33 @@ func TestTheTUIRecordsTypedInputAsThePersons(t *testing.T) {
 	}
 	r.quit()
 }
+
+// fixedSource is a client.Source that hands one event to each
+// subscriber.
+type fixedSource struct{ ev agentturn.Event }
+
+func (f fixedSource) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	fn(context.Background(), f.ev)
+	return func() {}
+}
+
+func (fixedSource) State() agentturn.State { return agentturn.State{} }
+
+// The terminal client shows a run's error as dax explains it: a request
+// the key's credit cannot cover in words, not the provider's raw JSON,
+// still the same error underneath (dax#15).
+func TestTheTUIShowsAQuotaRefusalInWords(t *testing.T) {
+	quota := &openresponses.Error{StatusCode: 402, Type: openresponses.ErrorTypeInvalidRequest, Code: openresponses.CodeInsufficientQuota,
+		Message: `{"error":{"message":"Prompt tokens limit exceeded: 162733 > 121537","code":402,"metadata":{"limit_source":"openrouter_key_limit"}}}`}
+	var got *agentturn.RunEnd
+	explained{fixedSource{&agentturn.RunEnd{Reason: agentturn.ReasonError, Err: quota}}}.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		got, _ = ev.(*agentturn.RunEnd)
+		return nil
+	})()
+	if got == nil || !strings.Contains(got.Err.Error(), "OpenRouter key's spend limit") || strings.Contains(got.Err.Error(), `"metadata"`) {
+		t.Fatalf("the client is shown %v", got.Err)
+	}
+	if !openresponses.IsInsufficientQuota(got.Err) {
+		t.Error("the explained error lost the original")
+	}
+}

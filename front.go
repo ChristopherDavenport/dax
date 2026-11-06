@@ -490,7 +490,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				})
 				continue
 			case r.err != nil:
-				fmt.Fprintln(os.Stderr, "\nerror:", r.err)
+				if s, ok := render.Explain(r.err); ok {
+					fmt.Fprintln(os.Stderr, "\n"+s)
+				} else {
+					fmt.Fprintln(os.Stderr, "\nerror:", r.err)
+				}
 				if h := hint(r.err); h != "" {
 					fmt.Fprintln(os.Stderr, h)
 				}

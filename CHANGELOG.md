@@ -27,8 +27,6 @@ versions may break flags and the config file.
   - An MCP server's first result after it was restarted tells the model,
     at its head, that the server was restarted and whatever it held is
     gone (agenttool v0.0.30, #92).
-  - A model call refused because the key's or account's credit cannot
-    cover it (`insufficient_quota`, OpenRouter's 402) is not retried.
 
 - Fixed: leaving `dax attach` with `/quit` leaves the served session's
   run going again. agentconsole v0.0.16 aborts a second time at exit,
@@ -67,6 +65,14 @@ versions may break flags and the config file.
   and an attached view take a steer as soon as it is sent, even while a
   quiet tool runs, rather than holding it behind the tool, and a steer
   that misses the run's last drain starts a run of its own (#183).
+
+- Changed: a model call refused because the key's or account's credit
+  cannot cover it (openresponses v0.0.19's `insufficient_quota`,
+  OpenRouter's 402 at a key's daily limit among them) is said in words
+  at the REPL, under `-p` and in the terminal client: that the limit
+  was reached, that it was not retried, the provider's own message and
+  remedy, and that `/compact` may fit what is left; not the provider's
+  raw JSON, which stays whole in the session's record (#15).
 
 ## v0.0.33 - 2026-11-04
 

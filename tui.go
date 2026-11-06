@@ -285,7 +285,7 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 	opts = append([]console.Option{
 		console.WithSubmit(submitLine(t, ctl, func() { quitting.Store(true); quit() })),
 	}, opts...)
-	err := run(cctx, rec, textQuestions{src}, act, opts...)
+	err := run(cctx, rec, textQuestions{explained{src}}, act, opts...)
 	if quitting.Load() && ctx.Err() == nil {
 		return nil
 	}
@@ -305,6 +305,34 @@ func viewLeft(ctx context.Context) bool {
 	v, ok := ctx.Value(viewKey{}).(context.Context)
 	return ok && v.Err() != nil
 }
+
+// explained is src with a run's error said in words where dax explains
+// it (render.Explain: a request the key's credit cannot cover), which
+// the terminal client shows as the run's error. The error still wraps
+// the original, and the record holds the original whole.
+type explained struct{ client.Source }
+
+func (x explained) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	return x.Source.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+		if e, ok := ev.(*agentturn.RunEnd); ok && e.Err != nil {
+			if s, ok := render.Explain(e.Err); ok {
+				c := *e
+				c.Err = explainedError{s, e.Err}
+				ev = &c
+			}
+		}
+		return fn(ctx, ev)
+	})
+}
+
+// explainedError is err said as text.
+type explainedError struct {
+	text string
+	err  error
+}
+
+func (e explainedError) Error() string { return e.text }
+func (e explainedError) Unwrap() error { return e.err }
 
 // textQuestions is src with dax's question for text
 // (extension.TextQuestion) shown to the terminal client without its

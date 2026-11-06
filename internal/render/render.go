@@ -134,7 +134,11 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		}
 		fmt.Fprintf(p.w(), "[%s · %d model call(s) · %d tool call(s) · %d in / %d out tokens]\n", reason, p.turns, p.calls, p.in, p.out)
 		if e.Err != nil && e.Reason != agentturn.ReasonAborted {
-			fmt.Fprintf(p.w(), "[error: %v]\n", e.Err)
+			if s, ok := Explain(e.Err); ok {
+				fmt.Fprintf(p.w(), "[%s]\n", s)
+			} else {
+				fmt.Fprintf(p.w(), "[error: %v]\n", e.Err)
+			}
 		}
 	}
 	return nil
