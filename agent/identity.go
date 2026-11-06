@@ -159,34 +159,39 @@ type recordedProfile struct {
 // extras are the header members dax records of a new session: its
 // workspace, and the address of the executor its tools run through.
 func (s *Session) extras() map[string]json.RawMessage {
-	d := s.identity()
+	return extrasOf(s.opts, s.identity(), s.beside)
+}
+
+// extrasOf are the header members of a session under o whose project
+// is d, with the servers workspaces beside it.
+func extrasOf(o Options, d workspace.Descriptor, beside []ServersBeside) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	if ws, err := json.Marshal(recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root, Host: d.Host, Instance: d.Instance}); err == nil {
 		out[headerWorkspace] = ws
 	}
-	if ex := s.opts.Executor; ex != nil && ex.addr != "" {
+	if ex := o.Executor; ex != nil && ex.addr != "" {
 		if mark, err := json.Marshal(executorMark{SHA256: ex.addr}); err == nil {
 			out[headerExecutor] = mark
 		}
 	}
-	if ex := s.opts.Executor; ex != nil {
+	if ex := o.Executor; ex != nil {
 		if raw := ex.r.Box(); len(raw) > 0 && json.Valid(raw) {
 			out[headerBox] = raw
 		}
 	}
-	from := s.opts.CompactFrom
-	if s.opts.Compact <= 0 {
+	from := o.CompactFrom
+	if o.Compact <= 0 {
 		from = "off"
 	}
-	if raw, err := json.Marshal(recordedContext{Budget: max(s.opts.Compact, 0), BudgetFrom: from, Window: s.opts.Window, WindowFrom: s.opts.WindowFrom}); err == nil {
+	if raw, err := json.Marshal(recordedContext{Budget: max(o.Compact, 0), BudgetFrom: from, Window: o.Window, WindowFrom: o.WindowFrom}); err == nil {
 		out[headerContext] = raw
 	}
-	if s.opts.Bare != nil {
-		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: s.opts.Bare}); err == nil {
+	if o.Bare != nil {
+		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: o.Bare}); err == nil {
 			out[headerProfile] = raw
 		}
 	}
-	one, named := recordServers(s.beside)
+	one, named := recordServers(beside)
 	if one != nil {
 		out[headerServers] = one
 	}

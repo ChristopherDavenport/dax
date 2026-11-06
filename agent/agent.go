@@ -191,6 +191,14 @@ type Options struct {
 	// holding every project's sessions, used when Store is nil; both
 	// empty disables recording.
 	Root string
+	// Recorder is a recorder the caller opened, which the session
+	// records into in place of a store of its own: an evaluation
+	// runner's (agenteval's Runner.Build), whose run's header is
+	// HeaderOf's and whose options are SessionOptionsOf's. It is
+	// exclusive with Store and Root, and with Resume; the session
+	// attaches nothing, since the recorder's owner attaches it to the
+	// agent it runs (Build).
+	Recorder *session.Recorder
 	// Sync is when an append to the store at Root is durable before it
 	// returns: every append (the default), a response or a call's
 	// output and what came before it, or at Close.
@@ -711,15 +719,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		ws, ownWS = local, true
 	}
-	switch {
-	case o.Name == "":
-		o.Name, o.Version = "dax", Version
-		if o.Description == "" {
-			o.Description = "A coding agent that reads, writes and edits files and runs shell commands in a project."
-		}
-	case o.Description == "":
-		o.Description = "An agent built on dax."
-	}
+	o = o.named()
 	if o.MaxTurns < 0 || o.MaxTokens < 0 || o.MaxCost < 0 {
 		return nil, errors.New("a limit on turns, tokens or cost is zero or more")
 	}
@@ -1100,7 +1100,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(s.tasks.pin)), fold)
 		}
 	}
-	if store != nil {
+	switch {
+	case o.Recorder != nil && resume != "":
+		return nil, errors.New("a session resumes from a store, not a Recorder")
+	case o.Recorder != nil:
+		kopts = append(kopts, agentkit.WithRecorder(o.Recorder))
+	case store != nil:
 		if resume != "" {
 			kopts = append(kopts, agentkit.WithResumedSession(store, resume, s.envOption()))
 		} else {
@@ -1159,18 +1164,39 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	return s, nil
 }
 
+// named is o with the agent's name, version and description filled:
+// dax's when it names none.
+func (o Options) named() Options {
+	switch {
+	case o.Name == "":
+		o.Name, o.Version = "dax", Version
+		if o.Description == "" {
+			o.Description = "A coding agent that reads, writes and edits files and runs shell commands in a project."
+		}
+	case o.Description == "":
+		o.Description = "An agent built on dax."
+	}
+	return o
+}
+
 // header names the harness and the cwd: the workspace's root, the
 // path the tools act in, on whichever machine that is; and in dax's
 // own members, the workspace whole and the executor's address, hashed
 // (extras), which say which machine.
 func (s *Session) header() agentsession.Header {
+	return newHeader(s.opts, s.ws.Root(), s.extras())
+}
+
+// newHeader is the header of a session under o, its options named
+// (named), whose workspace is rooted at root, with dax's members extra.
+func newHeader(o Options, root string, extra map[string]json.RawMessage) agentsession.Header {
 	return agentsession.Header{
 		// Media, an image a read returned or the person attached, is
 		// kept as the store's blobs beside the log (images.go).
 		Media:   agentsession.MediaSidecar,
-		CWD:     s.ws.Root(),
-		Harness: &agentsession.Harness{Name: s.opts.Name, Version: s.opts.Version},
-		Extra:   s.extras(),
+		CWD:     root,
+		Harness: &agentsession.Harness{Name: o.Name, Version: o.Version},
+		Extra:   extra,
 	}
 }
 
@@ -1180,9 +1206,11 @@ func (s *Session) header() agentsession.Header {
 // remote runtime). The recorder writes it only when it differs from the
 // last one on the path, so a session that stays in one workspace holds
 // one entry and a resume in another says so.
-func (s *Session) envOption() session.Option {
-	x := s.x
-	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
+func (s *Session) envOption() session.Option { return session.WithEnv(envOf(s.x)) }
+
+// envOf is the environment entry of the workspace x's tools act in.
+func envOf(x executor.Executor) func(context.Context) (*agentsession.EnvEntry, error) {
+	return func(context.Context) (*agentsession.EnvEntry, error) {
 		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
 		// The machine and the file system's instance too, which the
@@ -1190,7 +1218,7 @@ func (s *Session) envOption() session.Option {
 		w := e.SetWorkspace(d.Kind, d.Ref)
 		w.Host, w.Instance = d.Host, d.Instance
 		return e, nil
-	})
+	}
 }
 
 // New starts a fresh session.
@@ -1220,6 +1248,10 @@ func New(ctx context.Context, o Options) (*Session, error) {
 // the one at Root, which the session owns; nil when neither is set.
 func (o Options) openStore() (store agentsession.Store, own bool, err error) {
 	switch {
+	case o.Recorder != nil && (o.Store != nil || o.Root != ""):
+		return nil, false, errors.New("a session records into its Recorder or a store, not both")
+	case o.Recorder != nil:
+		return o.Recorder.Store(), false, nil
 	case o.Store != nil:
 		return o.Store, false, nil
 	case o.Root != "":

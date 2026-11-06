@@ -189,6 +189,11 @@ before changing the shape.
   `agent/caller.go`: what an A2A caller's requests leave out of what
   the person's carry (their own AGENTS.md), after the kit's
   BeforeModelCall and in sub-agents' (`Env.ChildBeforeModelCall`).
+  `agent/eval.go`: a session under an evaluation runner (agenteval's
+  `Runner`): `HeaderOf` and `SessionOptionsOf`, the header and recorder
+  options dax would write, and `Build`, the session over
+  `Options.Recorder` as an `agentturn.Config`, a recorder whose header
+  is not dax's refused.
   `agent/reopen.go`: `Reopen`, another session (`/new`, `/resume`)
   over the live settings, the store handed to it. `agent/names.go`:
   `SetName` (`/name`, an `info` entry), `Name`, and `Sessions`, this
