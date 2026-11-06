@@ -800,6 +800,9 @@ func mcpLines(info agent.Info) []string {
 	lines := []string{"mcp servers:"}
 	for _, m := range info.MCP {
 		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
+		if st := stateText(m); st != "" {
+			l += ", " + st
+		}
 		if m.Secrets {
 			l += ", given secrets (secret_env)"
 		}
@@ -823,6 +826,20 @@ const (
 	maxDescription = 160
 	maxField       = 80
 )
+
+// stateText says where m's session is (agent.MCPServerInfo.State), or
+// nothing for a dax that did not say.
+func stateText(m agent.MCPServerInfo) string {
+	switch m.State {
+	case "":
+		return ""
+	case "ended":
+		return "ended; the next call to one of its tools starts it again"
+	case "failed":
+		return "failed to start again (" + oneLine(m.Failure, maxField) + "); the next call tries again"
+	}
+	return oneLine(m.State, maxField)
+}
 
 // placedText says where m runs.
 func placedText(m agent.MCPServerInfo) string {

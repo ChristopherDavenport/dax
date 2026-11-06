@@ -1109,11 +1109,14 @@ since the new connection must be the same executor. What does not:
   of what a call would touch, or a read of the project's files, has no
   effect, and is read again once on the new connection.
 - Processes started in the sandbox for the session end with the old
-  connection. Your MCP servers among them are started again, on the new
+  connection. dax warns as each MCP server's session ends (`dax: MCP
+  server <name>'s session ended …`), and `/mcp` lists it `ended`. Your
+  MCP servers among them are started again, on the new
   connection, by the next call to one of their tools, with a warning
   (`dax: MCP server <name> ended and was started again …`) and an entry
   in the session's record (`dax.mcp.restart`). Whatever a server held
-  (open handles, subscriptions) is gone. The restarted server's tools
+  (open handles, subscriptions) is gone, and the first result from it
+  after the restart tells the model so, at its head. The restarted server's tools
   are offered from then on, even when they differ, and the warning says
   which were added or removed; a call the model made of a tool the
   restarted server no longer lists as it was is not sent, and fails

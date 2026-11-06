@@ -1446,7 +1446,10 @@ the input until the next line, and an error gives the line back to edit.
 - `/mcp` (or `/mcp list`) lists the session's MCP servers, one a line:
   the name, where it runs (on this machine, in the workspace, at a URL's
   origin, offered by the workspace, or offered by the servers
-  workspace), whether this session gives it secrets (`secret_env`), the
+  workspace), where its session is (`live`; `ended`, a process that
+  exited or a connection that dropped, which the next call to one of
+  its tools starts again; `restarting`; `failed to start again`, with
+  why; `closed`), whether this session gives it secrets (`secret_env`), the
   label `/mcp remove` takes for one `/mcp add` started, and its
   description. The listing looks the same whatever the placement. A URL
   is shown by its scheme and host alone, since a hosted server's key is

@@ -228,7 +228,7 @@ func TestAnAttachedViewListsTheServedSessionsMCPServers(t *testing.T) {
 	})
 	r := s.attach()
 	r.type_("/mcp\r")
-	r.waitOutput("docs: on this machine — the [31mdocs index")
+	r.waitOutput("docs: on this machine, live — the [31mdocs index")
 	r.quit()
 }
 

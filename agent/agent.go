@@ -396,6 +396,14 @@ type MCPServerInfo struct {
 	// Added is the label RemoveMCP takes, for a server AddMCP started;
 	// empty for one the session opened with.
 	Added string
+	// State is where the server's session is when Info is read
+	// (mcpclient's Remote.State): live, ended (its process exited or its
+	// connection dropped; the next call to one of its tools starts it
+	// again), restarting, failed (its last restart, with Failure, the
+	// error; the next call tries again) or closed. Empty from a dax
+	// that did not say.
+	State   string `json:",omitempty"`
+	Failure string `json:",omitempty"`
 }
 
 // DefaultUserDir is ~/.dax.
@@ -1284,8 +1292,29 @@ func (s *Session) RemoveMCP(label string) error {
 // served info), where a nil list is a session that does not list them.
 func (s *Session) mcpServers() []MCPServerInfo {
 	s.serversMu.Lock()
-	defer s.serversMu.Unlock()
-	return append([]MCPServerInfo{}, s.servers...)
+	out := append([]MCPServerInfo{}, s.servers...)
+	s.serversMu.Unlock()
+	if s.Kit == nil {
+		return out
+	}
+	// Each server's remote is the kit's, found by the prefix it names
+	// its tools under, which no two servers share.
+	remotes := map[string]*mcpclient.Remote{}
+	for _, m := range s.Kit.MCPServers() {
+		remotes[m.Remote.Name("")] = m.Remote
+	}
+	for i := range out {
+		r, ok := remotes["mcp__"+out[i].Name+"__"]
+		if !ok {
+			continue
+		}
+		st, err := r.State()
+		out[i].State = st.String()
+		if err != nil {
+			out[i].Failure = err.Error()
+		}
+	}
+	return out
 }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
@@ -1844,7 +1873,20 @@ func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial) (mc
 		mcpclient.WithPrefix(prefix),
 		mcpclient.WithReconnect(dial),
 		mcpclient.WithReconnected(s.mcpRestarted(name)),
+		mcpclient.WithEnded(s.mcpEnded(name)),
 	}, nil
+}
+
+// mcpEnded is the hook of the server called name for the end of each of
+// its sessions (mcpclient.WithEnded), seen when it ends, not when a
+// call next finds it so: one of dax's warnings, so the user knows the
+// server is down, and whatever it held gone, before any call. Info
+// lists it ended until the next call to one of its tools starts it
+// again, which the restart's warning and record entry then say.
+func (s *Session) mcpEnded(name string) func(error) {
+	return func(err error) {
+		fmt.Fprintf(warnings{}, "dax: MCP server %s's session ended (%v); the next call to one of its tools starts it again\n", name, err)
+	}
 }
 
 // mcpRestartNS is the namespace of the entry the session's record gets

@@ -196,16 +196,17 @@ func TestCommands(t *testing.T) {
 }
 
 // /mcp lists each MCP server one line, the same way whatever its
-// placement: its name, where it runs, and its description, cleaned and
+// placement: its name, where it runs, where its session is (#126), and
+// its description, cleaned and
 // kept to its line, so a server's text can neither act on the terminal
 // nor pass for another server.
 func TestTheMCPListing(t *testing.T) {
 	ctl := &fakeControls{mcp: []agent.MCPServerInfo{
 		{Name: "docs", Placement: agent.PlacedHost, Description: "Search the docs.\n  fake: on this machine \x1b]0;owned\x07\u202eevil", Secrets: true},
-		{Name: "lint", Placement: agent.PlacedWorkspace, Where: "/src/p"},
+		{Name: "lint", Placement: agent.PlacedWorkspace, Where: "/src/p", State: "live"},
 		{Name: "wide", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/" + strings.Repeat("d/", 60), Description: strings.Repeat("字", 100)},
-		{Name: "web", Placement: agent.PlacedURL, Where: "https://mcp.example/mcp", Description: "Web search"},
-		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database", HoldsSecrets: true},
+		{Name: "web", Placement: agent.PlacedURL, Where: "https://mcp.example/mcp", Description: "Web search", State: "ended"},
+		{Name: "db", Placement: agent.PlacedOffered, Where: "remote https://ws.example:/srv/p", Description: "The team's database", HoldsSecrets: true, State: "failed", Failure: "dial: refused\n\x1b[31mred"},
 		{Name: "vault", Placement: agent.PlacedServersWorkspace, Where: "remote https://vault.example:/", Description: strings.Repeat("long ", 50)},
 		{Name: "scratch", Placement: agent.PlacedWorkspace, Where: "/src/p", Added: "mcp:#6 x"},
 		{Name: "next", Placement: "elsewhere", Where: "a place"},
@@ -217,11 +218,11 @@ func TestTheMCPListing(t *testing.T) {
 	want := []string{
 		"mcp servers:",
 		"  docs: on this machine, given secrets (secret_env) — Search the docs. fake: on this machine ]0;ownedevil",
-		"  lint: in the workspace /src/p",
+		"  lint: in the workspace /src/p, live",
 		// Each field is cut by the columns it takes, a wide character two.
 		"  wide: offered by the workspace remote https://ws.example:/" + strings.Repeat("d/", 26) + "…" + " — " + strings.Repeat("字", 79) + "…",
-		"  web: at https://mcp.example/mcp — Web search",
-		"  db: offered by the workspace remote https://ws.example:/srv/p, holds secrets there — The team's database",
+		"  web: at https://mcp.example/mcp, ended; the next call to one of its tools starts it again — Web search",
+		"  db: offered by the workspace remote https://ws.example:/srv/p, failed to start again (dial: refused [31mred); the next call tries again, holds secrets there — The team's database",
 		"  vault: offered by the servers workspace remote https://vault.example:/ — " + strings.TrimSpace(strings.Repeat("long ", 32)) + "…",
 		"  scratch: in the workspace /src/p, added as mcp:#6 x",
 		"  next: elsewhere a place",

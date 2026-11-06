@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -476,5 +477,62 @@ func TestAnMCPServerInTheExecutorIsStartedAgainAfterAReconnect(t *testing.T) {
 	closed = true
 	if len(recs) != 1 || !recs[0].OK || recs[0].Server != "srv" {
 		t.Errorf("recorded restarts: %+v", recs)
+	}
+}
+
+// stateOf is the state Info lists the server called name in.
+func stateOf(s *Session, name string) MCPServerInfo {
+	for _, m := range s.Info().MCP {
+		if m.Name == name {
+			return m
+		}
+	}
+	return MCPServerInfo{}
+}
+
+// #126: Info says where each MCP server's session is (agenttool
+// v0.0.30's Remote.State): a server whose process exits reads ended
+// before any call finds it so, with a warning that it ended, and live
+// again once the next call starts it again. #92: that call's result
+// tells the model, at its head, that the server was restarted and what
+// it held is gone (mcpclient's RestartNotice), once; the next does not.
+func TestAnMCPServersStateIsListedAndARestartIsToldToTheModel(t *testing.T) {
+	ctx := context.Background()
+	var warned syncBuffer
+	defer CaptureWarnings(&warned)()
+	_, command := restartable(t, "where")
+	model := &offering{}
+	o := options(t, model)
+	o.MCP = []MCPServer{{Name: "srv", Command: command}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if st := stateOf(s, "srv"); st.State != "live" {
+		t.Fatalf("a started server is listed %+v, want live", st)
+	}
+	pid, _ := whereFrom(t, callOnce(ctx, t, s, model, "mcp__srv__where"))
+	must(t, syscall.Kill(pid, syscall.SIGKILL))
+	exited(t, pid)
+	deadline := time.Now().Add(15 * time.Second)
+	for stateOf(s, "srv").State != "ended" {
+		if time.Now().After(deadline) {
+			t.Fatalf("an exited server is listed %+v, want ended", stateOf(s, "srv"))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(warned.String(), "dax: MCP server srv's session ended") {
+		t.Errorf("no warning that the server ended: %q", warned.String())
+	}
+	out := callAfterEnd(ctx, t, s, model, "mcp__srv__where", false)
+	if !strings.HasPrefix(out, mcpclient.RestartNotice) {
+		t.Errorf("the first result after the restart does not tell the model: %q", out)
+	}
+	if st := stateOf(s, "srv"); st.State != "live" {
+		t.Errorf("a restarted server is listed %+v, want live", st)
+	}
+	if again := callOnce(ctx, t, s, model, "mcp__srv__where"); strings.Contains(again, mcpclient.RestartNotice) {
+		t.Errorf("a later result tells the model again: %q", again)
 	}
 }

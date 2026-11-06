@@ -24,9 +24,6 @@ versions may break flags and the config file.
     "user", one dax composed "not your words", and a line from a
     session recorded before this release "user (unclaimed)", since the
     format did not say then who typed it.
-  - An MCP server's first result after it was restarted tells the model,
-    at its head, that the server was restarted and whatever it held is
-    gone (agenttool v0.0.30, #92).
 
 - Fixed: leaving `dax attach` with `/quit` leaves the served session's
   run going again. agentconsole v0.0.16 aborts a second time at exit,
@@ -73,6 +70,18 @@ versions may break flags and the config file.
   was reached, that it was not retried, the provider's own message and
   remedy, and that `/compact` may fit what is left; not the provider's
   raw JSON, which stays whole in the session's record (#15).
+
+- Added: `/mcp` says where each MCP server's session is: live, ended
+  (its process exited or its connection dropped; the next call to one
+  of its tools starts it again), restarting, failed to start again with
+  why, or closed (agenttool v0.0.30's `Remote.State`); a servers
+  workspace that drops shows its servers ended. dax warns as a server's
+  session ends, not only when a call starts it again, and
+  `agent.MCPServerInfo` gains `State` and `Failure` (#126).
+- Changed: the first result from an MCP server after it was started
+  again tells the model, at its head, that the server was restarted and
+  whatever it held is gone, in agenttool's words (`mcpclient.RestartNotice`),
+  once; dax's warning and `dax.mcp.restart` entry stay as they were (#92).
 
 ## v0.0.33 - 2026-11-04
 
