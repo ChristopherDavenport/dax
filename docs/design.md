@@ -482,7 +482,12 @@ Images (`agent/images.go`): dax-coding's `read` returns an image file
 as an image part wherever it runs, since a tool cannot know the model;
 the session shows it to a model whose vendor says it takes images
 (`Options.TakesImages`, from `internal/modelinfo`) and puts a line in
-its place otherwise. An image the person attaches (`@path.png`) is
+its place otherwise. The test is made again on every request, by the
+model the request names (`textOnly`, around the session's streamers):
+a sub-agent on a model of its own is judged by that model, and the
+images a conversation holds are said, not sent, once `/model`, a
+resume or `/resume` moves it to a model that takes none. The record
+keeps them. An image the person attaches (`@path.png`) is
 read on this machine, theirs as the line is. The store keeps media as
 blobs beside the log (sidecar media), which agentturn's recorder
 writes and reads back.

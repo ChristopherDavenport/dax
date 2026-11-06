@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/tool"
@@ -47,16 +48,111 @@ func (s *Session) imageGate(t agenttool.Tool) agenttool.Tool {
 		if err != nil || res.Output.Parts == nil || s.takesImages(ctx) {
 			return res, err
 		}
-		parts := make(openresponses.Contents, 0, len(res.Output.Parts))
-		for _, p := range res.Output.Parts {
-			if _, ok := p.(*openresponses.InputImage); ok {
-				p = &openresponses.InputText{Text: noImage(s.Model())}
-			}
-			parts = append(parts, p)
-		}
-		res.Output.Parts = parts
+		res.Output.Parts = sayImages(res.Output.Parts, s.Model())
 		return res, nil
 	})
+}
+
+// textOnly is inner with the images dax puts in a request, a read's
+// and the person's own, said in place of shown when the request's model
+// does not take them: judged at each request by the model it names, so
+// a sub-agent on a model of its own is judged by that model, and the
+// images a conversation already holds are not sent to a text-only model
+// after /model, a resume or /resume (#166). Any other tool's images (an
+// MCP server's) pass as they did before. A server's compaction is kept,
+// its input judged the same way.
+func textOnly(takes func(context.Context, string) bool, inner openresponses.Streamer) openresponses.Streamer {
+	if inner == nil {
+		return nil
+	}
+	t := imageless{inner: inner, takes: takes}
+	if c, ok := inner.(compact.Compactor); ok {
+		return imagelessCompactor{imageless: t, c: c}
+	}
+	return t
+}
+
+type imageless struct {
+	inner openresponses.Streamer
+	takes func(context.Context, string) bool
+}
+
+func (s imageless) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	req.Input = s.strip(ctx, req.Model, req.Input)
+	return s.inner.CreateStream(ctx, req, sink)
+}
+
+type imagelessCompactor struct {
+	imageless
+	c compact.Compactor
+}
+
+func (s imagelessCompactor) Compact(ctx context.Context, req openresponses.CompactRequest) (*openresponses.CompactResponse, error) {
+	req.Input = s.strip(ctx, req.Model, req.Input)
+	return s.c.Compact(ctx, req)
+}
+
+// strip is in with the person's images and read's said, not shown, when
+// model does not take images; in itself when it holds none or the model
+// takes them. The items changed are copies: in is the conversation's.
+func (s imageless) strip(ctx context.Context, model string, in openresponses.Items) openresponses.Items {
+	reads := map[string]bool{}
+	var found bool
+	for _, it := range in {
+		switch it := it.(type) {
+		case *openresponses.FunctionCall:
+			if it.Name == "read" {
+				reads[it.CallID] = true
+			}
+		case *openresponses.Message:
+			found = found || it.Role == openresponses.RoleUser && hasImage(it.Content)
+		case *openresponses.FunctionCallOutput:
+			found = found || hasImage(it.Output.Parts)
+		}
+	}
+	if !found || s.takes != nil && s.takes(ctx, model) {
+		return in
+	}
+	out := make(openresponses.Items, len(in))
+	for i, it := range in {
+		out[i] = it
+		switch it := it.(type) {
+		case *openresponses.Message:
+			if it.Role == openresponses.RoleUser && hasImage(it.Content) {
+				m := *it
+				m.Content = sayImages(it.Content, model)
+				out[i] = &m
+			}
+		case *openresponses.FunctionCallOutput:
+			if reads[it.CallID] && hasImage(it.Output.Parts) {
+				o := *it
+				o.Output.Parts = sayImages(it.Output.Parts, model)
+				out[i] = &o
+			}
+		}
+	}
+	return out
+}
+
+func hasImage(cs openresponses.Contents) bool {
+	for _, c := range cs {
+		if _, ok := c.(*openresponses.InputImage); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// sayImages is cs with each image a line saying model is not shown it.
+func sayImages(cs openresponses.Contents, model string) openresponses.Contents {
+	out := make(openresponses.Contents, len(cs))
+	for i, c := range cs {
+		out[i] = c
+		if _, ok := c.(*openresponses.InputImage); ok {
+			out[i] = &openresponses.InputText{Text: noImage(model)}
+		}
+	}
+	return out
 }
 
 // Image is the image file at path on this machine as a part of the

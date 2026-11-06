@@ -567,7 +567,7 @@ no other account could have written it.
 
 | tool | what it does |
 |---|---|
-| `read` | numbered lines of a file, with `offset` and `limit`; a PNG, JPEG, GIF or WebP file (by its name and its first bytes, up to 5 MiB) is returned as the image, shown to a model whose vendor says it takes images (Anthropic's `image_input`, OpenRouter's input modalities, Ollama's `vision`) and otherwise said not to be shown |
+| `read` | numbered lines of a file, with `offset` and `limit`; a PNG, JPEG, GIF or WebP file (by its name and its first bytes, up to 5 MiB) is returned as the image, shown to a model whose vendor says it takes images (Anthropic's `image_input`, OpenRouter's input modalities, Ollama's `vision`) and otherwise said not to be shown; a sub-agent's read is judged by the sub-agent's model, and after `/model` or a resume to a model that takes none, images already in the conversation are said, not sent |
 | `write` | create or replace a file, making parent directories |
 | `edit` | replace one exact occurrence of a string |
 | `glob` | paths matching a doublestar pattern (`**/*.go`, `cmd/*/main.go`, `*.{md,txt}`), sorted |

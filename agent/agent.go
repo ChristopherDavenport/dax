@@ -731,6 +731,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		m.seed(ctx, r, resume, o.Model)
 	}
 	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
+	// A read's and the person's images reach only a model that takes
+	// them, each request judged by the model it names (images.go).
+	o.Streamer, o.SubagentStreamer = textOnly(o.TakesImages, o.Streamer), textOnly(o.TakesImages, o.SubagentStreamer)
 	s := &Session{opts: o, base: base, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as

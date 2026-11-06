@@ -199,3 +199,81 @@ func TestAnImageReadInAnExecutor(t *testing.T) {
 		t.Errorf("the model was not sent the executor's image:\n%s", got)
 	}
 }
+
+// bySub is scripted for the main agent and for explore, keeping each of
+// explore's requests as JSON.
+type bySub struct {
+	main scripted
+	sub  imageSeen
+}
+
+func (m *bySub) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	if !strings.HasPrefix(req.Instructions, "You are a read-only explorer") {
+		return m.main.CreateStream(ctx, req, sink)
+	}
+	return m.sub.CreateStream(ctx, req, sink)
+}
+
+// #166: a sub-agent's read is judged by the sub-agent's own model: a
+// main model that takes images does not let an image reach a sub-agent
+// model that does not.
+func TestASubagentsReadImageIsJudgedByItsOwnModel(t *testing.T) {
+	ctx := context.Background()
+	m := &bySub{main: scripted{calls: [][2]string{{"explore", `{"input":"what is in shot.png?"}`}}}}
+	m.sub.scripted = scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}
+	o := withAgents(options(t, m), "flash")
+	o.TakesImages = func(_ context.Context, model string) bool { return model != "flash" }
+	if err := os.WriteFile(filepath.Join(o.Dir, "shot.png"), pngBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := promptOn(ctx, s, "look at the screenshot", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := m.sub.last()
+	if strings.Contains(got, `"input_image"`) || !strings.Contains(got, "model flash does not take images") {
+		t.Errorf("the sub-agent's text-only model was sent:\n%s", got)
+	}
+}
+
+// #166: the images a conversation holds are not sent to a text-only
+// model it moves to: after /model, a read's image and the person's own
+// are said in the request, while the record keeps them.
+func TestImagesHeldAreNotSentToATextOnlyModel(t *testing.T) {
+	ctx := context.Background()
+	m := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
+	o := options(t, m)
+	o.TakesImages = func(_ context.Context, model string) bool { return model == "echo" }
+	if err := os.WriteFile(filepath.Join(o.Dir, "shot.png"), pngBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	img, err := s.Image(ctx, filepath.Join(o.Dir, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Drive(ctx, s, Rules{}, openresponses.UserMessage(&openresponses.InputText{Text: "look, and at this"}, img)); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); strings.Count(got, `"input_image"`) != 2 {
+		t.Fatalf("the model that takes images was not sent both:\n%s", got)
+	}
+	m.scripted.calls = nil
+	if err := s.SetModel("text"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "and now?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); strings.Contains(got, `"input_image"`) || strings.Count(got, "model text does not take images") != 2 {
+		t.Errorf("the text-only model was sent:\n%s", got)
+	}
+}

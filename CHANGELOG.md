@@ -17,6 +17,12 @@ versions may break flags and the config file.
   `~/.dax/learned`. A learned skill's name and description are still
   in a caller's catalogue until agentkit can leave a part out per
   conversation (#157, #158, #159, #161).
+- Fixed: images reach only a model that takes them, judged at each
+  request by the model it names: a sub-agent's `read` of an image is
+  judged by the sub-agent's own model (a text-only sub-agent model was
+  sent the image), and the images a conversation already holds are
+  said, not sent, after `/model`, a resume or `/resume` moves it to a
+  model that takes none; the record keeps them (#166).
 - Changed: `extension.Extension` has `PersonOnly`, the extension's
   tools an A2A caller is refused outright, and `extension.Env` has
   `Caller`, which says whether a context is an A2A caller's.
