@@ -316,6 +316,17 @@ shown.
 
 The sub-agents see the block and can search, but not write.
 
+`conversation_search` finds what an earlier session of this project
+said: the messages holding every word of a query, newest sessions
+first, with the session, the time and who wrote each. It reads this
+project's top-level sessions, those recorded in the workspace the
+tools act in (a box at `/work` is not another box at `/work`), never
+the calling session, which the model has in context, and never another
+project's. It runs unasked, as `memory_search` does, and its results
+are marked as untrusted text, since earlier models, tools and pages
+wrote them. It is dax-memory's, so `-memory off` and `-bare` leave it
+out; an A2A caller cannot use it (see Serving peers).
+
 ## Peers: other agents over A2A
 
 An agent that serves [A2A](https://a2a-protocol.org) can be offered to
@@ -1090,7 +1101,8 @@ the one whose rule decided it: `extension:dax-coding`, say):
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
   bash commands listed below (dax-coding's), `explore` and `task`
-  (dax-agents'), `skill` (dax-skills') and `memory_search` (dax-memory's);
+  (dax-agents'), `skill` (dax-skills') and `memory_search` and
+  `conversation_search` (dax-memory's);
 - **asks**: `write`, `edit`, every other command, memory writes (`memory_insert` too), every
   peer (dax-a2a's) and every MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile
@@ -1789,6 +1801,10 @@ dax serve -a2a -listen 127.0.0.1:7878
   calls is decided under one policy. Under a looser mode a skill's
   grant does not let a caller's call run unasked, since it is held to
   the rules alone; under `default` it does, as before.
+- **Not your conversations.** A caller's `conversation_search`, or its
+  sub-agents', fails before anything is searched: the store holds every
+  session you had, and a caller reads none of them. Your memory block
+  and `memory_search` are the served agent's, as its instructions are.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the
@@ -1977,7 +1993,7 @@ dax's own extensions are built the same way, from the same fields:
 | `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan and the facts the policy approved |
 | `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`), its sub-agent tools, and the memory block as the kit's parts |
 | `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
-| `dax-memory` | `ext/memory` | the memory tools and block; `memory_search` for the sub-agents |
+| `dax-memory` | `ext/memory` | the memory tools and block; `memory_search` for the sub-agents; `conversation_search`, scoped by `Env.SearchScope` |
 | `dax-a2a` | `ext/a2a` | a tool per configured peer, added through its kit as memory's are; their renderers; no rules |
 
 `dax-coding` and `dax-a2a` are always on (`dax-a2a` offers nothing

@@ -98,8 +98,8 @@ func session(t *testing.T, model openresponses.Streamer) (agent.Options, string)
 
 func TestTheExtension(t *testing.T) {
 	e := memory.New("/m")
-	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search", "memory_insert"}
-	if e.Name != "dax-memory" || !slices.Equal(e.Owns, want) || !slices.Equal(e.Policy.Allow, []string{"memory_search"}) ||
+	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search", "memory_insert", "conversation_search"}
+	if e.Name != "dax-memory" || !slices.Equal(e.Owns, want) || !slices.Equal(e.Policy.Allow, []string{"memory_search", "conversation_search"}) ||
 		len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil {
 		t.Errorf("extension %+v", e)
 	}

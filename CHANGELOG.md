@@ -7,6 +7,14 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `conversation_search` (agentkit's `WithSessionSearch`), which
+  finds what an earlier session of this project said, unasked: this
+  workspace's top-level sessions, not the calling one, its output
+  marked untrusted. An A2A caller's search fails before anything is
+  searched (`agent.ErrPeerSearch`), so a caller never reads your
+  conversations. `extension.Env` has `SearchScope`, the scope every
+  search of the store takes, and `agent.Session.SearchScope` is it;
+  an `Env` implemented outside dax needs the method (#157).
 - Added: an archive beside each memory scope, `user-archive` and the
   project's `project-…-archive`, which the model adds passages to with
   `memory_insert` (it asks, as every memory write does) and finds with

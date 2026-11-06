@@ -416,7 +416,11 @@ through the served commands; leaving it leaves the session's run going.
 With `-a2a` dax serve also serves A2A callers, behind a token of their
 own, each conversation a session of its own (see Planes); their
 questions reach only the views attached when they are asked, each
-naming the conversation it is about.
+naming the conversation it is about. Those sessions are in the
+person's store, so a search of it is scoped by its caller
+(`Session.SearchScope`, the `Env.SearchScope` every extension that
+searches the store passes agentkit's `SearchScope`): the person reads
+the project's top-level sessions, a caller none.
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal

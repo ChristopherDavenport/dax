@@ -35,15 +35,17 @@ const Name = "dax-memory"
 // act in (WorkspaceScope), and an archive beside each (ArchiveScope),
 // which it adds passages to with memory_insert and finds with
 // memory_search, and which the block never shows. It owns the memory
-// tools and ships one rule: a search runs unasked, while a save, a
-// patch, a forget and an insert ask. The sub-agents take memory_search
+// tools and conversation_search, which finds what an earlier session
+// of this project said (Env.SearchScope: none for an A2A caller), and
+// ships one rule: the searches run unasked, while a save, a patch, a
+// forget and an insert ask. The sub-agents take memory_search
 // over the same scopes (SubagentTools), and see the block the kit
 // renders as its parts; they are offered no writer.
 func New(dir string) extension.Extension {
 	return extension.Extension{
 		Name:   Name,
-		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool},
-		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool}},
+		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
+		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
 		SubagentTools: func(env extension.Env) ([]agenttool.Tool, error) {
 			mem, scopes, err := open(dir, env)
 			if err != nil {
@@ -63,6 +65,10 @@ func New(dir string) extension.Extension {
 			}
 			arch := archives(scopes)
 			return []agentkit.Option{
+				// conversation_search, over this project's earlier
+				// sessions, scoped by the caller: never an A2A
+				// caller's.
+				agentkit.WithSessionSearch(agentkit.SearchScope(env.SearchScope)),
 				agentkit.WithMemory(mem, scopes...),
 				agentkit.WithMemoryArchive(arch...),
 				agentkit.WithMemoryTools(agentmemory.WithInsert(arch...)),

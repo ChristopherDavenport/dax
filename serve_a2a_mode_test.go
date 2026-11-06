@@ -8,8 +8,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -148,5 +150,32 @@ func TestAnA2ACallerIsRefusedInDontAsk(t *testing.T) {
 				t.Errorf("the conversation's decisions:\n%s\nwant dontAsk's refusal", got)
 			}
 		})
+	}
+}
+
+// An A2A caller never reads the person's conversations: its
+// conversation_search fails before anything is searched, though the
+// served session is one of this project's (#157).
+func TestAnA2ACallerCannotSearchThePersonsConversations(t *testing.T) {
+	m := &steps{parent: [][2]string{{"conversation_search", `{"query":"zebra"}`}}}
+	rig := startRig(t, m, policy.Rules{}, nil, nil, false)
+	if _, err := agent.Drive(t.Context(), rig.sess, agent.Rules{}, openresponses.UserText("the launch code is zebra")); err != nil {
+		t.Fatal(err)
+	}
+	s := serveA2A(t, rig, false, t.TempDir())
+	if _, err := send(t, s.client(aliceToken), say("c1", "find the code")); err != nil {
+		t.Fatal(err)
+	}
+	var outs []string
+	for _, e := range s.session("c1").Entries() {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if o, ok := it.Item.(*openresponses.FunctionCallOutput); ok {
+				outs = append(outs, o.Output.Text)
+			}
+		}
+	}
+	got := strings.Join(outs, "\n")
+	if strings.Contains(got, "launch code") || !strings.Contains(got, agent.ErrPeerSearch.Error()) {
+		t.Errorf("the caller's search gave %q; want it refused", got)
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -227,6 +228,14 @@ type Env interface {
 	// order, cut to their caps as Tools are: what a sub-agent may read
 	// of the session beyond the workspace, such as its memory.
 	SubagentTools() []agenttool.Tool
+	// SearchScope confines a search of the session store, agentkit's
+	// conversation_search say (agentkit.SearchScope), to what the
+	// call's caller may read: for the person, this project's top-level
+	// sessions; for an A2A caller's conversation, none, the call
+	// failing. It narrows q and never widens it. An extension that
+	// searches the store sets it on every search, so a caller never
+	// reads the person's conversations.
+	SearchScope(ctx context.Context, q *agentsession.Query) error
 	// SystemPrompt is the main agent's part of the system prompt, with
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.

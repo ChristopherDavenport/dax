@@ -12,6 +12,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -397,13 +398,17 @@ func (e *sessionEnv) ToolOutput(ctx context.Context, ref string) ([]byte, error)
 	return e.s.ToolOutput(ctx, ref)
 }
 
-func (e *sessionEnv) ToolEnv() extension.ToolEnv           { return e.te }
-func (e *sessionEnv) Name() string                         { return e.s.opts.Name }
-func (e *sessionEnv) Dir() string                          { return e.s.opts.Dir }
-func (e *sessionEnv) UserDir() string                      { return e.s.opts.UserDir }
-func (e *sessionEnv) Tools() []agenttool.Tool              { return e.capped(e.a.tools) }
-func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return e.capped(e.a.readOnly) }
-func (e *sessionEnv) SubagentTools() []agenttool.Tool      { return e.capped(e.sub) }
+func (e *sessionEnv) ToolEnv() extension.ToolEnv      { return e.te }
+func (e *sessionEnv) Name() string                    { return e.s.opts.Name }
+func (e *sessionEnv) Dir() string                     { return e.s.opts.Dir }
+func (e *sessionEnv) UserDir() string                 { return e.s.opts.UserDir }
+func (e *sessionEnv) Tools() []agenttool.Tool         { return e.capped(e.a.tools) }
+func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool { return e.capped(e.a.readOnly) }
+func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
+
+func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
+	return e.s.SearchScope(ctx, q)
+}
 func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
 func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
 func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }

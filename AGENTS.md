@@ -204,8 +204,10 @@ before changing the shape.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`.
 - `ext/memory` (dax-memory): the store, the scopes (the project's is
-  its workspace's), the memory tools, `memory_search` for the
-  sub-agents.
+  its workspace's) and their archives, the memory tools,
+  `memory_search` for the sub-agents, and `conversation_search` under
+  `Env.SearchScope` (`agent/search.go`: this project's top-level
+  sessions; an A2A caller none).
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's
