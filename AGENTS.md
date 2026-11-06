@@ -169,6 +169,9 @@ before changing the shape.
   tool's name) and `Grant` (a session grant set under the kit's grant
   scope, or a rule kept in `~/.dax/grants.json` by the project's
   identity, loaded as `dax:saved`), both at `policy.RankGrant`.
+  `agent/permissions.go`: `PolicyInfo`, the policy in force read from
+  the engine for `Info` and `/permissions` (`permissionLines` in
+  `commands.go`).
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left

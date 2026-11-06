@@ -1526,6 +1526,15 @@ the input until the next line, and an error gives the line back to edit.
   the servers' prompts as they offer them now. `dax attach` offers none.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/permissions` lists the policy in force: the mode, what a call no
+  rule names gets, each source in turn with the file it came from (your
+  config, the project's `.dax/config.json`, `~/.dax/grants.json` for the
+  rules kept with `A`) and its rules, deny, ask and allow, as the engine
+  holds them (an alias such as `Read` expanded), the box's confinement
+  claim, and the grant sets in force with their scope (a skill's, yours
+  for the session). `git push` ran unasked? This shows the `allow
+  bash(git push:*)` in your config. It works during a run, and over
+  `dax attach`.
 - `/mode [name]`: the permission mode, or a switch to `default`,
   `acceptEdits`, `dontAsk` or `bypassPermissions` (see [Permission
   modes](#permission-modes)); during a run it takes effect at the run's

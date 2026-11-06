@@ -54,6 +54,7 @@ const commandHelp = `commands:
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
   /mode [name]              the permission mode, or switch to default, acceptEdits, dontAsk or bypassPermissions
+  /permissions              the rules in force, where each came from, the mode and the grants
   /compact [instructions]   fold the conversation at the next request, keeping what you say
   /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
@@ -149,6 +150,12 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return commandResult{out: "[reasoning " + arg + " from the next request]"}, nil
+	case "/permissions":
+		// The listing changes nothing, so it works during a run.
+		if arg != "" {
+			return commandResult{}, errors.New("usage: /permissions, with nothing after it")
+		}
+		return commandResult{out: strings.Join(permissionLines(ctl.Info()), "\n")}, nil
 	case "/mode":
 		// A switch during a run waits for its next turn, so it works
 		// during one.
@@ -259,6 +266,62 @@ func templateHelp(ctx context.Context, ctl agent.Controls) string {
 		}
 	}
 	return b.String()
+}
+
+// permissionLines are /permissions' lines: the mode, the default, each
+// source with the file it came from and its rules, the box's
+// confinement claim, and the grant sets in force with their scope.
+// Every text is cleaned, since a rule or a path may hold what a
+// terminal would act on.
+func permissionLines(info agent.Info) []string {
+	p := info.Policy
+	if p == nil {
+		return []string{"no policy: every call runs"}
+	}
+	lines := []string{modeLine(p.Mode, p.Pending), "default: " + p.Default}
+	list := func(indent string, allow, ask, deny []string) {
+		for _, l := range []struct {
+			what  string
+			rules []string
+		}{{"deny", deny}, {"ask", ask}, {"allow", allow}} {
+			for _, r := range l.rules {
+				lines = append(lines, indent+l.what+" "+r)
+			}
+		}
+	}
+	for _, s := range p.Sources {
+		var about []string
+		if s.Path != "" {
+			about = append(about, s.Path)
+		}
+		if !s.Trusted {
+			about = append(about, "untrusted: no allow rules")
+		}
+		if len(s.Allow)+len(s.Ask)+len(s.Deny) == 0 {
+			about = append(about, "no rules")
+		}
+		head := s.Name
+		if len(about) > 0 {
+			head += " (" + strings.Join(about, "; ") + ")"
+		}
+		lines = append(lines, head)
+		list("  ", s.Allow, s.Ask, s.Deny)
+	}
+	if p.Confined != "" {
+		lines = append(lines, p.Confined)
+	}
+	for _, g := range p.Grants {
+		scope := "every conversation"
+		if g.Scope != "" {
+			scope = "scope " + g.Scope
+		}
+		lines = append(lines, "granted "+g.Source+" ("+scope+")")
+		list("  ", g.Allow, g.Ask, g.Deny)
+	}
+	for i, l := range lines {
+		lines[i] = render.Clean(l)
+	}
+	return lines
 }
 
 // moder is what /mode and Shift-Tab ask of the session's controls: the

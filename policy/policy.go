@@ -73,6 +73,10 @@ type Settings struct {
 	// always"), from their grants file: source SourceSaved, at
 	// RankGrant. Only Allow is read.
 	Saved []string
+	// UserPath, ProjectPath and SavedPath are the files the user's, the
+	// project's and the saved rules came from, which their sources name
+	// (agentpolicy's Source.Path) so a listing says where a rule is.
+	UserPath, ProjectPath, SavedPath string
 	// Box are the tools a session's box.confine takes as confined, each
 	// a bare ask of source SourceBox: dax-coding's bash, write and edit
 	// by name, and an MCP unit's tools as mcp__<unit>__*, the one glob
@@ -194,8 +198,8 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		src   agentpolicy.Source
 		rules Rules
 	}{
-		{agentpolicy.Source{Name: SourceUser, Trusted: true, Rank: rankUser}, s.User},
-		{agentpolicy.Source{Name: SourceProject, Rank: rankProject}, s.Project},
+		{agentpolicy.Source{Name: SourceUser, Path: s.UserPath, Trusted: true, Rank: rankUser}, s.User},
+		{agentpolicy.Source{Name: SourceProject, Path: s.ProjectPath, Rank: rankProject}, s.Project},
 	} {
 		var set agentpolicy.RuleSet
 		var err error
@@ -222,7 +226,7 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		sets = append(sets, set)
 	}
 	if len(s.Saved) > 0 {
-		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceSaved, Trusted: true, Rank: RankGrant}}
+		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceSaved, Path: s.SavedPath, Trusted: true, Rank: RankGrant}}
 		if set.Allow, err = parse("saved", s.Saved); err != nil {
 			return agentpolicy.Policy{}, err
 		}

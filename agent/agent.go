@@ -855,6 +855,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		settings.Shipped = append(slices.Clone(settings.Shipped), a.shipped...)
 		// The rules the user kept for this project ("yes, always").
 		if f := o.grantsFile(); f != "" {
+			settings.SavedPath = f
 			saved, err := readGrants(f, ws.Descriptor())
 			if err != nil {
 				fmt.Fprintf(warnings{}, "dax: %v\n", err)

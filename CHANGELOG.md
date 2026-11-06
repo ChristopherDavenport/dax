@@ -133,6 +133,14 @@ versions may break flags and the config file.
   returned `(allow, note)`; `Rules.Stops` and `Rules.PermitBy` are
   gone, folded into it. `Drive` makes the grant an answer asks for
   when it drives an `agent.Session`.
+- Added: `/permissions` lists the policy in force: the mode, the
+  default, each source with the file it came from and its rules, the
+  box's confinement claim, and the grant sets with their scope, in
+  every front and over `dax attach` (#151). The user's and the
+  project's sources now name their files (agentpolicy's `Source.Path`,
+  from `policy.Settings.UserPath` and `ProjectPath`), and so does the
+  saved grants' (`SavedPath`). `agent.Info` gains `Policy`
+  (`agent.PolicyInfo`).
 
 ## v0.0.33 - 2026-11-04
 

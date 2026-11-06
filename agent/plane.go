@@ -351,13 +351,15 @@ type Info struct {
 	// MCP are its MCP servers, each with where it runs and what it is
 	// for, listed the same wherever it runs.
 	MCP []MCPServerInfo
+	// Policy is the policy in force, nil for a session with none.
+	Policy *PolicyInfo
 }
 
 var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

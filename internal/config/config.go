@@ -2112,6 +2112,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			dst := &s.Policy.User
 			if l.Project {
 				dst = &s.Policy.Project
+				s.Policy.ProjectPath = l.Path
+			} else {
+				s.Policy.UserPath = l.Path
 			}
 			dst.Allow = append(dst.Allow, p.Allow...)
 			dst.Ask = append(dst.Ask, p.Ask...)

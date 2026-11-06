@@ -61,6 +61,11 @@ func TestTheModesPrecedence(t *testing.T) {
 			t.Errorf("%s: %v, want %q", tc.json, err, tc.want)
 		}
 	}
+	// The policy's sources name the files they came from.
+	s, err := Resolve([]Layer{user("default"), project("dontAsk")}, Flags{}, "")
+	if err != nil || s.Policy.UserPath != "/u/config.json" || s.Policy.ProjectPath != "/p/.dax/config.json" {
+		t.Errorf("paths %q %q, %v", s.Policy.UserPath, s.Policy.ProjectPath, err)
+	}
 	if _, err := Resolve(nil, Flags{Mode: mode("dontask")}, ""); err != nil {
 		t.Errorf("-mode dontask: %v", err)
 	}
