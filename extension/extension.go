@@ -289,6 +289,11 @@ type Env interface {
 	// agent's are, each once, recorded as composed from its file. Nil
 	// when the session reads no AGENTS.md.
 	ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
+	// ChildBeforeModelCall is the BeforeModelCall hook a sub-agent's
+	// configuration takes: on an A2A caller's context (Caller) its
+	// requests leave out what is the person's own, as the caller's own
+	// requests do (their AGENTS.md); any other request goes as it is.
+	ChildBeforeModelCall() func(context.Context, *openresponses.Request) error
 	// ChildPolicy is the BeforeToolCall hook of a sub-agent called name:
 	// the session's policy and every extension's BeforeToolCall, with a
 	// call the policy asks about put to the user from inside the run.

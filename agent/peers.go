@@ -50,7 +50,7 @@ func (s *Session) PeerConfig() agentturn.Config {
 	// a caller's context (extension.Env.Caller), so the kit renders
 	// each of its requests with no memory block, and the text a run
 	// starts with, which its record keeps, holds none either.
-	cfg.Instructions = agentsession.JoinInstructions(withoutMemory(s.Kit.Parts()))
+	cfg.Instructions = agentsession.JoinInstructions(s.callerMD.parts(withoutMemory(s.Kit.Parts())))
 	// The person's mode switches are told to the session's model, not
 	// a caller's (modeTurn).
 	cfg.BeforeTurn = s.Kit.Config().BeforeTurn

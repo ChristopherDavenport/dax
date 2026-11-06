@@ -277,3 +277,65 @@ func TestA2AIsNotServedOverThePersonsOwnFiles(t *testing.T) {
 		}
 	}
 }
+
+// The person's own AGENTS.md (~/.dax/AGENTS.md, agents_md_global) is in
+// their requests, not a caller's or its sub-agents', while the
+// project's chain reaches both; the caller's conversation records none
+// of it (#157's review, L-b).
+func TestAnA2ACallersRequestsCarryNotThePersonsAgentsMD(t *testing.T) {
+	const personal, global, project = "PERSONAL-RULE-ostrich", "GLOBAL-RULE-heron", "PROJECT-RULE-otter"
+	m := &instructionsSeen{steps: &steps{parent: [][2]string{{"explore", `{"input":"look"}`}}}}
+	rig := startRig(t, m.steps, policy.Rules{Allow: []string{"explore"}}, func(o *agent.Options) {
+		o.Streamer = m
+		o.AgentsMD = true
+		g := filepath.Join(t.TempDir(), "rules.md")
+		for p, text := range map[string]string{
+			filepath.Join(o.UserDir, "AGENTS.md"): personal,
+			g:                                     global,
+			filepath.Join(o.Dir, "AGENTS.md"):     project,
+		} {
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(text+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		o.AgentsMDGlobal = []string{g}
+	}, nil, false)
+	if _, err := agent.Drive(t.Context(), rig.sess, agent.Rules{}, openresponses.UserText("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if mine := strings.Join(m.seen(), "\n"); !strings.Contains(mine, personal) || !strings.Contains(mine, global) || !strings.Contains(mine, project) {
+		t.Fatalf("the person's own requests lack an AGENTS.md:\n%s", mine)
+	}
+	s := serveA2A(t, rig, false, t.TempDir())
+	if _, err := send(t, s.client(aliceToken), say("c1", "look around")); err != nil {
+		t.Fatal(err)
+	}
+	theirs := m.seen()
+	if len(theirs) < 3 {
+		t.Fatalf("the caller's run made %d requests, want its own two and its sub-agent's", len(theirs))
+	}
+	for _, in := range theirs {
+		if strings.Contains(in, personal) || strings.Contains(in, global) {
+			t.Errorf("a caller's request carries the person's own AGENTS.md:\n%s", in)
+		}
+	}
+	if !strings.Contains(theirs[0], project) {
+		t.Errorf("a caller's request lacks the project's AGENTS.md:\n%s", theirs[0])
+	}
+	data, err := json.Marshal(s.session("c1").Entries())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), personal) || strings.Contains(string(data), global) {
+		t.Error("the caller's conversation records the person's own AGENTS.md")
+	}
+	if _, err := agent.Drive(t.Context(), rig.sess, agent.Rules{}, openresponses.UserText("again")); err != nil {
+		t.Fatal(err)
+	}
+	if mine := strings.Join(m.seen(), "\n"); !strings.Contains(mine, personal) {
+		t.Errorf("after a caller's run, the person's requests lack their AGENTS.md:\n%s", mine)
+	}
+}

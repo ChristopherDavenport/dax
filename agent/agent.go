@@ -508,6 +508,9 @@ type Session struct {
 	// that the work reaches (nestedmd.go), main agent and sub-agents
 	// alike; nil with AGENTS.md off.
 	nestedMD func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
+	// callerMD is the AGENTS.md part without the person's own files, as
+	// an A2A caller's requests carry it (caller.go).
+	callerMD callerMD
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -825,6 +828,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
 		agentsText = agentsmd.Render(res.Files)
+		// The person's own files are not an A2A caller's (caller.go).
+		personal := slices.Clone(o.AgentsMDGlobal)
+		if userDir != "" {
+			personal = append(personal, filepath.Join(userDir, "AGENTS.md"))
+		}
+		s.callerMD = newCallerMD(res.Files, personal)
 		// The files below the start directory reach the model as the
 		// work reaches their directories (nestedmd.go).
 		var start []string
@@ -837,6 +846,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		kopts = append(kopts, agentkit.WithBeforeTurn(s.nestedMD))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
+	// An A2A caller's request leaves out what is the person's own
+	// (caller.go); the person's go as the kit makes them.
+	kopts = append(kopts, agentkit.WithBeforeModelCall(s.callerRequest))
 	// Every tool's result is cut to its cap, an MCP server's and a
 	// child agent's among them, in every placement (outputcap.go).
 	// A read's image is shown only to a model that takes images (images.go).

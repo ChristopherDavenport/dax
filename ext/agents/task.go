@@ -72,15 +72,16 @@ func (o Options) task(ctx context.Context, env extension.Env) agentturn.Config {
 			"seeing only input, and runs the sub-agent model, which suits a task you can brief completely. Several " +
 			"task calls in one turn run in parallel; give parallel tasks separate files. Review what a task reports " +
 			"before relying on it.",
-		Model:          env.SubagentModel(),
-		ModelName:      model,
-		Instructions:   strings.Join(parts, "\n\n"),
-		Tools:          append(env.Tools(), env.SubagentTools()...),
-		Reasoning:      env.Reasoning(ctx, model, think),
-		MaxTurns:       taskTurns,
-		Retry:          agentturn.Retry{MaxAttempts: 3},
-		BeforeToolCall: env.ChildPolicy("task"),
-		BeforeTurn:     env.ChildBeforeTurn(),
+		Model:           env.SubagentModel(),
+		ModelName:       model,
+		Instructions:    strings.Join(parts, "\n\n"),
+		Tools:           append(env.Tools(), env.SubagentTools()...),
+		Reasoning:       env.Reasoning(ctx, model, think),
+		MaxTurns:        taskTurns,
+		Retry:           agentturn.Retry{MaxAttempts: 3},
+		BeforeToolCall:  env.ChildPolicy("task"),
+		BeforeTurn:      env.ChildBeforeTurn(),
+		BeforeModelCall: env.ChildBeforeModelCall(),
 	}
 }
 

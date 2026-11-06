@@ -1904,6 +1904,10 @@ dax serve -a2a -listen 127.0.0.1:7878
   anywhere in the workspace, and a search from its root walks every
   directory below, which no path rule holds. Serve from the project's
   directory, or keep those directories out of it.
+- **Not your own instructions.** `~/.dax/AGENTS.md` and the
+  `agents_md_global` files are in your requests alone: a caller's
+  requests, and its sub-agents', carry the project's AGENTS.md chain
+  without them, and its conversation's record holds neither.
 - **Not your memory or your learned skills.** Your memory (its `user`
   scope holds what you told dax across every project) is yours alone: a
   caller's requests, and its sub-agents', carry no memory block, and its

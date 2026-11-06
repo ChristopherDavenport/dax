@@ -7,6 +7,13 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: an A2A caller's requests, and its sub-agents', no longer carry
+  the person's own instructions (`~/.dax/AGENTS.md`, `agents_md_global`);
+  the project's AGENTS.md chain still reaches them, and the caller's
+  record holds the text it was sent (#157).
+- Changed: `extension.Env` has `ChildBeforeModelCall`, the hook a
+  sub-agent's configuration takes so a caller's sub-agent requests leave
+  out what is the person's own.
 - Fixed: `dax serve -a2a` refuses to start over this machine's directory
   when it holds `~/.dax`, the `memory_dir` or the session store (serving
   from the home directory, say), where a caller's reads and searches

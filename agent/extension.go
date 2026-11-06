@@ -421,6 +421,10 @@ func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStart
 	return e.s.nestedMD
 }
 
+func (e *sessionEnv) ChildBeforeModelCall() func(context.Context, *openresponses.Request) error {
+	return e.s.callerRequest
+}
+
 func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
 	return e.s.SearchScope(ctx, q)
 }

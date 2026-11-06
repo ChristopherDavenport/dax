@@ -127,12 +127,13 @@ func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Confi
 		ModelName: model,
 		Instructions: "You are a read-only explorer working in " + env.ToolEnv().Workspace.Root() + ". Answer the question using the " + list(names) + " tools; " +
 			"never modify files. End with a concise written answer that stands on its own. " + onlyYourTools,
-		Tools:          tools,
-		Reasoning:      env.Reasoning(ctx, model, think),
-		MaxTurns:       10,
-		Retry:          agentturn.Retry{MaxAttempts: 3},
-		BeforeToolCall: env.ChildPolicy("explore"),
-		BeforeTurn:     env.ChildBeforeTurn(),
+		Tools:           tools,
+		Reasoning:       env.Reasoning(ctx, model, think),
+		MaxTurns:        10,
+		Retry:           agentturn.Retry{MaxAttempts: 3},
+		BeforeToolCall:  env.ChildPolicy("explore"),
+		BeforeTurn:      env.ChildBeforeTurn(),
+		BeforeModelCall: env.ChildBeforeModelCall(),
 	}
 }
 

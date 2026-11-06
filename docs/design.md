@@ -236,6 +236,12 @@ names in `agents_md_global`, for every session whatever the repository
 holds; like `~/.dax/AGENTS.md` they are the user's, not the project's,
 so they are read on this machine whatever the workspace, a container's
 included, and are not screened. A project's config may not set it.
+An A2A caller's requests, and its sub-agents', carry the chain without
+the user's files (`agent/caller.go`): a BeforeModelCall after the
+kit's, and the sub-agents' `Env.ChildBeforeModelCall`, put the part
+rendered without them in its place, and refuse a request that still
+names one (a guard rewrote the part), so the caller's record holds what
+it was sent.
 What a layer left out, a file over the budget or a skill that
 would not load, is printed at start as `omitted:`.
 
