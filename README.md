@@ -1441,6 +1441,8 @@ tokens, cost, model, retry, turn, session. Your config can make it up:
   number from 0 to 255, or `#rrggbb`), or for `context`, `tokens`,
   `cost`, `time`, `turn` and `retry` thresholds, the color from each
   value up. A color you give one of dax's segments replaces its own.
+  The key is spelled `colors`, as the client's API spells it; `colours`
+  is an unknown field and stops dax at start, as any is.
 
 A segment or color dax does not know stops it at start, naming the
 config file. `dax attach` keeps the client's default line.
