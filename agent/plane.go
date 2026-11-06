@@ -435,6 +435,9 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		}
 		return Refusal(call.CallID, note, stop)
 	}
+	// Drive's items are the run's task: a fold keeps them verbatim,
+	// though they claim no person.
+	pinTasks(c, items)
 	var end *agentturn.RunEnd
 	var err error
 	if pending := c.State().Pending; slices.ContainsFunc(pending, held) {

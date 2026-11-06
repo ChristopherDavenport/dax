@@ -40,7 +40,7 @@ func TestAUserCommandReachesTheModelWithTheNextPrompt(t *testing.T) {
 		t.Errorf("the model saw %q", seen)
 	}
 	for _, it := range m.last {
-		if msg, ok := it.(*openresponses.Message); ok && strings.Contains(msg.Text(), "$ echo from-the-user") && pinPrompts(msg) {
+		if msg, ok := it.(*openresponses.Message); ok && strings.Contains(msg.Text(), "$ echo from-the-user") && s.tasks.pin(msg) {
 			t.Error("a fold would pin the command's output as the user's request")
 		}
 	}

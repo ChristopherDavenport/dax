@@ -26,7 +26,7 @@ import (
 const userCommandNS = "dax.user_command"
 
 // userCommandLead opens the message a user's command is sent as, and
-// marks it as output rather than a request (pinPrompts).
+// marks it as output rather than a request.
 const userCommandLead = "I ran this command in the workspace myself:\n$ "
 
 // maxUserCommandBytes is how much of a user's command's output the model

@@ -420,6 +420,8 @@ type Session struct {
 	outs keptOutputs
 	// templates are the prompt templates it offers (Templates).
 	templates []PromptTemplate
+	// tasks are what a fold keeps beside the person's own messages.
+	tasks tasks
 	// forwards are the ports Forward put on this machine's loopback, by
 	// the workspace's port; each ends with the session.
 	fwdMu    sync.Mutex
@@ -923,7 +925,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			if !ok {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
-			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(pinPrompts)), fold)
+			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(s.tasks.pin)), fold)
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
 			// under -think is effort low. qwen3.5 then spends most of
@@ -936,9 +938,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			none := compact.WithRequest(func(r *openresponses.Request) {
 				r.Reasoning = o.fit(context.Background(), r.Model, openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone})
 			})
-			// The user's own words are kept through every fold
-			// (pinPrompts), recorded in the compaction entry.
-			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(pinPrompts)), fold)
+			// The person's own messages are kept through every fold
+			// (agentturn's compact default), and an autonomous run's
+			// task beside them (tasks), each recorded in the compaction
+			// entry.
+			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(s.tasks.pin)), fold)
 		}
 	}
 	if store != nil {

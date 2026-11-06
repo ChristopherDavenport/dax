@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
@@ -39,10 +41,67 @@ func userTexts(items openresponses.Items) []string {
 	return out
 }
 
-// A fold keeps every prompt the user typed verbatim, so the task's exact
-// words outlive any summary of them; a prompt past the bound, a pasted
-// log, is folded like the rest (#173).
-func TestAFoldKeepsTheUsersPromptsVerbatim(t *testing.T) {
+// A fold keeps the person's own messages verbatim, those sent under a
+// trigger of kind human (agentturn's compact default, agentkit v0.0.17),
+// and folds a message nobody claims, which dax no longer guesses is
+// the person's; a message past the bound, a pasted log, is folded like
+// the rest (#173, agentturn#298).
+func TestAFoldKeepsThePersonsMessagesVerbatim(t *testing.T) {
+	ctx := context.Background()
+	m := &seeing{}
+	o := options(t, m)
+	// A budget the pasted log alone passes, so it folds, with room for
+	// the person's messages (a quarter of the budget, agentturn's
+	// default total).
+	o.Compact = 20000
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	byPerson := agentturn.ContextWithTrigger(ctx, AtTerminal)
+	pasted := "a log line\n" + strings.Repeat("x y ", 25000)
+	unclaimed := "a line no trigger claims, from a program"
+	for _, p := range []struct {
+		ctx  context.Context
+		text string
+	}{
+		{byPerson, "write `u001 7` to answer.txt, one space, then a newline"},
+		{byPerson, pasted},
+		{ctx, unclaimed},
+		{byPerson, "now sort it"},
+		{byPerson, "and say done"},
+	} {
+		if _, err := s.Prompt(p.ctx, openresponses.UserText(p.text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.mu.Lock()
+	seen := userTexts(m.last)
+	m.mu.Unlock()
+	joined := strings.Join(seen, "\n\x00")
+	for _, p := range []string{"write `u001 7` to answer.txt, one space, then a newline", "now sort it"} {
+		if !strings.Contains(joined, p) {
+			t.Errorf("the last request lost the prompt %q: it carries %q", p, seen)
+		}
+	}
+	for _, s := range seen {
+		if s == pasted {
+			t.Error("a prompt past the bound was kept whole")
+		}
+		if s == unclaimed {
+			t.Error("a message nobody claimed was kept as the person's")
+		}
+	}
+	if data := string(projected(t, o, s)); !strings.Contains(data, `"pinned"`) {
+		t.Error("no compaction entry names what it kept")
+	}
+}
+
+// The task an autonomous run is given (Drive's, -p's prompt) claims no
+// person, since a script may have given it, and a fold still keeps it
+// verbatim: the run's exact instructions outlive any summary (#173).
+func TestAFoldKeepsDrivesTaskVerbatim(t *testing.T) {
 	ctx := context.Background()
 	m := &seeing{}
 	o := options(t, m)
@@ -52,27 +111,22 @@ func TestAFoldKeepsTheUsersPromptsVerbatim(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	pasted := "a log line\n" + strings.Repeat("x", maxPinnedBytes)
-	prompts := []string{"write `u001 7` to answer.txt, one space, then a newline", pasted, "now sort it", "and say done"}
-	for _, p := range prompts {
-		if _, err := promptOn(ctx, s, p, nil); err != nil {
+	task := "write `u001 7` to answer.txt, one space, then a newline"
+	if _, err := promptOn(ctx, s, task, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"a line no trigger claims", "another", "and another"} {
+		if _, err := s.Prompt(ctx, openresponses.UserText(p)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	m.mu.Lock()
 	seen := userTexts(m.last)
 	m.mu.Unlock()
-	for _, p := range []string{prompts[0], prompts[2], prompts[3]} {
-		if !strings.Contains(strings.Join(seen, "\n\x00"), p) {
-			t.Errorf("the last request lost the prompt %q: it carries %q", p, seen)
-		}
+	if !slices.Contains(seen, task) {
+		t.Errorf("the last request lost Drive's task: it carries %q", seen)
 	}
-	for _, s := range seen {
-		if s == pasted {
-			t.Error("a prompt past the bound was pinned whole")
-		}
-	}
-	if data := string(projected(t, o, s)); !strings.Contains(data, `"pinned"`) {
-		t.Error("no compaction entry names what it pinned")
+	if slices.Contains(seen, "a line no trigger claims") {
+		t.Error("a message nobody claimed was kept")
 	}
 }

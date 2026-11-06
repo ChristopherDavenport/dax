@@ -50,6 +50,13 @@ versions may break flags and the config file.
   a `!` command is recorded under no trigger, so it never reads as
   yours. `-p`'s prompt claims nobody (#183).
 
+- Changed: a compaction keeps verbatim the messages the record holds as
+  yours (agentturn's fold, agentkit v0.0.17), up to 8 KiB each and the
+  newest of them up to a quarter of the budget in all, and `-p`'s
+  prompt; where dax pinned every user message it did not know to be a
+  `!` command's output, whoever sent it. A message dax composed (a
+  template's, an MCP prompt's) is now folded like the rest (#173).
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format
