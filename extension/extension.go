@@ -266,9 +266,12 @@ type Env interface {
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.
 	SystemPrompt(except ...string) string
-	// AgentsMD is the AGENTS.md chain as the main agent's prompt carries
-	// it, empty when AGENTS.md is off.
-	AgentsMD() string
+	// AgentsMD is the AGENTS.md chain as a request on ctx carries it:
+	// the main agent's prompt's, and on an A2A caller's context (Caller)
+	// the chain without the person's own files (~/.dax/AGENTS.md,
+	// agents_md_global), as the caller's requests carry it. Empty when
+	// AGENTS.md is off.
+	AgentsMD(ctx context.Context) string
 	// Model is the session's model, and Live the model name and the
 	// reasoning setting in force now, which /model and /think change
 	// while the session runs.

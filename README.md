@@ -1899,15 +1899,31 @@ dax serve -a2a -listen 127.0.0.1:7878
 - **Not your files under `~/.dax`.** `dax serve -a2a` does not start
   when the workspace is this machine's directory and holds dax's user
   directory (`~/.dax`: memory, learned skills, grants), a `memory_dir`
-  or the session store, as serving from your home directory would: a
+  or the session store, as serving from your home directory would, or
+  is inside one of them (`~/.dax/memory`, say): a
   caller's `read`, `grep`, `glob`, `ls` and allowed `bash` reads act
   anywhere in the workspace, and a search from its root walks every
   directory below, which no path rule holds. Serve from the project's
-  directory, or keep those directories out of it.
+  directory, or keep those directories out of it. Symbolic links are
+  followed for the check, and a link inside the workspace that leaves
+  it is refused when a tool reads it. What the check does not see,
+  and you keep out yourself: a bind mount or hard links of `~/.dax`'s
+  files inside the project, which look like the project's own
+  directories and files; and a workspace that is not this machine's
+  directory by kind but is this machine's home all the same, a
+  `dax execute -root ~` executor, a `dax workspace` served on loopback
+  from `~`, or a box whose project is your home directory. Other files
+  of yours, `~/.config/dax` and your `skills_dirs`, are not checked;
+  serving from your home directory is refused anyway, since `~/.dax`
+  is there.
 - **Not your own instructions.** `~/.dax/AGENTS.md` and the
   `agents_md_global` files are in your requests alone: a caller's
   requests, and its sub-agents', carry the project's AGENTS.md chain
-  without them, and its conversation's record holds neither.
+  without them, and its conversation's record holds neither. A file of
+  the project's chain that `agents_md_global` also names is the
+  project's, and a caller's requests keep it. An extension reading the
+  chain (`extension.Env.AgentsMD`) is given it without your files on a
+  caller's context.
 - **Not your memory or your learned skills.** Your memory (its `user`
   scope holds what you told dax across every project) is yours alone: a
   caller's requests, and its sub-agents', carry no memory block, and its

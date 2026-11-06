@@ -17,7 +17,16 @@ versions may break flags and the config file.
   record holds the text it was sent (#157).
 - Changed: `extension.Env` has `ChildBeforeModelCall`, the hook a
   sub-agent's configuration takes so a caller's sub-agent requests leave
-  out what is the person's own.
+  out what is the person's own, and says a read's images to a
+  sub-agent model that takes none (#166).
+- Changed: `extension.Env.AgentsMD` takes a context: on an A2A caller's
+  context it is the chain without the person's own files, so an
+  extension cannot hand them to a caller (#157).
+- Fixed: a file of the project's AGENTS.md chain that `agents_md_global`
+  also names is the project's: an A2A caller's requests keep it (#157).
+- Fixed: `dax serve -a2a` also refuses a workspace inside `~/.dax`, a
+  `memory_dir` or the session store (`~/.dax/memory`, say); the README
+  names what the check cannot see (#157).
 - Fixed: `dax serve -a2a` refuses to start over this machine's directory
   when it holds `~/.dax`, the `memory_dir` or the session store (serving
   from the home directory, say), where a caller's reads and searches

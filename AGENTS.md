@@ -129,7 +129,7 @@ before changing the shape.
 - `extension`: the `Extension` type (its `PersonOnly` tools, refused
   to an A2A caller), `ToolEnv` (what tools are built over), `Env` (the
   session as kit options see it; `Caller` names an A2A caller's
-  context), `Renderers`,
+  context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
   `TextQuestion`, `IsTextQuestion`, `TextAnswer` and `TextContent`,
   dax's own marked form asking for a line of text, which every front

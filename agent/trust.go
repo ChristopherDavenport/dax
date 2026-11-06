@@ -81,11 +81,13 @@ func serversOnly(ws workspace.Workspace) bool {
 const agentsMDPath = "."
 
 // agentsMDOptions are the options the chain is read with, over ws's
-// file system, and the files the screening left out. userDir's
-// AGENTS.md and the global files are the user's, read on this machine
-// and not screened; a global file that is also one of the others is
-// read once, in the other's place.
-func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []string) (agentsmd.Options, []agentkit.Omission) {
+// file system, the person's own files among them, and the files the
+// screening left out. userDir's AGENTS.md and the global files are the
+// user's, read on this machine and not screened; a global file that is
+// also one of the others is read once, in the other's place, and is
+// that other's: a project's file a global names is the project's, not
+// the person's own (caller.go).
+func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []string) (agentsmd.Options, []string, []agentkit.Omission) {
 	var host []string
 	var omitted []agentkit.Omission
 	start, local := hostDir(ws, dir)
@@ -107,6 +109,7 @@ func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []strin
 		}
 		extra = append(extra, g)
 	}
+	personal := slices.Clone(extra)
 	extra = append(extra, host...)
 	fsys, refused := screened(ws)
 	omitted = append(omitted, refused...)
@@ -115,7 +118,7 @@ func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []strin
 		Root:   agentsMDPath,
 		Extra:  extra,
 		Budget: 32 << 10,
-	}, omitted
+	}, personal, omitted
 }
 
 // hostDir is dir, absolute, when ws says it is that directory on this

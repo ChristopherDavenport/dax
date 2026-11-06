@@ -248,8 +248,8 @@ func TestServeWarnsOfLearnedSkillsListedToCallers(t *testing.T) {
 
 // dax serve -a2a does not start over this machine's directory when it
 // holds the person's own files: the user directory, the memory or the
-// session store; a project beside them, or a workspace elsewhere, is
-// served (#157's review, L-a).
+// session store, or is inside one of them; a project beside them, or a
+// workspace elsewhere, is served (#157's review, L-a; round 2, R2-2c).
 func TestA2AIsNotServedOverThePersonsOwnFiles(t *testing.T) {
 	home := t.TempDir()
 	user, project := filepath.Join(home, ".dax"), filepath.Join(home, "project")
@@ -269,6 +269,8 @@ func TestA2AIsNotServedOverThePersonsOwnFiles(t *testing.T) {
 	}{
 		{"the home directory", local(home), []string{user}, false},
 		{"the user directory itself", local(user), []string{user}, false},
+		{"a directory inside the user directory", local(filepath.Join(user, "memory")), []string{user}, false},
+		{"a directory inside the sessions", local(filepath.Join(home, "sessions", "x")), []string{user, filepath.Join(home, "sessions")}, false},
 		{"a memory_dir in the project", local(project), []string{user, filepath.Join(project, "notes", "memory")}, false},
 		{"the sessions in the project", local(project), []string{user, "", filepath.Join(project, ".sessions")}, false},
 		{"a project beside them", local(project), []string{user, filepath.Join(home, "memory")}, true},

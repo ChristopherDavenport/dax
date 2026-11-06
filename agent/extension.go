@@ -430,11 +430,20 @@ func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) err
 }
 
 func (e *sessionEnv) Caller(ctx context.Context) (string, bool) { return callerOf(ctx) }
-func (e *sessionEnv) AgentsMD() string                          { return e.agentsMD }
 func (e *sessionEnv) Model() openresponses.Streamer             { return e.s.opts.Streamer }
 func (e *sessionEnv) Omit(o agentkit.Omission)                  { e.s.refused = append(e.s.refused, o) }
 func (e *sessionEnv) Log(format string, args ...any)            { e.s.opts.log("%s", logText(format, args...)) }
 func (e *sessionEnv) SystemPrompt(except ...string) string      { return e.s.systemPrompt(except...) }
+
+// AgentsMD implements extension.Env: on an A2A caller's context, the
+// chain without the person's own files, as the caller's requests carry
+// it (caller.go).
+func (e *sessionEnv) AgentsMD(ctx context.Context) string {
+	if _, peer := callerOf(ctx); peer {
+		return e.s.callerMD.caller
+	}
+	return e.agentsMD
+}
 
 func (e *sessionEnv) SubagentModel() openresponses.Streamer {
 	if s := e.s.opts.SubagentStreamer; s != nil {

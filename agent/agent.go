@@ -823,7 +823,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.NoUserAgentsMD {
 			userDir = ""
 		}
-		mdOpts, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
+		mdOpts, personal, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
@@ -832,10 +832,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		agentsText = agentsmd.Render(res.Files)
 		// The person's own files are not an A2A caller's (caller.go).
-		personal := slices.Clone(o.AgentsMDGlobal)
-		if userDir != "" {
-			personal = append(personal, filepath.Join(userDir, "AGENTS.md"))
-		}
 		s.callerMD = newCallerMD(res.Files, personal)
 		// The files below the start directory reach the model as the
 		// work reaches their directories (nestedmd.go).

@@ -132,7 +132,7 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 // checkA2AWorkspace refuses to serve A2A over a workspace, this
 // machine's directory, that holds one of own, the person's own files
 // (dax's user directory with its memory, learned skills and grants, a
-// memory_dir, the session store): a caller's read, grep, glob, ls and
+// memory_dir, the session store), or is inside one: a caller's read, grep, glob, ls and
 // bash act anywhere in the workspace, and a search from its root, or
 // a read-only command the policy allows unasked, would read them. A
 // path rule could not hold that (a search of "." walks every
@@ -149,13 +149,21 @@ func checkA2AWorkspace(ws workspace.Descriptor, own ...string) error {
 		if p == "" {
 			continue
 		}
-		rel, err := filepath.Rel(root, resolved(p))
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-			continue
+		mine := resolved(p)
+		switch {
+		case within(root, mine):
+			return fmt.Errorf("dax serve -a2a: the workspace %s holds %s, which is yours (dax's user directory, memory or sessions): an A2A caller's reads and searches there would reach it; serve from a project directory, or keep it out of the workspace", ws.Root, p)
+		case within(mine, root):
+			return fmt.Errorf("dax serve -a2a: the workspace %s is inside %s, which is yours (dax's user directory, memory or sessions): an A2A caller's reads and searches there would reach it; serve from a project directory", ws.Root, p)
 		}
-		return fmt.Errorf("dax serve -a2a: the workspace %s holds %s, which is yours (dax's user directory, memory or sessions): an A2A caller's reads and searches there would reach it; serve from a project directory, or keep it out of the workspace", ws.Root, p)
 	}
 	return nil
+}
+
+// within reports whether p is dir or below it.
+func within(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // resolved is p absolute, its links resolved as far as it exists.
