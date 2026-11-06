@@ -889,7 +889,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if s.modes.peers, err = agentpolicy.Build(pp, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), lookup}, confine...)...); err != nil {
 			return nil, err
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor)}, confine...)...))
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor, s.dontAskRefusal)}, confine...)...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}

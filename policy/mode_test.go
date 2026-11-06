@@ -8,7 +8,8 @@ import (
 )
 
 // Each mode is the same rules made stricter or looser: acceptEdits adds
-// the extensions' mode rules, dontAsk refuses what would ask, and
+// the extensions' mode rules, dontAsk keeps default's (the session
+// refuses what they ask), and
 // bypassPermissions asks about nothing. A deny stays in every mode.
 func TestModes(t *testing.T) {
 	sh := acme(Rules{Allow: []string{"rollback"}, Deny: []string{"deploy(prod)"}, Ask: []string{"deploy(stage)"}})
@@ -25,8 +26,10 @@ func TestModes(t *testing.T) {
 		{ModeAcceptEdits, "my-secret", agentturn.Defer},
 		{ModeAcceptEdits, "stage", agentturn.Defer},
 		{ModeAcceptEdits, "prod", agentturn.Block},
-		{ModeDontAsk, "x", agentturn.Block},
-		{ModeDontAsk, "stage", agentturn.Block},
+		// dontAsk's rules are default's; the session refuses what they
+		// would ask (agent's TestDontAskRefusesWhatWouldAsk).
+		{ModeDontAsk, "x", agentturn.Defer},
+		{ModeDontAsk, "stage", agentturn.Defer},
 		{ModeDontAsk, "dev", agentturn.Allow},
 		{ModeDontAsk, "prod", agentturn.Block},
 		{ModeBypass, "x", agentturn.Allow},
@@ -40,13 +43,8 @@ func TestModes(t *testing.T) {
 			t.Errorf("%s deploy(%s) = %v (%s), want %v", tc.mode, tc.env, v.Action, v.Reason, tc.want)
 		}
 	}
-	// dontAsk tells the model why, and not to work around it.
-	s := base
-	s.Mode = ModeDontAsk
-	if v := verdict(t, s, "deploy", env("x")); !strings.Contains(v.Reason, "dontAsk") || !strings.Contains(v.Reason, NoWorkAround) {
-		t.Errorf("dontAsk's refusal: %q", v.Reason)
-	}
 	// A mode no one knows is an error.
+	s := base
 	s.Mode = "yolo"
 	if _, err := Build(s); err == nil {
 		t.Error("an unknown mode built")
@@ -57,6 +55,20 @@ func TestModes(t *testing.T) {
 	bad.Modes = map[string]Rules{ModeAcceptEdits: {Allow: []string{"bash"}}}
 	if _, err := Build(Settings{Mode: ModeAcceptEdits, Shipped: []Shipped{bad}}); err == nil || !strings.Contains(err.Error(), "not one of the extension's tools") {
 		t.Errorf("a mode rule for another's tool: %v", err)
+	}
+}
+
+// A carve-out lifts only what its own list holds, in every mode: a
+// user's ask carve-out never cancels a deny, so a call denied in
+// default is denied in each mode (#145's review, M1).
+func TestACarveOutNeverLiftsADeny(t *testing.T) {
+	s := Settings{Builtin: true, Fallback: "ask", Shipped: []Shipped{acme(Rules{Deny: []string{"deploy(prod)"}})},
+		User: Rules{Allow: []string{"deploy"}, Ask: []string{"deploy(!prod)"}}}
+	for _, mode := range Modes {
+		s.Mode = mode
+		if v := verdict(t, s, "deploy", env("prod")); v.Action != agentturn.Block {
+			t.Errorf("%s: deploy(prod) = %v (%s), want denied", mode, v.Action, v.Reason)
+		}
 	}
 }
 

@@ -230,3 +230,36 @@ func peerPolicy(st policy.Settings) (agentpolicy.Policy, error) {
 	st.Mode = policy.ModeDefault
 	return policy.Build(st)
 }
+
+// dontAskProbe marks the decision dontAskRefusal asks the engine for,
+// which the hook itself sits out.
+type dontAskProbe struct{}
+
+// dontAskRefusal is the hook that makes dontAsk: folded into the
+// session's engine, it refuses, with policy.DontAskNote, the session's
+// call (or its sub-agent's) that the engine would defer, asking no
+// one, while the mode is dontAsk. The rules stay default's, so a
+// carve-out lifts only what it lifts there and a box's confinement
+// still answers its own asks. A refusal is not an ask, so it holds
+// none of the batch's other calls. An A2A caller's call is held to the
+// default mode (peerFloor), and so is asked as there.
+func (s *Session) dontAskRefusal(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	if s.modes.current() != policy.ModeDontAsk || ctx.Value(dontAskProbe{}) != nil {
+		return nil, nil
+	}
+	if _, peer := ctx.Value(peerKey{}).(string); peer {
+		return nil, nil
+	}
+	eng := s.Kit.Engine()
+	if eng == nil {
+		return nil, nil
+	}
+	v, err := eng.Would(context.WithValue(ctx, dontAskProbe{}, true), asCalled(info))
+	if err != nil {
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error(), By: agentpolicy.ByPolicy}, nil
+	}
+	if v.Action != agentturn.Defer {
+		return nil, nil
+	}
+	return &agentturn.ToolDecision{Action: agentturn.Block, Reason: policy.DontAskNote, Subject: v.Subject, By: agentpolicy.ByPolicy}, nil
+}

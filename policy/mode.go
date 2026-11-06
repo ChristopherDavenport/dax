@@ -20,7 +20,11 @@ const (
 	// the paths that change what runs or is trusted; commands still ask.
 	ModeAcceptEdits = "acceptEdits"
 	// ModeDontAsk refuses, without asking, every call that would ask:
-	// only what a rule allows runs.
+	// only what a rule allows runs. The rules are those of the default
+	// mode: the refusal is the session's, which refuses each call the
+	// engine would defer (DontAskNote), so a carve-out lifts only what
+	// it lifts in default and a box's confinement still answers its
+	// asks.
 	ModeDontAsk = "dontAsk"
 	// ModeBypass asks about nothing: what no deny rule refuses runs.
 	ModeBypass = "bypassPermissions"
@@ -71,27 +75,14 @@ func DescribeMode(m string) string {
 	return "The permission mode is now default: reads run; writes, edits, commands and other tools ask the user first."
 }
 
-// dontAskNote is the note of a call dontAsk refuses for asking.
-const dontAskNote = "refused without asking in dontAsk mode. " + NoWorkAround
+// DontAskNote is the reason of a call dontAsk refuses for asking.
+const DontAskNote = "refused without asking in dontAsk mode. " + NoWorkAround
 
 // shape is p as mode m makes it: what becomes of the asks and the
 // default. acceptEdits' rules are the extensions' own, added before the
-// merge.
+// merge; dontAsk's rules are default's (ModeDontAsk).
 func shape(m string, fallback string, p agentpolicy.Policy) agentpolicy.Policy {
 	switch m {
-	case ModeDontAsk:
-		for _, r := range p.Ask {
-			// A carve-out cancels the asks it lifted, which are now
-			// denies, so it goes with them.
-			if _, carve := r.CarveOut(); !carve {
-				r.Note = dontAskNote
-			}
-			p.Deny = append(p.Deny, r)
-		}
-		p.Ask = nil
-		if fallback != "allow" {
-			p.Default = agentpolicy.Deny().WithNote(dontAskNote)
-		}
 	case ModeBypass:
 		p.Ask = nil
 		if fallback != "deny" {

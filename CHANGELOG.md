@@ -117,6 +117,12 @@ versions may break flags and the config file.
   folds in a floor, an engine of the same rules (the user's, the
   project's, the kept grants, a box's confinement) in `default`, which
   no switch touches (#145).
+- Fixed: `dontAsk` turned every ask rule into a deny, so a user's ask
+  carve-out cancelled deny rules (a call denied in `default` could run
+  in `dontAsk`), and a box's `dax:box` asks refused every `bash`,
+  `write` and `edit`, confined or not. The rules are now `default`'s,
+  and the session refuses each call the engine would ask about, with
+  `policy.DontAskNote`, asking no one (#145).
 - Added: permission modes (#145). `default`, `acceptEdits` (`write`
   and `edit` run unasked but for a protected or secret-looking path;
   commands still ask), `dontAsk` (what would ask is refused, the model

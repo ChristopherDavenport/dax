@@ -161,3 +161,39 @@ func TestAModeAskedForDuringARunStartsAtTheNextTurn(t *testing.T) {
 		t.Errorf("mode %q pending %q after the run", mode, p)
 	}
 }
+
+// dontAsk refuses, without asking anyone, what the rules would ask
+// about, the model told not to work around it, and runs what they
+// allow; the rules themselves are not rewritten (#145's review, M1).
+func TestDontAskRefusesWhatWouldAsk(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{calls: [][2]string{{"bash", `{"command":"touch b"}`}, {"ls", `{}`}}})
+	o.Policy = confirmPolicy(t)
+	o.Policy.Mode = policy.ModeDontAsk
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	if _, err := promptOn(ctx, s, "go", asker(&asked)); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 0 {
+		t.Errorf("dontAsk asked about %v", asked)
+	}
+	if _, err := os.Stat(filepath.Join(o.Dir, "b")); err == nil {
+		t.Error("dontAsk ran bash")
+	}
+	var outs []string
+	for _, it := range s.Agent().State().Transcript {
+		if out, ok := it.(*openresponses.FunctionCallOutput); ok {
+			outs = append(outs, out.Output.String())
+		}
+	}
+	if len(outs) != 2 || !strings.Contains(outs[0], "dontAsk") || !strings.Contains(outs[0], policy.NoWorkAround) {
+		t.Errorf("the outputs: %q, want bash refused in dontAsk's words and ls run", outs)
+	}
+	if p := s.Kit.Engine().Policy(); len(p.Deny) != 0 || func() bool { a, _ := p.Default.Action(); return a != agentturn.Defer }() {
+		t.Errorf("dontAsk rewrote the rules: deny %v, default %v", p.Deny, p.Default)
+	}
+}
