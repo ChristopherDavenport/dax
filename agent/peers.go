@@ -99,8 +99,14 @@ func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string)
 	grants := context.WithoutCancel(ctx)
 	return ctx, func() {
 		unsubscribe()
-		if n := p.s.Kit.RevokeSkillGrants(grants); n > 0 {
+		n, err := p.s.Kit.RevokeSkillGrants(grants)
+		if n > 0 {
 			p.s.opts.log("[A2A conversation in session %s: its task's skill grants ended (%d rules)]", id, n)
+		}
+		if err != nil {
+			// The engine revoked them all the same; the record lost the
+			// verdict, which is the conversation's to know.
+			p.s.opts.log("[A2A conversation in session %s: a revocation was not recorded: %v]", id, err)
 		}
 	}, nil
 }

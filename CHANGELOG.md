@@ -5,6 +5,31 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies, in one step, since agentsession v0.0.38 writes a format
+  older readers refuse: agentkit v0.0.17, up from v0.0.16; agentturn,
+  agentturn/session, front/a2a and tools/a2a v0.0.39, up from v0.0.37;
+  agentsession v0.0.38, up from v0.0.37; agentconsole v0.0.16, up from
+  v0.0.15; agentpolicy v0.0.20, up from v0.0.19; agentworkspace,
+  mcpworkspace and tunnel v0.0.12, up from v0.0.11; agenttool,
+  mcpclient and mcpserver v0.0.30, up from v0.0.29; openresponses and
+  its anthropic and gemini providers v0.0.19, up from v0.0.18. What
+  changes for you:
+  - Sessions are written as `agentsession/0.21`, and a session dax
+    appends to is raised to it, after which a reader built on an older
+    agentsession (an older dax, agentconsole before v0.0.16) refuses
+    it. Upgrade every reader of a store first.
+  - The terminal client labels a message by whose words it is: yours
+    "user", one dax composed "not your words", and a line from a
+    session recorded before this release "user (unclaimed)", since the
+    format did not say then who typed it.
+  - An MCP server's first result after it was restarted tells the model,
+    at its head, that the server was restarted and whatever it held is
+    gone (agenttool v0.0.30, #92).
+  - A model call refused because the key's or account's credit cannot
+    cover it (`insufficient_quota`, OpenRouter's 402) is not retried.
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format
