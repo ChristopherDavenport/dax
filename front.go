@@ -45,6 +45,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
@@ -86,6 +87,12 @@ type frontInfo struct {
 	Price      agent.Price
 	// Policy is a line saying what policy is in force.
 	Policy string
+	// Status is the terminal client's status line from the user's
+	// config, nil for the client's default line.
+	Status *config.Status
+	// Windows are the context windows dax believes, by model name, for
+	// the status line's context segment.
+	Windows map[string]int64
 	// Cost prices the terminal client's session pane and status line; nil
 	// shows token usage but no cost.
 	Cost client.Cost

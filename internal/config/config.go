@@ -172,6 +172,9 @@ type Config struct {
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
 	Peers map[string]Peer `json:"peers,omitempty"`
+	// Status makes up the terminal client's status line; nil keeps the
+	// client's default line. The user's alone.
+	Status *Status `json:"status,omitempty"`
 }
 
 // Peer is one remote A2A agent (dax-a2a).
@@ -838,7 +841,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"peers", len(c.Peers) > 0},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -911,6 +914,11 @@ func (l *Layer) validate() error {
 		}
 		if len(s.SecretEnv) > 0 && s.In != MCPInHost {
 			return SecretInWorkspace(name)
+		}
+	}
+	if c.Status != nil {
+		if err := c.Status.check(); err != nil {
+			return err
 		}
 	}
 	if p := c.Policy; p != nil {
@@ -1901,6 +1909,8 @@ type Settings struct {
 	// where it is lower than the window it would otherwise believe.
 	ContextWindow, ProjectContextWindow map[string]int64
 	Policy                              PolicySettings
+	// Status is the terminal client's status line, nil for its default.
+	Status *Status
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1973,6 +1983,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.SubagentCacheTTL != "" {
 			s.SubagentCacheTTL, s.Sources["subagent_cache_ttl"], setFor["subagent_cache_ttl"] = l.SubagentCacheTTL, l.Path, s.Provider
+		}
+		if l.Status != nil {
+			s.Status = l.Status
 		}
 		if l.Think != nil {
 			s.Think = *l.Think

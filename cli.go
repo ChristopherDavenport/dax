@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -626,6 +627,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Name: p.name, Version: p.version, Renderers: renderers,
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
+		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
 	}
 	var f front
 	if serving {
@@ -656,6 +658,21 @@ func run(ctx context.Context, args []string, p program) error {
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
 	return f.Run(ctx, sess)
+}
+
+// windowsOf are the context windows the status line divides by: the
+// user's context_window by model, and for the model the session starts
+// with the window dax settled on (the vendor's, the config's or the
+// flag's).
+func windowsOf(user map[string]int64, model string, window int64) map[string]int64 {
+	w := maps.Clone(user)
+	if w == nil {
+		w = map[string]int64{}
+	}
+	if window > 0 {
+		w[model] = window
+	}
+	return w
 }
 
 // runList prints the sessions of the project here: this directory's,

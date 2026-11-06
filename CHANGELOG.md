@@ -84,6 +84,20 @@ versions may break flags and the config file.
   asked (agentturn's `DeclineText`); and a call denied by default under
   `"fallback": "deny"` (agentpolicy v0.0.20's default note). A refusal's
   reason is recorded as the answer's reason too (#150).
+- Added: the terminal client's status line from your config's `status`
+  block: `position` (top, bottom), `style` (plain, powerline), the
+  `segments` in order (agentconsole's: time, tokens, cost, model,
+  context, retry, turn, session, verified, stopped; and dax's own:
+  `user`, `dir`, `git`, the branch with ± when the tree is dirty, read
+  where the tools act and again after each tool run, and `executor`,
+  where the tools act, which then is no longer printed before the
+  screen), and `colors` by segment, a color or, for a numeric segment,
+  thresholds. The model segment names the model dax runs next and the
+  context segment divides by the window dax believes. An unknown
+  segment or color fails at start with the config's path; with no
+  block the line is the client's default. Your file only.
+  `tool.GitHead`, `agent.Session.Git` and `agent.Session.Model` give a
+  front built on dax the same (#182).
 
 ## v0.0.33 - 2026-11-04
 

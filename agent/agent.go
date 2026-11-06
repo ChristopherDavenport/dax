@@ -1232,6 +1232,17 @@ func (s *Session) SetModel(name string) error {
 	return nil
 }
 
+// Model is the model name later runs go to, as /model last set it: the
+// name the requests carry, which a status line names.
+func (s *Session) Model() string {
+	_, m := s.now()
+	return m
+}
+
+// Git reads the workspace's repository for a status line: its branch
+// and whether the tree is dirty (tool.GitHead), wherever the tools act.
+func (s *Session) Git(ctx context.Context) (tool.Git, error) { return tool.GitHead(ctx, s.files) }
+
 // mcpPrefix is the prefix of a server's tools, mcp__<name>__<tool>
 // once the client adds its separator; the policy's mcp__* rules and
 // aliases name servers this way, whether the server came from the

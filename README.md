@@ -428,6 +428,7 @@ names the file and the field.
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
+| `status` | the terminal client's status line: `{"position": "bottom", "style": "powerline", "segments": ["user", "dir", "git", "model", "context", "cost"], "colors": {"git": "cyan", "context": {"50": "yellow", "80": "red"}}}`; see [The status line](#the-status-line). Your file only |
 | `policy` | see below |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -1337,6 +1338,45 @@ the terminal when it exits. With `-v` dax also prints its start lines
 `omitted:` line) and waits for Enter on an omission too, and when the
 client exits it prints what it noted during the run (skill grants,
 compactions, denied calls) above the resume command.
+
+### The status line
+
+Without a `status` block the client keeps its own line on top: time,
+tokens, cost, model, retry, turn, session. Your config can make it up:
+
+```json
+"status": {
+  "position": "bottom",
+  "style": "powerline",
+  "segments": ["user", "dir", "git", "executor", "model", "context", "cost"],
+  "colors": { "git": "cyan", "context": { "50": "yellow", "80": "red" } }
+}
+```
+
+- `position`: `top` (the default) or `bottom`, under the input.
+- `style`: `plain` (the default) or `powerline`, which needs a font
+  with the powerline glyphs.
+- `segments`, in order: the client's own (`time`, `tokens`, `cost`,
+  `model`, `context`, `retry`, `turn`, `session`, `verified`,
+  `stopped`) and dax's: `user` (you@host, on black), `dir` (the
+  workspace's root on blue, your home as `~` when the tools act here),
+  `git` (the branch, with ± when the tree is dirty, green when clean and
+  yellow when dirty; read
+  where the tools act, at start and after each tool run, and not read
+  at all, saying so, when the repository's own config names a program
+  git status would run) and `executor` (where the tools act: the
+  executor's or the served workspace's line, or `here`; shown there,
+  it is no longer printed before the client takes the screen). `model`
+  names the model dax runs next, and `context` divides by the window
+  dax believes that model has.
+- `colors`, by segment: a color (`black`, `red`, `green`, `yellow`,
+  `blue`, `magenta`, `cyan`, `white`, `gray`, the `bright-` ones, a
+  number from 0 to 255, or `#rrggbb`), or for `context`, `tokens`,
+  `cost`, `time`, `turn` and `retry` thresholds, the color from each
+  value up. A color you give one of dax's segments replaces its own.
+
+A segment or color dax does not know stops it at start, naming the
+config file. `dax attach` keeps the client's default line.
 
 Each of dax's tool calls is drawn as what it does, on one line, with a
 short body under it:

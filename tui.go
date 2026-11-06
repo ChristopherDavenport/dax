@@ -193,6 +193,11 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 	} else {
 		for _, l := range elsewhereLines(f.info) {
+			// With the executor segment on the status line, where the
+			// tools act is shown there, the whole session long.
+			if f.info.Status.Shows("executor") && l == elsewhereBanner(f.info) {
+				continue
+			}
 			fmt.Fprintln(out, render.Clean(l))
 		}
 	}
@@ -237,6 +242,15 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers)}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
+	}
+	if f.info.Status != nil {
+		h := newStatus(f.info, sess)
+		opts = append(opts, console.WithStatus(h.line()))
+		if f.info.Status.Shows("git") {
+			sctx, stop := context.WithCancel(ctx)
+			defer stop()
+			go h.run(sctx)
+		}
 	}
 	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess, sess, opts)
 }

@@ -94,7 +94,10 @@ before changing the shape.
   session's record (`client.RecordOf`) and the session as its source of
   events in, and the session as its controller (`client.Direct`) for
   the intents it sends out; `runConsole`, the client's run with dax's
-  slash input, which `attach.go` shares. `serve.go`: `dax serve`, a
+  slash input, which `attach.go` shares. `status.go`: the status
+  line's host side (`console.WithStatus` from the config's `status`):
+  the user, dir, git and executor segments, git read through the
+  session's workspace (`tool.GitHead`) and again after each tool run. `serve.go`: `dax serve`, a
   session served behind one bearer token, on loopback or over HTTPS
   with a certificate (`-tls-cert`, `-tls-key`), its control
   (agentturn's `front/control`, `agent.Controls` and the head move as
