@@ -64,7 +64,7 @@ const Version = "0.1.0-dev"
 // about is one nobody can account for.
 const (
 	abortedOutput    = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput     = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
+	deniedOutput     = "Error: the user denied this call. " + policy.NoWorkAround
 	unknownOutput    = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
 	neverRanOutput   = "Error: this call was cut off before it reached its tool; it did not run."
 	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. Do not get the same result another way; if it is still needed, say so."
@@ -2067,7 +2067,12 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 			// it to the task call's elicitor with agentturn.Ask: the
 			// question the fronts show is this reason (elicit), and
 			// with nobody to ask the sub-agent ends input-required.
-			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy}, nil
+			// A decline is told in dax's words, as a person's refusal
+			// of the main agent's call is (Refusal), and what the
+			// answerer said follows them (agentturn.Ask, #304).
+			asks := childAsks(name, why)
+			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: asks, Subject: subject, Args: args, By: agentpolicy.ByPolicy,
+				DeclineText: "declined when asked: " + asks + ". " + strings.TrimSuffix(policy.NoWorkAround, ".")}, nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the

@@ -226,7 +226,7 @@ func attachController(ctl *control.Client, controls *remoteControls) client.Cont
 	// What the person types is claimed as theirs, as in the local
 	// client; dax serve records the claim for its own attach token
 	// alone (WithTriggerClaims), and as control for any other.
-	act := detaching(answeredBy(client.Direct(ctl), agent.AtTerminal))
+	act := detaching(answeredBy(client.Direct(ctl, client.WithAnswers(daxAnswer)), agent.AtTerminal))
 	return func(ctx context.Context, in client.Intent) error {
 		if m, ok := in.(client.ContinueFrom); ok {
 			return controls.ContinueFrom(ctx, m.EntryID)

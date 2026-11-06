@@ -238,7 +238,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess), agent.AtTerminal), sess, sess, opts)
+	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess, sess, opts)
 }
 
 // answeredBy is act with by claimed for what the person sends: the
@@ -261,6 +261,18 @@ func answeredBy(act client.Controller, by agentturn.Trigger) client.Controller {
 		}
 		return act(ctx, in)
 	}
+}
+
+// daxAnswer is the control's answer to a call the permission panel
+// answered: a refusal in dax's words (agent.Refusal), the same as the
+// REPL's, n letting the run go on and s ending it, with the reason
+// typed; an approval as agentconsole makes it.
+func daxAnswer(a client.CallAnswer) agentturn.Answer {
+	switch a.Verdict {
+	case client.VerdictRefuse, client.VerdictStop:
+		return agent.Refusal(a.CallID, a.Reason, a.Verdict == client.VerdictStop)
+	}
+	return client.AnswerOf(a)
 }
 
 // consoleRun is console.Run's shape, which tests replace.

@@ -502,10 +502,17 @@ func Refusal(callID, note string, stop bool) agentturn.Answer {
 		out += " Reason: " + note
 	}
 	o := openresponses.NewFunctionCallOutput(callID, out)
+	a := agentturn.Output(o)
 	if stop {
-		return agentturn.Refuse(o).WithBy(agentpolicy.ByHuman)
+		a = agentturn.Refuse(o)
 	}
-	return agentturn.Output(o).WithBy(agentpolicy.ByHuman)
+	a = a.WithBy(agentpolicy.ByHuman)
+	if note != "" {
+		// The person's reason is the answer's too, as the record
+		// keeps it.
+		a = a.WithReason(note)
+	}
+	return a
 }
 
 // HeldPermissions are the calls a stopped session left held for

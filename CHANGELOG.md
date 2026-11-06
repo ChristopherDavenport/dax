@@ -24,19 +24,16 @@ versions may break flags and the config file.
     "user", one dax composed "not your words", and a line from a
     session recorded before this release "user (unclaimed)", since the
     format did not say then who typed it.
-
 - Fixed: leaving `dax attach` with `/quit` leaves the served session's
   run going again. agentconsole v0.0.16 aborts a second time at exit,
   under a context its leaving does not end, which the attached view
   passed on and so stopped the run.
-
 - Fixed: a `bash` call, or a `!` command, whose command exits while a
   job it started still holds its output gives the command's own exit
   status, where it said `exit 0` whatever it was (agentworkspace
   v0.0.12's `ErrCutShort`); and in a served or tunnelled workspace with
   no bash, `bash` tells the model so as it does on this machine, where
   the call failed with the wire's error.
-
 - Changed: what you type at the REPL or in the terminal client, a
   prompt, a steer or a note with an answer, is recorded as your words
   (a trigger of kind `human`, source `terminal`, agentsession format
@@ -44,14 +41,12 @@ versions may break flags and the config file.
   client labels it "user" rather than "user (unclaimed)". The output of
   a `!` command is recorded under no trigger, so it never reads as
   yours. `-p`'s prompt claims nobody (#183).
-
 - Changed: a compaction keeps verbatim the messages the record holds as
   yours (agentturn's fold, agentkit v0.0.17), up to 8 KiB each and the
   newest of them up to a quarter of the budget in all, and `-p`'s
   prompt; where dax pinned every user message it did not know to be a
   `!` command's output, whoever sent it. A message dax composed (a
   template's, an MCP prompt's) is now folded like the rest (#173).
-
 - Changed: `dax serve` lets its own token claim who typed a line
   (agentturn's `WithTriggerClaims`, under dax's scope `dax.typed`), so
   what you type and answer in `dax attach` is recorded as your words,
@@ -62,7 +57,6 @@ versions may break flags and the config file.
   and an attached view take a steer as soon as it is sent, even while a
   quiet tool runs, rather than holding it behind the tool, and a steer
   that misses the run's last drain starts a run of its own (#183).
-
 - Changed: a model call refused because the key's or account's credit
   cannot cover it (openresponses v0.0.19's `insufficient_quota`,
   OpenRouter's 402 at a key's daily limit among them) is said in words
@@ -70,7 +64,6 @@ versions may break flags and the config file.
   was reached, that it was not retried, the provider's own message and
   remedy, and that `/compact` may fit what is left; not the provider's
   raw JSON, which stays whole in the session's record (#15).
-
 - Added: `/mcp` says where each MCP server's session is: live, ended
   (its process exited or its connection dropped; the next call to one
   of its tools starts it again), restarting, failed to start again with
@@ -82,6 +75,15 @@ versions may break flags and the config file.
   again tells the model, at its head, that the server was restarted and
   whatever it held is gone, in agenttool's words (`mcpclient.RestartNotice`),
   once; dax's warning and `dax.mcp.restart` entry stay as they were (#92).
+- Changed: every refusal tells the model not to get the same result
+  another way and to leave the choice to you, in dax's one wording: the
+  terminal client's and `dax attach`'s permission panel now answer in
+  the REPL's words (`client.WithAnswers`), where they said "The user
+  refused this call."; `n` refuses and the run goes on, `s` refuses and
+  stops it (agentconsole v0.0.16); a sub-agent's call declined when
+  asked (agentturn's `DeclineText`); and a call denied by default under
+  `"fallback": "deny"` (agentpolicy v0.0.20's default note). A refusal's
+  reason is recorded as the answer's reason too (#150).
 
 ## v0.0.33 - 2026-11-04
 

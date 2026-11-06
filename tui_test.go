@@ -902,10 +902,10 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	m.mu.Lock()
 	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
 	m.mu.Unlock()
-	// agentturn.Ask's decline text; dax's #150 sentence waits on
-	// agentturn#304.
-	if !strings.Contains(saw, "the user said: wrong file") {
-		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
+	// dax's words for the decline (the deferral's DeclineText,
+	// agentturn#304), with what the user said after them (#150).
+	if !strings.Contains(saw, "declined when asked") || !strings.Contains(saw, policy.NoWorkAround[:40]) || !strings.Contains(saw, "the user said: wrong file") {
+		t.Errorf("the sub-agent saw %q, want dax's refusal and the user's reason", saw)
 	}
 	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)
 	r.quit()
@@ -1071,4 +1071,27 @@ func TestTheTUIShowsAQuotaRefusalInWords(t *testing.T) {
 	if !openresponses.IsInsufficientQuota(got.Err) {
 		t.Error("the explained error lost the original")
 	}
+}
+
+// The permission panel's refusals are dax's words, the same as the
+// REPL's (agent.Refusal), through client.WithAnswers: n refuses and the
+// run goes on, and the model is told not to work around it, with the
+// reason typed (#150).
+func TestTheTUIRefusesInDaxsWords(t *testing.T) {
+	m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitPanel()
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("not that\r")
+	r.waitOutput("all done")
+	if _, err := os.Stat(filepath.Join(r.dir, "REFUSED")); err == nil {
+		t.Error("the refused call ran")
+	}
+	want := agent.Refusal("x", "not that", false).Output.Output.Text
+	if got := toldOfRefusal(t, r.sess); got != want {
+		t.Errorf("the model was told %q, want the REPL's %q", got, want)
+	}
+	r.quit()
 }

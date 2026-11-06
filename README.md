@@ -1359,7 +1359,7 @@ drawn as the client draws any call, its name and arguments.
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
-| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
+| `y` / `n` / `s` | approve / refuse the permission asked and let the run go on / refuse it and stop the run; `n` and `s` then take an optional reason and Enter. A refusal is told to the model in the REPL's words, not to get the same result another way and to say so if it is still needed, with your reason after. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
@@ -1672,7 +1672,9 @@ note, `n not that file` refuses with a reason and the run goes on, and
 `s not that file` refuses and ends the run there. Any other line refuses,
 the whole line its reason. A refusal tells the model not to get the same
 result another way (another tool, a script, another path) and to say so
-if it is still needed. `-p` reads its answers the same way; a question
+if it is still needed; so does a sub-agent's call you decline, and a
+call denied because no rule allows it under `"fallback": "deny"`. `-p`
+reads its answers the same way; a question
 asked while a call runs has no run to end, so `s` declines it as `n`
 does. Only a line typed after a question is shown answers it: one typed
 ahead (a steer such as "yes, also fix the tests" that crossed a

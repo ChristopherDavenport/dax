@@ -190,12 +190,19 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 	case "allow":
 		p.Default = agentpolicy.Allow()
 	case "deny":
-		p.Default = agentpolicy.Deny()
+		// The model reads the reason of a call denied by default; the
+		// note tells it not to work around the denial (#150).
+		p.Default = agentpolicy.Deny().WithNote(NoWorkAround)
 	default:
 		p.Default = agentpolicy.Ask()
 	}
 	return p, nil
 }
+
+// NoWorkAround is what the model is told with a refusal, a person's or
+// the policy's by default: not to get the same result another way, and
+// to leave the choice to the user (#150).
+const NoWorkAround = "Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
 
 // boxTool reports whether name is one SourceBox may name: a file tool
 // or the shell by name, or every tool of one MCP unit, whose name is
