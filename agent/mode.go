@@ -45,6 +45,9 @@ type modes struct {
 	// peers is the A2A callers' floor (peerFloor): an engine of the same
 	// rules in the default mode, which no switch touches.
 	peers *agentpolicy.Engine
+	// swapped, set by a test, runs right after a switch has put its
+	// policy in the engine.
+	swapped func()
 }
 
 // current is the mode in force, as the decisions read it.
@@ -128,12 +131,27 @@ func (s *Session) applyMode(ctx context.Context, mode, why string) error {
 	if err != nil {
 		return err
 	}
+	// The hooks read the looser of the two modes while the engine's
+	// policy changes, so no call is decided under looser rules than the
+	// hooks expect: an A2A caller is floored (peerFloor) from the first
+	// call under a looser mode's rules, until the last under one it
+	// leaves. dontAsk's refusal starts once the swap is done; its rules
+	// are default's, so the calls between are asked as there.
+	from := s.modes.mode
+	during := mode
+	if policy.Stricter(mode, from) {
+		during = from
+	}
+	s.modes.inForce.Store(during)
 	if err := eng.SetPolicy(ctx, p, "mode "+mode+" ("+why+")"); err != nil {
+		s.modes.inForce.Store(from)
 		return err
 	}
-	from := s.modes.mode
-	s.modes.mode, s.modes.settings.Mode = mode, mode
+	if s.modes.swapped != nil {
+		s.modes.swapped()
+	}
 	s.modes.inForce.Store(mode)
+	s.modes.mode, s.modes.settings.Mode = mode, mode
 	s.modes.note = policy.DescribeMode(mode)
 	s.annotateMode(ctx, modeEntry{Mode: mode, From: from, Reason: why})
 	return nil

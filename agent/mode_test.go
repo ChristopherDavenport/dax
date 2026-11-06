@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +229,47 @@ func TestTheModelHearsOfASwitchInARunADeliveryStarts(t *testing.T) {
 	m.mu.Unlock()
 	if strings.Count(devs, "now acceptEdits") != 1 {
 		t.Errorf("the model was told %q, want the switch once", devs)
+	}
+}
+
+// A switch to a looser mode never leaves a moment in which an A2A
+// caller's call is decided under the looser rules without the floor:
+// the mode the floor reads is in force before the engine's policy is
+// (#145's review, R2-M1).
+func TestNoPeerCallSlipsThroughASwitch(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	bash, ok := s.Kit.LookupTool("bash")
+	if !ok {
+		t.Fatal("no bash")
+	}
+	args := `{"command":"touch PEER"}`
+	call := &openresponses.FunctionCall{Name: "bash", Arguments: args, CallID: "c1"}
+	info := agentturn.ToolCallInfo{Call: call, Tool: bash, Args: json.RawMessage(args), Batch: []*openresponses.FunctionCall{call}}
+	peer := context.WithValue(ctx, peerKey{}, "A2A caller alice")
+	var during agentturn.ToolAction
+	s.modes.swapped = func() {
+		v, err := s.Kit.Engine().Would(peer, info)
+		if err != nil {
+			t.Error(err)
+		}
+		during = v.Action
+	}
+	// Into bypass, and out of it to a stricter mode: either way the
+	// swap's moment holds the peer to default.
+	for _, mode := range []string{policy.ModeBypass, policy.ModeDontAsk, policy.ModeAcceptEdits, policy.ModeDefault} {
+		during = agentturn.Allow
+		if _, err := s.SetMode(ctx, mode); err != nil {
+			t.Fatal(err)
+		}
+		if during != agentturn.Defer {
+			t.Errorf("into %s: a peer's bash decided as the switch took effect: %v, want asked", mode, during)
+		}
 	}
 }
