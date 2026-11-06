@@ -491,11 +491,18 @@ as an image part wherever it runs, since a tool cannot know the model;
 the session shows it to a model whose vendor says it takes images
 (`Options.TakesImages`, from `internal/modelinfo`) and puts a line in
 its place otherwise. The test is made again on every request, by the
-model the request names (`textOnly`, around the session's streamers):
-a sub-agent on a model of its own is judged by that model, and the
-images a conversation holds are said, not sent, once `/model`, a
-resume or `/resume` moves it to a model that takes none. The record
-keeps them. An image the person attaches (`@path.png`) is
+model the request names, in the session's BeforeModelCall
+(`beforeModelCall`, the main agent's and, through
+`Env.ChildBeforeModelCall`, explore's and task's): a sub-agent on a
+model of its own is judged by that model, and the images a
+conversation holds are said, not sent, once `/model`, a resume or
+`/resume` moves it to a model that takes none. Being a hook, it acts
+before the recorder takes the request, so the record says what the
+model was sent: the items keep their images, and the request is
+recorded with the session format's omit placeholder in their place,
+its hash kept. A fold's summary and a server's compaction, which no
+hook sees and the session does not record as requests, are judged the
+same way around the session's streamers (`textOnly`). An image the person attaches (`@path.png`) is
 the workspace's file, read through it as `read` reads one (relative to
 its root, nothing outside it by name or link), so `@docs/x.png` is the
 project's file whether the tools act here, in a box or on a served

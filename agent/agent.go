@@ -735,7 +735,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}
 	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
 	// A read's and the person's images reach only a model that takes
-	// them, each request judged by the model it names (images.go).
+	// them, each request judged by the model it names: the session's
+	// requests in its BeforeModelCall, so the record holds what was
+	// sent; a fold's summary and a server's compaction, which no hook
+	// sees, here (images.go).
 	o.Streamer, o.SubagentStreamer = textOnly(o.TakesImages, o.Streamer), textOnly(o.TakesImages, o.SubagentStreamer)
 	s := &Session{opts: o, base: base, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
@@ -847,8 +850,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
 	// An A2A caller's request leaves out what is the person's own
-	// (caller.go); the person's go as the kit makes them.
-	kopts = append(kopts, agentkit.WithBeforeModelCall(s.callerRequest))
+	// (caller.go); the person's go as the kit makes them. A request's
+	// images are said to a model that does not take them here, before
+	// the recorder takes it (images.go).
+	kopts = append(kopts, agentkit.WithBeforeModelCall(s.beforeModelCall))
 	// Every tool's result is cut to its cap, an MCP server's and a
 	// child agent's among them, in every placement (outputcap.go).
 	// A read's image is shown only to a model that takes images (images.go).

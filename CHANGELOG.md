@@ -62,7 +62,11 @@ versions may break flags and the config file.
   files on any workspace, and the session shows it only to a model
   whose vendor says it takes images (`modelinfo.Info.Images`: Anthropic's
   `image_input`, OpenRouter's input modalities, Ollama's `vision`),
-  telling any other model it is not shown. `@path.png` in a typed line
+  telling any other model it is not shown, judged at each request by
+  the model it names (a sub-agent's by its own; images held are said
+  after `/model` or a resume to a model that takes none), before the
+  recorder takes it, so the record says what the model was sent.
+  `@path.png` in a typed line
   attaches the workspace's image file to your message, read through the
   workspace as `read` reads one, nothing outside it. New sessions
   keep media as blobs beside the log (header `media: sidecar`), read

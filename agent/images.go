@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
@@ -51,14 +52,31 @@ func (s *Session) imageGate(t agenttool.Tool) agenttool.Tool {
 	})
 }
 
-// textOnly is inner with the images dax puts in a request, a read's
-// and the person's own, said in place of shown when the request's model
-// does not take them: judged at each request by the model it names, so
-// a sub-agent on a model of its own is judged by that model, and the
-// images a conversation already holds are not sent to a text-only model
-// after /model, a resume or /resume (#166). Any other tool's images (an
-// MCP server's) pass as they did before. A server's compaction is kept,
-// its input judged the same way.
+// beforeModelCall is the session's BeforeModelCall, after the kit's
+// own, of the main agent's runs and the sub-agents' (extension.Env's
+// ChildBeforeModelCall): what an A2A caller's request leaves out
+// (callerRequest), then the images dax puts in a request, a read's and
+// the person's own, said in place of shown when the request's model
+// does not take them. It is judged at each request by the model the
+// request names, so a sub-agent on a model of its own is judged by that
+// model, and the images a conversation already holds are not sent to a
+// text-only model after /model, a resume or /resume (#166). Being a
+// hook, it changes the request before the recorder takes it: the record
+// holds what the model was sent, the images said as the session
+// format's omit placeholder, the items keeping their own. Any other
+// tool's images (an MCP server's) pass as they did before.
+func (s *Session) beforeModelCall(ctx context.Context, req *openresponses.Request) error {
+	if err := s.callerRequest(ctx, req); err != nil {
+		return err
+	}
+	req.Input = textOnlyInput(ctx, s.opts.TakesImages, req.Model, req.Input)
+	return nil
+}
+
+// textOnly is inner with the same images said in what reaches it
+// without a BeforeModelCall: a fold's summary request and a server's
+// compaction, neither of which is a request the session records. A
+// request the hook has seen holds none of them, so it goes as it is.
 func textOnly(takes func(context.Context, string) bool, inner openresponses.Streamer) openresponses.Streamer {
 	if inner == nil {
 		return nil
@@ -76,7 +94,7 @@ type imageless struct {
 }
 
 func (s imageless) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
-	req.Input = s.strip(ctx, req.Model, req.Input)
+	req.Input = textOnlyInput(ctx, s.takes, req.Model, req.Input)
 	return s.inner.CreateStream(ctx, req, sink)
 }
 
@@ -86,14 +104,15 @@ type imagelessCompactor struct {
 }
 
 func (s imagelessCompactor) Compact(ctx context.Context, req openresponses.CompactRequest) (*openresponses.CompactResponse, error) {
-	req.Input = s.strip(ctx, req.Model, req.Input)
+	req.Input = textOnlyInput(ctx, s.takes, req.Model, req.Input)
 	return s.c.Compact(ctx, req)
 }
 
-// strip is in with the person's images and read's said, not shown, when
-// model does not take images; in itself when it holds none or the model
-// takes them. The items changed are copies: in is the conversation's.
-func (s imageless) strip(ctx context.Context, model string, in openresponses.Items) openresponses.Items {
+// textOnlyInput is in with the person's images and read's said, not
+// shown, when model does not take images (takes says no, or there is
+// no takes); in itself when it holds none or the model takes them. The
+// items changed are copies: in is the conversation's.
+func textOnlyInput(ctx context.Context, takes func(context.Context, string) bool, model string, in openresponses.Items) openresponses.Items {
 	reads := map[string]bool{}
 	var found bool
 	for _, it := range in {
@@ -108,26 +127,36 @@ func (s imageless) strip(ctx context.Context, model string, in openresponses.Ite
 			found = found || hasImage(it.Output.Parts)
 		}
 	}
-	if !found || s.takes != nil && s.takes(ctx, model) {
+	if !found || takes != nil && takes(ctx, model) {
 		return in
 	}
-	out := make(openresponses.Items, len(in))
+	var out openresponses.Items
 	for i, it := range in {
-		out[i] = it
+		var said openresponses.Item
 		switch it := it.(type) {
 		case *openresponses.Message:
 			if it.Role == openresponses.RoleUser && hasImage(it.Content) {
 				m := *it
 				m.Content = sayImages(it.Content, model)
-				out[i] = &m
+				said = &m
 			}
 		case *openresponses.FunctionCallOutput:
 			if reads[it.CallID] && hasImage(it.Output.Parts) {
 				o := *it
 				o.Output.Parts = sayImages(it.Output.Parts, model)
-				out[i] = &o
+				said = &o
 			}
 		}
+		if said == nil {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(in)
+		}
+		out[i] = said
+	}
+	if out == nil {
+		return in
 	}
 	return out
 }

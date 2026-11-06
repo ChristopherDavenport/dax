@@ -277,11 +277,90 @@ func TestASubagentsReadImageIsJudgedByItsOwnModel(t *testing.T) {
 	if strings.Contains(got, `"input_image"`) || !strings.Contains(got, "model flash does not take images") {
 		t.Errorf("the sub-agent's text-only model was sent:\n%s", got)
 	}
+	// The sub-agent's record says what its model was sent.
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var children int
+	for _, child := range childSessions(t, o.Root, id) {
+		children++
+		rec := lastRecorded(t, o.Root, child)
+		if strings.Contains(rec, `"input_image"`) || !strings.Contains(rec, "model flash does not take images") {
+			t.Errorf("the sub-agent's record says its model was sent:\n%s", rec)
+		}
+	}
+	if children == 0 {
+		t.Fatal("no sub-agent session recorded")
+	}
+}
+
+// lastRecorded is the input of the last request recorded in session id,
+// as the record rebuilds it, one item of JSON to a line; the session
+// verifies and its requests are all hashed.
+func lastRecorded(t *testing.T, root, id string) string {
+	t.Helper()
+	ctx := context.Background()
+	if n, failed, err := Verify(ctx, root, id); err != nil || len(failed) != 0 || n == 0 {
+		t.Fatalf("verify %s: %d, %v, %v", id, n, failed, err)
+	}
+	if causes, err := Unhashed(ctx, root, id); err != nil || len(causes) != 0 {
+		t.Fatalf("%s has unhashed requests: %v, %v", id, causes, err)
+	}
+	st, err := readOnly(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess, err := st.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for _, e := range sess.Entries() {
+		if _, ok := e.(*agentsession.ResponseEntry); ok {
+			last = e.Base().ID
+		}
+	}
+	c, err := sess.RequestContext(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := c.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, it := range req.Input {
+		data, _ := json.Marshal(it)
+		b.Write(data)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// childSessions are the sessions spawned in session id.
+func childSessions(t *testing.T, root, id string) []string {
+	t.Helper()
+	st, err := readOnly(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var out []string
+	for sum, err := range st.List(context.Background(), agentsession.ListFilter{ParentSession: id}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, sum.Header.ID)
+	}
+	return out
 }
 
 // #166: the images a conversation holds are not sent to a text-only
 // model it moves to: after /model, a read's image and the person's own
-// are said in the request, while the record keeps them.
+// are said in the request, and the record says so too, the images kept
+// as the items' own.
 func TestImagesHeldAreNotSentToATextOnlyModel(t *testing.T) {
 	ctx := context.Background()
 	m := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
@@ -314,5 +393,13 @@ func TestImagesHeldAreNotSentToATextOnlyModel(t *testing.T) {
 	}
 	if got := m.last(); strings.Contains(got, `"input_image"`) || strings.Count(got, "model text does not take images") != 2 {
 		t.Errorf("the text-only model was sent:\n%s", got)
+	}
+	// The record says what the model was sent, and verifies.
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := lastRecorded(t, o.Root, id); strings.Contains(rec, `"input_image"`) || strings.Count(rec, "model text does not take images") != 2 {
+		t.Errorf("the record says the text-only model was sent:\n%s", rec)
 	}
 }

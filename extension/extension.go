@@ -293,7 +293,9 @@ type Env interface {
 	// configuration takes: on an A2A caller's context (Caller) its
 	// requests leave out what is the person's own, as the caller's own
 	// requests do (their AGENTS.md, the definitions of the PersonOnly
-	// tools); any other request goes as it is.
+	// tools); and a read's or the person's images are said, not shown,
+	// to a sub-agent model that does not take images, so the
+	// sub-agent's record holds what its model was sent.
 	ChildBeforeModelCall() func(context.Context, *openresponses.Request) error
 	// ChildPolicy is the BeforeToolCall hook of a sub-agent called name:
 	// the session's policy and every extension's BeforeToolCall, with a

@@ -183,8 +183,9 @@ before changing the shape.
   prompts as slash commands and its resources as `@server:uri`
   mentions, sent marked as the server's, untrusted.
   `agent/images.go`: a read's image shown only to a model that takes
-  images (`Options.TakesImages`), the person's `@path.png` (`Image`);
-  sessions keep media as sidecar blobs.
+  images (`Options.TakesImages`), judged per request in the session's
+  BeforeModelCall so the record holds what was sent, the person's
+  `@path.png` (`Image`); sessions keep media as sidecar blobs.
   `agent/caller.go`: what an A2A caller's requests leave out of what
   the person's carry (their own AGENTS.md), after the kit's
   BeforeModelCall and in sub-agents' (`Env.ChildBeforeModelCall`).

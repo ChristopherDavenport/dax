@@ -422,7 +422,7 @@ func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStart
 }
 
 func (e *sessionEnv) ChildBeforeModelCall() func(context.Context, *openresponses.Request) error {
-	return e.s.callerRequest
+	return e.s.beforeModelCall
 }
 
 func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
