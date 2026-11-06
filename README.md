@@ -1037,8 +1037,9 @@ project's config and `AGENTS.md` are not the session's.
   shared, and no two connections may hold one token or one variable. No
   server name may be offered by two, no workspace given twice, and no
   two hubs take one port. The header records them under
-  `dax.servers_workspace` as an object by name (`servers_workspace`
-  alone keeps its single form), `-list` ends a line with `servers
+  `dax.servers_workspaces` as an object by name, and
+  `servers_workspace` beside them keeps its own form under
+  `dax.servers_workspace`, which an older dax reads; `-list` ends a line with `servers
   <name>=<identity>` for each, and the start line names each.
   `-servers-workspace` replaces `servers_workspace` alone.
 

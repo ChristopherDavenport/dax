@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -45,14 +44,19 @@ const (
 	// headerServers is the header member holding, for a session with a
 	// servers workspace beside its own (Options.ServersWorkspace), that
 	// workspace as its servers were offered by: {"kind", "ref",
-	// "servers"}, or with servers_workspaces (Options.ServersWorkspaces)
-	// an object of those by name, servers_workspace's as "servers"; its identity (a served workspace's URL as
+	// "servers"}, the form every dax reads; its identity (a served workspace's URL as
 	// config.WorkspaceRef writes it, a hub's workspace's
 	// config.TunnelRef of its name) and the names of the servers it
 	// offered, which the session connected. Its root is not kept: a
 	// servers-only grant is told the served directory's last name
 	// alone, and nothing of the session acts there.
 	headerServers = "dax.servers_workspace"
+	// headerServersNamed holds the servers workspaces by name
+	// (servers_workspaces, Options.ServersWorkspaces): an object of
+	// headerServers' form by name. It is a member of its own so a dax
+	// that knows only headerServers still reads servers_workspace's
+	// beside them.
+	headerServersNamed = "dax.servers_workspaces"
 	// headerProfile is a bare run's: {"bare": true, "left_out": [...]}.
 	headerProfile = "dax.profile"
 	// headerContext is the context strategy the session started with:
@@ -175,8 +179,12 @@ func (s *Session) extras() map[string]json.RawMessage {
 			out[headerProfile] = raw
 		}
 	}
-	if raw, ok := recordServers(s.beside); ok {
-		out[headerServers] = raw
+	one, named := recordServers(s.beside)
+	if one != nil {
+		out[headerServers] = one
+	}
+	if named != nil {
+		out[headerServersNamed] = named
 	}
 	return out
 }
@@ -190,11 +198,11 @@ type ServersBeside struct {
 	Servers   []string
 }
 
-// recordServers is the header member of the servers workspaces l: one
-// named config.ServersName alone as {"kind", "ref", "servers"}, as dax
-// wrote it before servers_workspaces, and otherwise an object of those
-// by name; false for none.
-func recordServers(l []ServersBeside) (json.RawMessage, bool) {
+// recordServers is the header members of the servers workspaces l:
+// servers_workspace's (named config.ServersName) as {"kind", "ref",
+// "servers"} for headerServers, and the named ones as an object of
+// those by name for headerServersNamed; nil for none.
+func recordServers(l []ServersBeside) (one, named json.RawMessage) {
 	rec := func(b ServersBeside) recordedServers {
 		servers := b.Servers
 		if servers == nil {
@@ -202,47 +210,39 @@ func recordServers(l []ServersBeside) (json.RawMessage, bool) {
 		}
 		return recordedServers{Kind: b.Workspace.Kind, Ref: b.Workspace.Ref, Servers: servers}
 	}
-	var v any
-	switch {
-	case len(l) == 0:
-		return nil, false
-	case len(l) == 1 && l[0].Name == config.ServersName:
-		v = rec(l[0])
-	default:
-		m := map[string]recordedServers{}
-		for _, b := range l {
-			m[b.Name] = rec(b)
+	m := map[string]recordedServers{}
+	for _, b := range l {
+		if b.Name == config.ServersName {
+			one, _ = json.Marshal(rec(b))
+			continue
 		}
-		v = m
+		m[b.Name] = rec(b)
 	}
-	raw, err := json.Marshal(v)
-	return raw, err == nil
+	if len(m) > 0 {
+		named, _ = json.Marshal(m)
+	}
+	return one, named
 }
 
 // ServersWorkspacesOf is the servers workspaces a session's header
 // records, in the order of their names, servers_workspace's (named
 // config.ServersName) among them; none for a session that had none.
 func ServersWorkspacesOf(h agentsession.Header) []ServersBeside {
-	raw, ok := h.Extra[headerServers]
-	if !ok {
-		return nil
-	}
+	var out []ServersBeside
 	var one recordedServers
-	if err := json.Unmarshal(raw, &one); err == nil && one.Kind != "" {
-		return []ServersBeside{{Name: config.ServersName, Workspace: workspace.Descriptor{Kind: one.Kind, Ref: one.Ref}, Servers: one.Servers}}
+	if raw, ok := h.Extra[headerServers]; ok && json.Unmarshal(raw, &one) == nil && one.Kind != "" {
+		out = append(out, ServersBeside{Name: config.ServersName, Workspace: workspace.Descriptor{Kind: one.Kind, Ref: one.Ref}, Servers: one.Servers})
 	}
 	var many map[string]recordedServers
-	if err := json.Unmarshal(raw, &many); err != nil {
-		return nil
-	}
-	var out []ServersBeside
-	for _, n := range slices.Sorted(maps.Keys(many)) {
-		r := many[n]
-		if r.Kind == "" {
-			continue
+	if raw, ok := h.Extra[headerServersNamed]; ok && json.Unmarshal(raw, &many) == nil {
+		for n, r := range many {
+			if r.Kind == "" || n == config.ServersName {
+				continue
+			}
+			out = append(out, ServersBeside{Name: n, Workspace: workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, Servers: r.Servers})
 		}
-		out = append(out, ServersBeside{Name: n, Workspace: workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, Servers: r.Servers})
 	}
+	slices.SortFunc(out, func(a, b ServersBeside) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 

@@ -52,8 +52,9 @@ versions may break flags and the config file.
   reaches several hosts' secret-holding servers. Across them (and
   `servers_workspace`, named `servers`) no token or variable, server
   name, workspace or hub port is shared. The header records them under
-  `dax.servers_workspace` as an object by name (a lone
-  `servers_workspace` keeps its form); `-list` and the start line name
+  `dax.servers_workspaces` as an object by name, while
+  `servers_workspace` keeps its own form under `dax.servers_workspace`,
+  so an older dax still reads it beside them; `-list` and the start line name
   each. `agent.Options.ServersWorkspaces`, `agent.ServersBeside`,
   `agent.ServersWorkspacesOf`; `config.Settings.Servers` (#123).
 - Fixed: a box session records the image the box ran. The box host

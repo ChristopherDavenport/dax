@@ -410,8 +410,37 @@ func TestSeveralServersWorkspaces(t *testing.T) {
 		!slices.Equal(got[0].Servers, []string{"gh"}) || !slices.Equal(got[1].Servers, []string{"slack"}) {
 		t.Errorf("recorded %+v", got)
 	}
-	if raw := string(sums[0].Header.Extra[headerServers]); !strings.Contains(raw, `"github":{`) {
+	if raw := string(sums[0].Header.Extra[headerServersNamed]); !strings.Contains(raw, `"github":{`) {
 		t.Errorf("the header holds %s, want the workspaces by name", raw)
+	}
+	if raw, ok := sums[0].Header.Extra[headerServers]; ok {
+		t.Errorf("with no servers_workspace the header holds %s", raw)
+	}
+	// With servers_workspace beside the named ones, its entry keeps the
+	// single form every dax reads, and the named ones are a member of
+	// their own.
+	o2 := options(t, &scripted{})
+	o2.ServersWorkspace = offered(t, "p")
+	o2.ServersWorkspaces = map[string]workspace.Workspace{"github": offered(t, "q")}
+	s2, err := New(t.Context(), o2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Close()
+	sums2, err := List(t.Context(), o2.Root, o2.Dir)
+	if err != nil || len(sums2) != 1 {
+		t.Fatalf("listed %d, %v", len(sums2), err)
+	}
+	h := sums2[0].Header
+	var single struct {
+		Kind    string   `json:"kind"`
+		Servers []string `json:"servers"`
+	}
+	if err := json.Unmarshal(h.Extra[headerServers], &single); err != nil || single.Kind == "" || !slices.Equal(single.Servers, []string{"p"}) {
+		t.Errorf("servers_workspace recorded as %s, want the single form: %v", h.Extra[headerServers], err)
+	}
+	if l := ServersWorkspacesOf(h); len(l) != 2 || l[0].Name != "github" || l[1].Name != config.ServersName {
+		t.Errorf("both read back as %+v", l)
 	}
 	// servers_workspace beside them is named servers.
 	if l := ServersWorkspacesOf(agentsession.Header{Extra: map[string]json.RawMessage{headerServers: json.RawMessage(`{"kind":"remote","ref":"http://x","servers":["p"]}`)}}); len(l) != 1 || l[0].Name != config.ServersName {
