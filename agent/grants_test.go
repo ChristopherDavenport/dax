@@ -43,7 +43,7 @@ func (m perPrompt) CreateStream(ctx context.Context, req openresponses.Request, 
 // runs unasked in this session, and a new session asks again.
 func TestASessionGrantAnswersLaterCallsInThisSessionOnly(t *testing.T) {
 	ctx := context.Background()
-	model := perPrompt{"go": {{"bash", `{"command":"echo hello"}`}}, "again": {{"bash", `{"command":"echo hello world"}`}}}
+	model := perPrompt{"go": {{"bash", `{"command":"echo hello"}`}}, "again": {{"bash", `{"command":"echo hello"}`}}}
 	o := options(t, model)
 	o.Policy = confirmPolicy(t)
 	s, err := New(ctx, o)
@@ -54,7 +54,7 @@ func TestASessionGrantAnswersLaterCallsInThisSessionOnly(t *testing.T) {
 	if _, err := Drive(ctx, s, grantPermit(s, GrantSession, &asked, &offered), openresponses.UserText("go")); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(offered, ",") != "bash(echo hello:*)" {
+	if strings.Join(offered, ",") != "bash(echo hello)" {
 		t.Fatalf("offered %q", offered)
 	}
 	asked = nil
@@ -100,7 +100,7 @@ func TestASavedGrantHoldsForTheProjectAlone(t *testing.T) {
 	s.Close()
 
 	asked = nil
-	o.Streamer = &scripted{calls: [][2]string{{"bash", `{"command":"echo hello again"}`}}}
+	o.Streamer = &scripted{calls: [][2]string{{"bash", `{"command":"echo hello"}`}}}
 	s2, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestASavedGrantHoldsForTheProjectAlone(t *testing.T) {
 	other := o
 	other.Dir = filepath.Join(t.TempDir(), "other")
 	write(t, filepath.Join(other.Dir, "README"), "x\n")
-	other.Streamer = &scripted{calls: [][2]string{{"bash", `{"command":"echo hello again"}`}}}
+	other.Streamer = &scripted{calls: [][2]string{{"bash", `{"command":"echo hello"}`}}}
 	s3, err := New(ctx, other)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestNoGrantOverARulesAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(offered, ",") != "read=,bash=,bash=bash(echo hi:*)" {
+	if strings.Join(offered, ",") != "read=,bash=,bash=bash(echo hi)" {
 		t.Errorf("offered %q", offered)
 	}
 	if forged == nil {
@@ -169,7 +169,7 @@ func TestNoGrantOverARulesAsk(t *testing.T) {
 // session or the project (#146's review, L1).
 func TestARulesApprovalMakesNoGrant(t *testing.T) {
 	ctx := context.Background()
-	model := perPrompt{"go": {{"bash", `{"command":"echo hello"}`}}, "again": {{"bash", `{"command":"echo hello world"}`}}}
+	model := perPrompt{"go": {{"bash", `{"command":"echo hello"}`}}, "again": {{"bash", `{"command":"echo hello"}`}}}
 	o := options(t, model)
 	o.Policy = confirmPolicy(t)
 	s, err := New(ctx, o)
@@ -216,7 +216,7 @@ func TestASessionGrantReachesTheSubagents(t *testing.T) {
 			ctx := context.Background()
 			model := exploring{
 				perPrompt: perPrompt{"go": {{"bash", `{"command":"touch a"}`}}, "look": {{"task", `{"input":"make b"}`}}},
-				child:     [][2]string{{"bash", `{"command":"touch a b"}`}, {"bash", `{"command":"touch x"}`}},
+				child:     [][2]string{{"bash", `{"command":"touch a"}`}, {"bash", `{"command":"touch x"}`}},
 			}
 			o := withAgents(options(t, model), "")
 			o.Policy = confirmPolicy(t)
@@ -232,6 +232,9 @@ func TestASessionGrantReachesTheSubagents(t *testing.T) {
 			if _, err := s.SetMode(ctx, mode); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Remove(filepath.Join(o.Dir, "a")); err != nil {
+				t.Fatal(err)
+			}
 			asked = nil
 			rules := rulesOf(func(c *openresponses.FunctionCall, _ string) bool { asked = append(asked, c.Arguments); return false })
 			if _, err := Drive(ctx, s, rules, openresponses.UserText("look")); err != nil {
@@ -242,9 +245,9 @@ func TestASessionGrantReachesTheSubagents(t *testing.T) {
 				want = 0
 			}
 			if len(asked) != want || slices.ContainsFunc(asked, func(a string) bool { return strings.Contains(a, "touch a") }) {
-				t.Errorf("asked %q: want the child's touch a b under the session's grant, its touch x asked in default", asked)
+				t.Errorf("asked %q: want the child's touch a under the session's grant, its touch x asked in default", asked)
 			}
-			if _, err := os.Stat(filepath.Join(o.Dir, "b")); err != nil {
+			if _, err := os.Stat(filepath.Join(o.Dir, "a")); err != nil {
 				t.Errorf("the child's call the grant covers did not run: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(o.Dir, "x")); err == nil {

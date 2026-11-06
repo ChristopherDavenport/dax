@@ -1255,15 +1255,23 @@ A permission can be approved for more than the call. Where dax offers a
 rule beside the question, `a` approves the call and grants the rule for
 the rest of the session, and `A` keeps it for the project, in
 `~/.dax/grants.json` (private, by the project's identity, as `-list`
-has it), for every later session there too. The rule is
-`bash(<first two words>:*)` for a command line dax's analyzer reads
-whose commands, `cd` aside, all start with those words (`go test
-./...` offers `bash(go test:*)`, so `go test ./pkg/...` then runs
-unasked), but none when the first word runs whatever follows it (a
-shell, an interpreter such as `python` or `node`, or a launcher such
-as `env`, `sudo`, `xargs`, `timeout`, `find` or `npx`), is an
-assignment (`X=1 make`), or is followed by a flag (`git -c ...`, `go
--C ...`), since such a prefix would allow any code; the tool's name for an MCP server's tool, and nothing for
+has it), for every later session there too. For a command line dax's
+analyzer reads, the rule is a prefix only for the build, test and
+listing commands on a short list: `go test`, `go build`, `go vet`,
+`go fmt`, `go list`, `go doc`, `go version`; `cargo test`, `build`,
+`check`, `clippy`, `fmt`, `doc`; `npm test`, `pnpm test`, `yarn test`;
+`make <target>`; `pytest`, `ls`, `tree`, `wc`, `du`, `df`. When every
+command of the line, `cd` aside, starts with one of them, it is
+offered (`go test ./...` offers `bash(go test:*)`, so `go test
+./pkg/...` then runs unasked). Any other line of one command is
+offered exactly as written (`docker run alpine` offers `bash(docker
+run alpine)`, which allows that line and no other), and a line with
+quoting, a `*` or more than one command is offered nothing: a prefix
+of a shell, an interpreter, a launcher or a wrapper (`sh -c`, `env`,
+`uv run`, `docker exec`, `git rebase --exec`) would allow any code. A
+prefix allows the flags after it too, so `bash(go test:*)` allows
+`go test -exec PROG`, as the same rule in your own config does: weigh
+that when you accept one. The tool's name for an MCP server's tool, and nothing for
 `write` or `edit` (a [mode](#permission-modes) is the way to let edits
 run). A grant ranks below every other source, so it answers only what
 asks for want of a rule: never a rule's ask (dax-coding's secret paths,

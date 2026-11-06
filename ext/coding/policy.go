@@ -13,7 +13,8 @@ package coding
 import (
 	"context"
 	"encoding/json"
-	"path"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -110,34 +111,80 @@ func acceptEditsRules() policy.Rules {
 	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
 }
 
-// launchers are the programs that run whatever follows them: shells,
-// interpreters (a version suffix, python3.12, included) and the
-// commands that start another (env, sudo, xargs, find's -exec ...). A
-// rule of their first words would allow any code, so "yes, always"
-// offers none for them.
-var launchers = map[string]bool{
-	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "mksh": true, "fish": true, "csh": true, "tcsh": true, "ash": true, "busybox": true, "pwsh": true, "powershell": true,
-	"python": true, "pypy": true, "ruby": true, "perl": true, "php": true, "node": true, "nodejs": true, "deno": true, "bun": true, "lua": true, "luajit": true, "tclsh": true, "wish": true, "Rscript": true, "julia": true, "osascript": true,
-	"awk": true, "gawk": true, "mawk": true, "nawk": true, "sed": true,
-	"env": true, "sudo": true, "doas": true, "su": true, "runuser": true, "nohup": true, "timeout": true, "nice": true, "ionice": true, "time": true, "exec": true, "eval": true, "command": true, "builtin": true,
-	"setsid": true, "stdbuf": true, "unbuffer": true, "chroot": true, "xargs": true, "parallel": true, "find": true, "watch": true, "strace": true, "ltrace": true, "gdb": true, "flock": true, "systemd-run": true, "script": true, "ssh": true,
-	"npx": true, "pnpx": true, "bunx": true, "uvx": true, "pipx": true,
+// grantPrefixes are the programs and subcommands "yes, always" offers
+// a prefix rule for, bash(<program> <subcommand>:*): build, test and
+// listing tools that do not run a command a later word names. A
+// program with an empty list takes its own name alone (pytest:*); make
+// takes any plain target (make check:*), never make alone or a
+// variable. Any other line is offered exactly as it is (exactGrant),
+// never as a prefix: a deny list of shells, interpreters, launchers and
+// wrappers with a command-running subcommand or flag (uv run, docker
+// run, git rebase --exec, tar --to-command ...) kept missing some. A
+// prefix allows the flags after it; that go test -exec, make -f and
+// the like run a program is the person's to weigh when they accept it.
+var grantPrefixes = map[string][]string{
+	"go":     {"test", "build", "vet", "fmt", "list", "doc", "version"},
+	"cargo":  {"test", "build", "check", "clippy", "fmt", "doc"},
+	"npm":    {"test"},
+	"pnpm":   {"test"},
+	"yarn":   {"test"},
+	"make":   nil,
+	"pytest": {},
+	"ls":     {},
+	"tree":   {},
+	"wc":     {},
+	"du":     {},
+	"df":     {},
 }
 
-// launcher reports whether the program word names a launcher, by its
-// base name, with or without a version suffix.
-func launcher(word string) bool {
-	base := path.Base(word)
-	return launchers[base] || launchers[strings.TrimRight(base, "0123456789.")]
+// makeTarget is a make target a prefix may name: not a flag, not a
+// variable.
+var makeTarget = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`)
+
+// grantPrefix is the allowlisted prefix of a stage's words, "" for
+// none.
+func grantPrefix(words []string) string {
+	subs, ok := grantPrefixes[words[0]]
+	switch {
+	case !ok:
+		return ""
+	case words[0] == "make":
+		if len(words) > 1 && makeTarget.MatchString(words[1]) {
+			return "make " + words[1]
+		}
+		return ""
+	case len(subs) == 0:
+		return words[0]
+	case len(words) > 1 && slices.Contains(subs, words[1]):
+		return words[0] + " " + words[1]
+	}
+	return ""
+}
+
+// exactGrant is the rule that allows line, one stage whose match is
+// match, exactly: "" when the match is not the line as written (the
+// rule matches the words joined, so a quoted line would be shown
+// unquoted, another line than the one approved), would read as a
+// pattern (a *) or a carve-out (a leading !), or does not come back
+// from parsing as itself.
+func exactGrant(line, match string) string {
+	if match == "" || match != strings.TrimSpace(line) || strings.Contains(match, "*") || strings.HasPrefix(match, "!") {
+		return ""
+	}
+	rule := "bash(" + match + ")"
+	if r, err := agentpolicy.ParseRules(rule); err != nil || len(r) != 1 || r[0].Spec != match {
+		return ""
+	}
+	return rule
 }
 
 // grantRule is the rule "yes, always" grants for a call of dax-coding's
-// tools: for bash, bash(<first two words>:*) of a line the analyzer
-// reads (tool.Analyzer's safe subset) whose stages, cd aside, all start
-// with those words, so the grant answers the whole line next time; for
-// any other tool, and any other line, none. None either when the first
-// word is a launcher, an assignment, or the second word a flag: their
-// prefix would name what runs no more than the program alone does.
+// tools: for bash, a line the analyzer reads (tool.Analyzer's safe
+// subset) whose stages, cd aside, all share one allowlisted prefix
+// (grantPrefixes) is offered bash(<prefix>:*), so the grant answers
+// such lines next time; a line of one stage otherwise is offered
+// exactly, when it holds no quoting (exactGrant). For any other tool, and any other line,
+// none.
 func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, args json.RawMessage) string {
 	a := &tool.Analyzer{Files: env.Files, MaxFile: env.MaxReadBytes}
 	return func(ctx context.Context, name string, args json.RawMessage) string {
@@ -154,34 +201,34 @@ func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, arg
 		if !c.Parsed {
 			return ""
 		}
-		prefix := ""
+		var stages []tool.StageCheck
 		for _, st := range c.Stages {
 			if len(st.Words) == 0 || st.Words[0] == "cd" {
 				continue
 			}
-			p := st.Words[0]
-			if launcher(p) || strings.Contains(p, "=") {
-				return ""
-			}
-			if len(st.Words) > 1 {
-				if strings.HasPrefix(st.Words[1], "-") {
-					return ""
-				}
-				p += " " + st.Words[1]
-			}
-			if prefix != "" && p != prefix {
-				return ""
-			}
-			prefix = p
+			stages = append(stages, st)
 		}
-		if prefix == "" {
+		if len(stages) == 0 {
 			return ""
 		}
-		rule := "bash(" + prefix + ":*)"
-		if r, err := agentpolicy.ParseRules(rule); err != nil || len(r) != 1 || r[0].Spec != prefix+":*" {
+		prefix := grantPrefix(stages[0].Words)
+		for _, st := range stages[1:] {
+			if grantPrefix(st.Words) != prefix {
+				prefix = ""
+				break
+			}
+		}
+		if prefix != "" {
+			rule := "bash(" + prefix + ":*)"
+			if r, err := agentpolicy.ParseRules(rule); err == nil && len(r) == 1 && r[0].Spec == prefix+":*" {
+				return rule
+			}
 			return ""
 		}
-		return rule
+		if len(c.Stages) == 1 {
+			return exactGrant(in.Command, c.Stages[0].Match)
+		}
+		return ""
 	}
 }
 

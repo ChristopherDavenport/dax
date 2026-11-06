@@ -161,10 +161,13 @@ versions may break flags and the config file.
   gone, in favour of `Settings.Mode`.
 - Fixed: "yes, always" offered a launcher's prefix as a rule:
   `bash -c 'echo hi'` offered `bash(bash -c:*)`, which allows any
-  code, and so did `sh -c`, `python -c`, `node -e`, `env X=1`, `xargs`,
-  `sudo`, `nohup`, `timeout`, `find .` and `git -c`. No rule is
-  offered now when the first word is a shell, an interpreter or a
-  launcher, an assignment, or is followed by a flag (#146).
+  code, and so did `sh -c`, `python -c`, `env X=1`, `xargs`, `sudo`,
+  `uv run`, `npm exec`, `docker run`, `git rebase` and many more. A
+  prefix rule is offered now only for an allowlist of build, test and
+  listing commands (`go test`, `cargo test`, `npm test`, `make
+  <target>`, `pytest`, `ls` ...); any other line of one command, with
+  no quoting and no `*`, is offered exactly as written, and nothing
+  else is offered (#146).
 - Fixed: `agent.Drive` made a grant for any approval that asked for
   one; it makes one only for a person's answer (`PermitAnswer.By`
   empty, agentpolicy's `ByHuman`), and a rule's approval is once
