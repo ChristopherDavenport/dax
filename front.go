@@ -413,7 +413,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		fmt.Fprintln(w, render.Clean(l))
 	}
 	if info.Recorded {
-		fmt.Fprintf(w, "session %s\n", info.ID)
+		fmt.Fprintln(w, sessionLine(info))
 	}
 	showAssembly(w, info)
 	showPending(w, t, "resumed")

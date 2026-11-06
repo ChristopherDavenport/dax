@@ -172,8 +172,10 @@ before changing the shape.
   tool's name) and `Grant` (a session grant set under the kit's grant
   scope, or a rule kept in `~/.dax/grants.json` by the project's
   identity, loaded as `dax:saved`), both at `policy.RankGrant`.
-  `agent/reopen.go`: `Reopen`, another session (`/new`) over the live
-  settings, the store handed to it.
+  `agent/reopen.go`: `Reopen`, another session (`/new`, `/resume`)
+  over the live settings, the store handed to it. `agent/names.go`:
+  `SetName` (`/name`, an `info` entry), `Name`, and `Sessions`, this
+  project's sessions for `/resume`.
   `agent/permissions.go`: `PolicyInfo`, the policy in force read from
   the engine for `Info` and `/permissions` (`permissionLines` in
   `commands.go`).

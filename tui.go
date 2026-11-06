@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -168,7 +169,7 @@ func banner(info frontInfo, si agent.Info) []string {
 	}
 	lines = append(lines, elsewhereLines(info)...)
 	if si.Recorded {
-		lines = append(lines, "session "+si.ID)
+		lines = append(lines, sessionLine(si))
 	}
 	if info.Policy != "" {
 		lines = append(lines, "policy: "+info.Policy)
@@ -532,6 +533,15 @@ func (f *tuiFront) flush(out io.Writer, si agent.Info) {
 	if si.Recorded {
 		fmt.Fprintln(out, resumeLine(f.info.Name, si.ID))
 	}
+}
+
+// sessionLine is the start line naming the session: its ID, and its
+// name (/name) when it has one.
+func sessionLine(si agent.Info) string {
+	if si.Name != "" {
+		return "session " + si.ID + " " + strconv.Quote(render.Clean(si.Name))
+	}
+	return "session " + si.ID
 }
 
 // resumeLine is what the terminal client leaves on the terminal when it

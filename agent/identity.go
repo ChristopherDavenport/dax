@@ -406,6 +406,8 @@ func list(ctx context.Context, root string, f agentsession.ListFilter, in *works
 func listIn(ctx context.Context, store agentsession.Store, f agentsession.ListFilter, in *workspace.Descriptor) ([]agentsession.Summary, error) {
 	var all []agentsession.Summary
 	var err error
+	// The listing shows each session's name (/name).
+	f.WithNames = true
 	for sum, e := range store.List(ctx, f) {
 		if e != nil {
 			err = e

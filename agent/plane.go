@@ -343,6 +343,8 @@ type Info struct {
 	// is kept of (no store), whose ID names nothing after it closes.
 	ID       string
 	Recorded bool
+	// Name is its name (/name), empty for none.
+	Name string `json:",omitempty"`
 	// Path is its directory in a local store; empty otherwise.
 	Path    string
 	Tools   []agentkit.ToolOrigin
@@ -361,7 +363,7 @@ var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Policy: s.policyInfo()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

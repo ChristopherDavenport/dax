@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -747,7 +748,12 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		if d, _, ok := agent.ServersWorkspaceOf(s.Header); ok {
 			servers = "  servers " + render.Clean(d.Kind+" "+d.Ref)
 		}
-		fmt.Fprintf(w, "%s  %s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path, at, servers)
+		// Its name (/name) is the person's text, cleaned as any is.
+		name := ""
+		if s.Name != "" {
+			name = "  " + strconv.Quote(render.Clean(s.Name))
+		}
+		fmt.Fprintf(w, "%s  %s%s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, name, s.Size, s.Path, at, servers)
 	}
 	return err
 }

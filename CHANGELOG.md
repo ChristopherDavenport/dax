@@ -7,6 +7,13 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `/name <text>` names the session (agentsession's `info`
+  entry), and `-list`, `/resume` and a resume's start line show it.
+  `/resume` lists this project's sessions, newest first and numbered;
+  `/resume <n|ID|name>` continues one in place over the live settings,
+  as `/new` does. `dax attach` refuses both. `agent.Session.SetName`,
+  `Name`, `Sessions` and `agent.Info.Name`; `-list`'s summaries carry
+  names (#164).
 - Added: `/new` (alias `/clear`) starts a new session in place, in the
   REPL and the terminal client, over the settings you changed during
   this one: the model, reasoning, the permission mode and the servers

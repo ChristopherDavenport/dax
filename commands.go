@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -52,6 +53,8 @@ const commandHelp = `commands:
   /tools                    the tools offered and what was left out
   /session                  the session's ID and where it is kept
   /new                      a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)
+  /name <text>              name this session; -list and /resume show it
+  /resume [n|ID|name]       this project's sessions, newest first; with one, continue it here
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
@@ -142,6 +145,10 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{}, err
 		}
 		return reopen(ctx, ctl, "")
+	case "/name":
+		return nameCommand(ctx, ctl, arg, running)
+	case "/resume":
+		return resumeCommand(ctx, ctl, arg, running)
 	case "/model":
 		if arg == "" {
 			return commandResult{}, errors.New("usage: /model <name>")
@@ -246,6 +253,144 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 // none: a view cannot move the host to another session.
 type reopener interface {
 	Reopen(ctx context.Context, id string) (*agent.Session, error)
+}
+
+// namer is what /name asks of the session's controls: the session's
+// own (agent.Session); dax attach offers none.
+type namer interface {
+	SetName(ctx context.Context, name string) error
+	Name() string
+}
+
+// nameCommand is /name: with no text the session's name, with text the
+// session named so.
+func nameCommand(ctx context.Context, ctl agent.Controls, arg string, running bool) (commandResult, error) {
+	n, ok := ctl.(namer)
+	if !ok {
+		return commandResult{}, errors.New("/name is not offered over dax attach")
+	}
+	if arg == "" {
+		if name := n.Name(); name != "" {
+			return commandResult{out: "session " + strconv.Quote(name)}, nil
+		}
+		return commandResult{}, errors.New("usage: /name <text>; this session has no name")
+	}
+	if running {
+		return commandResult{}, errors.New("/name waits for the run to end")
+	}
+	if err := n.SetName(ctx, arg); err != nil {
+		return commandResult{}, err
+	}
+	return commandResult{out: "[session named " + strconv.Quote(strings.TrimSpace(arg)) + "]"}, nil
+}
+
+// lister is what /resume asks of the session's controls to list the
+// project's sessions: the session's own (agent.Session).
+type lister interface {
+	Sessions(ctx context.Context) ([]agentsession.Summary, error)
+}
+
+// maxListed is how many sessions /resume lists.
+const maxListed = 20
+
+// resumeCommand is /resume: with nothing, this project's sessions,
+// newest first and numbered, the current one marked; with a number from
+// that list, an ID, the start of one, or a name (the whole name, or a
+// part of only one), the front moves to that session over the live
+// settings (agent.Session.Reopen).
+func resumeCommand(ctx context.Context, ctl agent.Controls, arg string, running bool) (commandResult, error) {
+	l, ok := ctl.(lister)
+	if !ok {
+		return commandResult{}, errors.New("a served session stays the one conversation every attached view acts on: /new and /resume are not offered over dax attach")
+	}
+	sums, err := l.Sessions(ctx)
+	if err != nil {
+		return commandResult{}, err
+	}
+	current := ctl.Info().ID
+	if arg == "" {
+		if len(sums) == 0 {
+			return commandResult{out: "no sessions in this project"}, nil
+		}
+		var b strings.Builder
+		for i, s := range sums {
+			if i == maxListed {
+				fmt.Fprintf(&b, "\n  (%d more: /resume ID)", len(sums)-i)
+				break
+			}
+			mark := " "
+			if s.Header.ID == current {
+				mark = "*"
+			}
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "%s%3d  %s  %s", mark, i+1, s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID)
+			if s.Name != "" {
+				b.WriteString("  " + strconv.Quote(oneLine(s.Name, maxField)))
+			}
+		}
+		return commandResult{out: b.String()}, nil
+	}
+	if running {
+		return commandResult{}, errors.New("/resume waits for the run to end")
+	}
+	id, err := pickSession(sums, arg)
+	if err != nil {
+		return commandResult{}, err
+	}
+	if id == current {
+		return commandResult{}, errors.New("that is this session")
+	}
+	return reopen(ctx, ctl, id)
+}
+
+// pickSession is the ID of the session ref names among sums: its number
+// in /resume's list, its ID or a start of one, its name, or a part of
+// one name alone, case aside.
+func pickSession(sums []agentsession.Summary, ref string) (string, error) {
+	if n, err := strconv.Atoi(ref); err == nil {
+		if n < 1 || n > len(sums) || n > maxListed {
+			return "", fmt.Errorf("no session %d in the list; /resume lists them", n)
+		}
+		return sums[n-1].Header.ID, nil
+	}
+	one := func(match func(agentsession.Summary) bool, what string) (string, bool, error) {
+		var found []agentsession.Summary
+		for _, s := range sums {
+			if match(s) {
+				found = append(found, s)
+			}
+		}
+		switch len(found) {
+		case 0:
+			return "", false, nil
+		case 1:
+			return found[0].Header.ID, true, nil
+		}
+		var ids []string
+		for _, s := range found {
+			ids = append(ids, s.Header.ID)
+		}
+		return "", true, fmt.Errorf("%q is %s of %d sessions: %s", ref, what, len(found), strings.Join(ids, ", "))
+	}
+	lower := strings.ToLower(ref)
+	for _, m := range []struct {
+		match func(agentsession.Summary) bool
+		what  string
+	}{
+		{func(s agentsession.Summary) bool { return s.Header.ID == ref }, "the ID"},
+		{func(s agentsession.Summary) bool { return strings.EqualFold(s.Name, ref) }, "the name"},
+		{func(s agentsession.Summary) bool { return len(ref) >= 4 && strings.HasPrefix(s.Header.ID, ref) }, "the start of the ID"},
+		{func(s agentsession.Summary) bool {
+			return s.Name != "" && strings.Contains(strings.ToLower(s.Name), lower)
+		}, "part of the name"},
+	} {
+		if id, ok, err := one(m.match, m.what); ok || err != nil {
+			return id, err
+		}
+	}
+	return "", fmt.Errorf("no session in this project is %q; /resume lists them", ref)
 }
 
 // reopen is the session the front moves to: a new one for id "", or

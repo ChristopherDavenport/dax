@@ -1653,6 +1653,9 @@ the input until the next line, and an error gives the line back to edit.
 - `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has
   letters, digits, `-` and `_`, and no `__`), `/mcp remove <label>`.
 - `/tools`, `/session`, `/help`.
+- `/name <text>` names the session; `/resume` lists this project's
+  sessions and `/resume <n|ID|name>` continues one here (see
+  [Sessions](#sessions)).
 - `/new` (or `/clear`) starts a new session in place, in this
   project: a new conversation recorded as one of its own, which `-list`
   shows beside this one. It keeps what you changed during this
@@ -1677,8 +1680,9 @@ the input until the next line, and an error gives the line back to edit.
   session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think`, `/compact`, `/new`, `/mcp add`
-and `/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
+the next model call. `/model`, `/think`, `/compact`, `/new`, `/name
+<text>`, `/resume <session>`, `/mcp add` and `/mcp remove` wait for the
+run to end; the rest, the `/mcp` listing among them, work
 during one. An unknown command is an error, not a
 prompt.
 
@@ -1753,8 +1757,9 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
   that resumes the session.
 - **Commands.** The slash commands run against the served session:
   `/model`, `/think`, `/mcp` and `/session` act there, through the
-  server's commands. `/new` is refused there: a view cannot move the
-  host, and every view with it, to another conversation.
+  server's commands. `/new`, `/resume` and `/name` are refused there: a
+  view cannot move the host, and every view with it, to another
+  conversation.
 - **The tree.** Continuing from an entry (Ctrl-B on a row, `c` in the
   tree) moves the served session's head, as it does locally: the next
   prompt, from any view, continues from there. A move the session
@@ -1959,7 +1964,7 @@ Every run is recorded in one content-addressed store,
 `~/.dax/sessions`, for every project. Admin commands:
 
 ```sh
-dax -list                          # sessions of this project: this directory, or the executor's (docs/sandbox.md)
+dax -list                          # sessions of this project, with their names: this directory, or the executor's (docs/sandbox.md)
 dax -resume <id>                   # continue one, answering any call an abort cut off
 dax -verify <id>                   # rebuild every request and check its hash
 dax -project <id> -out dir         # write one as a JSONL file (RFC 0001)
@@ -1970,6 +1975,17 @@ dax -repair <id>                   # rewrite a damaged log from what still reads
 
 `-list`, `-verify` and `-project` open the store read-only, so they work
 beside a running dax. `-sessions ""` disables recording.
+
+Inside a session, `/name <text>` names it (an `info` entry on its
+record; a later one replaces it), and `-list`, `/resume` and the start
+line of a resume show the name. `/resume` lists this project's
+sessions, newest first and numbered, the one you are in marked `*`;
+`/resume <n|ID|name>` continues one in place: its number in that list,
+its ID or at least its first four characters, its name, or a part of
+one session's name alone (`/resume auth` for "auth refactor"). Like
+`/new`, it keeps the model, reasoning, mode and `/mcp add` servers you
+set, and leaves this session's record as it is. `dax attach` refuses
+both: an attached view cannot move the served host to another session.
 
 The record says whose words each message is. What you type at the
 REPL or in the terminal client, a prompt, a steer or a note with an
