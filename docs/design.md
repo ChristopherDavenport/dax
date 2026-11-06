@@ -560,7 +560,9 @@ What is not equal yet, and why:
   servers workspace offers (`Options.ServersWorkspace`,
   `servers_workspace`): a second workspace, granted servers alone
   (the scopes its `remote` client reports are exactly `servers`),
-  beside the one the tools act in, which nothing else uses. A server placed on
+  beside the one the tools act in, which nothing else uses; or several,
+  by name (`Options.ServersWorkspaces`, `servers_workspaces`), each so
+  held, sharing no server name, workspace, token or hub port. A server placed on
   the host (`"in": "host"`) or at a `url` is called from this machine
   whatever the workspace, its tools never taken as confined.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is

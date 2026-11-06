@@ -7,6 +7,15 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `servers_workspaces`, more servers workspaces by name, each as
+  `servers_workspace` is with a `token_env` of its own, so a session
+  reaches several hosts' secret-holding servers. Across them (and
+  `servers_workspace`, named `servers`) no token or variable, server
+  name, workspace or hub port is shared. The header records them under
+  `dax.servers_workspace` as an object by name (a lone
+  `servers_workspace` keeps its form); `-list` and the start line name
+  each. `agent.Options.ServersWorkspaces`, `agent.ServersBeside`,
+  `agent.ServersWorkspacesOf`; `config.Settings.Servers` (#123).
 - Fixed: a box session records the image the box ran. The box host
   starts `dax execute` with the image's digest as the workspace's ref,
   the container's ID as its instance and its own machine as the host,

@@ -482,6 +482,7 @@ names the file and the field.
 | `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there) or `checkout` (`{"url", "ref"}`: a repository the box host clones and keeps, within its config's `checkouts.allow`; no credentials in the URL), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. `confine` (`off`, `units`, `workspace`) has the policy take the box's tools as confined where their envelope allows, so a bare ask for them does not ask; `workspace` also has the box host hold the repository's `.git` read-only in the box, the git guard (git that writes then fails there; commit outside it), and claims nothing for the workspace without it (docs/sandbox.md, "Fewer questions in a box"). Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `workspace` | `{"url": "https://box.example:7779", "token_env": "DAX_WORKSPACE_TOKEN", "tls_ca": "ca.pem"}`: run the tools here, in a workspace `dax workspace` serves there (see [A served workspace](#a-served-workspace-dax-workspace)). `url` is https, or http to a loopback host, with no user, password, query or fragment; `token_env` names the variable holding its token (default `DAX_WORKSPACE_TOKEN`), which only the workspace is sent and `pass_env` may not name; `tls_ca`, for https, a CA certificate to verify its certificate against in place of the system's. Your file only; not with `executor` or `box` |
 | `workspace.hub` | `{"listen": ":7780", "name": "build", "token_env": "DAX_TUNNEL_TOKEN", "tls_cert": "hub.pem", "tls_key": "hub-key.pem", "wait": "60s"}`, in place of `workspace.url`: host a hub for a workspace that dials in (`dax workspace -connect`, see [A workspace that dials in](#a-workspace-that-dials-in-dax-workspace--connect)), and act in it once it does. `listen` is a loopback address unless `tls_cert` and `tls_key` are given; the upgrade path is `/tunnel`. `name` is the workspace's name and identity, a DNS label; `token_env` the variable holding the one token that enrolls it (default `DAX_TUNNEL_TOKEN`, at least 32 bytes, taken out of the environment before any process starts, and no other credential's variable); `wait` how long to wait for it (default `60s`). Your file only; not with `url`, `executor` or `box` |
+| `servers_workspaces` | `{"github": {"url": "https://gh.example:7781", "token_env": "GH_WS_TOKEN"}}`: more servers workspaces, by name (a DNS label, not `servers`), each as `servers_workspace` with a `token_env` of its own required (a hub's `hub.token_env`); no token, variable, server name, workspace or hub port shared between any two (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). Your file only |
 | `servers_workspace` | `{"url": "http://127.0.0.1:7781", "token_env": "DAX_SERVERS_WORKSPACE_TOKEN"}`, or `{"hub": {...}}` as `workspace.hub`: a second served workspace, beside wherever the tools act (this directory, `workspace`, an executor or a box), whose offered MCP servers the session connects and nothing else (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). The same fields as `workspace`, checked the same way, with their own default variables, `DAX_SERVERS_WORKSPACE_TOKEN` and, for a hub, `DAX_SERVERS_TUNNEL_TOKEN` (no other connection's, nor any other credential's). The session refuses one whose grant is more than `servers`: with `read`, `write` or `exec` its servers' secrets are not safe there. Not the session's own workspace, and two hubs need two ports. Your file only |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
@@ -497,7 +498,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `peers` or `status`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers` or `status`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -1012,6 +1013,28 @@ project's config and `AGENTS.md` are not the session's.
 - **Through a hub,** the session prints what to run on the servers'
   host, with the grant it needs: `DAX_TUNNEL_TOKEN=... dax workspace
   -connect <url> -scopes servers -servers FILE`.
+- **Several.** `dax workspace` offers a secret holder alone, so two
+  servers that each hold a secret need two `dax workspace` processes.
+  `servers_workspaces` names more, by name, each as `servers_workspace`
+  is and checked the same way:
+
+  ```json
+  "servers_workspaces": {
+    "github": {"url": "https://gh.example:7781", "token_env": "GH_WS_TOKEN"},
+    "slack":  {"hub": {"listen": "127.0.0.1:7782", "name": "slack", "token_env": "SLACK_TUNNEL_TOKEN"}}
+  }
+  ```
+
+  A name is a DNS label, the one the record, `-list` and messages give
+  it (`servers_workspace` goes by `servers` beside them). Each names its
+  own `token_env` (a hub's `hub.token_env`): no default variable is
+  shared, and no two connections may hold one token or one variable. No
+  server name may be offered by two, no workspace given twice, and no
+  two hubs take one port. The header records them under
+  `dax.servers_workspace` as an object by name (`servers_workspace`
+  alone keeps its single form), `-list` ends a line with `servers
+  <name>=<identity>` for each, and the start line names each.
+  `-servers-workspace` replaces `servers_workspace` alone.
 
 ### A workspace that dials in: `dax workspace -connect`
 

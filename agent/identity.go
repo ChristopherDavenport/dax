@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -43,7 +45,8 @@ const (
 	// headerServers is the header member holding, for a session with a
 	// servers workspace beside its own (Options.ServersWorkspace), that
 	// workspace as its servers were offered by: {"kind", "ref",
-	// "servers"}, its identity (a served workspace's URL as
+	// "servers"}, or with servers_workspaces (Options.ServersWorkspaces)
+	// an object of those by name, servers_workspace's as "servers"; its identity (a served workspace's URL as
 	// config.WorkspaceRef writes it, a hub's workspace's
 	// config.TunnelRef of its name) and the names of the servers it
 	// offered, which the session connected. Its root is not kept: a
@@ -172,14 +175,73 @@ func (s *Session) extras() map[string]json.RawMessage {
 			out[headerProfile] = raw
 		}
 	}
-	if sw := s.sw; sw != nil {
-		servers := s.served
+	if raw, ok := recordServers(s.beside); ok {
+		out[headerServers] = raw
+	}
+	return out
+}
+
+// ServersBeside is a servers workspace as a session's header records
+// it: its name (config.ServersName for servers_workspace), its identity
+// (kind and ref; the root is not kept) and the servers it offered.
+type ServersBeside struct {
+	Name      string
+	Workspace workspace.Descriptor
+	Servers   []string
+}
+
+// recordServers is the header member of the servers workspaces l: one
+// named config.ServersName alone as {"kind", "ref", "servers"}, as dax
+// wrote it before servers_workspaces, and otherwise an object of those
+// by name; false for none.
+func recordServers(l []ServersBeside) (json.RawMessage, bool) {
+	rec := func(b ServersBeside) recordedServers {
+		servers := b.Servers
 		if servers == nil {
 			servers = []string{}
 		}
-		if raw, err := json.Marshal(recordedServers{Kind: sw.Kind, Ref: sw.Ref, Servers: servers}); err == nil {
-			out[headerServers] = raw
+		return recordedServers{Kind: b.Workspace.Kind, Ref: b.Workspace.Ref, Servers: servers}
+	}
+	var v any
+	switch {
+	case len(l) == 0:
+		return nil, false
+	case len(l) == 1 && l[0].Name == config.ServersName:
+		v = rec(l[0])
+	default:
+		m := map[string]recordedServers{}
+		for _, b := range l {
+			m[b.Name] = rec(b)
 		}
+		v = m
+	}
+	raw, err := json.Marshal(v)
+	return raw, err == nil
+}
+
+// ServersWorkspacesOf is the servers workspaces a session's header
+// records, in the order of their names, servers_workspace's (named
+// config.ServersName) among them; none for a session that had none.
+func ServersWorkspacesOf(h agentsession.Header) []ServersBeside {
+	raw, ok := h.Extra[headerServers]
+	if !ok {
+		return nil
+	}
+	var one recordedServers
+	if err := json.Unmarshal(raw, &one); err == nil && one.Kind != "" {
+		return []ServersBeside{{Name: config.ServersName, Workspace: workspace.Descriptor{Kind: one.Kind, Ref: one.Ref}, Servers: one.Servers}}
+	}
+	var many map[string]recordedServers
+	if err := json.Unmarshal(raw, &many); err != nil {
+		return nil
+	}
+	var out []ServersBeside
+	for _, n := range slices.Sorted(maps.Keys(many)) {
+		r := many[n]
+		if r.Kind == "" {
+			continue
+		}
+		out = append(out, ServersBeside{Name: n, Workspace: workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, Servers: r.Servers})
 	}
 	return out
 }
@@ -187,16 +249,15 @@ func (s *Session) extras() map[string]json.RawMessage {
 // ServersWorkspaceOf is the servers workspace a session's header
 // records (Options.ServersWorkspace), by its kind and ref, and the
 // servers it offered; false for a session that had none.
+//
+// With several (servers_workspaces) it is the first by name; see
+// ServersWorkspacesOf.
 func ServersWorkspaceOf(h agentsession.Header) (workspace.Descriptor, []string, bool) {
-	raw, ok := h.Extra[headerServers]
-	if !ok {
+	l := ServersWorkspacesOf(h)
+	if len(l) == 0 {
 		return workspace.Descriptor{}, nil, false
 	}
-	var r recordedServers
-	if err := json.Unmarshal(raw, &r); err != nil || r.Kind == "" {
-		return workspace.Descriptor{}, nil, false
-	}
-	return workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, r.Servers, true
+	return l[0].Workspace, l[0].Servers, true
 }
 
 // recordedIn is the workspace a header records, and whether it records

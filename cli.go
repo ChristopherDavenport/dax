@@ -371,23 +371,36 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 	}
-	// So does the servers workspace's.
-	var swToken string
-	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
-		if swToken, err = takeTunnelToken(w.Hub.Setting(), w.Hub.TokenEnv); err != nil {
-			return err
-		}
-	} else if w != nil {
-		if swToken, err = takeWorkspaceToken(w.Flag(), w.TokenEnv); err != nil {
-			return err
-		}
+	// So does each servers workspace's.
+	type serversConn struct {
+		name  string
+		w     *config.WorkspaceSettings
+		token string
 	}
-	// The servers workspace's host is another machine, and holds its
-	// token: one token for both connections, whatever their kinds, would
-	// let that host use the session's workspace's grant (dial it, or
-	// enroll at its hub first) and the session's workspace use its.
-	if swToken != "" && swToken == wsToken {
-		return errors.New("servers_workspace: its token is the session's workspace's too; give each connection a token of its own")
+	var swConns []serversConn
+	for _, nw := range settings.Servers() {
+		var tok string
+		if nw.Hub != nil {
+			tok, err = takeTunnelToken(nw.Hub.Setting(), nw.Hub.TokenEnv)
+		} else {
+			tok, err = takeWorkspaceToken(nw.Flag(), nw.TokenEnv)
+		}
+		if err != nil {
+			return err
+		}
+		// A servers workspace's host is another machine, and holds its
+		// token: one token for two connections, whatever their kinds,
+		// would let that host use the other's grant (dial it, or enroll
+		// at its hub first).
+		if tok != "" && tok == wsToken {
+			return fmt.Errorf("%s: its token is the session's workspace's too; give each connection a token of its own", nw.Name())
+		}
+		for _, o := range swConns {
+			if tok != "" && tok == o.token {
+				return fmt.Errorf("%s: its token is %s's too; give each connection a token of its own", nw.Name(), o.w.Name())
+			}
+		}
+		swConns = append(swConns, serversConn{nw.Label, nw.WorkspaceSettings, tok})
 	}
 	cost, err := pricing(settings.PricingFile)
 	if err != nil {
@@ -511,31 +524,53 @@ func run(ctx context.Context, args []string, p program) error {
 	// granted more than servers.
 	var (
 		sw       workspace.Workspace
-		swLine   string
-		swHosted *hostedHub
+		named    map[string]workspace.Workspace
+		swLines  []string
+		swHosted []*hostedHub
 	)
-	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
-		if swHosted, err = hostHub(ctx, *w.Hub, swToken, p.name, os.Stderr); err != nil {
-			return err
+	for _, c := range swConns {
+		var (
+			one  workspace.Workspace
+			line string
+		)
+		if c.w.Hub != nil {
+			h, err := hostHub(ctx, *c.w.Hub, c.token, p.name, os.Stderr)
+			if err != nil {
+				return err
+			}
+			defer h.Close()
+			swHosted = append(swHosted, h)
+			one, line = h.Workspace, "remote "+c.w.Hub.Name+" through the hub at "+render.Clean(h.URL)+" · its servers alone"
+		} else {
+			served, err := dialWorkspace(ctx, *c.w, c.token)
+			if err != nil {
+				return err
+			}
+			defer served.Close()
+			d := served.Descriptor()
+			one, line = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
+			if a, ok := served.(abandoner); ok {
+				dialed = append(dialed, a)
+			}
 		}
-		defer swHosted.Close()
-		sw, swLine = swHosted.Workspace, "remote "+w.Hub.Name+" through the hub at "+render.Clean(swHosted.URL)+" · its servers alone"
-	} else if w != nil {
-		served, err := dialWorkspace(ctx, *w, swToken)
-		if err != nil {
-			return err
+		if c.name == config.ServersName {
+			sw = one
+		} else {
+			if named == nil {
+				named = map[string]workspace.Workspace{}
+			}
+			named[c.name] = one
 		}
-		defer served.Close()
-		d := served.Descriptor()
-		sw, swLine = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
-		if a, ok := served.(abandoner); ok {
-			dialed = append(dialed, a)
+		if len(swConns) > 1 {
+			line = c.name + ": " + line
 		}
+		swLines = append(swLines, line)
 	}
+	swLine := strings.Join(swLines, "; ")
 	opts := agent.Options{
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, Executor: ex, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, ServersWorkspaces: named, Executor: ex, Root: *root, Sync: policyMode,
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		AgentsMD:       *agentsMD,
@@ -663,7 +698,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// With a hub hosted or a workspace dialed, the whole close is
 	// bounded, so a workspace that went away does not hold the exit.
 	cur = sess
-	defer func() { closeSession(cur, []*hostedHub{hosted, swHosted}, dialed...) }()
+	defer func() { closeSession(cur, append([]*hostedHub{hosted}, swHosted...), dialed...) }()
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
@@ -745,8 +780,12 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		// A session with a servers workspace beside its own names it
 		// after where its tools ran, by its identity, as the record does.
 		servers := ""
-		if d, _, ok := agent.ServersWorkspaceOf(s.Header); ok {
-			servers = "  servers " + render.Clean(d.Kind+" "+d.Ref)
+		for _, b := range agent.ServersWorkspacesOf(s.Header) {
+			servers += "  servers "
+			if b.Name != config.ServersName {
+				servers += render.Clean(b.Name) + "="
+			}
+			servers += render.Clean(b.Workspace.Kind + " " + b.Workspace.Ref)
 		}
 		// Its name (/name) is the person's text, cleaned as any is.
 		name := ""

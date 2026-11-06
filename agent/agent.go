@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -150,6 +152,12 @@ type Options struct {
 	// running server's environment, or write, which changes its code)
 	// fails the session. It is the caller's to close, after the session.
 	ServersWorkspace workspace.Workspace
+	// ServersWorkspaces are more servers workspaces, by name (config's
+	// servers_workspaces), each held to ServersWorkspace's rules, which
+	// is named ServersName beside them: and across them, no two are one
+	// workspace and no server name is offered by two. A name is a DNS
+	// label. Each is the caller's to close, after the session.
+	ServersWorkspaces map[string]workspace.Workspace
 	// Executor runs the extensions' tools elsewhere, in `dax execute`
 	// (DialExecutor), in place of building them in this process over a
 	// workspace: their calls, facts and stamps are the executor's, and
@@ -446,10 +454,9 @@ type Session struct {
 	grantRules map[string]func(context.Context, string, json.RawMessage) string
 	env        []string // what an MCP server outside the workspace starts with
 	offered    []string // the MCP servers the workspace offers, connected at open
-	// served are the MCP servers the servers workspace offers,
-	// connected at open, and sw that workspace's descriptor.
-	served []string
-	sw     *workspace.Descriptor
+	// beside are the servers workspaces, by name, each with its
+	// descriptor and the MCP servers it offered, connected at open.
+	beside []ServersBeside
 	// reserved are the names no other server may take: the offered
 	// servers' and a box host's units'.
 	reserved []string
@@ -877,24 +884,46 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// the workspace offers, or a box host's unit, is refused, since the
 	// two servers' tools would be one name and box.confine claims a
 	// unit's by its name.
-	if sw := o.ServersWorkspace; sw != nil {
-		sp, err := checkServersWorkspace(sw, ws)
+	besides, err := serversWorkspaces(o)
+	if err != nil {
+		return nil, err
+	}
+	// Who offered each reserved name, for a collision's message.
+	by := map[string]string{}
+	for _, r := range s.reserved {
+		by[r] = "the workspace"
+	}
+	for _, b := range besides {
+		sp, err := checkServersWorkspace(b.ws, ws)
 		if err != nil {
 			return nil, err
 		}
-		d := sw.Descriptor()
-		s.sw = &d
-		list, err := offeredServers(ctx, sp, "the servers workspace "+where(d), PlacedServersWorkspace, where(d))
-		if err != nil {
-			return nil, err
+		d := b.ws.Descriptor()
+		this := "the servers workspace " + where(d)
+		if b.name != config.ServersName || len(besides) > 1 {
+			this = "the servers workspace " + b.name + " (" + where(d) + ")"
 		}
-		for _, m := range list {
-			if slices.ContainsFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }) {
-				return nil, fmt.Errorf("mcp %s: the workspace and the servers workspace %s both offer a server by that name; offer it from one", m.Name, where(d))
+		for _, o := range s.beside {
+			if o.Workspace.Kind == d.Kind && o.Workspace.Ref == d.Ref {
+				return nil, fmt.Errorf("%s is the servers workspace %s too; name each once", this, o.Name)
 			}
-			s.served = append(s.served, m.Name)
 		}
-		s.reserved = append(s.reserved, s.served...)
+		list, err := offeredServers(ctx, sp, this, PlacedServersWorkspace, where(d))
+		if err != nil {
+			return nil, err
+		}
+		rec := ServersBeside{Name: b.name, Workspace: workspace.Descriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}, Servers: []string{}}
+		for _, m := range list {
+			if i := slices.IndexFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }); i >= 0 {
+				return nil, fmt.Errorf("mcp %s: %s and %s both offer a server by that name; offer it from one", m.Name, by[s.reserved[i]], this)
+			}
+			rec.Servers = append(rec.Servers, m.Name)
+		}
+		for _, n := range rec.Servers {
+			s.reserved = append(s.reserved, n)
+			by[n] = this
+		}
+		s.beside = append(s.beside, rec)
 		offered = append(offered, list...)
 	}
 	if o.Policy != nil {
@@ -1231,28 +1260,81 @@ func (s *Session) resumed(id string) error {
 	}
 	// So is the servers workspace: the header keeps the one the session
 	// started with, which -list names.
-	if w := serversResumed(sess.Header(), s.sw); w != "" {
+	if w := serversResumed(sess.Header(), s.beside); w != "" {
 		fmt.Fprintf(warnings{}, "dax: %s\n", w)
 	}
 	return nil
 }
 
 // serversResumed is what to say when a session whose header h records
-// one servers workspace, or none, continues with another, or none (now,
-// nil for none); "" when they are one.
-func serversResumed(h agentsession.Header, now *workspace.Descriptor) string {
+// its servers workspaces (none, one, or several by name) continues
+// with others (now); "" when they are the same.
+func serversResumed(h agentsession.Header, now []ServersBeside) string {
 	name := func(d workspace.Descriptor) string { return d.Kind + " " + d.Ref }
-	was, _, had := ServersWorkspaceOf(h)
-	switch {
-	case had && now == nil:
-		return "session's servers were recorded from servers workspace " + name(was) + ", continuing without one"
-	case !had && now != nil:
-		return "session was recorded without a servers workspace, continuing with " + name(*now)
-	case had && (was.Kind != now.Kind || was.Ref != now.Ref):
-		return "session's servers were recorded from servers workspace " + name(was) + ", continuing with " + name(*now)
+	was := ServersWorkspacesOf(h)
+	single := func(l []ServersBeside) bool {
+		return len(l) == 0 || len(l) == 1 && l[0].Name == config.ServersName
 	}
-	return ""
+	if single(was) && single(now) {
+		// One servers workspace, or none, either side: said as before.
+		switch {
+		case len(was) == 1 && len(now) == 0:
+			return "session's servers were recorded from servers workspace " + name(was[0].Workspace) + ", continuing without one"
+		case len(was) == 0 && len(now) == 1:
+			return "session was recorded without a servers workspace, continuing with " + name(now[0].Workspace)
+		case len(was) == 1 && len(now) == 1 && (was[0].Workspace.Kind != now[0].Workspace.Kind || was[0].Workspace.Ref != now[0].Workspace.Ref):
+			return "session's servers were recorded from servers workspace " + name(was[0].Workspace) + ", continuing with " + name(now[0].Workspace)
+		}
+		return ""
+	}
+	list := func(l []ServersBeside) string {
+		if len(l) == 0 {
+			return "none"
+		}
+		var parts []string
+		for _, b := range l {
+			parts = append(parts, b.Name+" "+name(b.Workspace))
+		}
+		return strings.Join(parts, ", ")
+	}
+	if list(was) == list(now) {
+		return ""
+	}
+	return "session's servers were recorded from servers workspaces " + list(was) + ", continuing with " + list(now)
 }
+
+// namedWorkspace is a servers workspace the session connects and its
+// name.
+type namedWorkspace struct {
+	name string
+	ws   workspace.Workspace
+}
+
+// serversWorkspaces are o's servers workspaces, by name: ServersWorkspace
+// as config.ServersName, then ServersWorkspaces in the order of their
+// names, each name a DNS label.
+func serversWorkspaces(o Options) ([]namedWorkspace, error) {
+	var out []namedWorkspace
+	if o.ServersWorkspace != nil {
+		out = append(out, namedWorkspace{config.ServersName, o.ServersWorkspace})
+	}
+	names := slices.Sorted(maps.Keys(o.ServersWorkspaces))
+	for _, n := range names {
+		switch {
+		case !serversName.MatchString(n):
+			return nil, fmt.Errorf("servers workspace %q: a name is a DNS label of lower-case letters, digits and hyphens", n)
+		case n == config.ServersName && o.ServersWorkspace != nil:
+			return nil, fmt.Errorf("servers workspace %s: the name is ServersWorkspace's", n)
+		case o.ServersWorkspaces[n] == nil:
+			continue
+		}
+		out = append(out, namedWorkspace{n, o.ServersWorkspaces[n]})
+	}
+	return out, nil
+}
+
+// serversName is a servers workspace's name: a DNS label.
+var serversName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // ID is the session ID, empty when not recording.
 func (s *Session) ID() string { return s.Kit.SessionID() }

@@ -141,8 +141,9 @@ before changing the shape.
   one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
   those the workspace offers of its own (`workspace.ServerProvider`, a
   box host's units, a served or tunnelled workspace's `-servers`) or a
-  servers workspace beside it offers (`Options.ServersWorkspace`,
-  refused unless its grant is servers alone, `checkServersWorkspace`), and
+  servers workspace beside it offers (`Options.ServersWorkspace`, and
+  by name `Options.ServersWorkspaces`, each refused unless its grant is
+  servers alone, `checkServersWorkspace`), and
   a command holding secrets (`secret_env`, on the host alone) started
   through `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,

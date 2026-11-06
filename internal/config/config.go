@@ -168,6 +168,13 @@ type Config struct {
 	// project cannot, since it chooses a machine the session's tool
 	// calls go to.
 	ServersWorkspace *Workspace `json:"servers_workspace,omitempty"`
+	// ServersWorkspaces are more servers workspaces, by name, each as
+	// servers_workspace is and with a token variable of its own: a
+	// session reaches several hosts' secret-holding servers, each served
+	// alone. A name is a DNS label, the one the record, -list and
+	// messages give it; "servers" is servers_workspace's. The user sets
+	// them; a project cannot.
+	ServersWorkspaces map[string]*Workspace `json:"servers_workspaces,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
@@ -292,6 +299,17 @@ type WorkspaceSettings struct {
 // WorkspaceSettings.Field of the settings it gives.
 const ServersField = "servers_workspace"
 
+// ServersWorkspacesField is servers_workspaces' name in messages; an
+// entry's Field is it, a dot and the entry's name.
+const ServersWorkspacesField = "servers_workspaces"
+
+// ServersName is the name servers_workspace goes by beside the
+// servers_workspaces entries: in the record, -list and messages.
+const ServersName = "servers"
+
+// serversName is a servers_workspaces entry's name: a DNS label.
+var serversName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
 // Name is what messages call the setting w came from: workspace, or
 // servers_workspace.
 func (w WorkspaceSettings) Name() string {
@@ -306,6 +324,9 @@ func (w WorkspaceSettings) Name() string {
 func (w WorkspaceSettings) Flag() string {
 	if w.Field == ServersField {
 		return "-servers-workspace"
+	}
+	if strings.HasPrefix(w.Field, ServersWorkspacesField+".") {
+		return w.Field
 	}
 	return "-workspace"
 }
@@ -845,7 +866,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -902,6 +923,27 @@ func (l *Layer) validate() error {
 	if w := c.ServersWorkspace; w != nil {
 		if err := w.check(ServersField); err != nil {
 			return err
+		}
+	}
+	for _, name := range sortedKeys(c.ServersWorkspaces) {
+		w, field := c.ServersWorkspaces[name], ServersWorkspacesField+"."+name
+		switch {
+		case !serversName.MatchString(name):
+			return fmt.Errorf("%s: %q is not a name: a DNS label of lower-case letters, digits and hyphens", ServersWorkspacesField, name)
+		case name == ServersName:
+			return fmt.Errorf("%s.%s: the name is servers_workspace's; give it there or pick another", ServersWorkspacesField, name)
+		case w == nil:
+			return fmt.Errorf("%s is empty", field)
+		}
+		if err := w.check(field); err != nil {
+			return err
+		}
+		// Each its own variable: no default is shared between them.
+		if w.Hub != nil && w.Hub.TokenEnv == "" {
+			return fmt.Errorf("%s.hub.token_env is required: each servers workspace's hub enrolls with a token of its own", field)
+		}
+		if w.Hub == nil && w.TokenEnv == "" {
+			return fmt.Errorf("%s.token_env is required: each servers workspace is sent a token of its own", field)
 		}
 	}
 	for _, name := range sortedKeys(c.Peers) {
@@ -1458,6 +1500,60 @@ func ServersWorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
 	return s, nil
 }
 
+// ServersWorkspacesOf is the user's servers_workspaces, by name, with
+// their defaults filled in; nil for none. -servers-workspace replaces
+// servers_workspace alone.
+func ServersWorkspacesOf(user Layer) (map[string]*WorkspaceSettings, error) {
+	if len(user.ServersWorkspaces) == 0 {
+		return nil, nil
+	}
+	out := map[string]*WorkspaceSettings{}
+	for name, w := range user.ServersWorkspaces {
+		field := ServersWorkspacesField + "." + name
+		s := &WorkspaceSettings{URL: w.URL, TokenEnv: w.TokenEnv, TLSCA: w.TLSCA, Field: field}
+		if w.Hub != nil {
+			var err error
+			if s.Hub, err = w.Hub.settings(field+".hub", ""); err != nil {
+				return nil, err
+			}
+			s.Hub.Field = field + ".hub"
+		}
+		out[name] = s
+	}
+	return out, nil
+}
+
+// Servers are the servers workspaces, by name: servers_workspace (or
+// -servers-workspace) as ServersName, then servers_workspaces, in the
+// order of their names.
+func (s Settings) Servers() []NamedWorkspace {
+	var out []NamedWorkspace
+	if s.ServersWorkspace != nil {
+		out = append(out, NamedWorkspace{ServersName, s.ServersWorkspace})
+	}
+	for _, name := range sortedKeys(s.ServersWorkspaces) {
+		out = append(out, NamedWorkspace{name, s.ServersWorkspaces[name]})
+	}
+	return out
+}
+
+// NamedWorkspace is a servers workspace and the name it goes by in the
+// record and -list (Label); WorkspaceSettings.Name is what messages call
+// its setting.
+type NamedWorkspace struct {
+	Label string
+	*WorkspaceSettings
+}
+
+// mapValues are m's values in the order of their keys.
+func mapValues[V any](m map[string]V) []V {
+	var out []V
+	for _, k := range sortedKeys(m) {
+		out = append(out, m[k])
+	}
+	return out
+}
+
 // HasExecutor reports whether the user's layer and the flags set an
 // executor, a box's among them: what decides, before the project's
 // layer is read, whether the project is this machine's directory at
@@ -1792,7 +1888,7 @@ func (l *Layer) resolvePaths() {
 		l.MemoryDir = &m
 	}
 	l.PricingFile = fix(l.PricingFile)
-	for _, w := range []*Workspace{l.Workspace, l.ServersWorkspace} {
+	for _, w := range append([]*Workspace{l.Workspace, l.ServersWorkspace}, mapValues(l.ServersWorkspaces)...) {
 		if w == nil {
 			continue
 		}
@@ -1906,6 +2002,9 @@ type Settings struct {
 	// Workspace is the served workspace the tools act in, nil for none;
 	// the caller dials it, and reads the project's layer through it.
 	Workspace *WorkspaceSettings
+	// ServersWorkspaces are servers_workspaces, by name (Servers lists
+	// them with ServersWorkspace).
+	ServersWorkspaces map[string]*WorkspaceSettings
 	// ServersWorkspace is the servers workspace beside wherever the
 	// tools act, nil for none; the caller dials it (or hosts its hub),
 	// and the session connects its offered servers alone.
@@ -2229,11 +2328,17 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if !l.Project && l.ServersWorkspace != nil {
 			user.ServersWorkspace = l.ServersWorkspace
 		}
+		if !l.Project && l.ServersWorkspaces != nil {
+			user.ServersWorkspaces = l.ServersWorkspaces
+		}
 	}
 	if s.Workspace, err = WorkspaceOf(user, f); err != nil {
 		return s, err
 	}
 	if s.ServersWorkspace, err = ServersWorkspaceOf(user, f); err != nil {
+		return s, err
+	}
+	if s.ServersWorkspaces, err = ServersWorkspacesOf(user); err != nil {
 		return s, err
 	}
 	if s.Box, err = BoxOf(user, f); err != nil {
@@ -2409,7 +2514,9 @@ func tokenOf(w *WorkspaceSettings) []connectionToken {
 func checkConnectionTokens(s Settings) error {
 	var all []connectionToken
 	all = append(all, tokenOf(s.Workspace)...)
-	all = append(all, tokenOf(s.ServersWorkspace)...)
+	for _, sw := range s.Servers() {
+		all = append(all, tokenOf(sw.WorkspaceSettings)...)
+	}
 	for i, t := range all {
 		for _, list := range []struct {
 			field string
@@ -2440,22 +2547,39 @@ func checkConnectionTokens(s Settings) error {
 	}
 	// A hub's token is not its workspace's token_env, which a flag's URL
 	// given over the hub is sent.
-	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+	conns := []*WorkspaceSettings{s.Workspace}
+	for _, sw := range s.Servers() {
+		conns = append(conns, sw.WorkspaceSettings)
+	}
+	for _, w := range conns {
 		if w != nil && w.Hub != nil && w.Hub.TokenEnv == w.TokenEnv {
 			return fmt.Errorf("%s.token_env: %s is %s.token_env too, a served workspace's token; name a variable of the hub's own", w.Hub.Setting(), w.TokenEnv, w.Name())
 		}
 	}
 	// Two hubs on one port: the second's listen would fail only once the
 	// first's workspace connected, up to its wait.
-	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Hub != nil && sw.Hub != nil {
-		_, p1, _ := net.SplitHostPort(w.Hub.Listen)
-		_, p2, _ := net.SplitHostPort(sw.Hub.Listen)
-		if p1 == p2 && p1 != "" && p1 != "0" {
-			return fmt.Errorf("servers_workspace.hub.listen %q: port %s is workspace.hub's too; give each hub a port of its own", sw.Hub.Listen, p2)
+	for i, a := range conns {
+		for _, b := range conns[i+1:] {
+			if a == nil || b == nil || a.Hub == nil || b.Hub == nil {
+				continue
+			}
+			_, p1, _ := net.SplitHostPort(a.Hub.Listen)
+			_, p2, _ := net.SplitHostPort(b.Hub.Listen)
+			if p1 == p2 && p1 != "" && p1 != "0" {
+				return fmt.Errorf("%s.listen %q: port %s is %s's too; give each hub a port of its own", b.Hub.Setting(), b.Hub.Listen, p2, a.Hub.Setting())
+			}
 		}
 	}
-	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Ref() == sw.Ref() {
-		return fmt.Errorf("servers_workspace %s is the session's workspace too; the servers workspace stands beside it, so name another or leave it out", sw.Ref())
+	for i, a := range conns {
+		for _, b := range conns[i+1:] {
+			if a == nil || b == nil || a.Ref() != b.Ref() {
+				continue
+			}
+			if a == s.Workspace {
+				return fmt.Errorf("%s %s is the session's workspace too; the servers workspace stands beside it, so name another or leave it out", b.Name(), b.Ref())
+			}
+			return fmt.Errorf("%s %s is %s too; name each servers workspace once", b.Name(), b.Ref(), a.Name())
+		}
 	}
 	return nil
 }
@@ -2480,7 +2604,11 @@ func checkSecretEnv(s Settings) error {
 			others[p.TokenEnv] = "peer " + p.Name + "'s token_env"
 		}
 	}
-	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+	conns := []*WorkspaceSettings{s.Workspace}
+	for _, sw := range s.Servers() {
+		conns = append(conns, sw.WorkspaceSettings)
+	}
+	for _, w := range conns {
 		if w == nil {
 			continue
 		}
