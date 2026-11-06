@@ -431,6 +431,12 @@ type mentioner interface {
 	MCPResources(ctx context.Context) []agent.MCPResource
 }
 
+// mentionNamer says whether a word is a mention of one of the session's
+// MCP servers' resources (agent.Session.IsMCPMention).
+type mentionNamer interface {
+	IsMCPMention(word string) bool
+}
+
 // typedItems is what a line the person typed sends: the line, their
 // words, and after it each MCP resource it mentions (@server:uri),
 // attached once, marked as the server's text.
@@ -438,11 +444,13 @@ func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openres
 	msg := openresponses.UserText(text)
 	// The images it names (@path.png, the workspace's files), each once,
 	// attached to the person's message: theirs, as the line is.
+	// A word naming a server's resource (@server:x.png) is the server's.
 	if im, ok := ctl.(imager); ok {
+		mn, _ := ctl.(mentionNamer)
 		seen := map[string]bool{}
 		for _, word := range strings.Fields(text) {
 			p, ok := strings.CutPrefix(strings.TrimRight(word, ".,;!?"), "@")
-			if !ok || seen[p] || tool.ImageType(p, nil) == "" {
+			if !ok || seen[p] || tool.ImageType(p, nil) == "" || mn != nil && mn.IsMCPMention("@"+p) {
 				continue
 			}
 			seen[p] = true

@@ -1644,12 +1644,20 @@ the input until the next line, and an error gives the line back to edit.
   refused. `dax attach` sends the line as typed.
 - `@<server>:<uri>` in a line you type attaches that MCP server's
   resource (`resources/read`) after your message, once however often
-  the line names it, cut at 100 KiB, recorded as composed from the
+  the line names it, cut at 100 KiB (on a character's boundary) and at
+  256 KiB for all a line attaches, recorded as composed from the
   resource (source `dax.mcp_resource`) and untrusted, while the line
   stays your words; content that is not text is said to be left out.
-  A name no server has is plain text. A resource that cannot be read
-  sends nothing and says why. In the terminal client `@` completes the
-  servers' resources. `dax attach` sends the line as typed.
+  A name no server has is plain text; one a server has is that
+  server's mention even when it ends as an image's name does
+  (`@docs:shot.png` is not a path). A resource that cannot be read
+  sends nothing and says why. dax does not check the URI against the
+  server's list: the server alone decides what it reads, so a
+  host-placed server (`"in": "host"`, a `secret_env` one) may read
+  this machine's files. Naming one is your own act, as running a
+  command is, and what it reads reaches only the model. In the
+  terminal client `@` completes the servers' resources. `dax attach`
+  sends the line as typed.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
 - `/permissions` lists the policy in force: the mode, what a call no

@@ -17,6 +17,11 @@ versions may break flags and the config file.
   `~/.dax/learned`. A learned skill's name and description are still
   in a caller's catalogue until agentkit can leave a part out per
   conversation (#157, #158, #159, #161).
+- Fixed: an `@<server>:<uri>` mention whose URI ends as an image's name
+  does (`@docs:shot.png`) is the server's resource, no longer taken as
+  an image path and refused; a resource's text is cut on a character's
+  boundary, and a line's mentions attach at most 256 KiB in all;
+  `agent.Session.IsMCPMention` (#176, #166).
 - Fixed: images reach only a model that takes them, judged at each
   request by the model it names: a sub-agent's `read` of an image is
   judged by the sub-agent's own model (a text-only sub-agent model was

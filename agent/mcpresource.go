@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
@@ -33,8 +34,12 @@ type MCPResource struct {
 // resource on the record.
 const mcpResourceSource = "dax.mcp_resource"
 
-// maxResource bounds what one mention attaches of a resource's text.
-const maxResource = 100 << 10
+// maxResource bounds what one mention attaches of a resource's text,
+// and maxMentioned what one line's mentions attach in all.
+const (
+	maxResource  = 100 << 10
+	maxMentioned = 256 << 10
+)
 
 // mention is @<server>:<uri> at the start of a line or after a space;
 // what ends a sentence is not part of the URI.
@@ -53,6 +58,19 @@ func (s *Session) mcpByName() map[string]string {
 		out[name] = srv.Label
 	}
 	return out
+}
+
+// IsMCPMention reports whether word is a mention of a resource of one
+// of the session's MCP servers (@<server>:<uri>, the server's name
+// one the session has): such a word is the server's, never a path, even
+// when its URI ends as an image's name does.
+func (s *Session) IsMCPMention(word string) bool {
+	m := mention.FindStringSubmatch(word)
+	if m == nil || !strings.HasPrefix(word, "@") {
+		return false
+	}
+	_, ok := s.mcpByName()[m[1]]
+	return ok
 }
 
 // MCPResources lists the resources the session's MCP servers offer now
@@ -86,7 +104,8 @@ func (s *Session) MCPResources(ctx context.Context) []MCPResource {
 // user message marked with the resource as its instructions layer and
 // as untrusted. A mention of a name no server has is text, and adds
 // nothing. A resource's text is cut at 100 KiB; content that is not
-// text is said to be left out.
+// text is said to be left out. What the line's mentions attach in all is
+// cut at 256 KiB.
 func (s *Session) MCPMentions(ctx context.Context, text string) (openresponses.Items, error) {
 	found := mention.FindAllStringSubmatch(text, -1)
 	if len(found) == 0 {
@@ -95,6 +114,7 @@ func (s *Session) MCPMentions(ctx context.Context, text string) (openresponses.I
 	servers := s.mcpByName()
 	var out openresponses.Items
 	seen := map[string]bool{}
+	left := maxMentioned
 	for _, m := range found {
 		name, uri := m[1], strings.TrimRight(m[2], ".,;!?")
 		label, ok := servers[name]
@@ -111,25 +131,7 @@ func (s *Session) MCPMentions(ctx context.Context, text string) (openresponses.I
 		if err != nil {
 			return nil, fmt.Errorf("@%s: %w", key, err)
 		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "<mcp_resource server=%q uri=%q>\n", name, uri)
-		for _, c := range res.Contents {
-			switch {
-			case c.Text != "":
-				t := c.Text
-				if len(t) > maxResource {
-					t = t[:maxResource] + fmt.Sprintf("\n[cut: %d of %d bytes attached]", maxResource, len(c.Text))
-				}
-				b.WriteString(t)
-				if !strings.HasSuffix(t, "\n") {
-					b.WriteString("\n")
-				}
-			case len(c.Blob) > 0:
-				fmt.Fprintf(&b, "[%s: %d bytes of %s, not attached]\n", c.URI, len(c.Blob), c.MIMEType)
-			}
-		}
-		b.WriteString("</mcp_resource>")
-		item, err := agentturn.WithProvenance(openresponses.UserText(b.String()), agentturn.Provenance{
+		item, err := agentturn.WithProvenance(openresponses.UserText(resourceText(name, uri, res.Contents, &left)), agentturn.Provenance{
 			Layers: []agentturn.Layer{{ID: key, Source: mcpResourceSource}},
 			Trust:  &agentturn.Trust{Reads: []agenttool.Label{agenttool.LabelUntrusted}},
 		})
@@ -139,4 +141,39 @@ func (s *Session) MCPMentions(ctx context.Context, text string) (openresponses.I
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// resourceText is a resource's contents as the message that attaches
+// it: each text whole, or cut on a rune boundary at maxResource or at
+// what *left says the line may still attach, which it lowers; content
+// that is not text is said to be left out.
+func resourceText(name, uri string, contents []*mcp.ResourceContents, left *int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<mcp_resource server=%q uri=%q>\n", name, uri)
+	for _, c := range contents {
+		switch {
+		case c.Text != "":
+			t, note := c.Text, ""
+			if n := min(maxResource, *left); len(t) > n {
+				for n > 0 && !utf8.RuneStart(t[n]) {
+					n-- // on a rune's first byte
+				}
+				t = t[:n]
+				note = fmt.Sprintf("\n[cut: %d of %d bytes attached]", len(t), len(c.Text))
+				if n < maxResource {
+					note = fmt.Sprintf("\n[cut: %d of %d bytes attached; a line attaches at most %d bytes]", len(t), len(c.Text), maxMentioned)
+				}
+			}
+			*left -= len(t)
+			t += note
+			b.WriteString(t)
+			if !strings.HasSuffix(t, "\n") {
+				b.WriteString("\n")
+			}
+		case len(c.Blob) > 0:
+			fmt.Fprintf(&b, "[%s: %d bytes of %s, not attached]\n", c.URI, len(c.Blob), c.MIMEType)
+		}
+	}
+	b.WriteString("</mcp_resource>")
+	return b.String()
 }

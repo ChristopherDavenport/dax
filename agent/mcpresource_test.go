@@ -5,9 +5,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/ChristopherDavenport/openresponses/echo"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // An @<server>:<uri> mention attaches the server's resource once,
@@ -55,5 +57,59 @@ func TestAnMCPResourceMentionIsAttachedAsTheServers(t *testing.T) {
 		if !strings.Contains(data, want) {
 			t.Errorf("the record lacks %s", want)
 		}
+	}
+}
+
+// A word is a mention only of a server the session has, so a path that
+// happens to hold a colon is not one (#176, #166).
+func TestIsMCPMention(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	o := options(t, &echo.Adapter{})
+	o.MCP = []MCPServer{{Name: "team", Command: os.Args[0]}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for word, want := range map[string]bool{
+		"@team:file:///shot.png": true,
+		"@team:shot.png":         true,
+		"@nobody:shot.png":       false,
+		"@shot.png":              false,
+		"team:shot.png":          false,
+	} {
+		if got := s.IsMCPMention(word); got != want {
+			t.Errorf("IsMCPMention(%q) = %v, want %v", word, got, want)
+		}
+	}
+}
+
+// A resource's text is cut on a rune's first byte, at 100 KiB each and
+// at 256 KiB for all a line's mentions attach.
+func TestAResourceIsCutOnARuneAndALineIsCapped(t *testing.T) {
+	big := strings.Repeat("é", maxResource) // two bytes each
+	left := maxMentioned
+	var texts []string
+	for range 4 {
+		texts = append(texts, resourceText("team", "file:///big", []*mcp.ResourceContents{{Text: big}}, &left))
+	}
+	for i, txt := range texts {
+		if !utf8.ValidString(txt) {
+			t.Errorf("attachment %d is not whole runes", i)
+		}
+		if !strings.Contains(txt, "[cut: ") {
+			t.Errorf("attachment %d says no cut", i)
+		}
+	}
+	var sum int
+	for _, txt := range texts {
+		sum += strings.Count(txt, "é") * 2
+	}
+	if sum > maxMentioned || sum < maxMentioned-4 {
+		t.Errorf("the line attached %d bytes of text, want at most %d", sum, maxMentioned)
+	}
+	if !strings.Contains(texts[2], "a line attaches at most") || !strings.Contains(texts[3], "[cut: 0 of ") {
+		t.Errorf("the line's cap is not said:\n%.200s\n%.200s", texts[2][len(texts[2])-200:], texts[3])
 	}
 }

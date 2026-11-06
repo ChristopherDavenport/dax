@@ -51,3 +51,35 @@ func TestATypedLineAttachesItsImages(t *testing.T) {
 		t.Error("over attach an image was attached")
 	}
 }
+
+// fakeBoth is controls that attach images and whose server "team"
+// offers resources.
+type fakeBoth struct {
+	fakeMentions
+	asked []string
+}
+
+func (f *fakeBoth) Image(_ context.Context, path string) (*openresponses.InputImage, error) {
+	f.asked = append(f.asked, path)
+	return &openresponses.InputImage{ImageURL: "data:image/png;base64,AA=="}, nil
+}
+
+func (f *fakeBoth) IsMCPMention(word string) bool { return strings.HasPrefix(word, "@team:") }
+
+// A mention of a server's resource whose URI ends as an image's name
+// does is the server's, never a path: @team:shot.png attaches the
+// resource and reads no file; a name no server has stays a path.
+func TestAnMCPMentionWinsOverAnImagePath(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeBoth{}
+	items, err := typedItems(ctx, f, "see @team:shot.png and @other:x.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Errorf("%d items, want the line and the resource", len(items))
+	}
+	if len(f.asked) != 1 || f.asked[0] != "other:x.png" {
+		t.Errorf("images asked for: %q, want only other:x.png", f.asked)
+	}
+}
