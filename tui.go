@@ -270,6 +270,10 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 	}
 	cctx, quit := context.WithCancel(ctx)
 	defer quit()
+	// Every intent's context carries the view's own, which a context
+	// the client detaches from its cancellation still holds, so a
+	// controller can tell an intent sent after the user left (viewLeft).
+	cctx = context.WithValue(cctx, viewKey{}, cctx)
 	var quitting atomic.Bool
 	opts = append([]console.Option{
 		console.WithSubmit(submitLine(t, ctl, func() { quitting.Store(true); quit() })),
@@ -279,6 +283,20 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 		return nil
 	}
 	return err
+}
+
+type viewKey struct{}
+
+// viewLeft reports whether ctx is an intent's from a view the user has
+// left: the context runConsole ran the client under is done. The client
+// aborts at exit twice, the second time under a context detached from
+// its cancellation (agentconsole v0.0.16), whose own Err is nil.
+func viewLeft(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	v, ok := ctx.Value(viewKey{}).(context.Context)
+	return ok && v.Err() != nil
 }
 
 // textQuestions is src with dax's question for text

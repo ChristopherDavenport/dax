@@ -30,6 +30,11 @@ versions may break flags and the config file.
   - A model call refused because the key's or account's credit cannot
     cover it (`insufficient_quota`, OpenRouter's 402) is not retried.
 
+- Fixed: leaving `dax attach` with `/quit` leaves the served session's
+  run going again. agentconsole v0.0.16 aborts a second time at exit,
+  under a context its leaving does not end, which the attached view
+  passed on and so stopped the run.
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format

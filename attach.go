@@ -240,15 +240,16 @@ func attachController(ctl *control.Client, controls *remoteControls) client.Cont
 //     view's context, and that client sends an abort when its caller's
 //     context ends, so the run is started under one the view's leaving
 //     does not end;
-//   - the terminal client sends an abort as it exits, the only one sent
-//     once the view's context is done (the user left with /quit), which
-//     is dropped. An abort the user asks for while the view is up
+//   - the terminal client sends an abort as it exits, twice, once the
+//     view's context is done (the user left with /quit), the second
+//     under a context detached from its cancellation; both are dropped
+//     (viewLeft). An abort the user asks for while the view is up
 //     (ctrl+c) goes through.
 func detaching(act client.Controller) client.Controller {
 	return func(ctx context.Context, in client.Intent) error {
 		switch in.(type) {
 		case client.Abort:
-			if ctx.Err() != nil {
+			if viewLeft(ctx) {
 				return nil
 			}
 		case client.Prompt, client.Answer:
