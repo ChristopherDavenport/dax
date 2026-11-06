@@ -1229,6 +1229,8 @@ client, which moves to the next one:
 | `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. It is what `-p` does with every question once its input ends |
 | `bypassPermissions` | nothing asks: what no deny rule refuses runs |
 
+A mode is yours: an A2A caller of `dax serve -a2a` is held to
+`default` whatever the mode (see [Serving peers](#serving-peers-dax-serve--a2a)).
 A deny rule, an extension's or yours, holds in every mode, and a grant
 for the session (a skill's) survives a switch. A project's
 `default_mode` may only be stricter than yours (`dontAsk`), and
@@ -1723,13 +1725,24 @@ dax serve -a2a -listen 127.0.0.1:7878
   new message in the same context.
 - **The same agent, the same workspace.** A conversation runs under the
   served session's model and reasoning as they stood when serve
-  started, and its extensions, policy and MCP servers as they are: an
+  started, and its extensions, rules and MCP servers as they are: an
   MCP server added or removed in an attached view is added or removed
   for the conversations too. Its tools act in the same workspace. The
   conversations and the served session run at the same time, on the
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in
   flight is refused, and the caller sends it again.
+- **Never your mode.** A conversation's calls, and its sub-agents', are
+  decided as the `default` [permission mode](#permission-modes) decides
+  them, whatever mode you started serve in or switch to: under
+  `acceptEdits`, `bypassPermissions` or `-no-policy` a caller's `write`
+  or `bash` still asks an attached view, and is refused with none. Your
+  rules, the rules you kept with `A` and a box's confinement hold for
+  it as for you; a grant you made for your own session (`a`) does not
+  reach it. A switch never reaches a caller's run, so a batch of its
+  calls is decided under one policy. Under a looser mode a skill's
+  grant does not let a caller's call run unasked, since it is held to
+  the rules alone; under `default` it does, as before.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the

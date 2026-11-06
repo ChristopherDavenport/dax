@@ -331,8 +331,10 @@ func (a bareAsks) unit(u string) bool {
 
 // confineBox builds the session's claim over settings, the policy
 // settings the session runs under, and adds its SourceBox rules to
-// them: the baseline is the policy as it was. It returns nil options
-// when nothing is claimed.
+// them: the baseline is the policy as it was, in the default mode
+// whatever mode the session starts in, since an A2A caller's floor
+// (peerFloor) reads the same claim and a switch does not rebuild it. It
+// returns nil options when nothing is claimed.
 func confineBox(o Options, set *executor.Set, settings *policy.Settings, matchers map[string]agentpolicy.ToolMatcher, aliases map[string][]string, offered []string) ([]agentpolicy.Option, error) {
 	if o.Executor == nil {
 		return nil, nil
@@ -341,7 +343,9 @@ func confineBox(o Options, set *executor.Set, settings *policy.Settings, matcher
 	if err != nil || c == nil {
 		return nil, err
 	}
-	p0, err := policy.Build(*settings)
+	st0 := *settings
+	st0.Mode = policy.ModeDefault
+	p0, err := policy.Build(st0)
 	if err != nil {
 		return nil, err
 	}

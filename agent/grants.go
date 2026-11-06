@@ -149,7 +149,18 @@ func (s *Session) Grant(ctx context.Context, callID string, kind GrantKind, rule
 		if err != nil {
 			return err
 		}
-		return eng.SetPolicy(ctx, p, "kept "+rule+" for the project")
+		if err := eng.SetPolicy(ctx, p, "kept "+rule+" for the project"); err != nil {
+			return err
+		}
+		// The A2A callers' floor reads the user's saved rules too.
+		if peers := s.modes.peers; peers != nil {
+			pp, err := peerPolicy(*st)
+			if err != nil {
+				return err
+			}
+			return peers.SetPolicy(ctx, pp, "kept "+rule+" for the project")
+		}
+		return nil
 	}
 	return fmt.Errorf("grant %q: want session or saved", kind)
 }

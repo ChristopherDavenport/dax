@@ -109,6 +109,14 @@ versions may break flags and the config file.
   block the line is the client's default. Your file only.
   `tool.GitHead`, `agent.Session.Git` and `agent.Session.Model` give a
   front built on dax the same (#182).
+- Fixed: an A2A caller of `dax serve -a2a` was decided under the
+  person's permission mode, so under `bypassPermissions` (`-mode`,
+  `-no-policy`, `/mode`, Shift-Tab) or `acceptEdits` a remote caller's
+  `bash` or `write`, or its sub-agent's, ran with nobody asked. A
+  caller's call is now held to the `default` mode: the session's engine
+  folds in a floor, an engine of the same rules (the user's, the
+  project's, the kept grants, a box's confinement) in `default`, which
+  no switch touches (#145).
 - Added: permission modes (#145). `default`, `acceptEdits` (`write`
   and `edit` run unasked but for a protected or secret-looking path;
   commands still ask), `dontAsk` (what would ask is refused, the model

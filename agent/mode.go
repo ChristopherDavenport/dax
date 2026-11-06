@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
+
+	"github.com/ChristopherDavenport/agentpolicy"
 
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -35,6 +39,18 @@ type modes struct {
 	mode     string
 	pending  string
 	note     string
+	// inForce is mode, read by the decisions without the lock, which a
+	// switch holds while it replaces the policy.
+	inForce atomic.Value
+	// peers is the A2A callers' floor (peerFloor): an engine of the same
+	// rules in the default mode, which no switch touches.
+	peers *agentpolicy.Engine
+}
+
+// current is the mode in force, as the decisions read it.
+func (m *modes) current() string {
+	v, _ := m.inForce.Load().(string)
+	return v
 }
 
 // ErrNoPolicy refuses a mode on a session built without a policy.
@@ -117,6 +133,7 @@ func (s *Session) applyMode(ctx context.Context, mode, why string) error {
 	}
 	from := s.modes.mode
 	s.modes.mode, s.modes.settings.Mode = mode, mode
+	s.modes.inForce.Store(mode)
 	s.modes.note = policy.DescribeMode(mode)
 	s.annotateMode(ctx, modeEntry{Mode: mode, From: from, Reason: why})
 	return nil
@@ -165,4 +182,51 @@ func (s *Session) modeNote() openresponses.Item {
 	n := s.modes.note
 	s.modes.note = ""
 	return openresponses.DeveloperText(n)
+}
+
+// peerFloor is the hook the session's engine folds into every decision
+// (agentpolicy.WithHooks): an A2A caller's call, or its sub-agent's,
+// is held to the default mode, whatever mode the person put the
+// session in. While the mode is looser than default (acceptEdits,
+// bypassPermissions), the caller's call is decided again by the peers'
+// engine (modes.peers: the same rule sources, saved grants and box
+// confinement, in the default mode), and that verdict stands when it
+// is stricter, since the fold keeps the strictest. In default and
+// dontAsk the session's policy is the default one, so the floor adds
+// nothing there and a caller's skill grants, which live in the
+// session's engine, decide as before. A switch never touches the
+// peers' engine, so a caller's batch decided across one is decided
+// under the default mode throughout.
+func (s *Session) peerFloor(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	if _, peer := ctx.Value(peerKey{}).(string); !peer || s.modes.peers == nil {
+		return nil, nil
+	}
+	if !policy.Stricter(policy.ModeDefault, s.modes.current()) {
+		return nil, nil
+	}
+	v, err := s.modes.peers.Would(ctx, asCalled(info))
+	if err != nil {
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error(), By: agentpolicy.ByPolicy}, nil
+	}
+	if v.Action == agentturn.Allow {
+		return nil, nil
+	}
+	return &agentturn.ToolDecision{Action: v.Action, Reason: v.Reason, Subject: v.Subject, By: agentpolicy.ByPolicy}, nil
+}
+
+// asCalled is info with the arguments the model gave: a hook is handed
+// the call's rewrite (bash's stamp), which a decision of its own reads
+// from the call's facts claim again.
+func asCalled(info agentturn.ToolCallInfo) agentturn.ToolCallInfo {
+	if info.Call != nil && info.Call.Arguments != "" {
+		info.Args = json.RawMessage(info.Call.Arguments)
+	}
+	return info
+}
+
+// peerPolicy is the policy the A2A callers' floor decides under: st in
+// the default mode.
+func peerPolicy(st policy.Settings) (agentpolicy.Policy, error) {
+	st.Mode = policy.ModeDefault
+	return policy.Build(st)
 }

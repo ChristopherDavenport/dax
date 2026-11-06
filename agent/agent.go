@@ -878,7 +878,18 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if s.modes.mode == "" {
 			s.modes.mode = policy.ModeDefault
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases)}, confine...)...))
+		s.modes.inForce.Store(s.modes.mode)
+		// The A2A callers' floor: the same rules in the default mode,
+		// which a call of theirs is held to (peerFloor).
+		pp, err := peerPolicy(settings)
+		if err != nil {
+			return nil, err
+		}
+		lookup := agentpolicy.WithToolsFor(func(ctx context.Context, name string) (agenttool.Tool, bool) { return s.Kit.LookupToolFor(ctx, name) })
+		if s.modes.peers, err = agentpolicy.Build(pp, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), lookup}, confine...)...); err != nil {
+			return nil, err
+		}
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor)}, confine...)...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}

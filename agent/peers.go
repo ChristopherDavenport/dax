@@ -33,6 +33,10 @@ import (
 // PeerRecord.Attach routes a run's records to the conversation's
 // session.
 //
+// Its calls, and its sub-agents', are decided by the session's engine
+// held to the default permission mode (peerFloor): the person's mode,
+// at start or switched to since, never loosens them.
+//
 // The conversations share the workspace with the session, and with each
 // other, as parallel sub-agents do.
 func (s *Session) PeerConfig() agentturn.Config {
