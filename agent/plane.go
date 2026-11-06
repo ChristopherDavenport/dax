@@ -417,7 +417,8 @@ type PermitAnswer struct {
 	// Grant, for an approval, is how far it reaches, and Rule the rule
 	// the session offered for the call (Session.GrantOffer). Drive makes
 	// the grant through the control when it is a Session, before the
-	// Resume that answers the call.
+	// Resume that answers the call, and only for a person's answer (By
+	// ByHuman): a rule's approval is once.
 	Grant GrantKind
 	Rule  string
 }
@@ -468,7 +469,10 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 			by = agentpolicy.ByHuman
 		}
 		if pa.Allow {
-			if pa.Grant != GrantOnce {
+			// A grant is a person's to make: a rule's approval is once.
+			if pa.Grant != GrantOnce && by != agentpolicy.ByHuman {
+				fmt.Fprintf(warnings{}, "dax: %s approved once: a grant is a person's, and %s decided\n", call.Name, by)
+			} else if pa.Grant != GrantOnce {
 				g, ok := c.(interface {
 					Grant(context.Context, string, GrantKind, string) error
 				})

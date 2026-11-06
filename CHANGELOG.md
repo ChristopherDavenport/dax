@@ -155,6 +155,10 @@ versions may break flags and the config file.
   `sudo`, `nohup`, `timeout`, `find .` and `git -c`. No rule is
   offered now when the first word is a shell, an interpreter or a
   launcher, an assignment, or is followed by a flag (#146).
+- Fixed: `agent.Drive` made a grant for any approval that asked for
+  one; it makes one only for a person's answer (`PermitAnswer.By`
+  empty, agentpolicy's `ByHuman`), and a rule's approval is once
+  (#146).
 - Added: "yes, always" (#146). Beside a permission dax offers a rule
   when no rule asked about the call: `bash(<first two words>:*)` for a
   line its analyzer reads whose commands share them, an MCP tool's

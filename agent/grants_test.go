@@ -161,3 +161,32 @@ func TestNoGrantOverARulesAsk(t *testing.T) {
 		t.Error("a rule dax did not offer was granted")
 	}
 }
+
+// A grant is a person's: an approval a rule gave (By not ByHuman)
+// makes none, so a controller's rules cannot keep a rule for the
+// session or the project (#146's review, L1).
+func TestARulesApprovalMakesNoGrant(t *testing.T) {
+	ctx := context.Background()
+	model := perPrompt{"go": {{"bash", `{"command":"echo hello"}`}}, "again": {{"bash", `{"command":"echo hello world"}`}}}
+	o := options(t, model)
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	byRule := Rules{Permit: func(c *openresponses.FunctionCall, _ string) PermitAnswer {
+		o := s.GrantOffer(ctx, c.CallID)
+		return PermitAnswer{Allow: true, By: "policy", Grant: GrantSession, Rule: o.Rule}
+	}}
+	if _, err := Drive(ctx, s, byRule, openresponses.UserText("go")); err != nil {
+		t.Fatal(err)
+	}
+	var asked, offered []string
+	if _, err := Drive(ctx, s, grantPermit(s, GrantOnce, &asked, &offered), openresponses.UserText("again")); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("asked about %v after a rule's approval, want the call: the rule made a grant", asked)
+	}
+}
