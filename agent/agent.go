@@ -574,6 +574,16 @@ func (s *Session) withModeTurn(cfg agentturn.Config) agentturn.Config {
 // other's, which a reload in the middle of a batch would allow
 // (agentkit's Kit.ReloadSkills). A failed reload keeps the catalogue
 // in force, with a warning.
+//
+// The gap it leaves: an A2A caller's conversation (PeerConfig) runs on
+// the same kit at the same time as the main agent, and nothing here
+// orders its batches against the main agent's turns, so a caller's
+// batch can be decided on one catalogue and served from the next. A
+// reload follows only the person's own write (skill_manage is refused
+// to a caller, extension.Extension.PersonOnly), and a caller reads
+// only installed skills (dax-skills' callerReads); what can
+// straddle it is a learned skill's listing, never its body, and an
+// installed skill as its directory stood when the reload read it.
 func (s *Session) skillsTurn(ctx context.Context, _ agentturn.TurnStartInfo) (openresponses.Items, error) {
 	if !s.skillsStale.Swap(false) {
 		return nil, nil

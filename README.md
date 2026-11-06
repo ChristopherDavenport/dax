@@ -339,7 +339,11 @@ is checked before it is written (its name, its frontmatter, its
 `allowed-tools`), written whole and moved into place, and the catalogue
 lists it from the model's next turn, in the run that wrote it, so "save
 how you did that as a skill" can be followed and used in one session,
-and found in the next.
+and found in the next. An A2A caller's conversation runs beside yours
+on the same catalogue, and nothing orders its calls against your turns,
+so a call of its can be decided before a reload and served after it;
+it reads only installed skills, so what it can see change is a learned
+skill's line in its catalogue, or an installed skill you edited since.
 
 A skill the model wrote grants nothing, even under `-trust-skills`,
 until you approve it: `/skills approve <name>` records its
