@@ -3,19 +3,24 @@ package agent
 // What an A2A caller's requests leave out of what the person's carry:
 // the person's own AGENTS.md (UserDir/AGENTS.md and AgentsMDGlobal),
 // which the kit renders in the one AGENTS.md part every conversation
-// shares. A caller's request, its own and its sub-agents', is the
-// kit's with that part rendered again without those files, after the
-// kit's own BeforeModelCall, so the caller's record holds the text it
-// was sent.
+// shares, and the definitions of the tools the extensions keep to the
+// person (extension.Extension.PersonOnly: the memory tools,
+// skill_manage), which personOnlyRefusal refuses a caller anyway. A
+// caller's request, its own and its sub-agents', is the kit's with
+// that part rendered again without those files and those tools taken
+// out, after the kit's own BeforeModelCall, so the caller's record
+// holds what it was sent.
 
 import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentsmd"
+	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -113,7 +118,8 @@ func (c callerMD) parts(ps []agentkit.Part) []agentkit.Part {
 // callerRequest is the BeforeModelCall, after the kit's own, of the
 // main agent's runs and the sub-agents' (extension.Env's
 // ChildBeforeModelCall): on an A2A caller's context, the request with
-// the person's own AGENTS.md left out; any other request as it is.
+// the person's own AGENTS.md and the tools they keep to themselves
+// left out; any other request as it is.
 func (s *Session) callerRequest(ctx context.Context, req *openresponses.Request) error {
 	if _, peer := callerOf(ctx); !peer {
 		return nil
@@ -123,5 +129,25 @@ func (s *Session) callerRequest(ctx context.Context, req *openresponses.Request)
 		return err
 	}
 	req.Instructions = in
+	if slices.ContainsFunc(req.Tools, s.isPersonOnly) {
+		req.Tools = slices.DeleteFunc(slices.Clone(req.Tools), s.isPersonOnly)
+	}
 	return nil
+}
+
+// isPersonOnly reports whether t is the definition of a tool an
+// extension keeps to the person.
+func (s *Session) isPersonOnly(t openresponses.Tool) bool {
+	f, ok := t.(*openresponses.FunctionTool)
+	return ok && s.personOnly[f.Name]
+}
+
+// offeredToCallers is ts without the tools an extension keeps to the
+// person: what a caller's run (PeerConfig) is offered and its agent
+// card names.
+func (s *Session) offeredToCallers(ts []agenttool.Tool) []agenttool.Tool {
+	if !slices.ContainsFunc(ts, func(t agenttool.Tool) bool { return s.personOnly[t.Name()] }) {
+		return ts
+	}
+	return slices.DeleteFunc(slices.Clone(ts), func(t agenttool.Tool) bool { return s.personOnly[t.Name()] })
 }

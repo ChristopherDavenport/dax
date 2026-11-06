@@ -1916,7 +1916,9 @@ dax serve -a2a -listen 127.0.0.1:7878
   `skill_manage` are refused to a caller and its sub-agents outright,
   whatever your rules and mode, and no view is asked, since one
   approval would let a caller read or write what every later session of
-  yours reads. The `skill` tool serves a caller only the skills you
+  yours reads. Nor is a caller offered them: its requests and its
+  sub-agents' leave out their definitions, and the agent card does not
+  name them. The `skill` tool serves a caller only the skills you
   installed (the project's, `~/.dax/skills`, `skills_dirs`), never one
   the model wrote for you under `~/.dax/learned`. The catalogue in a
   caller's instructions still lists a learned skill's name and

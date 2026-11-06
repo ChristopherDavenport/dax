@@ -3,8 +3,10 @@ package dax
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
+	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/skills"
@@ -337,5 +340,81 @@ func TestAnA2ACallersRequestsCarryNotThePersonsAgentsMD(t *testing.T) {
 	}
 	if mine := strings.Join(m.seen(), "\n"); !strings.Contains(mine, personal) {
 		t.Errorf("after a caller's run, the person's requests lack their AGENTS.md:\n%s", mine)
+	}
+}
+
+// toolsSeen is a model that keeps the tool names of every request.
+type toolsSeen struct {
+	*steps
+	mu  sync.Mutex
+	got [][]string
+}
+
+func (m *toolsSeen) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	var names []string
+	for _, t := range req.Tools {
+		if f, ok := t.(*openresponses.FunctionTool); ok {
+			names = append(names, f.Name)
+		}
+	}
+	m.mu.Lock()
+	m.got = append(m.got, names)
+	m.mu.Unlock()
+	return m.steps.CreateStream(ctx, req, sink)
+}
+
+func (m *toolsSeen) seen() [][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := m.got
+	m.got = nil
+	return out
+}
+
+// A caller is not offered the tools the person keeps to themselves
+// (memory_*, skill_manage): its requests and its sub-agents' leave
+// their definitions out, and so does the agent card, while the
+// person's own requests still offer them (#157's review, L-c).
+func TestAnA2ACallerIsNotOfferedThePersonsTools(t *testing.T) {
+	m := &toolsSeen{steps: &steps{parent: [][2]string{{"explore", `{"input":"look"}`}}}}
+	rig := startRig(t, m.steps, policy.Rules{Allow: []string{"explore"}}, func(o *agent.Options) {
+		withThePersonsOwn(t)(o)
+		o.Streamer = m
+	}, nil, false)
+	if _, err := agent.Drive(t.Context(), rig.sess, agent.Rules{}, openresponses.UserText("hello")); err != nil {
+		t.Fatal(err)
+	}
+	kept := []string{"memory_save", "memory_search", "skill_manage"}
+	mine := m.seen()
+	for _, name := range kept {
+		if len(mine) == 0 || !slices.Contains(mine[0], name) {
+			t.Fatalf("the person's request does not offer %s: %v", name, mine)
+		}
+	}
+	s := serveA2A(t, rig, false, t.TempDir())
+	if _, err := send(t, s.client(aliceToken), say("c1", "look around")); err != nil {
+		t.Fatal(err)
+	}
+	theirs := m.seen()
+	if len(theirs) < 3 {
+		t.Fatalf("the caller's run made %d requests, want its own two and its sub-agent's", len(theirs))
+	}
+	var sub bool
+	for _, names := range theirs {
+		sub = sub || !slices.Contains(names, "explore")
+		for _, name := range append(kept, "memory_patch", "memory_forget", "memory_insert") {
+			if slices.Contains(names, name) {
+				t.Errorf("a caller's request offers %s: %v", name, names)
+			}
+		}
+	}
+	if !sub {
+		t.Error("no request of the caller's sub-agent was seen")
+	}
+	_, body, _ := get(t, http.DefaultClient, s.url+a2asrv.WellKnownAgentCardPath, aliceToken, nil)
+	for _, name := range kept {
+		if strings.Contains(string(body), name) {
+			t.Errorf("the agent card names %s:\n%s", name, body)
+		}
 	}
 }

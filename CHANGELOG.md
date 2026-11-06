@@ -7,6 +7,10 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: an A2A caller is no longer offered the tools the person keeps
+  to themselves (`memory_*`, `skill_manage`, any extension's
+  `PersonOnly`): its requests and its sub-agents' leave out their
+  definitions, and the agent card does not name them (#157).
 - Fixed: an A2A caller's requests, and its sub-agents', no longer carry
   the person's own instructions (`~/.dax/AGENTS.md`, `agents_md_global`);
   the project's AGENTS.md chain still reaches them, and the caller's

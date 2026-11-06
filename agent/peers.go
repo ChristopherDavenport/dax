@@ -51,6 +51,12 @@ func (s *Session) PeerConfig() agentturn.Config {
 	// each of its requests with no memory block, and the text a run
 	// starts with, which its record keeps, holds none either.
 	cfg.Instructions = agentsession.JoinInstructions(s.callerMD.parts(withoutMemory(s.Kit.Parts())))
+	// Nor the tools the person keeps to themselves: a caller is not
+	// offered them, and the agent card does not name them.
+	cfg.Tools = s.offeredToCallers(cfg.Tools)
+	if p := cfg.ToolProvider; p != nil {
+		cfg.ToolProvider = func(ctx context.Context) []agenttool.Tool { return s.offeredToCallers(p(ctx)) }
+	}
 	// The person's mode switches are told to the session's model, not
 	// a caller's (modeTurn).
 	cfg.BeforeTurn = s.Kit.Config().BeforeTurn
