@@ -2089,6 +2089,7 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
 		}
+		v = s.sessionGrantFor(bctx, e, info, v)
 		s.recordVerdict(ctx, v)
 		var h *agentturn.ToolDecision
 		if hook != nil {
@@ -2132,6 +2133,36 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		}
 		return d, nil
 	}
+}
+
+// sessionGrantFor is v, a sub-agent's verdict under its own grant
+// scope, or the verdict under its session's scope when a grant the
+// person made for the session ("a", policy.SourceSession) allows the
+// call there: the person's grant reaches the session's sub-agents,
+// where a skill its parent read does not. It applies only where v
+// asks for want of a rule, or is dontAsk's refusal of such a call, and
+// never to an A2A caller's sub-agent, whose conversation is not the
+// session's.
+func (s *Session) sessionGrantFor(ctx context.Context, e *agentpolicy.Engine, info agentturn.ToolCallInfo, v agentpolicy.Verdict) agentpolicy.Verdict {
+	if _, peer := ctx.Value(peerKey{}).(string); peer || s.Kit == nil {
+		return v
+	}
+	asks := v.Action == agentturn.Defer && v.Rule == nil
+	refused := v.Action == agentturn.Block && v.Reason == policy.DontAskNote
+	if !asks && !refused {
+		return v
+	}
+	s.grants.mu.Lock()
+	none := len(s.grants.session) == 0
+	s.grants.mu.Unlock()
+	if none {
+		return v
+	}
+	g, err := e.Would(agentpolicy.ContextWithGrantScope(ctx, s.Kit.GrantScope(context.Background())), info)
+	if err != nil || g.Action != agentturn.Allow || g.Rule == nil || g.Rule.Source.Name != policy.SourceSession {
+		return v
+	}
+	return g
 }
 
 // recordVerdict writes a sub-agent's verdict to its run's session under

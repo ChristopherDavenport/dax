@@ -1269,7 +1269,9 @@ asks for want of a rule: never a rule's ask (dax-coding's secret paths,
 your config's, the project's), never a deny, and dax offers none for a
 call such a rule asked about. A session's grant is agentpolicy's grant
 set under the conversation's scope, on the record with that scope; it
-holds across a mode switch, not in a sub-agent's own calls, and ends
+holds across a mode switch, reaches the session's sub-agents (a
+sub-agent's call it covers runs unasked, its verdict naming the grant;
+an A2A caller's conversation is not the session's and asks), and ends
 with the session (a resumed session asks again). A kept one is the
 source `dax:saved`; delete it from the file to take it back. `dax
 attach` offers once only.

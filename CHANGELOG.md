@@ -159,6 +159,11 @@ versions may break flags and the config file.
   one; it makes one only for a person's answer (`PermitAnswer.By`
   empty, agentpolicy's `ByHuman`), and a rule's approval is once
   (#146).
+- Fixed: a grant for the session (`a`) did not reach the session's
+  sub-agents, which decide under a grant scope of their own. A
+  sub-agent's call it covers now runs unasked, in `dontAsk` too; a
+  skill the parent read still does not reach them, and an A2A caller's
+  sub-agents get none (#146).
 - Added: "yes, always" (#146). Beside a permission dax offers a rule
   when no rule asked about the call: `bash(<first two words>:*)` for a
   line its analyzer reads whose commands share them, an MCP tool's

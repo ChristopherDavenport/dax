@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,5 +190,66 @@ func TestARulesApprovalMakesNoGrant(t *testing.T) {
 	}
 	if len(asked) != 1 {
 		t.Errorf("asked about %v after a rule's approval, want the call: the rule made a grant", asked)
+	}
+}
+
+// exploring is perPrompt for the main agent, whose task child runs
+// child's calls.
+type exploring struct {
+	perPrompt
+	child [][2]string
+}
+
+func (m exploring) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	if strings.Contains(req.Instructions, "You are a sub-agent of dax") {
+		return (&scripted{calls: m.child}).CreateStream(ctx, req, sink)
+	}
+	return m.perPrompt.CreateStream(ctx, req, sink)
+}
+
+// A grant the person made for the session reaches its sub-agents' calls
+// too (#146's review, L3), in dontAsk as well; a sub-agent's call it
+// does not cover is still asked.
+func TestASessionGrantReachesTheSubagents(t *testing.T) {
+	for _, mode := range []string{"default", "dontAsk"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			model := exploring{
+				perPrompt: perPrompt{"go": {{"bash", `{"command":"touch a"}`}}, "look": {{"task", `{"input":"make b"}`}}},
+				child:     [][2]string{{"bash", `{"command":"touch a b"}`}, {"bash", `{"command":"touch x"}`}},
+			}
+			o := withAgents(options(t, model), "")
+			o.Policy = confirmPolicy(t)
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var asked, offered []string
+			if _, err := Drive(ctx, s, grantPermit(s, GrantSession, &asked, &offered), openresponses.UserText("go")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetMode(ctx, mode); err != nil {
+				t.Fatal(err)
+			}
+			asked = nil
+			rules := rulesOf(func(c *openresponses.FunctionCall, _ string) bool { asked = append(asked, c.Arguments); return false })
+			if _, err := Drive(ctx, s, rules, openresponses.UserText("look")); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if mode == "dontAsk" {
+				want = 0
+			}
+			if len(asked) != want || slices.ContainsFunc(asked, func(a string) bool { return strings.Contains(a, "touch a") }) {
+				t.Errorf("asked %q: want the child's touch a b under the session's grant, its touch x asked in default", asked)
+			}
+			if _, err := os.Stat(filepath.Join(o.Dir, "b")); err != nil {
+				t.Errorf("the child's call the grant covers did not run: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(o.Dir, "x")); err == nil {
+				t.Error("the child's call no grant covers ran")
+			}
+		})
 	}
 }
