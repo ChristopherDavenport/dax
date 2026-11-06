@@ -127,6 +127,11 @@ versions may break flags and the config file.
   only (`policy.Cycle`); `bypassPermissions` is reached by its name
   alone (`/mode`, `-mode`, `-no-policy`), so one key never turns every
   ask off (#145).
+- Fixed: the model heard of a mode switch only with the next prompt,
+  not in a run a steer (`Deliver`, `Accept`) or a `Resume` started.
+  It is told at the next turn, a BeforeTurn of the session's, which
+  also applies a switch waiting for the turn; an A2A caller's runs are
+  not told (#145).
 - Added: permission modes (#145). `default`, `acceptEdits` (`write`
   and `edit` run unasked but for a protected or secret-looking path;
   commands still ask), `dontAsk` (what would ask is refused, the model
@@ -139,7 +144,7 @@ versions may break flags and the config file.
   `SetPolicy`, recorded with the mode as its reason and a `dax.mode`
   entry; a switch during a run waits for its next turn; deny rules and
   scoped grants hold in every mode; the model is told at the next
-  prompt; the status line's `mode` segment shows it. An extension adds
+  turn, whatever starts it; the status line's `mode` segment shows it. An extension adds
   rules in a mode with `extension.Extension.ModeRules`, held to its own
   tools; `agent.Session` gains `Mode`, `SetMode` and `NextMode`.
 - Changed: `-no-policy` is `-mode bypassPermissions`: the policy is

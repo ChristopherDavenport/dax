@@ -42,6 +42,9 @@ import (
 func (s *Session) PeerConfig() agentturn.Config {
 	cfg := s.ag.Config()
 	cfg.ToolRecorder = nil
+	// The person's mode switches are told to the session's model, not
+	// a caller's (modeTurn).
+	cfg.BeforeTurn = s.Kit.Config().BeforeTurn
 	return cfg
 }
 

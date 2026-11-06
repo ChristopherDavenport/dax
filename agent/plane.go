@@ -105,10 +105,6 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	for _, p := range pending {
 		outs = append(outs, answerOf(p))
 	}
-	// A mode switch since the last prompt is said first.
-	if n := s.modeNote(); n != nil {
-		outs = append(outs, n)
-	}
 	return s.ctl.Prompt(ctx, append(outs, items...)...)
 }
 

@@ -163,7 +163,7 @@ before changing the shape.
   `agent/mode.go`: the permission mode, the policy settings kept and
   rebuilt into the engine on a switch (`SetMode`, `NextMode`), a switch
   during a run applied at its next turn, the `dax.mode` entry and the
-  model's note at the next prompt; `peerFloor`, which holds an A2A
+  model's note at the next turn (`modeTurn`); `peerFloor`, which holds an A2A
   caller's calls to the default mode through a second engine of the
   same rules that no switch touches.
   `agent/grants.go`: "yes, always", `GrantOffer` (a rule only when the

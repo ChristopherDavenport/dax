@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -195,5 +196,37 @@ func TestDontAskRefusesWhatWouldAsk(t *testing.T) {
 	}
 	if p := s.Kit.Engine().Policy(); len(p.Deny) != 0 || func() bool { a, _ := p.Default.Action(); return a != agentturn.Defer }() {
 		t.Errorf("dontAsk rewrote the rules: deny %v, default %v", p.Deny, p.Default)
+	}
+}
+
+// The model hears of a mode switch at the next request, whatever starts
+// it: a run a steer started through Deliver as well as a prompt (#145's
+// review, L4).
+func TestTheModelHearsOfASwitchInARunADeliveryStarts(t *testing.T) {
+	ctx := context.Background()
+	m := &told{}
+	o := options(t, m)
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SetMode(ctx, "acceptEdits"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Deliver(ctx, openresponses.UserText("go")); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); s.State().Running; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never ended")
+		}
+	}
+	m.mu.Lock()
+	devs := strings.Join(m.devs, "\n")
+	m.mu.Unlock()
+	if strings.Count(devs, "now acceptEdits") != 1 {
+		t.Errorf("the model was told %q, want the switch once", devs)
 	}
 }

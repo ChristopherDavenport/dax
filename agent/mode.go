@@ -32,7 +32,7 @@ type modeEntry struct {
 // modes is the session's permission mode: the settings the policy is
 // rebuilt from (the box's confinement and the extensions' rules
 // included), the mode in force, one asked for during a run, and what
-// the model is told at the next prompt.
+// the model is told at the next turn.
 type modes struct {
 	mu       sync.Mutex
 	settings *policy.Settings // nil: the session has no policy
@@ -71,7 +71,7 @@ func (s *Session) Mode() (mode, pending string) {
 // sub-agents' decisions read too. Scoped grants survive it. While a run
 // goes the switch waits for the run's next turn or its end, so no batch
 // is decided under two policies; pending says so. The model is told at
-// the next prompt.
+// the next turn (modeTurn).
 func (s *Session) SetMode(ctx context.Context, name string) (pending bool, err error) {
 	mode, err := policy.ParseMode(name)
 	if err != nil {
@@ -171,8 +171,29 @@ func (s *Session) modeAtTurn(ctx context.Context, ev agentturn.Event) error {
 	return nil
 }
 
+// modeTurn is the session's BeforeTurn beside the kit's: a switch
+// asked for during the run is applied here, before the turn's model
+// call and so before any call of the turn is decided, and the model is
+// told of a switch at the first turn after it, whatever started the
+// run (a prompt, a steer through Deliver or Accept, a Resume). An A2A
+// caller's run (PeerConfig) has the kit's BeforeTurn alone.
+func (s *Session) modeTurn(ctx context.Context, _ agentturn.TurnStartInfo) (openresponses.Items, error) {
+	s.modes.mu.Lock()
+	pending := s.modes.pending
+	s.modes.mu.Unlock()
+	if pending != "" {
+		if err := s.applyMode(ctx, pending, "/mode, at the next turn"); err != nil {
+			fmt.Fprintf(warnings{}, "dax: mode %s: %v\n", pending, err)
+		}
+	}
+	if n := s.modeNote(); n != nil {
+		return openresponses.Items{n}, nil
+	}
+	return nil, nil
+}
+
 // modeNote takes what the model is to be told of a mode switch, as a
-// developer message for the next prompt, or nil.
+// developer message for the next turn, or nil.
 func (s *Session) modeNote() openresponses.Item {
 	s.modes.mu.Lock()
 	defer s.modes.mu.Unlock()

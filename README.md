@@ -1243,7 +1243,8 @@ calls is decided under two policies. Each switch is on the record, as
 agentpolicy's replacement of the policy (`replaced the policy: mode
 acceptEdits (/mode)`) and a `dax.mode` entry, which a session started in
 a mode other than `default` also holds from its start, and the model is
-told of it with the next prompt. `/mode` alone says the mode in force,
+told of it at the next turn, whatever starts it (a prompt, a steer, an
+answer). `/mode` alone says the mode in force,
 and the one waiting for the run's next turn; the status line's `mode`
 segment shows both. `dax attach` switches the served session's mode the
 same way.

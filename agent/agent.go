@@ -529,6 +529,13 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 	return cfg
 }
 
+// withModeTurn is cfg with the session's modeTurn after its
+// BeforeTurn.
+func (s *Session) withModeTurn(cfg agentturn.Config) agentturn.Config {
+	cfg.BeforeTurn = agentturn.ChainBeforeTurn(cfg.BeforeTurn, s.modeTurn)
+	return cfg
+}
+
 // PartOneShot is the id of the instructions part a one-shot run
 // (Options.OneShot) adds.
 const PartOneShot = "one-shot"
@@ -1019,7 +1026,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		kit.Close()
 		return nil, err
 	}
-	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), seed...)
+	s.ag = agentturn.New(s.withModeTurn(s.withPinnedFacts(kit.Config())), seed...)
 	// A fold keeps the record's unclaimed prompts too: an older
 	// record's typed lines, -p's prompt.
 	s.claimUnclaimed()
