@@ -296,6 +296,26 @@ turns them off. They are the `dax-agents` extension, which ships an
 allow rule for starting one, since what a sub-agent then does is decided
 call by call by the same policy.
 
+## Memory
+
+dax-memory keeps what the model should remember between sessions in
+`memory_dir` (`~/.dax/memory`), in two scopes: `user`, for every
+project, and the project's own, named for the workspace the tools act
+in. The memory block in the system prompt shows both, rendered again
+each turn. The model saves, patches and forgets entries with
+`memory_save`, `memory_patch` and `memory_forget`, each of which asks,
+and finds them with `memory_search`, which runs unasked.
+
+Beside each scope is an archive, `user-archive` and the project's
+`project-…-archive`: passages worth finding again and not worth reading
+every turn. The model adds one with `memory_insert`, which asks as every
+memory write does and names the entry itself, and finds it with
+`memory_search`. The block never shows an archive, however much it
+holds; its usage paragraph names the archives as searchable and not
+shown.
+
+The sub-agents see the block and can search, but not write.
+
 ## Peers: other agents over A2A
 
 An agent that serves [A2A](https://a2a-protocol.org) can be offered to
@@ -1071,7 +1091,7 @@ the one whose rule decided it: `extension:dax-coding`, say):
 - **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
   bash commands listed below (dax-coding's), `explore` and `task`
   (dax-agents'), `skill` (dax-skills') and `memory_search` (dax-memory's);
-- **asks**: `write`, `edit`, every other command, memory writes, every
+- **asks**: `write`, `edit`, every other command, memory writes (`memory_insert` too), every
   peer (dax-a2a's) and every MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile
   repository would run code as you on the model's say-so.

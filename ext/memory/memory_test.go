@@ -98,7 +98,7 @@ func session(t *testing.T, model openresponses.Streamer) (agent.Options, string)
 
 func TestTheExtension(t *testing.T) {
 	e := memory.New("/m")
-	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search"}
+	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search", "memory_insert"}
 	if e.Name != "dax-memory" || !slices.Equal(e.Owns, want) || !slices.Equal(e.Policy.Allow, []string{"memory_search"}) ||
 		len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil {
 		t.Errorf("extension %+v", e)
@@ -117,6 +117,7 @@ func TestASearchRunsUnaskedAndAChangeAsks(t *testing.T) {
 		{"memory_save", `{"scope":"user","name":"style","content":"Use tabs."}`, true},
 		{"memory_patch", `{"scope":"user","name":"style","old_text":"tabs","new_text":"spaces"}`, true},
 		{"memory_forget", `{"scope":"user","name":"style"}`, true},
+		{"memory_insert", `{"scope":"user-archive","content":"Tabs since 2019."}`, true},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			ctx := context.Background()

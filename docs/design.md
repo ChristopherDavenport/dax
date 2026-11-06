@@ -496,7 +496,9 @@ is:
   lists this directory's workspace, or the one the latest session at
   the configured executor's address recorded, without connecting to
   it; dax-memory's project scope is the workspace's (this machine's
-  stays the directory's, so older memory is kept).
+  stays the directory's, so older memory is kept), with an archive
+  beside it and beside the user's (`ArchiveScope`), searched and never
+  rendered.
 
 `agent.Options.Workspace` is the caller's workspace, which the caller
 closes; without one the session opens a `workspace.Local` over `Dir`,

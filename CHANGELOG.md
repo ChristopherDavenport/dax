@@ -7,6 +7,11 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: an archive beside each memory scope, `user-archive` and the
+  project's `project-…-archive`, which the model adds passages to with
+  `memory_insert` (it asks, as every memory write does) and finds with
+  `memory_search`; the memory block never shows it (agentkit's
+  `WithMemoryArchive`). `memory.ArchiveScope` names one (#161).
 - Added: the `explore` and `task` sub-agents see the memory block and
   can search memory with `memory_search`; they cannot write it. Their
   sessions record the block as memory parts with each entry's trust,

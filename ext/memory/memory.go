@@ -32,21 +32,24 @@ const Name = "dax-memory"
 // New is dax-memory over the store in dir, which is made private (0700)
 // when the session starts, with a warning if it was not. The model
 // reads and writes a user scope and the scope of the project the tools
-// act in (WorkspaceScope). It owns the memory tools and ships one rule: a search
-// runs unasked, while a save, a patch and a forget ask. The sub-agents
-// take memory_search over the same scopes (SubagentTools), and see the
-// block the kit renders as its parts; they are offered no writer.
+// act in (WorkspaceScope), and an archive beside each (ArchiveScope),
+// which it adds passages to with memory_insert and finds with
+// memory_search, and which the block never shows. It owns the memory
+// tools and ships one rule: a search runs unasked, while a save, a
+// patch, a forget and an insert ask. The sub-agents take memory_search
+// over the same scopes (SubagentTools), and see the block the kit
+// renders as its parts; they are offered no writer.
 func New(dir string) extension.Extension {
 	return extension.Extension{
 		Name:   Name,
-		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool},
+		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool},
 		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool}},
 		SubagentTools: func(env extension.Env) ([]agenttool.Tool, error) {
 			mem, scopes, err := open(dir, env)
 			if err != nil {
 				return nil, err
 			}
-			for _, t := range agentmemory.Tools(mem, scopes) {
+			for _, t := range agentmemory.Tools(mem, append(scopes, archives(scopes)...)) {
 				if t.Name() == agentmemory.SearchTool {
 					return []agenttool.Tool{t}, nil
 				}
@@ -58,9 +61,23 @@ func New(dir string) extension.Extension {
 			if err != nil {
 				return nil, err
 			}
-			return []agentkit.Option{agentkit.WithMemory(mem, scopes...)}, nil
+			arch := archives(scopes)
+			return []agentkit.Option{
+				agentkit.WithMemory(mem, scopes...),
+				agentkit.WithMemoryArchive(arch...),
+				agentkit.WithMemoryTools(agentmemory.WithInsert(arch...)),
+			}, nil
 		},
 	}
+}
+
+// archives are the archive scopes beside scopes, in order.
+func archives(scopes []agentmemory.Scope) []agentmemory.Scope {
+	out := make([]agentmemory.Scope, len(scopes))
+	for i, sc := range scopes {
+		out[i] = ArchiveScope(sc)
+	}
+	return out
 }
 
 // open is the store in dir, made private, and the session's scopes:
@@ -131,4 +148,13 @@ func scope(base string, sum []byte) agentmemory.Scope {
 	}
 	b.WriteString(hex.EncodeToString(sum[:4]))
 	return agentmemory.Scope(b.String())
+}
+
+// ArchiveScope is the archive beside scope: user-archive beside the
+// user's, project-…-archive beside a project's. An archive is written
+// with memory_insert and found with memory_search, and the block never
+// shows it (agentkit.WithMemoryArchive), so it holds what is worth
+// finding again and not worth reading every turn.
+func ArchiveScope(scope agentmemory.Scope) agentmemory.Scope {
+	return scope + "-archive"
 }
