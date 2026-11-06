@@ -47,6 +47,10 @@ func (s *Session) Reopen(ctx context.Context, id string) (*Session, error) {
 			return nil, fmt.Errorf("session %s is this one", id)
 		}
 	}
+	// The limits are each session's (-max-tokens, -max-cost): base is
+	// taken before the meter wraps the streamer, so the new session
+	// meters from nothing, or from what a resumed one's record says it
+	// spent, as -resume does; restarting dax would do the same.
 	o := s.base
 	think, model := s.now()
 	o.Think = think

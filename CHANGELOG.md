@@ -17,6 +17,9 @@ versions may break flags and the config file.
   `~/.dax/learned`. A learned skill's name and description are still
   in a caller's catalogue until agentkit can leave a part out per
   conversation (#157, #158, #159, #161).
+- Documented: `-max-tokens` and `-max-cost` are each session's: `/new`
+  starts the count from nothing and `/resume` from what that session's
+  record says it spent, as `-resume` does (#13).
 - Fixed: `/resume` no longer lists or continues an A2A caller's
   conversation: `OpenPeer` marks its header `"dax.origin": "a2a"` and
   `Session.Sessions` leaves such a session out (#164).
