@@ -117,6 +117,22 @@ versions may break flags and the config file.
   always built, the deny rules hold, and `/mode` can leave it, where
   before no policy ran at all for the session. `policy.Settings.Off` is
   gone, in favour of `Settings.Mode`.
+- Added: "yes, always" (#146). Beside a permission dax offers a rule
+  when no rule asked about the call: `bash(<first two words>:*)` for a
+  line its analyzer reads whose commands share them, an MCP tool's
+  name, nothing for `write` or `edit`. `a` (the REPL, `-p`, the
+  terminal client's panel through agentconsole's `WithGrantOffer`)
+  approves and grants it for the session, an agentpolicy grant set
+  under `Kit.GrantScope`; `A` keeps it for the project in
+  `~/.dax/grants.json`, loaded as the source `dax:saved`. Both rank
+  below every source (`policy.RankGrant`), so neither answers a rule's
+  ask. `extension.Extension.GrantRule` says an extension's rule;
+  `agent.Session` gains `GrantOffer` and `Grant`.
+- Changed: `agent.Rules.Permit` returns an `agent.PermitAnswer` (allow,
+  note, stop, who decided, and a grant with its rule), where it
+  returned `(allow, note)`; `Rules.Stops` and `Rules.PermitBy` are
+  gone, folded into it. `Drive` makes the grant an answer asks for
+  when it drives an `agent.Session`.
 
 ## v0.0.33 - 2026-11-04
 

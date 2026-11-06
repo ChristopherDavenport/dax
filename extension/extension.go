@@ -108,6 +108,16 @@ type Extension struct {
 	// extension's own tools and aliases as Policy is, and kept with
 	// "builtin": false, since the user chose the mode.
 	ModeRules map[string]policy.Rules
+	// GrantRule is the rule a person's "yes, always" to a call of one
+	// of the extension's tools (its Tools and Owns) grants, in the
+	// policy's grammar, or "" to offer only "once": dax-coding offers
+	// bash(<first two words>:*) for a line its analyzer reads whose
+	// asking stages share them, and nothing for write or edit. A tool
+	// with no extension's GrantRule is offered its bare name. The
+	// session offers the rule only when no rule asked about the call (a
+	// grant ranks below every source, policy.RankGrant). It is built
+	// over the session's ToolEnv, as the tools are.
+	GrantRule func(ToolEnv) func(ctx context.Context, tool string, args json.RawMessage) string
 	// Lifts are the extension's tools whose asks a user's allow rule
 	// with a specifier lifts: allowing read(.env) means reading .env,
 	// though dax-coding asks about secret-looking paths.

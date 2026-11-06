@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -363,9 +364,12 @@ func (s *Session) Info() Info {
 // question a run asks, in place of a person.
 type Rules struct {
 	// Permit decides a call the policy asked about: allow, or refuse,
-	// with a note the model is told either way. reason is the policy's
-	// question. Nil refuses every call.
-	Permit func(call *openresponses.FunctionCall, reason string) (allow bool, note string)
+	// with a note the model is told either way, whether a refusal ends
+	// the run, who decided, and how far an approval reaches (a grant
+	// for the session or kept for the project, of the rule the session
+	// offers, Session.GrantOffer). reason is the policy's question. Nil
+	// refuses every call.
+	Permit func(call *openresponses.FunctionCall, reason string) PermitAnswer
 	// Reply answers a question asked while a call runs: a sub-agent's
 	// call the policy asks about (q.Call), a tool's own question. What
 	// it says with the answer is its Note, which the model is told of an
@@ -375,10 +379,6 @@ type Rules struct {
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
-	// Stops, when set, says of a call Permit refused whether the
-	// refusal ends the run (Refusal with stop) rather than going on to
-	// the model; nil goes on.
-	Stops func(call *openresponses.FunctionCall) bool
 	// By, when set, names who gave the reply Reply has just given to q,
 	// written beside the answer (agentturn.ContextWithAnswerer):
 	// AtTerminal for a person's answer, a trigger of the controller's
@@ -387,14 +387,31 @@ type Rules struct {
 	// of the input) name the person only for what the person said. The
 	// zero Trigger, or a nil By, leaves the reply unattributed.
 	By func(q agentturn.Question) agentturn.Trigger
-	// PermitBy, when set, names who decided the permit Permit has just
-	// given for call, the decider the record writes: agentpolicy.ByHuman
-	// for a person's answer, ByPolicy for the controller's own rule,
-	// such as a refusal because nobody was left to ask (the end of -p's
-	// input, its -timeout). A rule's refusal tells the model nobody
-	// answered, not that the user denied the call. Nil or "" is
-	// ByHuman.
-	PermitBy func(call *openresponses.FunctionCall) string
+}
+
+// PermitAnswer is a controller's answer to a call the policy asked
+// about.
+type PermitAnswer struct {
+	// Allow runs the call; Note is what the model is told with the
+	// answer, either way.
+	Allow bool
+	Note  string
+	// Stop, for a refusal, ends the run (Refusal with stop) rather than
+	// going on to the model.
+	Stop bool
+	// By names who decided, the decider the record writes:
+	// agentpolicy.ByHuman ("") for a person's answer, ByPolicy for the
+	// controller's own rule, such as a refusal because nobody was left
+	// to ask (the end of -p's input, its -timeout). A rule's refusal
+	// tells the model nobody answered, not that the user denied the
+	// call.
+	By string
+	// Grant, for an approval, is how far it reaches, and Rule the rule
+	// the session offered for the call (Session.GrantOffer). Drive makes
+	// the grant through the control when it is a Session, before the
+	// Resume that answers the call.
+	Grant GrantKind
+	Rule  string
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -434,17 +451,28 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		})()
 	}
 	permit := func(call *openresponses.FunctionCall, reason string) agentturn.Answer {
-		allow, note := false, ""
+		var pa PermitAnswer
 		if r.Permit != nil {
-			allow, note = r.Permit(call, reason)
+			pa = r.Permit(call, reason)
 		}
-		by := agentpolicy.ByHuman
-		if r.PermitBy != nil {
-			if b := r.PermitBy(call); b != "" {
-				by = b
+		note, by := pa.Note, pa.By
+		if by == "" {
+			by = agentpolicy.ByHuman
+		}
+		if pa.Allow {
+			if pa.Grant != GrantOnce {
+				g, ok := c.(interface {
+					Grant(context.Context, string, GrantKind, string) error
+				})
+				switch {
+				case !ok:
+					fmt.Fprintf(warnings{}, "dax: %s approved once: this session cannot grant %s\n", call.Name, pa.Rule)
+				default:
+					if err := g.Grant(ctx, call.CallID, pa.Grant, pa.Rule); err != nil {
+						fmt.Fprintf(warnings{}, "dax: %s approved once: %v\n", call.Name, err)
+					}
+				}
 			}
-		}
-		if allow {
 			a := agentturn.Approve(call.CallID).WithBy(by)
 			if note != "" {
 				a = a.WithNote(note)
@@ -454,7 +482,7 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		stop := r.Stops != nil && r.Stops(call)
+		stop := pa.Stop
 		if by != agentpolicy.ByHuman {
 			o := openresponses.NewFunctionCallOutput(call.CallID, unansweredOutput)
 			if stop {

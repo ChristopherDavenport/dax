@@ -1242,6 +1242,28 @@ and the one waiting for the run's next turn; the status line's `mode`
 segment shows both. `dax attach` switches the served session's mode the
 same way.
 
+### Yes, always
+
+A permission can be approved for more than the call. Where dax offers a
+rule beside the question, `a` approves the call and grants the rule for
+the rest of the session, and `A` keeps it for the project, in
+`~/.dax/grants.json` (private, by the project's identity, as `-list`
+has it), for every later session there too. The rule is
+`bash(<first two words>:*)` for a command line dax's analyzer reads
+whose commands, `cd` aside, all start with those words (`go test
+./...` offers `bash(go test:*)`, so `go test ./pkg/...` then runs
+unasked), the tool's name for an MCP server's tool, and nothing for
+`write` or `edit` (a [mode](#permission-modes) is the way to let edits
+run). A grant ranks below every other source, so it answers only what
+asks for want of a rule: never a rule's ask (dax-coding's secret paths,
+your config's, the project's), never a deny, and dax offers none for a
+call such a rule asked about. A session's grant is agentpolicy's grant
+set under the conversation's scope, on the record with that scope; it
+holds across a mode switch, not in a sub-agent's own calls, and ends
+with the session (a resumed session asks again). A kept one is the
+source `dax:saved`; delete it from the file to take it back. `dax
+attach` offers once only.
+
 ## Security model
 
 dax gives a model the ability to read your files, change them and run
@@ -1431,6 +1453,7 @@ drawn as the client draws any call, its name and arguments.
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
+| `a` / `A` | approve the permission asked and grant the rule dax offers beside it for the session / keep it for the project, which asks you to confirm with Enter (see [Yes, always](#yes-always)) |
 | `y` / `n` / `s` | approve / refuse the permission asked and let the run go on / refuse it and stop the run; `n` and `s` then take an optional reason and Enter. A refusal is told to the model in the REPL's words, not to get the same result another way and to say so if it is still needed, with your reason after. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
@@ -1760,7 +1783,11 @@ is shown again. When `-p`'s input has ended, or `-timeout` ends the
 wait, nobody answered: the call is refused, or the question declined,
 by dax's rule, and the record names the rule (`policy`), not you, as
 the decider. The model is told nobody was there to approve the call,
-not that you denied it.
+not that you denied it. Where dax offers a grant (see [Yes,
+always](#yes-always)) the question says which rule, `[y/a/A/N] (a:
+allow bash(go test:*) for this session, A: always in this project)`:
+`a` approves and grants it for the session, `A` keeps it for the
+project; `-p` takes them too.
 
 ## Exit status
 

@@ -435,11 +435,14 @@ type Session struct {
 	fwdMu    sync.Mutex
 	forwards map[int]net.Listener
 
-	opts    Options
-	live    live
-	modes   modes
-	env     []string // what an MCP server outside the workspace starts with
-	offered []string // the MCP servers the workspace offers, connected at open
+	opts   Options
+	live   live
+	modes  modes
+	grants grants
+	// grantRules are the extensions' GrantRule by tool (GrantOffer).
+	grantRules map[string]func(context.Context, string, json.RawMessage) string
+	env        []string // what an MCP server outside the workspace starts with
+	offered    []string // the MCP servers the workspace offers, connected at open
 	// served are the MCP servers the servers workspace offers,
 	// connected at open, and sw that workspace's descriptor.
 	served []string
@@ -720,6 +723,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	s.set = a.set
+	s.grantRules = a.grantRules
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -849,6 +853,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if o.Policy != nil {
 		settings := *o.Policy
 		settings.Shipped = append(slices.Clone(settings.Shipped), a.shipped...)
+		// The rules the user kept for this project ("yes, always").
+		if f := o.grantsFile(); f != "" {
+			saved, err := readGrants(f, ws.Descriptor())
+			if err != nil {
+				fmt.Fprintf(warnings{}, "dax: %v\n", err)
+			}
+			settings.Saved = append(slices.Clone(settings.Saved), saved...)
+		}
 		// box.confine: the box's tools the policy takes as confined, and
 		// the rules that make that matter (confine.go).
 		confine, err := confineBox(o, a.set, &settings, a.matchers, a.aliases, s.offered)

@@ -505,7 +505,7 @@ func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 	})()
 	var questions []string
 	rules := Rules{
-		Permit: func(*openresponses.FunctionCall, string) (bool, string) { return true, "" },
+		Permit: func(*openresponses.FunctionCall, string) PermitAnswer { return PermitAnswer{Allow: true} },
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			questions = append(questions, q.Elicitation.Message)
 			if q.Call == nil {

@@ -448,9 +448,9 @@ func TestACallAsksThenCompletes(t *testing.T) {
 	t.Run("asks by default", func(t *testing.T) {
 		s, _ := open(t, remotes, nil, "paint the fence")
 		var asked []string
-		end, err := agent.Drive(t.Context(), s, agent.Rules{Permit: func(c *openresponses.FunctionCall, _ string) (bool, string) {
+		end, err := agent.Drive(t.Context(), s, agent.Rules{Permit: func(c *openresponses.FunctionCall, _ string) agent.PermitAnswer {
 			asked = append(asked, c.Name)
-			return false, ""
+			return agent.PermitAnswer{}
 		}}, openresponses.UserText("go"))
 		if err != nil {
 			t.Fatal(err)

@@ -11,12 +11,15 @@ package coding
 // "builtin": false drops the allow list; the asks stay.
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
 
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // allowRules is the allow list dax-coding ships. go test, build, vet and
@@ -104,6 +107,52 @@ func acceptEditsRules() policy.Rules {
 		ask = append(ask, "Edit(ci:"+n+")", "Edit(ci:"+n+"/**)", "Edit(ci:*/"+n+")", "Edit(ci:*/"+n+"/**)")
 	}
 	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
+}
+
+// grantRule is the rule "yes, always" grants for a call of dax-coding's
+// tools: for bash, bash(<first two words>:*) of a line the analyzer
+// reads (tool.Analyzer's safe subset) whose stages, cd aside, all start
+// with those words, so the grant answers the whole line next time; for
+// any other tool, and any other line, none.
+func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, args json.RawMessage) string {
+	a := &tool.Analyzer{Files: env.Files, MaxFile: env.MaxReadBytes}
+	return func(ctx context.Context, name string, args json.RawMessage) string {
+		if name != "bash" {
+			return ""
+		}
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(args, &in) != nil {
+			return ""
+		}
+		c := a.Check(ctx, in.Command)
+		if !c.Parsed {
+			return ""
+		}
+		prefix := ""
+		for _, st := range c.Stages {
+			if len(st.Words) == 0 || st.Words[0] == "cd" {
+				continue
+			}
+			p := st.Words[0]
+			if len(st.Words) > 1 {
+				p += " " + st.Words[1]
+			}
+			if prefix != "" && p != prefix {
+				return ""
+			}
+			prefix = p
+		}
+		if prefix == "" {
+			return ""
+		}
+		rule := "bash(" + prefix + ":*)"
+		if r, err := agentpolicy.ParseRules(rule); err != nil || len(r) != 1 || r[0].Spec != prefix+":*" {
+			return ""
+		}
+		return rule
+	}
 }
 
 // lifts are the tools whose asks a user's allow rule with a specifier

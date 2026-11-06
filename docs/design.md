@@ -327,6 +327,13 @@ so the sub-agents, which decide through the same engine, follow; a
 switch asked for during a run waits for the run's next `TurnStart`, so
 no batch straddles two policies.
 
+A person's "yes, always" is a grant at `policy.RankGrant`, below every
+source: for the session a grant set under the kit's grant scope, kept
+for the project the source `dax:saved` from the user's grants file. It
+answers only an ask made for want of a rule, and dax offers one only
+then (the deferred verdict names no rule), in the words of the tool's
+extension (`GrantRule`).
+
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
 the write tool on the file it opens (normalised from the directory a

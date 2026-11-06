@@ -31,7 +31,20 @@ const (
 	// (agentpolicy's WithConfinement), so the tool asks only when the
 	// call is not confined.
 	SourceBox = "dax:box"
+	// SourceSession is the rules a person granted for the session ("a",
+	// yes for this session): a grant set under the conversation's grant
+	// scope, at RankGrant.
+	SourceSession = "dax:session"
+	// SourceSaved is the rules a person kept for the project ("A", yes
+	// always): allow rules from the user's grants file, at RankGrant.
+	SourceSaved = "dax:saved"
 )
+
+// RankGrant is the rank of a person's grants, the session's and the
+// saved ones: below every other source, the project's included, so a
+// grant answers only what asks for want of a rule, never a rule's ask
+// (dax-coding's secret paths, a project's or the user's own asks).
+const RankGrant = -1
 
 // SourceExtension is the source of the rules the extension called name
 // ships: what a verdict a rule of them decides names in the session's
@@ -56,6 +69,10 @@ type Settings struct {
 	// User and Project are the user's config's rules and the project's.
 	User    Rules
 	Project Rules
+	// Saved are the allow rules the user kept for this project ("yes,
+	// always"), from their grants file: source SourceSaved, at
+	// RankGrant. Only Allow is read.
+	Saved []string
 	// Box are the tools a session's box.confine takes as confined, each
 	// a bare ask of source SourceBox: dax-coding's bash, write and edit
 	// by name, and an MCP unit's tools as mcp__<unit>__*, the one glob
@@ -201,6 +218,13 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 					set.Ask = append(set.Ask, agentpolicy.Rule{Tool: r.Tool, Spec: "!" + r.Spec})
 				}
 			}
+		}
+		sets = append(sets, set)
+	}
+	if len(s.Saved) > 0 {
+		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceSaved, Trusted: true, Rank: RankGrant}}
+		if set.Allow, err = parse("saved", s.Saved); err != nil {
+			return agentpolicy.Policy{}, err
 		}
 		sets = append(sets, set)
 	}

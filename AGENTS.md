@@ -164,6 +164,11 @@ before changing the shape.
   rebuilt into the engine on a switch (`SetMode`, `NextMode`), a switch
   during a run applied at its next turn, the `dax.mode` entry and the
   model's note at the next prompt.
+  `agent/grants.go`: "yes, always", `GrantOffer` (a rule only when the
+  deferred verdict names none; the extension's `GrantRule` or the
+  tool's name) and `Grant` (a session grant set under the kit's grant
+  scope, or a rule kept in `~/.dax/grants.json` by the project's
+  identity, loaded as `dax:saved`), both at `policy.RankGrant`.
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left

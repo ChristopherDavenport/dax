@@ -12,6 +12,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -254,8 +255,44 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 			go h.run(sctx)
 		}
 	}
-	act := withModes(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess, redraw)
+	// The panel offers "yes, always" where dax offers a grant (a for the
+	// session, A kept for the project), and the grant is made before
+	// the answers resume the run.
+	opts = append(opts, console.WithGrantOffer(func(ctx context.Context, p view.Permission) client.GrantOffer {
+		o := sess.GrantOffer(ctx, p.CallID)
+		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
+	}))
+	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
 	return runConsole(ctx, f.run, rec, sess, act, sess, sess, opts)
+}
+
+// withGrants is act with the grants the permission panel's answers ask
+// for made first (client.Direct makes none): each approval with a grant
+// of the session's or the project's, through the session's Grant,
+// which refuses a rule it did not offer. A grant that fails leaves the
+// approval for the call alone, said as a warning.
+func withGrants(act client.Controller, ctl agent.Controls) client.Controller {
+	g, ok := ctl.(granter)
+	if !ok {
+		return act
+	}
+	return func(ctx context.Context, in client.Intent) error {
+		if a, ok := in.(client.Answer); ok {
+			for _, c := range a.Calls {
+				if c.Verdict != client.VerdictApprove || c.Grant == client.GrantOnce {
+					continue
+				}
+				kind := agent.GrantSession
+				if c.Grant == client.GrantSaved {
+					kind = agent.GrantSaved
+				}
+				if err := g.Grant(ctx, c.CallID, kind, c.Rule); err != nil {
+					fmt.Fprintf(agent.Warnings(), "dax: approved once: %v\n", err)
+				}
+			}
+		}
+		return act(ctx, in)
+	}
 }
 
 // withModes is act with Shift-Tab's intent (client.NextMode, which

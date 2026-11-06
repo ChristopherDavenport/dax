@@ -415,9 +415,9 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 			o := options(t, model, &agents.Options{})
 			o.Policy = &policy.Settings{Builtin: true, Fallback: "ask"}
 			var asked []string
-			rules := agent.Rules{Permit: func(*openresponses.FunctionCall, string) (bool, string) {
+			rules := agent.Rules{Permit: func(*openresponses.FunctionCall, string) agent.PermitAnswer {
 				t.Error("a permission was asked about a sub-agent's call, which is a question")
-				return true, ""
+				return agent.PermitAnswer{Allow: true}
 			}}
 			if tc.ask.err == nil {
 				rules.Reply = func(q agentturn.Question) agenttool.Answer {

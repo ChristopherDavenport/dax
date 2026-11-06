@@ -42,6 +42,10 @@ type assembly struct {
 	// owned are the names the extensions own: whose each is, and
 	// whether its matcher gives subjects of its own (bind).
 	owned map[string]ownedName
+	// grantRules are the extensions' GrantRule, by tool: the rule "yes,
+	// always" grants for a call of it. An extension's tool with none is
+	// offered its bare name.
+	grantRules map[string]func(context.Context, string, json.RawMessage) string
 }
 
 // ownedName is a name an extension owns: whose it is, and whether its
@@ -91,7 +95,7 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 	if err != nil {
 		return nil, err
 	}
-	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}}
+	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}, grantRules: map[string]func(context.Context, string, json.RawMessage) string{}}
 	extNames := map[string]bool{}
 	claimed := map[string]string{} // lower-case name -> the extension that has it
 	claim := func(ext, name, what string) error {
@@ -130,6 +134,16 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 				return nil, err
 			}
 			own[t.Name()] = true
+		}
+		if e.GrantRule != nil {
+			if fn := e.GrantRule(env); fn != nil {
+				for _, t := range tools {
+					a.grantRules[t.Name()] = fn
+				}
+				for _, n := range e.Owns {
+					a.grantRules[n] = fn
+				}
+			}
 		}
 		listed := map[string]bool{}
 		readOnly := func(t executor.Bound) error {

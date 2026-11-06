@@ -67,6 +67,7 @@ func New(maxRead int64) extension.Extension {
 		Aliases:      aliases,
 		Policy:       policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},
 		ModeRules:    map[string]policy.Rules{policy.ModeAcceptEdits: acceptEditsRules()},
+		GrantRule:    grantRule,
 		Lifts:        lifts,
 		Instructions: instructions,
 		Renderers:    toolrender.Renderers,

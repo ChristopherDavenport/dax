@@ -209,7 +209,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	// they refused with s, which ends the run.
 	// The calls refused because nobody was left to answer, whose
 	// refusal is dax's rule, not the person's.
-	var answered, stops, unanswered sync.Map
+	var answered sync.Map
 	// One reader scans standard input for every answer, so a wait on a
 	// line ends with the run's context (-timeout) as no answer.
 	lines := make(chan string)
@@ -228,29 +228,21 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		}
 	}
 	rules := agent.Rules{
-		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
-			fmt.Print(question(c, reason))
+		Permit: func(c *openresponses.FunctionCall, reason string) agent.PermitAnswer {
+			offer := offerOf(ctx, ctl, c.CallID)
+			fmt.Print(questionOffer(c, reason, offer))
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
-				unanswered.Store(c.CallID, true)
-				return false, ""
+				// Nobody is left to answer: the refusal is dax's rule,
+				// not the person's.
+				return agent.PermitAnswer{By: agentpolicy.ByPolicy}
+			}
+			if kind, note, ok := grantLine(line, offer); ok {
+				return agent.PermitAnswer{Allow: true, Note: note, Grant: kind, Rule: offer.Rule}
 			}
 			allow, stop, note := answerLine(line)
-			if stop {
-				stops.Store(c.CallID, true)
-			}
-			return allow, note
-		},
-		Stops: func(c *openresponses.FunctionCall) bool {
-			_, ok := stops.LoadAndDelete(c.CallID)
-			return ok
-		},
-		PermitBy: func(c *openresponses.FunctionCall) string {
-			if _, ok := unanswered.LoadAndDelete(c.CallID); ok {
-				return agentpolicy.ByPolicy
-			}
-			return agentpolicy.ByHuman
+			return agent.PermitAnswer{Allow: allow, Note: note, Stop: stop}
 		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
@@ -326,6 +318,8 @@ type waiting struct {
 	// shown is how many lines had been read when the question was last
 	// shown: only a line read after it answers it.
 	shown uint64
+	// offer is the grant dax offers with a permission.
+	offer agent.GrantOffer
 }
 
 // typedLine is a line of the REPL's input and when it was read: its
@@ -430,7 +424,8 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 	ask := func(perms []agent.Permission) {
 		for _, pm := range perms {
-			asks = append(asks, waiting{q: question(pm.Call, pm.Reason), call: pm.Call})
+			o := offerOf(ctx, ctl, pm.Call.CallID)
+			asks = append(asks, waiting{q: questionOffer(pm.Call, pm.Reason, o), call: pm.Call, offer: o})
 		}
 		answers = nil
 		next()
@@ -563,6 +558,18 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				a := asks[0]
 				asks = asks[1:]
 				allow, stop, note := answerLine(line)
+				if kind, gnote, ok := grantLine(line, a.offer); ok && a.call != nil {
+					allow, stop, note = true, false, gnote
+					if g, ok := ctl.(granter); ok {
+						if err := g.Grant(ctx, a.call.CallID, kind, a.offer.Rule); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else if kind == agent.GrantSaved {
+							fmt.Fprintf(w, "  [%s kept for this project]\n", render.Clean(a.offer.Rule))
+						} else {
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+						}
+					}
+				}
 				switch {
 				case a.question != "":
 					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(a.ask, line))
@@ -655,10 +662,54 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 // question is what the user is asked about a call the policy asked
 // about.
 func question(c *openresponses.FunctionCall, reason string) string {
+	return questionOffer(c, reason, agent.GrantOffer{})
+}
+
+// questionOffer is question with the grant dax offers for the call: a
+// for the session, A kept for the project.
+func questionOffer(c *openresponses.FunctionCall, reason string, o agent.GrantOffer) string {
 	if reason != "" {
 		reason = " (" + reason + ")"
 	}
-	return render.Clean(fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason))
+	keys := "[y/N] "
+	switch {
+	case o.Rule != "" && o.Saved:
+		keys = "[y/a/A/N] (a: allow " + o.Rule + " for this session, A: always in this project) "
+	case o.Rule != "":
+		keys = "[y/a/N] (a: allow " + o.Rule + " for this session) "
+	}
+	return render.Clean(fmt.Sprintf("? allow %s %s%s %s", c.Name, c.Arguments, reason, keys))
+}
+
+// granter is what "yes, always" asks of the session's controls: the
+// session's own (agent.Session.GrantOffer and Grant); dax attach offers
+// none.
+type granter interface {
+	GrantOffer(ctx context.Context, callID string) agent.GrantOffer
+	Grant(ctx context.Context, callID string, kind agent.GrantKind, rule string) error
+}
+
+// offerOf is the grant the session offers for a pending call, none when
+// it grants nothing.
+func offerOf(ctx context.Context, ctl any, callID string) agent.GrantOffer {
+	if g, ok := ctl.(granter); ok {
+		return g.GrantOffer(ctx, callID)
+	}
+	return agent.GrantOffer{}
+}
+
+// grantLine reads an answer that approves with a grant: a (this
+// session) or A (kept for the project), in that case, when the offer
+// has it, with what follows as the note.
+func grantLine(line string, o agent.GrantOffer) (kind agent.GrantKind, note string, ok bool) {
+	word, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+	switch {
+	case word == "a" && o.Rule != "":
+		return agent.GrantSession, strings.TrimSpace(rest), true
+	case word == "A" && o.Rule != "" && o.Saved:
+		return agent.GrantSaved, strings.TrimSpace(rest), true
+	}
+	return "", "", false
 }
 
 // questionText is what the user is asked of a question a running call
