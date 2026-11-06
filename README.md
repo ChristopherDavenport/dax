@@ -2061,6 +2061,11 @@ one session's name alone (`/resume auth` for "auth refactor"). Like
 `/new`, it keeps the model, reasoning, mode and `/mcp add` servers you
 set, and leaves this session's record as it is. `dax attach` refuses
 both: an attached view cannot move the served host to another session.
+An A2A caller's conversation (`dax serve -a2a`) is in the same store,
+its header marked `"dax.origin": "a2a"`, and `/resume` neither lists
+nor continues it: its words are the caller's, not yours to carry on
+under your mode. One recorded before that mark is listed; `-resume ID`
+still opens any session by its ID.
 
 The record says whose words each message is. What you type at the
 REPL or in the terminal client, a prompt, a steer or a note with an

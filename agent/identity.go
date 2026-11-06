@@ -51,6 +51,13 @@ const (
 	// servers-only grant is told the served directory's last name
 	// alone, and nothing of the session acts there.
 	headerServers = "dax.servers_workspace"
+	// headerOrigin marks a session that is not the person's own
+	// conversation: "a2a" for an A2A caller's (OpenPeer), which
+	// /resume neither lists nor continues (Sessions).
+	headerOrigin = "dax.origin"
+	// originPeer is headerOrigin's value for an A2A caller's
+	// conversation.
+	originPeer = "a2a"
 	// headerServersNamed holds the servers workspaces by name
 	// (servers_workspaces, Options.ServersWorkspaces): an object of
 	// headerServers' form by name. It is a member of its own so a dax

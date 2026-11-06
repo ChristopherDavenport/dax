@@ -465,7 +465,9 @@ same input and the terminal client entered again over the new record;
 the old session is closed and its record kept. Over `dax attach` it is
 refused, since every view acts on the one served conversation.
 `/resume` moves the same way to an earlier session of the project
-(`Session.Sessions`, read from the store by the project's identity),
+(`Session.Sessions`, read from the store by the project's identity,
+never an A2A caller's conversation, which `OpenPeer` marks with the
+header's `dax.origin`),
 and `/name` writes agentsession's `info` entry, which listings read. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Resume`, and every question asked while a call runs is

@@ -17,6 +17,9 @@ versions may break flags and the config file.
   `~/.dax/learned`. A learned skill's name and description are still
   in a caller's catalogue until agentkit can leave a part out per
   conversation (#157, #158, #159, #161).
+- Fixed: `/resume` no longer lists or continues an A2A caller's
+  conversation: `OpenPeer` marks its header `"dax.origin": "a2a"` and
+  `Session.Sessions` leaves such a session out (#164).
 - Fixed: an `@<server>:<uri>` mention whose URI ends as an image's name
   does (`@docs:shot.png`) is the server's resource, no longer taken as
   an image path and refused; a resource's text is cut on a character's

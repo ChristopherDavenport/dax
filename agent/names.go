@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,7 +52,10 @@ func (s *Session) Name() string {
 // Sessions lists this project's sessions in the session's store, newest
 // first, with their names: the top-level sessions recorded in the
 // workspace the session's tools act in (the identity -list goes by),
-// this one among them, and not those a continued_in link retired.
+// this one among them, and not those a continued_in link retired, nor
+// an A2A caller's conversation (OpenPeer's, marked dax.origin "a2a"):
+// that text is a caller's, not the person's to continue under their
+// own mode. A caller's conversation recorded before the mark is listed.
 func (s *Session) Sessions(ctx context.Context) ([]agentsession.Summary, error) {
 	if !s.recorded {
 		return nil, errors.New("no session store: nothing is kept to resume")
@@ -63,9 +67,22 @@ func (s *Session) Sessions(ctx context.Context) ([]agentsession.Summary, error) 
 		if err != nil {
 			return out, err
 		}
+		if sessionOrigin(sum.Header) == originPeer {
+			continue
+		}
 		if sameProject(workspaceOf(sum.Header), here) {
 			out = append(out, sum)
 		}
 	}
 	return out, nil
+}
+
+// sessionOrigin is the origin a header marks (headerOrigin); "" for the
+// person's own session.
+func sessionOrigin(h agentsession.Header) string {
+	var o string
+	if raw, ok := h.Extra[headerOrigin]; ok {
+		_ = json.Unmarshal(raw, &o)
+	}
+	return o
 }

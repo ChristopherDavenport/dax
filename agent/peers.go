@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -95,7 +96,10 @@ func (s *Session) OpenPeer(ctx context.Context, id string) (*PeerRecord, error) 
 	if id != "" {
 		rec, _, err = session.Resume(ctx, s.store, id, opts...)
 	} else {
-		rec, _, err = session.Start(ctx, s.store, s.header(), opts...)
+		// Marked as a caller's, so /resume leaves it out (Sessions).
+		h := s.header()
+		h.Extra[headerOrigin], _ = json.Marshal(originPeer)
+		rec, _, err = session.Start(ctx, s.store, h, opts...)
 	}
 	if err != nil {
 		return nil, err
