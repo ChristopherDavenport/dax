@@ -7,6 +7,18 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: the model can write a skill and use it in the same session.
+  `skill_manage` (create, update, delete; it asks) writes to
+  `~/.dax/learned`, refusing a name the project's or your skills hold,
+  and the catalogue lists the skill from the model's next turn
+  (agentkit's `ReloadSkills`, at a turn's start, when no call is being
+  decided). Its `allowed-tools` grant nothing until you run
+  `/skills approve <name>`, which records its frontmatter's digest in
+  `~/.dax/skill-approvals.json`, and then only under `-trust-skills`.
+  With no skill directory the `skill` tool is now offered over the
+  empty learned directory. `extension.Env` has `ReloadSkills`, and
+  `agent.Session` `UserDir`; an `Env` implemented outside dax needs the
+  method (#159).
 - Added: `conversation_search` (agentkit's `WithSessionSearch`), which
   finds what an earlier session of this project said, unasked: this
   workspace's top-level sessions, not the calling one, its output

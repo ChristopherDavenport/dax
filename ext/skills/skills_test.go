@@ -118,7 +118,7 @@ func TestTheExtension(t *testing.T) {
 	}{{"default", skills.Options{}}, {"trusted with dirs", skills.Options{Dirs: []string{"/x"}, Trust: true}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := skills.New(tc.o)
-			if e.Name != "dax-skills" || !slices.Equal(e.Owns, []string{"skill"}) || !slices.Equal(e.Policy.Allow, []string{"skill"}) ||
+			if e.Name != "dax-skills" || !slices.Equal(e.Owns, []string{"skill", "skill_manage"}) || !slices.Equal(e.Policy.Allow, []string{"skill"}) ||
 				len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil ||
 				len(e.HeldTo) != 1 || !slices.Equal(e.HeldTo["skill"], []string{"read"}) {
 				t.Errorf("extension %+v", e)

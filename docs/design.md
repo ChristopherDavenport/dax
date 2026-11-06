@@ -321,6 +321,17 @@ installed, `~/.dax/skills` and `skills_dirs`, are the user's and are
 not held. What is not covered yet: the moment between the decision and
 the skill tool's read, in which a link can change.
 
+The skills the model writes (`skill_manage`) are on this machine, in
+`~/.dax/learned`, the last source, written through an `os.Root` on it
+with the name held to the skill grammar, so no model-supplied path
+reaches `os`. A write asks; the catalogue is reloaded
+(`Kit.ReloadSkills`) at the main agent's next turn, before its model
+call, since agentkit does not serialise a reload with the engine's
+decisions and a turn's start is a point where none is in flight. Their
+`allowed-tools` grant only under `-trust-skills` and only for the
+frontmatter digest the person approved (`/skills approve`,
+`~/.dax/skill-approvals.json`).
+
 A permission mode is the same sources made stricter or looser as a
 whole (`policy/mode.go`): `acceptEdits` adds each extension's
 `ModeRules` for the mode (dax-coding's: write and edit allowed, protected

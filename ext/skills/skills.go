@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentkit"
@@ -22,6 +23,7 @@ import (
 	"github.com/ChristopherDavenport/agenttool"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -55,7 +57,7 @@ const readTool = "read"
 func New(o Options) extension.Extension {
 	return extension.Extension{
 		Name:   Name,
-		Owns:   []string{agentskill.ToolName},
+		Owns:   []string{agentskill.ToolName, ManageTool},
 		Policy: policy.Rules{Allow: []string{agentskill.ToolName}},
 		HeldTo: map[string][]string{agentskill.ToolName: {readTool}},
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
@@ -87,7 +89,34 @@ func New(o Options) extension.Extension {
 				}
 				sources = append(sources, src)
 			}
+			// The skills the model writes (skill_manage) come last, so
+			// they shadow nothing; the tool refuses a name the others
+			// hold anyway. The directory is made, private, so the
+			// kit has a catalogue to reload into from the start.
+			installed := slices.Clone(sources)
+			var learned string
+			var manage *manager
+			if env.UserDir() != "" {
+				learned = LearnedDir(env.UserDir())
+				if err := private.SecureDir(learned); err != nil {
+					return nil, fmt.Errorf("skills %s: %w", learned, err)
+				}
+				src, err := agentskill.Dir(learned)
+				if err != nil {
+					return nil, fmt.Errorf("skills %s: %w", learned, err)
+				}
+				learned = src.Location
+				sources = append(sources, src)
+				manage = &manager{
+					dir:    LearnedDir(env.UserDir()),
+					taken:  func() (*agentskill.Catalog, error) { return agentskill.Discover(installed...) },
+					reload: env.ReloadSkills,
+				}
+			}
 			opts := []agentkit.Option{agentkit.WithSkillSources(sources...)}
+			if manage != nil {
+				opts = append(opts, agentkit.WithTools(manage.tool()))
+			}
 			if ok {
 				opts = append(opts, agentkit.WithSkillTool(agentskill.WithFileClaim(projectFileClaim(env.ToolEnv().Files, project.Location))))
 			}
@@ -104,7 +133,18 @@ func New(o Options) extension.Extension {
 						// any path on this machine is consulted, since
 						// the workspace's paths need not be this
 						// machine's.
-						trusted := !(ok && inside(project.Location, sk.Location)) && under(roots, sk.Location)
+						//
+						// A skill the model wrote is trusted only as the
+						// person approved it: its frontmatter's digest
+						// in the approvals file (Approve).
+						var trusted bool
+						switch {
+						case ok && inside(project.Location, sk.Location):
+						case learned != "" && inside(learned, sk.Location):
+							trusted = approved(env.UserDir(), sk.Name, sk.FrontmatterSHA256())
+						default:
+							trusted = under(roots, sk.Location)
+						}
 						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: trusted}
 					}),
 					agentkit.WithSkillGrantScope(),

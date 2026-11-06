@@ -202,7 +202,10 @@ before changing the shape.
   AGENTS.md) as the kit's parts (`agentkit.ChildParts`); the
   delegation guide.
 - `ext/skills` (dax-skills): skill directories, the screening of the
-  project's, grants under `-trust-skills`.
+  project's, grants under `-trust-skills`; `skill_manage` (`manage.go`)
+  over `~/.dax/learned` through an `os.Root`, reloaded at the next turn
+  (`Env.ReloadSkills`, the session's `skillsTurn`), and `Approve`, the
+  approvals by frontmatter digest that `/skills approve` writes.
 - `ext/memory` (dax-memory): the store, the scopes (the project's is
   its workspace's) and their archives, the memory tools,
   `memory_search` for the sub-agents, and `conversation_search` under

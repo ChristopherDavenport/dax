@@ -12,6 +12,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -55,6 +56,7 @@ const commandHelp = `commands:
   /mcp remove <label>       stop an MCP server
   /mode [name]              the permission mode, or switch to default, acceptEdits, dontAsk or bypassPermissions
   /permissions              the rules in force, where each came from, the mode and the grants
+  /skills approve <name>    let a skill the model wrote grant its allowed-tools under -trust-skills
   /compact [instructions]   fold the conversation at the next request, keeping what you say
   /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
@@ -160,6 +162,10 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		// A switch during a run waits for its next turn, so it works
 		// during one.
 		return modeCommand(ctx, ctl, arg)
+	case "/skills":
+		// An approval changes what the next read of the skill grants,
+		// not the run, so it works during one.
+		return skillsCommand(ctl, arg)
 	case "/port":
 		// A forward changes nothing the run does, so it works during one.
 		port, err := strconv.Atoi(arg)
@@ -436,4 +442,32 @@ func userCommand(ctx context.Context, ctl agent.Controls, cmd string) (commandRe
 		out += fmt.Sprintf(" [%d bytes cut]", c.Cut)
 	}
 	return commandResult{out: strings.TrimLeft(out, "\n")}, nil
+}
+
+// userDirer is a session whose user directory a command acts on: the
+// session in this process (agent.Session), never one over a wire.
+type userDirer interface{ UserDir() string }
+
+// skillsCommand is /skills approve NAME: the person approves a skill
+// the model wrote (dax-skills' skill_manage), as its frontmatter is now,
+// so its allowed-tools grant under -trust-skills.
+func skillsCommand(ctl agent.Controls, arg string) (commandResult, error) {
+	sub, name, _ := strings.Cut(arg, " ")
+	name = strings.TrimSpace(name)
+	if sub != "approve" || name == "" || strings.Contains(name, " ") {
+		return commandResult{}, errors.New("usage: /skills approve <name>, a skill the model wrote")
+	}
+	u, ok := ctl.(userDirer)
+	if !ok || u.UserDir() == "" {
+		return commandResult{}, errors.New("/skills approve acts on this machine's ~/.dax; it is not offered over dax attach or without a user directory")
+	}
+	a, err := skills.Approve(u.UserDir(), name)
+	if err != nil {
+		return commandResult{}, err
+	}
+	tools := a.AllowedTools
+	if tools == "" {
+		tools = "none"
+	}
+	return commandResult{out: fmt.Sprintf("[approved the skill %s as it is now (%s); allowed-tools: %s, granted under -trust-skills at its next read; a change to its frontmatter needs approving again]", name, a.Digest, tools)}, nil
 }

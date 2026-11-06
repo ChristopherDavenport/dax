@@ -468,6 +468,9 @@ type Session struct {
 	detach func()
 	// answering counts the fronts answering questions (Answering).
 	answering atomic.Int32
+	// skillsStale is set when an extension asked for its skills to be
+	// discovered again (skillsTurn).
+	skillsStale atomic.Bool
 	// views counts the views attached to it (Viewing), which an A2A
 	// caller's conversation's questions need.
 	views views
@@ -529,11 +532,28 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 	return cfg
 }
 
-// withModeTurn is cfg with the session's modeTurn after its
-// BeforeTurn.
+// withModeTurn is cfg with the session's skillsTurn and modeTurn after
+// its BeforeTurn.
 func (s *Session) withModeTurn(cfg agentturn.Config) agentturn.Config {
-	cfg.BeforeTurn = agentturn.ChainBeforeTurn(cfg.BeforeTurn, s.modeTurn)
+	cfg.BeforeTurn = agentturn.ChainBeforeTurn(cfg.BeforeTurn, s.skillsTurn, s.modeTurn)
 	return cfg
+}
+
+// skillsTurn reloads the kit's skills before the turn's model call when
+// an extension asked for it (extension.Env.ReloadSkills): at a turn's
+// start no call of the agent is being decided, the last batch done, so
+// no call is decided on one catalogue's claim and served from the
+// other's, which a reload in the middle of a batch would allow
+// (agentkit's Kit.ReloadSkills). A failed reload keeps the catalogue
+// in force, with a warning.
+func (s *Session) skillsTurn(ctx context.Context, _ agentturn.TurnStartInfo) (openresponses.Items, error) {
+	if !s.skillsStale.Swap(false) {
+		return nil, nil
+	}
+	if err := s.Kit.ReloadSkills(ctx); err != nil {
+		fmt.Fprintf(warnings{}, "dax: skills: %v\n", err)
+	}
+	return nil, nil
 }
 
 // PartOneShot is the id of the instructions part a one-shot run
@@ -1376,6 +1396,12 @@ func (s *Session) mcpServers() []MCPServerInfo {
 	}
 	return out
 }
+
+// UserDir is the user's directory the session reads its own sources
+// from (Options.UserDir), ~/.dax, empty for none: a front's commands
+// that change what the user keeps there, such as approving a skill the
+// model wrote, act on it.
+func (s *Session) UserDir() string { return s.opts.UserDir }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
 // model in force, and keeps the setting for a later SetModel. The

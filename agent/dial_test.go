@@ -304,7 +304,9 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 			names = append(names, tl.Name)
 		}
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output"}; !slices.Equal(names, want) {
+	// skill_manage is dax-skills' and control: it writes the user's
+	// learned skills where the session runs, never in the executor.
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output", "skill_manage"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if om := s.Omitted(); len(om) != 0 {

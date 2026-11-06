@@ -327,6 +327,25 @@ are marked as untrusted text, since earlier models, tools and pages
 wrote them. It is dax-memory's, so `-memory off` and `-bare` leave it
 out; an A2A caller cannot use it (see Serving peers).
 
+## Skills the model writes
+
+dax-skills offers the model `skill_manage`, which creates, updates or
+deletes a skill of its own in `~/.dax/learned`, on this machine, never
+in the repository's `.dax/skills` or your `~/.dax/skills`; a name either
+of those (or `skills_dirs`) holds is refused. Every call asks. The skill
+is checked before it is written (its name, its frontmatter, its
+`allowed-tools`), written whole and moved into place, and the catalogue
+lists it from the model's next turn, in the run that wrote it, so "save
+how you did that as a skill" can be followed and used in one session,
+and found in the next.
+
+A skill the model wrote grants nothing, even under `-trust-skills`,
+until you approve it: `/skills approve <name>` records its
+frontmatter's digest in `~/.dax/skill-approvals.json`, and its
+`allowed-tools` then grant at its next read under `-trust-skills`, as a
+skill you installed does. A change to its frontmatter needs approving
+again. The model has no route to the approvals.
+
 ## Peers: other agents over A2A
 
 An agent that serves [A2A](https://a2a-protocol.org) can be offered to
@@ -1407,7 +1426,9 @@ machine matters.
 - **`-trust-skills` trusts the skills in directories you named**
   (`~/.dax/skills` and your config's `skills_dirs`) and never the
   repository's: a skill in `.dax/skills` is text from the repository, and
-  its `allowed-tools` are withheld, so it cannot run anything unasked.
+  its `allowed-tools` are withheld, so it cannot run anything unasked. A
+  skill the model wrote (`~/.dax/learned`) is trusted only as you
+  approved it, by its frontmatter's digest (`/skills approve`).
 - **The provider sees what the model reads.** Files and command output go
   to the model's provider (OpenAI, OpenRouter and whichever upstream it
   routes to, Anthropic, Google, your Ollama host, or the `openresponses`
@@ -1955,7 +1976,8 @@ the same 8 KiB and quarter of the budget, but never a `!` command's
 output or a message dax composed.
 
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
-`skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
+`skills/`, `memory/`, `learned/` (the skills the model wrote) and
+`skill-approvals.json`. A project's `.dax/skills` and its `AGENTS.md` files
 are read too, through the workspace. The `AGENTS.md` chain follows the
 convention (https://agents.md): from the repository's root, the nearest
 directory at or above the start that holds a `.git`, down to where dax
@@ -1992,7 +2014,7 @@ dax's own extensions are built the same way, from the same fields:
 |---|---|---|
 | `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan and the facts the policy approved |
 | `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`), its sub-agent tools, and the memory block as the kit's parts |
-| `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
+| `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills`; `skill_manage` over `~/.dax/learned` |
 | `dax-memory` | `ext/memory` | the memory tools and block; `memory_search` for the sub-agents; `conversation_search`, scoped by `Env.SearchScope` |
 | `dax-a2a` | `ext/a2a` | a tool per configured peer, added through its kit as memory's are; their renderers; no rules |
 

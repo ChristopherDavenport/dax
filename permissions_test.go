@@ -3,6 +3,7 @@ package dax
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,5 +67,32 @@ func TestPermissionsListsTheRulesAndWhereTheyCameFrom(t *testing.T) {
 	}
 	if got := strings.Join(permissionLines(si.Info), "\n"); got != res.out {
 		t.Errorf("attach shows:\n%s\nwant:\n%s", got, res.out)
+	}
+}
+
+// /skills approve NAME approves a skill the model wrote, as it is now,
+// and names its allowed-tools; a name that is no learned skill is
+// refused (#159).
+func TestSkillsApprove(t *testing.T) {
+	r := startRig(t, &steps{}, policy.Rules{}, nil, nil, false)
+	ctx := context.Background()
+	dir := filepath.Join(r.o.UserDir, "learned", "fix-migration")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: fix-migration\ndescription: Rerun it.\nallowed-tools: Bash(echo:*)\n---\nRerun.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := command(ctx, r.sess, r.sess, "/skills approve fix-migration", false)
+	if err != nil || !strings.Contains(res.out, "approved the skill fix-migration") || !strings.Contains(res.out, "Bash(echo:*)") {
+		t.Fatalf("/skills approve: %q, %v", res.out, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(r.o.UserDir, "skill-approvals.json")); err != nil || !strings.Contains(string(data), `"fix-migration": "`) {
+		t.Errorf("approvals file %q, %v", data, err)
+	}
+	for _, line := range []string{"/skills approve greet", "/skills approve ../learned/fix-migration", "/skills", "/skills list"} {
+		if _, err := command(ctx, r.sess, r.sess, line, false); err == nil {
+			t.Errorf("%s was accepted", line)
+		}
 	}
 }

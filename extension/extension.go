@@ -236,6 +236,13 @@ type Env interface {
 	// searches the store sets it on every search, so a caller never
 	// reads the person's conversations.
 	SearchScope(ctx context.Context, q *agentsession.Query) error
+	// ReloadSkills asks the session to discover its skills again
+	// (agentkit's Kit.ReloadSkills) at the main agent's next turn,
+	// before its model call, when none of its calls is being decided:
+	// a skill an extension wrote since is listed and served from that
+	// request on, in the run that wrote it or the next. A failed reload
+	// is a warning, and the catalogue in force stays.
+	ReloadSkills()
 	// SystemPrompt is the main agent's part of the system prompt, with
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.

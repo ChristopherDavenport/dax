@@ -406,6 +406,8 @@ func (e *sessionEnv) Tools() []agenttool.Tool         { return e.capped(e.a.tool
 func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool { return e.capped(e.a.readOnly) }
 func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
+func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
+
 func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
 	return e.s.SearchScope(ctx, q)
 }
