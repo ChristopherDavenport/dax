@@ -10,12 +10,13 @@ import (
 )
 
 // refusing is a model whose every request the key's credit cannot
-// cover.
+// cover, in OpenAI's shape: a 429, which the loop retries unless its
+// code is insufficient_quota.
 type refusing struct{ calls atomic.Int32 }
 
 func (m *refusing) CreateStream(context.Context, openresponses.Request, openresponses.EventSink) error {
 	m.calls.Add(1)
-	return &openresponses.Error{StatusCode: 402, Type: openresponses.ErrorTypeInvalidRequest, Code: openresponses.CodeInsufficientQuota, Message: "no credit"}
+	return &openresponses.Error{StatusCode: 429, Type: "insufficient_quota", Code: openresponses.CodeInsufficientQuota, Message: "You exceeded your current quota."}
 }
 
 // A request the key's credit cannot cover is not sent again: the run

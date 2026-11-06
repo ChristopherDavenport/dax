@@ -431,9 +431,16 @@ func TestTheREPLRecordsTypedInputAsThePersons(t *testing.T) {
 	if got, ok := words["hello"]; !ok || got != agentsession.WordsPerson {
 		t.Errorf("the typed prompt is recorded as %v (found %v), want the person's: %v", got, ok, words)
 	}
+	ran := false
 	for text, w := range words {
-		if strings.Contains(text, "from-a-command") && w == agentsession.WordsPerson {
-			t.Errorf("a command's output is recorded as the person's words: %q", text)
+		if strings.Contains(text, "from-a-command") {
+			ran = true
+			if w == agentsession.WordsPerson {
+				t.Errorf("a command's output is recorded as the person's words: %q", text)
+			}
 		}
+	}
+	if !ran {
+		t.Errorf("the record holds no command's output: %v", words)
 	}
 }

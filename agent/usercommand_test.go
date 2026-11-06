@@ -5,13 +5,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
 // A command the user runs with ! runs in the session's workspace, not
 // through the policy, and its line, output and exit status reach the
 // model with the next prompt as the user's; the record says the user ran
-// a command, and a fold does not pin its output as a request (#169).
+// a command, and the output is not the person's words, which a fold
+// keeps (#169, #183).
 func TestAUserCommandReachesTheModelWithTheNextPrompt(t *testing.T) {
 	ctx := context.Background()
 	m := &seeing{}
@@ -22,7 +25,9 @@ func TestAUserCommandReachesTheModelWithTheNextPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	c, err := s.RunUserCommand(ctx, "echo from-the-user; false")
+	// Run as the fronts run it, under the person's trigger, which its
+	// output does not take.
+	c, err := s.RunUserCommand(agentturn.ContextWithTrigger(ctx, AtTerminal), "echo from-the-user; false")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,9 +44,27 @@ func TestAUserCommandReachesTheModelWithTheNextPrompt(t *testing.T) {
 	if !strings.Contains(joined, "$ echo from-the-user; false") || !strings.Contains(joined, "from-the-user\n") || !strings.Contains(joined, "[exit 1]") || !strings.Contains(joined, "fix this") {
 		t.Errorf("the model saw %q", seen)
 	}
-	for _, it := range m.last {
-		if msg, ok := it.(*openresponses.Message); ok && strings.Contains(msg.Text(), "$ echo from-the-user") && s.tasks.pin(msg) {
-			t.Error("a fold would pin the command's output as the user's request")
+	// The record does not hold the output as the person's words, nor
+	// as an unclaimed prompt a fold after a resume would keep.
+	found := false
+	for _, e := range s.Kit.Session().Path(s.Kit.Session().Leaf()) {
+		ie, ok := e.(*agentsession.ItemEntry)
+		if !ok {
+			continue
+		}
+		if msg, ok := ie.Item.(*openresponses.Message); ok && strings.Contains(msg.Text(), "$ echo from-the-user") {
+			found = true
+			if w := agentsession.WordsOf(ie); w == agentsession.WordsPerson {
+				t.Errorf("the command's output is recorded as the person's words (%v)", w)
+			}
+		}
+	}
+	if !found {
+		t.Error("the record holds no message with the command's output")
+	}
+	for m := range unclaimed(s.Kit.Session(), s.ag.State().Transcript) {
+		if strings.Contains(m.Text(), "$ echo from-the-user") {
+			t.Error("a fold after a resume would keep the command's output as a prompt")
 		}
 	}
 	data := string(projected(t, o, s))
