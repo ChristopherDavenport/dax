@@ -49,3 +49,23 @@ func TestAUserCommandReachesTheModelWithTheNextPrompt(t *testing.T) {
 		t.Error("the record does not say the user ran a command")
 	}
 }
+
+// A command that exits while a job it left holds its output open is
+// cut short with its own status (agentworkspace v0.0.12's
+// ErrCutShort), which reaches the model and the record, not 0.
+func TestAUserCommandCutShortKeepsItsStatus(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &seeing{})
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c, err := s.RunUserCommand(ctx, "sleep 5 & echo started; exit 3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ExitCode != 3 || !strings.Contains(c.Output, "started") {
+		t.Fatalf("ran %+v", c)
+	}
+}

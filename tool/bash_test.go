@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agenttool"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
 )
 
 // runBash runs one bash call, collecting the progress it reports: the
@@ -102,5 +103,57 @@ func TestBashSaysABackgroundJobHeldItsOutput(t *testing.T) {
 	}
 	if !strings.Contains(result, "started") || !strings.Contains(result, "still holds its output") {
 		t.Errorf("the model is told %q", result)
+	}
+}
+
+// runBashIn is runBash in ws.
+func runBashIn(t *testing.T, ws workspace.Workspace, command string) (string, error) {
+	t.Helper()
+	args, _ := json.Marshal(map[string]string{"command": command})
+	res, err := Bash(NewFiles(ws)).Execute(context.Background(), agenttool.Call{ID: "call_1", Args: args})
+	return Text(res), err
+}
+
+// A workspace's refusals are kinds every backend gives and every wire
+// carries (agentworkspace v0.0.12): a missing bash is fs.ErrNotExist
+// and a command cut short, whatever its status, ErrCutShort with the
+// status. So bash says the same to the model on this machine and over
+// a served workspace, and a background job's note gives the command's
+// own exit code, not 0.
+func TestBashSaysTheSameOverAWire(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(*testing.T, workspace.Workspace) workspace.Workspace
+	}{
+		{"local", func(_ *testing.T, ws workspace.Workspace) workspace.Workspace { return ws }},
+		{"served", served},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, err := workspace.NewLocal(t.TempDir(), []string{"PATH=" + t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { local.Close() })
+			result, err := runBashIn(t, tc.wrap(t, local), "ls")
+			if err != nil {
+				t.Fatalf("no bash: the call failed: %v", err)
+			}
+			if result != noBashOutput {
+				t.Errorf("no bash: the model is told %q", result)
+			}
+
+			local, err = workspace.NewLocal(t.TempDir(), DefaultEnv(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { local.Close() })
+			result, err = runBashIn(t, tc.wrap(t, local), "sleep 5 & echo started; exit 3")
+			if err != nil {
+				t.Fatalf("cut short: the call failed: %v", err)
+			}
+			if !strings.Contains(result, "started") || !strings.Contains(result, "[exit 3; ") || !strings.Contains(result, "still holds its output") {
+				t.Errorf("cut short: the model is told %q", result)
+			}
+		})
 	}
 }

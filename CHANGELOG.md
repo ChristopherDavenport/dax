@@ -35,6 +35,13 @@ versions may break flags and the config file.
   under a context its leaving does not end, which the attached view
   passed on and so stopped the run.
 
+- Fixed: a `bash` call, or a `!` command, whose command exits while a
+  job it started still holds its output gives the command's own exit
+  status, where it said `exit 0` whatever it was (agentworkspace
+  v0.0.12's `ErrCutShort`); and in a served or tunnelled workspace with
+  no bash, `bash` tells the model so as it does on this machine, where
+  the call failed with the wire's error.
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format

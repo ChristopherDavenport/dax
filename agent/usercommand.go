@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -65,8 +64,12 @@ func (s *Session) RunUserCommand(ctx context.Context, line string) (UserCommand,
 	res, err := s.ws.Exec(ctx, workspace.Command{Args: []string{"bash", "-c", line}, Stream: out, Timeout: userCommandTimeout})
 	c := UserCommand{Command: line}
 	switch {
-	case errors.Is(err, exec.ErrWaitDelay):
-		// It exited 0 and left a job holding its output.
+	case errors.Is(err, workspace.ErrCutShort):
+		// It exited and left a job holding its output: the output so
+		// far and its own status came beside the error.
+		if res != nil {
+			c.ExitCode = res.ExitCode
+		}
 	case err != nil:
 		return UserCommand{}, err
 	default:

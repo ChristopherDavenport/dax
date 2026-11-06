@@ -498,7 +498,7 @@ no other account could have written it.
 | `glob` | paths matching a doublestar pattern (`**/*.go`, `cmd/*/main.go`, `*.{md,txt}`), sorted |
 | `grep` | a regular expression over files: `path`, `include` (a glob), `ignore_case`, `max_results`; prints `path:line:text` |
 | `ls` | one directory, sorted, directories with `/`, files with their size |
-| `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs |
+| `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs. A command that exits while a job it started still holds its output ends the call with the command's own exit status and a note that the job runs on; a workspace with no bash says so as the call's output, on this machine and over a served workspace alike |
 | `read_output` | the whole of a result that was cut to `bash_max_output` or `mcp_max_output`, by the output id (`out_…`) it names: numbered lines from an offset, or the lines matching a pattern. It reads only an output this session kept, never a blob by its hash or another session's, where the session runs |
 | `background` | a long-lived command (a dev server, a watcher) started in the background (`start`), listed (`list`), its new output read (`output`, the last 16 KiB of what came since the last read) and stopped (`stop`); at most 8 running, each ended with the session. A start is decided as `bash`'s call of its line (the same rules, the same stamp), so `git status` starts unasked and `npm run dev` asks; `list`, `output` and `stop` of the session's own processes run. In a workspace that cannot start a process, run the command with `bash` |
 
