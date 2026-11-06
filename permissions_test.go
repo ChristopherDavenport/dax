@@ -51,7 +51,7 @@ func TestPermissionsListsTheRulesAndWhereTheyCameFrom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.out, "granted dax:session (scope "+r.sess.ID()+")") || !strings.Contains(res.out, "  allow bash(echo hello:*)") {
+	if !strings.Contains(res.out, "granted dax:session (scope "+r.sess.ID()+")") || !strings.Contains(res.out, "  allow bash(echo hello)") {
 		t.Errorf("the session's grant is not listed:\n%s", res.out)
 	}
 
