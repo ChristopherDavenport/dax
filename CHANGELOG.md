@@ -90,9 +90,11 @@ versions may break flags and the config file.
   the REPL's words (`client.WithAnswers`), where they said "The user
   refused this call."; `n` refuses and the run goes on, `s` refuses and
   stops it (agentconsole v0.0.16); a sub-agent's call declined when
-  asked (agentturn's `DeclineText`); and a call denied by default under
-  `"fallback": "deny"` (agentpolicy v0.0.20's default note). A refusal's
-  reason is recorded as the answer's reason too (#150).
+  asked (agentturn's `DeclineText`), which tells the sub-agent to say
+  so in its result, having no user of its own; a call `-p` refuses
+  because nobody was there to approve it; and a call denied by default
+  under `"fallback": "deny"` (agentpolicy v0.0.20's default note). A
+  refusal's reason is recorded as the answer's reason too (#150).
 - Added: the terminal client's status line from your config's `status`
   block: `position` (top, bottom), `style` (plain, powerline), the
   `segments` in order (agentconsole's: time, tokens, cost, model,

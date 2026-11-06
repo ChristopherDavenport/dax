@@ -907,6 +907,11 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	if !strings.Contains(saw, "declined when asked") || !strings.Contains(saw, policy.NoWorkAround[:40]) || !strings.Contains(saw, "the user said: wrong file") {
 		t.Errorf("the sub-agent saw %q, want dax's refusal and the user's reason", saw)
 	}
+	// Told as a sub-agent, which has no user of its own to let decide:
+	// its result goes to the agent that gave it the task.
+	if strings.Contains(saw, "sub-agent asks:") || strings.Contains(saw, "let the user decide") || !strings.Contains(saw, "say so in your result") {
+		t.Errorf("the sub-agent saw %q, want the refusal in a sub-agent's terms", saw)
+	}
 	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)
 	r.quit()
 }

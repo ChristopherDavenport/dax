@@ -67,7 +67,7 @@ const (
 	deniedOutput     = "Error: the user denied this call. " + policy.NoWorkAround
 	unknownOutput    = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
 	neverRanOutput   = "Error: this call was cut off before it reached its tool; it did not run."
-	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. Do not get the same result another way; if it is still needed, say so."
+	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. " + policy.NoWorkAround
 	heldOutput       = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
 )
 
@@ -2109,9 +2109,8 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 			// A decline is told in dax's words, as a person's refusal
 			// of the main agent's call is (Refusal), and what the
 			// answerer said follows them (agentturn.Ask, #304).
-			asks := childAsks(name, why)
-			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: asks, Subject: subject, Args: args, By: agentpolicy.ByPolicy,
-				DeclineText: "declined when asked: " + asks + ". " + strings.TrimSuffix(policy.NoWorkAround, ".")}, nil
+			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy,
+				DeclineText: childDeclined(why)}, nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -2147,6 +2146,16 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 // fronts show it and the record keeps it: the sub-agent's name, then
 // the policy's reason.
 func childAsks(name, why string) string { return "the " + name + " sub-agent asks: " + why }
+
+// childDeclined is what a sub-agent's model reads for a call of its own
+// declined when asked, the policy's reason why it asked in brackets:
+// policy.NoWorkAround's rule, but with no user of its own to let
+// decide, it says so in the result its caller reads. agentturn adds
+// what the answerer said after it.
+func childDeclined(why string) string {
+	rule, _, _ := strings.Cut(policy.NoWorkAround, ";")
+	return "declined when asked about this call (" + why + "). " + rule + "; if it is still needed, say so in your result"
+}
 
 // isChildAsk reports whether reason is a sub-agent's question
 // (childAsks).

@@ -1793,7 +1793,8 @@ is shown again. When `-p`'s input has ended, or `-timeout` ends the
 wait, nobody answered: the call is refused, or the question declined,
 by dax's rule, and the record names the rule (`policy`), not you, as
 the decider. The model is told nobody was there to approve the call,
-not that you denied it. Where dax offers a grant (see [Yes,
+not that you denied it, and, as with every refusal, not to get the same
+result another way. Where dax offers a grant (see [Yes,
 always](#yes-always)) the question says which rule, `[y/a/A/N] (a:
 allow bash(go test:*) for this session, A: always in this project)`:
 `a` approves and grants it for the session, `A` keeps it for the
