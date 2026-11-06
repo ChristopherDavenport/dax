@@ -165,11 +165,11 @@ versions may break flags and the config file.
   `bash -c 'echo hi'` offered `bash(bash -c:*)`, which allows any
   code, and so did `sh -c`, `python -c`, `env X=1`, `xargs`, `sudo`,
   `uv run`, `npm exec`, `docker run`, `git rebase` and many more. A
-  prefix rule is offered now only for an allowlist of build, test and
-  listing commands (`go test`, `cargo test`, `npm test`, `make
-  <target>`, `pytest`, `ls` ...); any other line of one command, with
-  no quoting and no `*`, is offered exactly as written, and nothing
-  else is offered (#146).
+  prefix rule is offered now only for `ls`, `wc`, `du` and `df`; any
+  other line of one command, with no quoting and no `*`, is offered
+  exactly as written (`go test ./...` too, since `go test -exec`,
+  `make --eval` and the like run a program), and nothing else is
+  offered (#146).
 - Fixed: `agent.Drive` made a grant for any approval that asked for
   one; it makes one only for a person's answer (`PermitAnswer.By`
   empty, agentpolicy's `ByHuman`), and a rule's approval is once

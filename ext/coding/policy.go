@@ -13,8 +13,6 @@ package coding
 import (
 	"context"
 	"encoding/json"
-	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -111,52 +109,21 @@ func acceptEditsRules() policy.Rules {
 	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
 }
 
-// grantPrefixes are the programs and subcommands "yes, always" offers
-// a prefix rule for, bash(<program> <subcommand>:*): build, test and
-// listing tools that do not run a command a later word names. A
-// program with an empty list takes its own name alone (pytest:*); make
-// takes any plain target (make check:*), never make alone or a
-// variable. Any other line is offered exactly as it is (exactGrant),
-// never as a prefix: a deny list of shells, interpreters, launchers and
-// wrappers with a command-running subcommand or flag (uv run, docker
-// run, git rebase --exec, tar --to-command ...) kept missing some. A
-// prefix allows the flags after it; that go test -exec, make -f and
-// the like run a program is the person's to weigh when they accept it.
-var grantPrefixes = map[string][]string{
-	"go":     {"test", "build", "vet", "fmt", "list", "doc", "version"},
-	"cargo":  {"test", "build", "check", "clippy", "fmt", "doc"},
-	"npm":    {"test"},
-	"pnpm":   {"test"},
-	"yarn":   {"test"},
-	"make":   nil,
-	"pytest": {},
-	"ls":     {},
-	"tree":   {},
-	"wc":     {},
-	"du":     {},
-	"df":     {},
-}
-
-// makeTarget is a make target a prefix may name: not a flag, not a
-// variable.
-var makeTarget = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`)
+// grantPrefixes are the programs "yes, always" offers a prefix rule
+// for, bash(<program>:*): listing tools with no flag that runs a
+// command or writes a file. Any other line is offered exactly as it
+// is (exactGrant), never as a prefix: a build or test tool runs
+// whatever a later flag names (go test -exec, -toolexec, -vettool;
+// make --eval, -f, SHELL=, CC=), as do shells, interpreters, launchers
+// and wrappers (uv run, docker run, git rebase --exec, tar
+// --to-command), and a deny list of them kept missing some.
+var grantPrefixes = map[string]bool{"ls": true, "wc": true, "du": true, "df": true}
 
 // grantPrefix is the allowlisted prefix of a stage's words, "" for
 // none.
 func grantPrefix(words []string) string {
-	subs, ok := grantPrefixes[words[0]]
-	switch {
-	case !ok:
-		return ""
-	case words[0] == "make":
-		if len(words) > 1 && makeTarget.MatchString(words[1]) {
-			return "make " + words[1]
-		}
-		return ""
-	case len(subs) == 0:
+	if grantPrefixes[words[0]] {
 		return words[0]
-	case len(words) > 1 && slices.Contains(subs, words[1]):
-		return words[0] + " " + words[1]
 	}
 	return ""
 }
