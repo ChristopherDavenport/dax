@@ -234,9 +234,22 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 			panic(r)
 		}
 	}()
+	for {
+		next, err := f.session(ctx, sess)
+		if next == nil {
+			return err
+		}
+		f.info.moved(sess, next)
+		sess, si = next, next.Info()
+	}
+}
+
+// session runs the client over sess until the user leaves, or a
+// command opens another session, which it returns.
+func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Session, error) {
 	rec, err := client.RecordOf(sess.Recorder())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The client answers the questions asked while a call runs.
 	defer sess.Answering()()
@@ -263,7 +276,36 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
 	}))
 	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
-	return runConsole(ctx, f.run, rec, sess, act, sess, sess, opts)
+	// A command that opens a session (/new, /resume) ends this client,
+	// and Run enters it again over the new one.
+	cctx, leave := context.WithCancel(ctx)
+	defer leave()
+	sw := &switching{Session: sess, leave: leave}
+	err = runConsole(cctx, f.run, rec, sess, act, sess, sw, opts)
+	if n := sw.next.Load(); n != nil {
+		return n, nil
+	}
+	return nil, err
+}
+
+// switching is the session's controls with Reopen ending the client
+// that runs over it, once the session it opened is there to move to.
+type switching struct {
+	*agent.Session
+	leave func()
+	next  atomic.Pointer[agent.Session]
+}
+
+// Reopen opens the session to move to (agent.Session.Reopen) and ends
+// the client.
+func (s *switching) Reopen(ctx context.Context, id string) (*agent.Session, error) {
+	n, err := s.Session.Reopen(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.next.Store(n)
+	s.leave()
+	return n, nil
 }
 
 // withGrants is act with the grants the permission panel's answers ask

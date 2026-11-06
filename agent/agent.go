@@ -435,7 +435,10 @@ type Session struct {
 	fwdMu    sync.Mutex
 	forwards map[int]net.Listener
 
-	opts   Options
+	opts Options
+	// base is the Options the session was opened with, as the caller
+	// gave them, which Reopen opens another over.
+	base   Options
 	live   live
 	modes  modes
 	grants grants
@@ -450,15 +453,18 @@ type Session struct {
 	// reserved are the names no other server may take: the offered
 	// servers' and a box host's units'.
 	reserved []string
-	mcpNames []string            // the configured servers connected at open
-	refused  []agentkit.Omission // repository files screened out before the kit
-	ws       workspace.Workspace
-	ownWS    bool // the session opened ws, and closes it
-	files    *tool.Files
-	x        executor.Executor // runs the extensions' tools; the session closes it
-	set      *executor.Set     // x's tools as the kit has them
-	store    agentsession.Store
-	own      bool // the session opened store, and closes it
+	mcpNames []string // the configured servers connected at open
+	// added are the servers AddMCP started, by label, in the order they
+	// were, which Reopen starts again.
+	added   []addedMCP
+	refused []agentkit.Omission // repository files screened out before the kit
+	ws      workspace.Workspace
+	ownWS   bool // the session opened ws, and closes it
+	files   *tool.Files
+	x       executor.Executor // runs the extensions' tools; the session closes it
+	set     *executor.Set     // x's tools as the kit has them
+	store   agentsession.Store
+	own     bool // the session opened store, and closes it
 	// recorded is false when the store is one the session made in
 	// memory because nothing was to be kept.
 	recorded bool
@@ -483,6 +489,9 @@ type Session struct {
 	// as Info.MCP lists them.
 	servers   []MCPServerInfo
 	serversMu sync.Mutex
+	// closing makes Close once, and closeErr is its error.
+	closing  sync.Once
+	closeErr error
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -645,6 +654,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if o.Streamer == nil {
 		return nil, errors.New("no model")
 	}
+	base := o
 	ws, ownWS := o.Workspace, false
 	if o.Executor != nil {
 		if ws != nil {
@@ -692,7 +702,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		m.seed(ctx, r, resume, o.Model)
 	}
 	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
-	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
+	s := &Session{opts: o, base: base, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
 	// for its AGENTS.md.
@@ -1169,6 +1179,17 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 		}
 		return nil, err
 	}
+	if err := s.resumed(id); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// resumed checks a session open has just resumed as id, and warns of
+// what changed since it was recorded: a session that cannot be
+// continued is an error, and the caller closes it.
+func (s *Session) resumed(id string) error {
 	sess := s.Kit.Session()
 	if t := sess.Truncated(); t != nil {
 		fmt.Fprintf(warnings{}, "dax: session %s: %v (dropped)\n", id, t)
@@ -1178,8 +1199,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// can be appended to it: it is refused here, rather than by the
 	// first prompt's append.
 	if err := sess.RaiseRefused(agentsession.Format); err != nil {
-		s.Close()
-		return nil, fmt.Errorf("session %s cannot be continued: %w", id, err)
+		return fmt.Errorf("session %s cannot be continued: %w", id, err)
 	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
@@ -1207,7 +1227,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	if w := serversResumed(sess.Header(), s.sw); w != "" {
 		fmt.Fprintf(warnings{}, "dax: %s\n", w)
 	}
-	return s, nil
+	return nil
 }
 
 // serversResumed is what to say when a session whose header h records
@@ -1351,6 +1371,7 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 	info.Added = label
 	s.serversMu.Lock()
 	s.servers = append(s.servers, info)
+	s.added = append(s.added, addedMCP{label: label, server: MCPServer{Name: name, Command: command}})
 	s.serversMu.Unlock()
 	return label, nil
 }
@@ -1363,6 +1384,7 @@ func (s *Session) RemoveMCP(label string) error {
 	err := s.Kit.RemoveMCP(label)
 	s.serversMu.Lock()
 	s.servers = slices.DeleteFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
+	s.added = slices.DeleteFunc(s.added, func(a addedMCP) bool { return a.label == label })
 	s.serversMu.Unlock()
 	return err
 }
@@ -1467,8 +1489,14 @@ func (s *Session) Forward(ctx context.Context, port int) (string, error) {
 }
 
 // Close detaches the recorder and releases the MCP server and the
-// store.
+// store. A second Close returns the first's error and does nothing: a
+// front that moved to another session (Reopen) has closed this one.
 func (s *Session) Close() error {
+	s.closing.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
+
+func (s *Session) close() error {
 	if s.detach != nil {
 		s.detach()
 	}

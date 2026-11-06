@@ -148,7 +148,7 @@ the header each model call carries its session's ID in, and
 ```
 
 The ID is that of the session the call is recorded in: a sub-agent's
-calls carry the sub-agent's own session, and after `/clear` the new
+calls carry the sub-agent's own session, and after `/new` the new
 session's. A request made outside a run, such as asking the vendor what
 a model supports, carries none. Each must be a header name of letters,
 digits and hyphens, not one the client sets itself (`Authorization`,
@@ -1653,6 +1653,16 @@ the input until the next line, and an error gives the line back to edit.
 - `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has
   letters, digits, `-` and `_`, and no `__`), `/mcp remove <label>`.
 - `/tools`, `/session`, `/help`.
+- `/new` (or `/clear`) starts a new session in place, in this
+  project: a new conversation recorded as one of its own, which `-list`
+  shows beside this one. It keeps what you changed during this
+  session, the model (`/model`), reasoning (`/think`), the permission
+  mode (`/mode`, Shift-Tab) and the servers `/mcp add` started, which
+  start again with labels of their own; it does not keep this session's
+  grants (`a`), its `/port` forwards, or calls left waiting, which stay
+  with this session's record for a `-resume`. It waits for the run to
+  end, and `dax attach` refuses it: every attached view acts on the one
+  conversation the host serves.
 - `/follow text` queues a follow-up that runs once the model would have
   stopped; `/abort` aborts the run; `/quit` leaves.
 - `!command` runs a command yourself, with bash in the session's
@@ -1667,8 +1677,8 @@ the input until the next line, and an error gives the line back to edit.
   session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think`, `/compact`, `/mcp add` and
-`/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
+the next model call. `/model`, `/think`, `/compact`, `/new`, `/mcp add`
+and `/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
 during one. An unknown command is an error, not a
 prompt.
 
@@ -1743,7 +1753,8 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
   that resumes the session.
 - **Commands.** The slash commands run against the served session:
   `/model`, `/think`, `/mcp` and `/session` act there, through the
-  server's commands.
+  server's commands. `/new` is refused there: a view cannot move the
+  host, and every view with it, to another conversation.
 - **The tree.** Continuing from an entry (Ctrl-B on a row, `c` in the
   tree) moves the served session's head, as it does locally: the next
   prompt, from any view, continues from there. A move the session

@@ -100,6 +100,9 @@ type frontInfo struct {
 	// it takes the screen and what dax noted after it exits; without it,
 	// the client leaves only the command that resumes the session.
 	Verbose bool
+	// switched is told of the session a front moved to (/new,
+	// /resume), which is the one to close at the end; nil for none.
+	switched func(*agent.Session)
 }
 
 // front is a way to talk to a session.
@@ -184,6 +187,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
 	var usage runUsage
 	defer t.Subscribe(usage.count)()
+	defer abortOnInterrupt(t)()
 	if f.info.Timeout > 0 {
 		// A deadline is a cancellation: the run ends aborted, and its
 		// cause, on the record and in the end line, is the timeout.
@@ -191,7 +195,6 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		ctx, cancel = context.WithTimeoutCause(ctx, f.info.Timeout, &timeoutError{f.info.Timeout})
 		defer cancel()
 	}
-	abortOnInterrupt(t)
 	info := ctl.Info()
 	if info.Recorded {
 		// On standard error, so standard output stays the run's, and
@@ -303,6 +306,11 @@ type replFront struct {
 	in   *bufio.Scanner
 	// out is where the REPL writes; nil is os.Stdout.
 	out io.Writer
+	// lines are in's, read by one reader (readLines), and read the
+	// count of them.
+	reading sync.Once
+	lines   chan typedLine
+	read    atomic.Uint64
 }
 
 // waiting is something the REPL asked the user and waits on a line for:
@@ -336,9 +344,50 @@ type result struct {
 }
 
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
-	// The REPL answers the questions asked while a call runs.
-	defer sess.Answering()()
-	return f.run(ctx, sess, sess)
+	for {
+		// The REPL answers the questions asked while a call runs.
+		answering := sess.Answering()
+		err := f.run(ctx, sess, sess)
+		answering()
+		var to *movedTo
+		if !errors.As(err, &to) {
+			return err
+		}
+		f.info.moved(sess, to.sess)
+		sess = to.sess
+	}
+}
+
+// readLines is the REPL's input, each line numbered as it is read, by
+// one reader for the front's whole life.
+func (f *replFront) readLines() (<-chan typedLine, *atomic.Uint64) {
+	f.reading.Do(func() {
+		f.lines = make(chan typedLine, 256)
+		go func() {
+			defer close(f.lines)
+			for f.in.Scan() {
+				f.lines <- typedLine{text: f.in.Text(), seq: f.read.Add(1)}
+			}
+		}()
+	})
+	return f.lines, &f.read
+}
+
+// movedTo ends a front's loop over one session for another, which a
+// command opened (/new, /resume).
+type movedTo struct{ sess *agent.Session }
+
+func (*movedTo) Error() string { return "moved to another session" }
+
+// moved is a front's move from old to n: whoever closes the session at
+// the end now closes n, and old is closed here.
+func (i frontInfo) moved(old, n *agent.Session) {
+	if i.switched != nil {
+		i.switched(n)
+	}
+	if err := old.Close(); err != nil {
+		fmt.Fprintf(agent.Warnings(), "dax: closing session %s: %v\n", old.ID(), err)
+	}
 }
 
 func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
@@ -347,7 +396,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		w = os.Stdout
 	}
 	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think, Compact: true}).Handle)()
-	abortOnInterrupt(t)
+	defer abortOnInterrupt(t)()
 	// What the person types here is sent as theirs: a prompt, a steer
 	// and the run their answers resume start under the trigger of the
 	// person at this terminal (agentturn.TriggerHuman), which the record
@@ -389,14 +438,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	// Each line is numbered as it is read, ahead of the loop, so a line
 	// typed before a question was shown is known for one even when the
 	// loop takes it after: it never answers that question.
-	var read atomic.Uint64
-	lines := make(chan typedLine, 256)
-	go func() {
-		defer close(lines)
-		for f.in.Scan() {
-			lines <- typedLine{text: f.in.Text(), seq: read.Add(1)}
-		}
-	}()
+	// The reader outlives a move to another session (/new), whose loop
+	// reads on from the same lines.
+	lines, read := f.readLines()
 	done := make(chan result, 1)
 	running := false
 	var asks []waiting             // what waits on the user, in order
@@ -639,6 +683,12 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					}
 					return nil
 				}
+				if r.open != nil {
+					// A command that opens a session waits for the run
+					// to end, so none is running.
+					fmt.Fprintf(w, "[session %s]\n", r.open.ID())
+					return &movedTo{r.open}
+				}
 				if !running {
 					prompt()
 				}
@@ -786,18 +836,29 @@ func openSession(ctx context.Context, opts agent.Options, resume string) (*agent
 
 // abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
 // or one while idle, exits.
-func abortOnInterrupt(t agentturn.Control) {
+// It returns what stops it, for a front that moves to another session.
+func abortOnInterrupt(t agentturn.Control) (stop func()) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
 	go func() {
-		for range sigs {
-			if !t.State().Running {
-				fmt.Println()
-				os.Exit(130)
+		for {
+			select {
+			case <-done:
+				return
+			case <-sigs:
+				if !t.State().Running {
+					fmt.Println()
+					os.Exit(130)
+				}
+				t.Abort()
 			}
-			t.Abort()
 		}
 	}()
+	return func() {
+		signal.Stop(sigs)
+		close(done)
+	}
 }
 
 // ended says what a run's end leaves the user to know: the calls an

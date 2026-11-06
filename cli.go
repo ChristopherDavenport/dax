@@ -633,6 +633,10 @@ func run(ctx context.Context, args []string, p program) error {
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
 	}
+	// The session to close at the end: the one opened here, or the one
+	// a front moved to (/new, /resume).
+	var cur *agent.Session
+	fi.switched = func(n *agent.Session) { cur = n }
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
@@ -657,7 +661,8 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	// With a hub hosted or a workspace dialed, the whole close is
 	// bounded, so a workspace that went away does not hold the exit.
-	defer closeSession(sess, []*hostedHub{hosted, swHosted}, dialed...)
+	cur = sess
+	defer func() { closeSession(cur, []*hostedHub{hosted, swHosted}, dialed...) }()
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.

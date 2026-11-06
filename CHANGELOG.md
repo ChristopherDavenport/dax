@@ -7,6 +7,13 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `/new` (alias `/clear`) starts a new session in place, in the
+  REPL and the terminal client, over the settings you changed during
+  this one: the model, reasoning, the permission mode and the servers
+  `/mcp add` started. This session's grants, forwards and held calls
+  stay with its record. `dax attach` refuses it. `agent.Session.Reopen`
+  opens the session a front moves to; `Session.Close` may be called
+  twice (#13).
 - Added: the model can write a skill and use it in the same session.
   `skill_manage` (create, update, delete; it asks) writes to
   `~/.dax/learned`, refusing a name the project's or your skills hold,

@@ -436,7 +436,13 @@ A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal
 client hands over with each submitted line (`console.WithSubmit`), and
-the model never sees it. The session asks nothing of a
+the model never sees it. One session is one conversation: `/new` does
+not reset the session but opens another (`Session.Reopen`) over the
+settings the person changed (model, reasoning, mode, `/mcp add`
+servers), and the front moves to it, the REPL's loop going on over the
+same input and the terminal client entered again over the new record;
+the old session is closed and its record kept. Over `dax attach` it is
+refused, since every view acts on the one served conversation. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Resume`, and every question asked while a call runs is
 an `agentturn.Question` event, answered with `Reply`, what the user said

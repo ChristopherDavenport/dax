@@ -51,6 +51,7 @@ const commandHelp = `commands:
   /think on|off             reasoning from the next request
   /tools                    the tools offered and what was left out
   /session                  the session's ID and where it is kept
+  /new                      a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
@@ -74,6 +75,9 @@ type commandResult struct {
 	// goes: a prompt template's message or an MCP prompt's, marked with
 	// where it came from.
 	send []openresponses.Item
+	// open is the session the front moves to (/new): it closes the one
+	// it was on.
+	open *agent.Session
 }
 
 // command runs a slash line against the session. While a run goes, a
@@ -130,6 +134,14 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 	case "/session":
 		info := ctl.Info()
 		return commandResult{out: strings.TrimSpace(info.ID + " " + info.Path)}, nil
+	case "/new", "/clear":
+		if arg != "" {
+			return commandResult{}, fmt.Errorf("usage: %s, with nothing after it", name)
+		}
+		if err := idle(); err != nil {
+			return commandResult{}, err
+		}
+		return reopen(ctx, ctl, "")
 	case "/model":
 		if arg == "" {
 			return commandResult{}, errors.New("usage: /model <name>")
@@ -226,6 +238,28 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		return commandResult{send: items}, nil
 	}
 	return commandResult{}, fmt.Errorf("unknown command %s\n%s%s", name, commandHelp, templateHelp(ctx, ctl))
+}
+
+// reopener is what /new asks of the session's controls: the session's
+// own (agent.Session.Reopen). Over dax attach every view acts on the
+// one conversation the host serves, so the attached controls offer
+// none: a view cannot move the host to another session.
+type reopener interface {
+	Reopen(ctx context.Context, id string) (*agent.Session, error)
+}
+
+// reopen is the session the front moves to: a new one for id "", or
+// the recorded session id, over the live settings.
+func reopen(ctx context.Context, ctl agent.Controls, id string) (commandResult, error) {
+	r, ok := ctl.(reopener)
+	if !ok {
+		return commandResult{}, errors.New("a served session stays the one conversation every attached view acts on: /new and /resume are not offered over dax attach")
+	}
+	n, err := r.Reopen(ctx, id)
+	if err != nil {
+		return commandResult{}, err
+	}
+	return commandResult{open: n}, nil
 }
 
 // mcpPrompter is what an MCP prompt's command asks of the session's
