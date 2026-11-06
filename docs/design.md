@@ -488,7 +488,10 @@ a sub-agent on a model of its own is judged by that model, and the
 images a conversation holds are said, not sent, once `/model`, a
 resume or `/resume` moves it to a model that takes none. The record
 keeps them. An image the person attaches (`@path.png`) is
-read on this machine, theirs as the line is. The store keeps media as
+the workspace's file, read through it as `read` reads one (relative to
+its root, nothing outside it by name or link), so `@docs/x.png` is the
+project's file whether the tools act here, in a box or on a served
+workspace; theirs as the line is. The store keeps media as
 blobs beside the log (sidecar media), which agentturn's recorder
 writes and reads back.
 

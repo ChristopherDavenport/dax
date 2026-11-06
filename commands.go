@@ -436,8 +436,8 @@ type mentioner interface {
 // attached once, marked as the server's text.
 func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openresponses.Item, error) {
 	msg := openresponses.UserText(text)
-	// The images it names (@path.png), each once, attached to the
-	// person's message: theirs, as the line is.
+	// The images it names (@path.png, the workspace's files), each once,
+	// attached to the person's message: theirs, as the line is.
 	if im, ok := ctl.(imager); ok {
 		seen := map[string]bool{}
 		for _, word := range strings.Fields(text) {

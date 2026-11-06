@@ -1635,10 +1635,13 @@ the input until the next line, and an error gives the line back to edit.
   untrusted: a third party's text, never words you wrote. `/help` lists
   the servers' prompts as they offer them now. `dax attach` offers none.
 - `@path.png` (a PNG, JPEG, GIF or WebP, up to 5 MiB) in a line you
-  type attaches that image file on this machine to your message, once,
+  type attaches that image file of the workspace to your message, once,
   for a model whose vendor says it takes images; one it does not, or a
   file that is not the image its name says, sends nothing and says why.
-  A leading `~/` is your home. `dax attach` sends the line as typed.
+  The path is the workspace's, as `read`'s is: relative to its root
+  (the box's, the executor's or the served workspace's when the tools
+  act there), and a path that leaves it, by name, `~/` or a link, is
+  refused. `dax attach` sends the line as typed.
 - `@<server>:<uri>` in a line you type attaches that MCP server's
   resource (`resources/read`) after your message, once however often
   the line names it, cut at 100 KiB, recorded as composed from the

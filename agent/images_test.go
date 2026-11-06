@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -18,6 +19,8 @@ import (
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/agentworkspace/remote"
 	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // pngBytes is a small PNG.
@@ -91,6 +94,10 @@ func TestAReadImageIsKeptAsABlobAndResumed(t *testing.T) {
 	if got := m.last(); !strings.Contains(got, url) || !strings.Contains(got, `"input_image"`) {
 		t.Fatalf("the model was not sent the image:\n%s", got)
 	}
+	// The person's @shot.png is the served workspace's file.
+	if img, err := s.Image(ctx, "shot.png"); err != nil || !strings.HasPrefix(img.ImageURL, url) {
+		t.Errorf("@shot.png on a served workspace: %v, %v", img, err)
+	}
 	id := s.ID()
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -149,26 +156,50 @@ func TestAReadImageIsKeptAsABlobAndResumed(t *testing.T) {
 	}
 }
 
-// The person's @path.png is read on this machine, refused unless it is
-// the image its name says and within the size.
+// The person's @path.png is the workspace's file, read as read reads
+// one: relative to the workspace's root, refused when it leaves it by
+// name, by ~/ or by a link, and unless it is the image its name says,
+// within the size.
 func TestAnAttachedImage(t *testing.T) {
 	ctx := context.Background()
 	o := options(t, &scripted{})
 	o.TakesImages = func(context.Context, string) bool { return true }
+	outside := t.TempDir()
+	put := func(p string, data []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(filepath.Join(o.Dir, "docs", "a.PNG"), pngBytes(t))
+	put(filepath.Join(o.Dir, "b.png"), []byte("not a png"))
+	put(filepath.Join(outside, "secret.png"), pngBytes(t))
+	if err := os.Symlink(filepath.Join(outside, "secret.png"), filepath.Join(o.Dir, "out.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("docs/a.PNG", filepath.Join(o.Dir, "in.png")); err != nil {
+		t.Fatal(err)
+	}
 	s, err := New(ctx, o)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	dir := t.TempDir()
-	good, fake := filepath.Join(dir, "a.PNG"), filepath.Join(dir, "b.png")
-	os.WriteFile(good, pngBytes(t), 0o644)
-	os.WriteFile(fake, []byte("not a png"), 0o644)
-	img, err := s.Image(ctx, good)
-	if err != nil || !strings.HasPrefix(img.ImageURL, "data:image/png;base64,") {
-		t.Fatalf("image %v, %v", img, err)
+	for _, p := range []string{"docs/a.PNG", filepath.Join(o.Dir, "docs", "a.PNG"), "in.png"} {
+		img, err := s.Image(ctx, p)
+		if err != nil || !strings.HasPrefix(img.ImageURL, "data:image/png;base64,") {
+			t.Errorf("%s: image %v, %v", p, img, err)
+		}
 	}
-	for _, p := range []string{fake, filepath.Join(dir, "missing.png"), filepath.Join(dir, "notes.txt"), dir + "/"} {
+	for _, p := range []string{filepath.Join(outside, "secret.png"), "../secret.png", "out.png", "~/secret.png"} {
+		if _, err := s.Image(ctx, p); !errors.Is(err, tool.ErrOutside) {
+			t.Errorf("%s: %v, want the workspace's refusal", p, err)
+		}
+	}
+	for _, p := range []string{"b.png", "missing.png", "notes.txt", "docs/"} {
 		if _, err := s.Image(ctx, p); err == nil {
 			t.Errorf("%s was attached", p)
 		}
@@ -197,6 +228,14 @@ func TestAnImageReadInAnExecutor(t *testing.T) {
 	}
 	if got := m.last(); !strings.Contains(got, "data:image/png;base64,") {
 		t.Errorf("the model was not sent the executor's image:\n%s", got)
+	}
+	// The person's @shot.png is the executor's file too: nothing by that
+	// name is in this machine's directory.
+	if _, err := os.Stat(filepath.Join(o.Dir, "shot.png")); err == nil {
+		t.Fatal("the session's own directory holds shot.png")
+	}
+	if img, err := s.Image(ctx, "shot.png"); err != nil || !strings.HasPrefix(img.ImageURL, "data:image/png;base64,") {
+		t.Errorf("@shot.png in an executor's session: %v, %v", img, err)
 	}
 }
 

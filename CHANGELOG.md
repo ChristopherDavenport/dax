@@ -34,7 +34,8 @@ versions may break flags and the config file.
   whose vendor says it takes images (`modelinfo.Info.Images`: Anthropic's
   `image_input`, OpenRouter's input modalities, Ollama's `vision`),
   telling any other model it is not shown. `@path.png` in a typed line
-  attaches an image file on this machine to your message. New sessions
+  attaches the workspace's image file to your message, read through the
+  workspace as `read` reads one, nothing outside it. New sessions
   keep media as blobs beside the log (header `media: sidecar`), read
   back on resume. `agent.Options.TakesImages`, `agent.Session.Image`,
   `tool.ImageType`, `tool.ImageURL`, `tool.MaxImageBytes` (#166).

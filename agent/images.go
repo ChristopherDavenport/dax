@@ -1,8 +1,9 @@
 package agent
 
 // Images: a file read returns one (dax-coding's read), and the person
-// may attach one to a line (@path.png); either reaches the model only
-// when its vendor says it takes images (Options.TakesImages). The
+// may attach one of the workspace's files to a line (@path.png); either
+// reaches the model only when its vendor says it takes images
+// (Options.TakesImages). The
 // session's store keeps them as blobs beside the log (agentsession's
 // sidecar media, header media "sidecar"), so the log names each by its
 // hash rather than holding it inline (#166).
@@ -11,9 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
@@ -155,43 +153,28 @@ func sayImages(cs openresponses.Contents, model string) openresponses.Contents {
 	return out
 }
 
-// Image is the image file at path on this machine as a part of the
-// person's message (@path.png in a line they type): read here, since it
-// is theirs to attach, as running a command is, never the model's; a
-// PNG, JPEG, GIF or WebP of at most tool.MaxImageBytes, by its name and
-// its bytes. A leading ~/ is the home directory. It is refused for a
-// model whose vendor does not say it takes images.
+// Image is the image file at path in the session's workspace as a part
+// of the person's message (@path.png in a line they type): the
+// project's file, read through the workspace as read reads one, so a
+// path is relative to the workspace's root and one that leaves it, by
+// name or by a link, is tool.ErrOutside, whatever the workspace (this
+// machine's directory, a box, an executor, a served one); a PNG, JPEG,
+// GIF or WebP of at most tool.MaxImageBytes, by its name and its bytes.
+// It is refused for a model whose vendor does not say it takes images.
 func (s *Session) Image(ctx context.Context, path string) (*openresponses.InputImage, error) {
 	if !s.takesImages(ctx) {
 		return nil, errors.New(strings.Trim(noImage(s.Model()), "[]"))
 	}
-	if rest, ok := strings.CutPrefix(path, "~/"); ok {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		path = filepath.Join(home, rest)
+	if strings.HasPrefix(path, "~") {
+		return nil, fmt.Errorf("%w: %s (an attached image is a file in the workspace)", tool.ErrOutside, path)
 	}
 	mt := tool.ImageType(path, nil)
 	if mt == "" {
 		return nil, fmt.Errorf("%s: an image is a PNG, JPEG, GIF or WebP file", path)
 	}
-	f, err := os.Open(path)
+	data, err := s.files.ReadFile(path, tool.MaxImageBytes)
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil {
-		return nil, err
-	} else if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	data, err := io.ReadAll(io.LimitReader(f, tool.MaxImageBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > tool.MaxImageBytes {
-		return nil, fmt.Errorf("%s is over the %d bytes an image may be", path, tool.MaxImageBytes)
 	}
 	if tool.ImageType(path, data) == "" {
 		return nil, fmt.Errorf("%s is not the %s its name says", path, mt)
