@@ -310,6 +310,10 @@ type Options struct {
 	// DefaultViewGrace.
 	ViewGrace time.Duration
 
+	// noConsent says no one is at the terminal to sign in to a URL
+	// server (a session Reopen opens while a front has the screen).
+	noConsent bool
+
 	// executor runs the extensions' tools in place of the session's
 	// in-process one, which builds them over the workspace; the session
 	// closes it. It is the seam the tests use to stand in for an
@@ -334,6 +338,9 @@ type MCPServer struct {
 	// sent to its origin alone, and which every child's environment
 	// loses.
 	URL, TokenEnv string
+	// OAuth signs in to the URL's server with OAuth, in place of
+	// TokenEnv (mcpoauth.go); nil sends no token or TokenEnv's.
+	OAuth *OAuth
 	// Project says the project's config named the server: it starts only
 	// when the user trusts the project's set (Options.TrustMCP).
 	Project bool
@@ -519,6 +526,9 @@ type Session struct {
 	// callerMD is the AGENTS.md part without the person's own files, as
 	// an A2A caller's requests carry it (caller.go).
 	callerMD callerMD
+	// opened is set once open has returned the session: a URL server's
+	// sign-in is asked for only before (consent).
+	opened atomic.Bool
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -1176,6 +1186,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	ok = true
+	s.opened.Store(true)
 	return s, nil
 }
 
@@ -2008,7 +2019,7 @@ func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
 	case m.offeredBy != nil:
 		return placed(m.offeredAs, m.offeredAt, mcpOffered(m.offeredBy, m.Name), nil)
 	case m.URL != "":
-		dial, err := mcpURL(m.URL, m.TokenEnv)
+		dial, err := s.mcpURL(context.Background(), m)
 		return placed(PlacedURL, urlPlace(m.URL), dial, err)
 	case len(m.SecretEnv) > 0:
 		dial, err := s.mcpHolding(m)
@@ -2465,6 +2476,9 @@ func Secrets(exts []extension.Extension, keyEnv string, servers []MCPServer) []s
 		out = append(out, keyEnv)
 	}
 	for _, m := range servers {
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
+		}
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}

@@ -1,7 +1,8 @@
 package agent
 
-// An MCP server at a URL: streamable HTTP, called from this machine
-// whatever the workspace, with a token sent to the URL's origin alone.
+// An MCP server at a URL: streamable HTTP, or HTTP+SSE for a server
+// that refuses it, called from this machine whatever the workspace,
+// with a token sent to the URL's origin alone.
 
 import (
 	"context"
@@ -12,40 +13,131 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
-// mcpURL is the dial of the streamable HTTP server at endpoint. When
-// tokenEnv is set, the token it holds is sent as a bearer token on every
-// request to endpoint's origin, and on none to any other: a request
-// elsewhere is refused, and so is a redirect off the origin, since Go's
-// client keeps the Authorization header on a redirect to another port
-// or from https to http. A variable that is not set is an error here,
-// before anything is sent. Each dial is a new transport.
-func mcpURL(endpoint, tokenEnv string) (mcpDial, error) {
+// mcpURL is the dial of the server at m.URL, called from this machine:
+// streamable HTTP, or HTTP+SSE for a server that refuses it.
+//
+// When m.TokenEnv is set, the token it holds is sent as a bearer token
+// on every request to the URL's origin, and on none to any other: a
+// request elsewhere is refused, and so is a redirect off the origin,
+// since Go's client keeps the Authorization header on a redirect to
+// another port or from https to http. A variable that is not set is an
+// error here, before anything is sent. With m.OAuth, the token is the
+// grant the person signs in for (mcpoauth.go), held to the same origin.
+//
+// The first dial asks the server whether it speaks streamable HTTP: a
+// POST of initialize, as the MCP transports' backwards compatibility
+// has a client do. A 4xx (but an authorization's 401 or 403, a 408 or a
+// 429) is a server of the older HTTP+SSE transport, dialled over
+// SSEClientTransport from then on, which the user is told once; any
+// other answer is streamable HTTP's, and a session the probe opened is
+// ended. Each dial is a new transport.
+func (s *Session) mcpURL(ctx context.Context, m MCPServer) (mcpDial, error) {
+	endpoint := m.URL
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
 		return nil, fmt.Errorf("url %q: not a URL", endpoint)
 	}
 	g := &originGuard{origin: originOf(u), rt: http.DefaultTransport}
-	if tokenEnv != "" {
-		if g.token = os.Getenv(tokenEnv); g.token == "" {
-			return nil, fmt.Errorf("token_env %s is not set; the server at %s is not reached without its token", tokenEnv, g.origin)
+	if m.TokenEnv != "" {
+		if g.token = os.Getenv(m.TokenEnv); g.token == "" {
+			return nil, fmt.Errorf("token_env %s is not set; the server at %s is not reached without its token", m.TokenEnv, g.origin)
 		}
 	}
 	client := &http.Client{CheckRedirect: g.redirect, Transport: g}
-	return func(context.Context) (mcp.Transport, error) {
-		return &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client}, nil
+	var oh *auth.AuthorizationCodeHandler
+	if m.OAuth != nil {
+		if m.TokenEnv != "" {
+			return nil, errors.New("token_env and oauth: give one")
+		}
+		if oh, err = s.oauthHandler(ctx, m, g.origin); err != nil {
+			return nil, err
+		}
+	}
+	// The SSE transport has no OAuth handler of its own: its client
+	// sends the grant's current token, to the origin alone.
+	sg := &originGuard{origin: g.origin, token: g.token, rt: g.rt}
+	if oh != nil {
+		sg.source = func(ctx context.Context) string {
+			ts, err := oh.TokenSource(ctx)
+			if err != nil || ts == nil {
+				return ""
+			}
+			tok, err := ts.Token()
+			if err != nil {
+				return ""
+			}
+			return tok.AccessToken
+		}
+	}
+	sseClient := &http.Client{CheckRedirect: sg.redirect, Transport: sg}
+	var once sync.Once
+	var legacy bool
+	return func(ctx context.Context) (mcp.Transport, error) {
+		once.Do(func() {
+			if code := refusesStreamable(ctx, client, endpoint); code != 0 {
+				legacy = true
+				fmt.Fprintf(warnings{}, "dax: mcp %s: the server refused streamable HTTP (%d %s); it is reached over HTTP+SSE\n", m.Name, code, http.StatusText(code))
+			}
+		})
+		if legacy {
+			return &mcp.SSEClientTransport{Endpoint: endpoint, HTTPClient: sseClient}, nil
+		}
+		t := &mcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: client}
+		if oh != nil {
+			t.OAuthHandler = oh
+		}
+		return t, nil
 	}, nil
 }
 
+// refusesStreamable POSTs an initialize to endpoint and returns the
+// status of a 4xx that says the server does not speak streamable HTTP,
+// 0 for any other answer. A session the POST opened is ended.
+func refusesStreamable(ctx context.Context, client *http.Client, endpoint string) int {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	body := `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"dax","version":"` + Version + `"}}}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	resp.Body.Close()
+	switch code := resp.StatusCode; {
+	case code >= 200 && code < 300:
+		if id := resp.Header.Get("Mcp-Session-Id"); id != "" {
+			if del, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil); err == nil {
+				del.Header.Set("Mcp-Session-Id", id)
+				if r, err := client.Do(del); err == nil {
+					r.Body.Close()
+				}
+			}
+		}
+	case code >= 400 && code < 500 && code != http.StatusUnauthorized && code != http.StatusForbidden && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
+		return code
+	}
+	return 0
+}
+
 // originGuard holds an MCP server's requests to its origin and adds the
-// token to them.
+// token to them: the static one, or source's.
 type originGuard struct {
 	origin, token string
+	source        func(context.Context) string
 	rt            http.RoundTripper
 }
 
@@ -58,9 +150,13 @@ func (g *originGuard) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return nil, fmt.Errorf("a request to %s, another origin than the server's %s, is not sent", o, g.origin)
 	}
-	if g.token != "" {
+	token := g.token
+	if g.source != nil {
+		token = g.source(req.Context())
+	}
+	if token != "" {
 		req = req.Clone(req.Context())
-		req.Header.Set("Authorization", "Bearer "+g.token)
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return g.rt.RoundTrip(req)
 }

@@ -52,6 +52,8 @@ func (s *Session) Reopen(ctx context.Context, id string) (*Session, error) {
 	// meters from nothing, or from what a resumed one's record says it
 	// spent, as -resume does; restarting dax would do the same.
 	o := s.base
+	// A front has the screen: a URL server's sign-in is not asked for.
+	o.noConsent = true
 	think, model := s.now()
 	o.Think = think
 	if o.Policy != nil && s.modes.settings != nil {

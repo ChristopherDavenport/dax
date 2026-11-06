@@ -1,0 +1,301 @@
+package agent
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+)
+
+// fakeAS is an authorization server on its own origin: metadata,
+// dynamic registration, an authorize endpoint that consents at once by
+// redirecting with a code, and a token endpoint; it records every
+// Authorization header it is sent.
+type fakeAS struct {
+	srv                              *httptest.Server
+	registered, exchanged, refreshed atomic.Int32
+	issued                           atomic.Int32
+	mu                               sync.Mutex
+	authHeaders                      []string
+	expiresIn                        int
+}
+
+func newFakeAS(t *testing.T) *fakeAS {
+	t.Helper()
+	as := &fakeAS{expiresIn: 3600}
+	mux := http.NewServeMux()
+	as.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		as.mu.Lock()
+		as.authHeaders = append(as.authHeaders, r.Header.Get("Authorization"))
+		as.mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(as.srv.Close)
+	issuer := as.srv.URL
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token",
+			"registration_endpoint": issuer + "/register", "response_types_supported": []string{"code"},
+			"grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_post", "none"},
+		})
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		as.registered.Add(1)
+		var md struct {
+			RedirectURIs []string `json:"redirect_uris"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&md)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"client_id": "dyn-client", "client_secret": "dyn-secret", "redirect_uris": md.RedirectURIs})
+	})
+	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		back, err := url.Parse(q.Get("redirect_uri"))
+		if err != nil {
+			http.Error(w, "bad redirect", http.StatusBadRequest)
+			return
+		}
+		v := back.Query()
+		v.Set("code", "code-1")
+		v.Set("state", q.Get("state"))
+		back.RawQuery = v.Encode()
+		http.Redirect(w, r, back.String(), http.StatusFound)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch r.Form.Get("grant_type") {
+		case "authorization_code":
+			as.exchanged.Add(1)
+		case "refresh_token":
+			as.refreshed.Add(1)
+		}
+		n := as.issued.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": fmt.Sprintf("at-%d", n), "refresh_token": fmt.Sprintf("rt-%d", n), "token_type": "Bearer", "expires_in": as.expiresIn})
+	})
+	return as
+}
+
+// protectedServer is an MCP server whose /mcp needs a token the fake
+// authorization server issued, naming it in its protected-resource
+// metadata.
+func protectedServer(t *testing.T, as *fakeAS) *httptest.Server {
+	t.Helper()
+	srv := mcp.NewServer(&mcp.Implementation{Name: "hosted", Version: "1"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "where", Description: "report where the server runs"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "behind OAuth"}}}, struct{}{}, nil
+		})
+	mux := http.NewServeMux()
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	prm := &oauthex.ProtectedResourceMetadata{Resource: ts.URL + "/mcp", AuthorizationServers: []string{as.srv.URL}}
+	mux.Handle("/.well-known/oauth-protected-resource/mcp", auth.ProtectedResourceMetadataHandler(prm))
+	mux.Handle("/.well-known/oauth-protected-resource", auth.ProtectedResourceMetadataHandler(prm))
+	verify := func(_ context.Context, tok string, _ *http.Request) (*auth.TokenInfo, error) {
+		if !strings.HasPrefix(tok, "at-") {
+			return nil, auth.ErrInvalidToken
+		}
+		return &auth.TokenInfo{Expiration: time.Now().Add(time.Hour)}, nil
+	}
+	mux.Handle("/mcp", auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{ResourceMetadataURL: ts.URL + "/.well-known/oauth-protected-resource/mcp"})(
+		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)))
+	return ts
+}
+
+// browser stands in for the person: it reads the consent line dax
+// prints, opens the URL and follows the redirect to dax's loopback.
+type browser struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	opened atomic.Int32
+}
+
+func (b *browser) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	b.buf.Write(p)
+	text := b.buf.String()
+	b.mu.Unlock()
+	if u := regexp.MustCompile(`https?://\S+/authorize\?\S+`).FindString(text); u != "" && b.opened.CompareAndSwap(0, 1) {
+		go func() {
+			resp, err := http.Get(u)
+			if err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+		}()
+	}
+	return len(p), nil
+}
+
+func (b *browser) said() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A URL server with an oauth block signs in through the authorization
+// server its metadata names: discovery, one registration, one consent
+// (the URL printed, the redirect on a loopback port), the exchange. The
+// grant is kept in a private file under ~/.dax, and a session started
+// again refreshes from it and asks nobody. The access token goes to the
+// server's origin alone (#175).
+func TestAnMCPServerSignsInWithOAuth(t *testing.T) {
+	as := newFakeAS(t)
+	ts := protectedServer(t, as)
+	b := &browser{}
+	defer swapConsentOut(b)()
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.MCP = []MCPServer{{Name: "hosted", URL: ts.URL + "/mcp", OAuth: &OAuth{}}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatalf("%v; dax said %q", err, b.said())
+	}
+	if got := leak(t, s, "mcp__hosted__where"); got != "behind OAuth" {
+		t.Errorf("where = %q", got)
+	}
+	s.Close()
+	if as.registered.Load() != 1 || as.exchanged.Load() != 1 || b.opened.Load() != 1 {
+		t.Errorf("registered %d, exchanged %d, consents %d: want one each", as.registered.Load(), as.exchanged.Load(), b.opened.Load())
+	}
+	if !strings.Contains(b.said(), "mcp hosted") {
+		t.Errorf("the consent line %q does not name the server", b.said())
+	}
+	file := filepath.Join(o.UserDir, "mcp-tokens.json")
+	fi, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		t.Errorf("the token file's mode %04o lets others read it", fi.Mode().Perm())
+	}
+	data, _ := os.ReadFile(file)
+	if !bytes.Contains(data, []byte("rt-1")) {
+		t.Errorf("the token file holds no grant: %s", data)
+	}
+
+	// Started again: the stored grant, expired, is refreshed; nobody is
+	// asked and nothing registers again.
+	var kept map[string]map[string]map[string]any
+	if err := json.Unmarshal(data, &kept); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range kept["grants"] {
+		g["Token"].(map[string]any)["expiry"] = time.Now().Add(-time.Hour).Format(time.RFC3339)
+	}
+	data, _ = json.Marshal(kept)
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o2 := o
+	o2.Root = filepath.Join(t.TempDir(), "sessions")
+	s2, err := New(ctx, o2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := leak(t, s2, "mcp__hosted__where"); got != "behind OAuth" {
+		t.Errorf("after a restart, where = %q", got)
+	}
+	s2.Close()
+	if b.opened.Load() != 1 || as.registered.Load() != 1 || as.refreshed.Load() == 0 {
+		t.Errorf("after a restart: consents %d, registered %d, refreshed %d; want no consent, no registration, a refresh", b.opened.Load(), as.registered.Load(), as.refreshed.Load())
+	}
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	for _, h := range as.authHeaders {
+		if strings.Contains(h, "at-") {
+			t.Errorf("the authorization server was sent the MCP access token: %q", h)
+		}
+	}
+}
+
+// The authorization client goes to the server's origin for its
+// metadata and to the authorization servers that metadata names, and
+// nowhere else; a redirect off them is not followed (#175).
+func TestTheOAuthGuardHoldsDiscoveryToTheNamedServer(t *testing.T) {
+	var got []string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.URL.Host)
+		body := `{}`
+		if strings.HasPrefix(r.URL.Path, "/.well-known/oauth-protected-resource") {
+			body = `{"resource":"https://mcp.example/mcp","authorization_servers":["https://as.example"]}`
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	})
+	g := newAuthGuard("https://mcp.example:443", rt)
+	send := func(raw string) error {
+		req, _ := http.NewRequest("GET", raw, nil)
+		resp, err := g.RoundTrip(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, bufio.NewReader(resp.Body))
+			resp.Body.Close()
+		}
+		return err
+	}
+	if err := send("https://as.example/.well-known/oauth-authorization-server"); err == nil {
+		t.Error("the authorization server was reached before the metadata named it")
+	}
+	if err := send("https://mcp.example/.well-known/oauth-protected-resource/mcp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := send("https://as.example/.well-known/oauth-authorization-server"); err != nil {
+		t.Errorf("the named authorization server: %v", err)
+	}
+	if err := send("https://evil.example/token"); err == nil {
+		t.Error("another origin was reached")
+	}
+	req, _ := http.NewRequest("GET", "https://evil.example/cb", nil)
+	if err := g.redirect(req, nil); err == nil {
+		t.Error("a redirect off the named origins was followed")
+	}
+}
+
+// A server that refuses streamable HTTP is reached over HTTP+SSE, once,
+// and the user is told (#175).
+func TestAServerThatRefusesStreamableHTTPIsReachedOverSSE(t *testing.T) {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "legacy", Version: "1"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "where", Description: "report where the server runs"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{}, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "over SSE"}}}, struct{}{}, nil
+		})
+	sse := mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	ts := httptest.NewServer(sse)
+	t.Cleanup(ts.Close)
+	var warned bytes.Buffer
+	defer CaptureWarnings(&warned)()
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.MCP = []MCPServer{{Name: "legacy", URL: ts.URL}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got := leak(t, s, "mcp__legacy__where"); got != "over SSE" {
+		t.Errorf("where = %q", got)
+	}
+	if !strings.Contains(warned.String(), "HTTP+SSE") {
+		t.Errorf("warnings %q: want the fallback said", warned.String())
+	}
+}

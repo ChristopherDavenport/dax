@@ -578,6 +578,12 @@ type MCPServer struct {
 	// TokenEnv names the variable holding the bearer token sent to URL's
 	// origin only; empty sends none. Refused in a project's file.
 	TokenEnv string `json:"token_env,omitempty"`
+	// OAuth signs in to a url's server with OAuth when it asks for it,
+	// in place of token_env: {} registers dax with the server's
+	// authorization server; client_id (with client_secret_env, and the
+	// callback_port its registration names) is a client registered for
+	// you. Refused in a project's file.
+	OAuth *MCPOAuth `json:"oauth,omitempty"`
 	// Description says what the server is for, shown where servers are
 	// listed (dax workspace -servers says it at start, and a served
 	// workspace lists it with the server's name).
@@ -591,6 +597,32 @@ type MCPServer struct {
 	// alone, never one sent to a workspace (SecretInWorkspace). Refused
 	// in a project's file, and for a url, whose token is token_env's.
 	SecretEnv []string `json:"secret_env,omitempty"`
+}
+
+// MCPOAuth is a url server's oauth block.
+type MCPOAuth struct {
+	ClientID        string `json:"client_id,omitempty"`
+	ClientSecretEnv string `json:"client_secret_env,omitempty"`
+	CallbackPort    int    `json:"callback_port,omitempty"`
+}
+
+// check refuses a secret with no client, a client with no port its
+// registration can name, a port out of range and a variable that is not
+// one.
+func (o *MCPOAuth) check(name string) error {
+	switch {
+	case o.ClientSecretEnv != "" && o.ClientID == "":
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env is for a client_id", name)
+	case o.ClientSecretEnv != "" && !envName.MatchString(o.ClientSecretEnv):
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env: %q is not a variable name", name, o.ClientSecretEnv)
+	case o.ClientSecretEnv != "" && IsTokenVariable(o.ClientSecretEnv):
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env: %s is a served workspace's token", name, o.ClientSecretEnv)
+	case o.CallbackPort < 0 || o.CallbackPort > 65535:
+		return fmt.Errorf("mcp_servers.%s: oauth.callback_port %d: want a port, 1 to 65535", name, o.CallbackPort)
+	case o.ClientID != "" && o.CallbackPort == 0:
+		return fmt.Errorf("mcp_servers.%s: oauth.client_id needs callback_port, the loopback port its registration's redirect names", name)
+	}
+	return nil
 }
 
 // SecretInWorkspace is the refusal of a session's server that names
@@ -1231,7 +1263,21 @@ func (s MCPServer) check(name string, project bool) error {
 		if s.TokenEnv != "" {
 			return fmt.Errorf("mcp_servers.%s: token_env is for a url; a command's server gets its environment", name)
 		}
+		if s.OAuth != nil {
+			return fmt.Errorf("mcp_servers.%s: oauth is for a url", name)
+		}
 		return nil
+	}
+	if s.OAuth != nil {
+		switch {
+		case project:
+			return fmt.Errorf("mcp_servers.%s: oauth: a project file may not sign you in to a server, which would send your grant where the repository says; put the server in your own config (%s)", name, Path())
+		case s.TokenEnv != "":
+			return fmt.Errorf("mcp_servers.%s: give token_env or oauth, not both", name)
+		}
+		if err := s.OAuth.check(name); err != nil {
+			return err
+		}
 	}
 	if s.In != "" {
 		return fmt.Errorf("mcp_servers.%s: in is for a command; a url is called from this machine", name)
@@ -2050,6 +2096,7 @@ type Settings struct {
 // project's file named it.
 type MCP struct {
 	Name, Command, In, URL, TokenEnv string
+	OAuth                            *MCPOAuth
 	Description                      string
 	SecretEnv                        []string
 	Project                          bool
@@ -2194,7 +2241,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					}
 				}
 			}
-			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer
@@ -2675,6 +2722,9 @@ func (s Settings) Credentials() []string {
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
+		}
 		out = append(out, m.SecretEnv...)
 	}
 	for _, p := range s.Peers {
@@ -2692,6 +2742,9 @@ func (l Layer) Credentials() []string {
 		m := l.MCPServers[n]
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
+		}
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
 		}
 		out = append(out, m.SecretEnv...)
 	}

@@ -606,7 +606,17 @@ What is not equal yet, and why:
   by name (`Options.ServersWorkspaces`, `servers_workspaces`), each so
   held, sharing no server name, workspace, token or hub port. A server placed on
   the host (`"in": "host"`) or at a `url` is called from this machine
-  whatever the workspace, its tools never taken as confined.
+  whatever the workspace, its tools never taken as confined. A `url`'s
+  OAuth is dax's (the library is the capability, the app does auth):
+  go-sdk's `AuthorizationCodeHandler` with mcpclient's `StoreTokens`,
+  the grant in the user's private `~/.dax/mcp-tokens.json`, never a
+  workspace's; the access token held to the server's origin
+  (`originGuard`), the sign-in's own requests to that origin and the
+  authorization servers its metadata names (`authGuard`), and consent
+  asked only while a session opens at the terminal. A server that
+  refuses streamable HTTP's `initialize` with a 4xx is reached over
+  HTTP+SSE; that stays dax's until a second product wants it in
+  mcpclient.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
   `Store`: opening takes a lease, an append returns a new result, and a

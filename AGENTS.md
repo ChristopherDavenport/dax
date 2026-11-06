@@ -141,7 +141,13 @@ before changing the shape.
   each started again by the next call after it ends, with a warning and
   a `dax.mcp.restart` entry (`mcpStart`, the one path every placement
   takes): a command's in the workspace or here, one placed on the host,
-  one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
+  one at a URL (`agent/mcpurl.go`, its token held to the URL's origin,
+  HTTP+SSE for a server whose first `initialize` gets a 4xx;
+  `agent/mcpoauth.go`, an `oauth` server's sign-in through go-sdk's
+  `AuthorizationCodeHandler` and mcpclient's `StoreTokens` into
+  `~/.dax/mcp-tokens.json`, its discovery held to the server's origin
+  and the authorization servers its metadata names by `authGuard`, the
+  consent URL printed only while a session opens at the terminal),
   those the workspace offers of its own (`workspace.ServerProvider`, a
   box host's units, a served or tunnelled workspace's `-servers`) or a
   servers workspace beside it offers (`Options.ServersWorkspace`, and

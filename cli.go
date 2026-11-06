@@ -924,7 +924,7 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 	for _, m := range s.MCP {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
-			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+			URL: m.URL, TokenEnv: m.TokenEnv, OAuth: oauthOf(m.OAuth), Project: m.Project,
 			Description: m.Description, SecretEnv: m.SecretEnv,
 		})
 	}
@@ -1111,4 +1111,12 @@ func hookOptions(h *config.Hooks) hooks.Options {
 		return out
 	}
 	return hooks.Options{PreToolUse: of(h.PreToolUse), PostToolUse: of(h.PostToolUse)}
+}
+
+// oauthOf is a url server's oauth block as the session takes it.
+func oauthOf(o *config.MCPOAuth) *agent.OAuth {
+	if o == nil {
+		return nil
+	}
+	return &agent.OAuth{ClientID: o.ClientID, ClientSecretEnv: o.ClientSecretEnv, CallbackPort: o.CallbackPort}
 }
