@@ -704,6 +704,7 @@ closed. A signal stops it, and every session's processes with it.
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
 | `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod. With `-kind` and `-root` it is the project's identity for `-list` and memory, so give one that outlives a recreated container |
+| `-project` | the ref | the project's identity, for `-list`, memory, the MCP trust, saved grants and the header's `dax.workspace`, when `-ref` is not it: the box host passes a box's name here and the image's digest as `-ref`, so a rebuilt image is on the record and the project stays one |
 | `-host`, `-instance` | none | the machine the workspace is on and its file system's instance (a container's ID), which the session's env entry records beside kind and ref (`workspace.host`, `workspace.instance`), so a restart into a new file system is on the record; not part of the project's identity |
 | `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
 | `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |

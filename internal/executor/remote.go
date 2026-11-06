@@ -108,7 +108,10 @@ type Remote struct {
 
 // shape is what an executor says of itself that a session holds it to.
 type shape struct {
-	desc       workspace.Descriptor
+	desc workspace.Descriptor
+	// project is the project's identity the executor names beside
+	// desc's ref; empty for none.
+	project    string
 	extensions []string
 	tools      []Tool
 	// maxRead is the read limit the executor gave the session's
@@ -302,6 +305,7 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 	cn := &conn{c: c, server: server, byName: map[string]agenttool.Tool{}, start: cp.Start, servers: cp.Servers || len(cp.Box) > 0}
 	sh := shape{
 		desc:       workspace.Descriptor{Kind: cp.Descriptor.Kind, Ref: cp.Descriptor.Ref, Host: cp.Descriptor.Host, Instance: cp.Descriptor.Instance, Root: cp.Descriptor.Root},
+		project:    cp.Project,
 		extensions: slices.Clone(cp.Extensions),
 		maxRead:    cp.MaxReadBytes,
 		box:        cp.Box,
@@ -348,6 +352,9 @@ func remoteOf(c *mcpclient.Remote) (*conn, shape, error) {
 func (s shape) differs(o shape) string {
 	if s.desc != o.desc {
 		return fmt.Sprintf("it acts in %s, not %s", describe(o.desc), describe(s.desc))
+	}
+	if s.project != o.project {
+		return fmt.Sprintf("it names the project %q, not %q", o.project, s.project)
 	}
 	if !slices.Equal(s.extensions, o.extensions) {
 		return fmt.Sprintf("it runs the extensions %v, not %v", o.extensions, s.extensions)
@@ -770,6 +777,11 @@ func (r *Remote) readFiles(ctx context.Context, f func(*sdk.ClientSession) error
 
 // Descriptor is the workspace the executor's capability names.
 func (r *Remote) Descriptor() workspace.Descriptor { return r.first.desc }
+
+// Project is the project's identity the executor names beside its
+// descriptor's ref (`dax execute -project`, a box's name beside its
+// image's digest); empty when the ref is the identity.
+func (r *Remote) Project() string { return r.first.project }
 
 // Box is what the box host in front of the executor resolved for the
 // session at the first connection, as JSON: {"profile", "units": [an

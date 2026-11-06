@@ -26,7 +26,7 @@ func (s *Session) SearchScope(ctx context.Context, q *agentsession.Query) error 
 	if _, peer := ctx.Value(peerKey{}).(string); peer {
 		return ErrPeerSearch
 	}
-	here := s.x.Descriptor()
+	here := s.identity()
 	q.Filter.CWD = s.ws.Root()
 	q.Filter.TopLevel = true
 	if s.store == nil {

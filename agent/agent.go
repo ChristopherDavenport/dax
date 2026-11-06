@@ -1218,7 +1218,7 @@ func (s *Session) resumed(id string) error {
 	// here, or the other way, is said to, even when the two roots are
 	// the same path. One recorded before dax wrote its workspace says
 	// only its cwd, which is compared with the root as before.
-	now := s.x.Descriptor()
+	now := s.identity()
 	if was, ok := recordedIn(sess.Header()); ok && !sameWorkspace(was, now) {
 		// Named by host and instance only when they are the change.
 		name := where

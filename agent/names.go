@@ -56,7 +56,7 @@ func (s *Session) Sessions(ctx context.Context) ([]agentsession.Summary, error) 
 	if !s.recorded {
 		return nil, errors.New("no session store: nothing is kept to resume")
 	}
-	here := s.x.Descriptor()
+	here := s.identity()
 	f := agentsession.ListFilter{CWD: s.ws.Root(), TopLevel: true, WithNames: true, Current: true}
 	var out []agentsession.Summary
 	for sum, err := range s.store.List(ctx, f) {

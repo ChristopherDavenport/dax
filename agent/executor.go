@@ -176,7 +176,15 @@ func connectExecutor(ctx context.Context, dial executor.Dialer, o executor.Conne
 	if err != nil {
 		return nil, err
 	}
-	return &Executor{r: r, view: &executorView{d: r.Descriptor(), fsys: r.FS(), r: r}}, nil
+	// The view is the project's identity, which the header, -list,
+	// memory, trust and grants go by: the ref, or the project the
+	// executor names beside it (a box's name beside its image's
+	// digest). The env entry records the descriptor as served.
+	d := r.Descriptor()
+	if p := r.Project(); p != "" {
+		d.Ref = p
+	}
+	return &Executor{r: r, view: &executorView{d: d, fsys: r.FS(), r: r}}, nil
 }
 
 // Server is the name and version the executor gave, its program's.
@@ -203,7 +211,8 @@ func (e *Executor) Close() error { return e.r.Close() }
 // String names the executor and where it acts, for a banner.
 func (e *Executor) String() string {
 	name, version := e.Server()
-	d := e.r.Descriptor()
+	// The project's identity: a box by its name, not its image's digest.
+	d := e.view.d
 	where := d.Kind
 	if d.Ref != "" {
 		where += " " + d.Ref

@@ -150,7 +150,9 @@ before changing the shape.
   chosen where `mcpDialOf` chooses its dial, which `/mcp` shows (`mcpLines`
   in `front.go`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
-  identity, the workspace and the executor's hashed address in the
+  identity (`identity`: the workspace's descriptor, or a box by its
+  name, `dax execute -project`, while the env entry records the image
+  it ran), the workspace and the executor's hashed address in the
   session's header, a servers workspace's identity and servers beside
   them (`ServersWorkspaceOf`), and the listings by it (`List`, `ListExecutor`,
   `ListWorkspaceURL`, a served workspace's by the URL its descriptor

@@ -392,7 +392,10 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 				descriptions[u.Unit] = u.Description
 			}
 		}
-		child, err := start(ctx, b.Command())
+		// The session records the image the box runs, its container and
+		// this machine, with the box's name as the project.
+		host, _ := os.Hostname()
+		child, err := start(ctx, b.HostedCommand(host))
 		if err != nil {
 			return box.Hosted{}, err
 		}

@@ -42,12 +42,17 @@ tools every key and config there, and so is a path with a colon, which
 docker's `-v` cannot take. The box host's executor is
 
 ```sh
-docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container -ref dax-app-<hash>
+docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container \
+  -ref sha256:<image> -instance <container ID> -project dax-app-<hash> -host <box host>
 ```
 
 so everything under [Docker](#docker) holds for it: the pipe is the
 credential, there is no port, and `-list` and memory know the project
-by the box's name and the directory. `-list` with `-box` (or with a
+by the box's name and the directory. The session's env entry records
+the image the box ran (its digest, as agentworkspace RFC 0001 §12 asks
+of a container), the container's ID and the box host's machine, so a
+session after an image rebuild says it ran on another image; the
+project, its sessions and its memory stay the box's name's. `-list` with `-box` (or with a
 `box` in your config) finds its sessions without starting the box host.
 
 ### What the session says, and what the box host decides

@@ -145,7 +145,7 @@ type recordedProfile struct {
 // extras are the header members dax records of a new session: its
 // workspace, and the address of the executor its tools run through.
 func (s *Session) extras() map[string]json.RawMessage {
-	d := s.x.Descriptor()
+	d := s.identity()
 	out := map[string]json.RawMessage{}
 	if ws, err := json.Marshal(recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root, Host: d.Host, Instance: d.Instance}); err == nil {
 		out[headerWorkspace] = ws
@@ -229,6 +229,13 @@ func workspaceOf(h agentsession.Header) workspace.Descriptor {
 func sameProject(a, b workspace.Descriptor) bool {
 	return a.Kind == b.Kind && a.Ref == b.Ref && a.Root == b.Root
 }
+
+// identity is the workspace the session's project is known by: the
+// header's dax.workspace, -list, memory, the MCP trust and the saved
+// grants go by it. It is the workspace's descriptor, but for an
+// executor that names its project beside its ref (a box's name beside
+// the image digest the env entry records, `dax execute -project`).
+func (s *Session) identity() workspace.Descriptor { return s.ws.Descriptor() }
 
 // sameWorkspace says whether a and b are one file system: one project,
 // on one machine and one instance where both name them. A header from

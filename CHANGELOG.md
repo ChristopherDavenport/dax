@@ -7,6 +7,15 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Fixed: a box session records the image the box ran. The box host
+  starts `dax execute` with the image's digest as the workspace's ref,
+  the container's ID as its instance and its own machine as the host,
+  and the box's name as `-project`, the project's identity, so the env
+  entry shows a rebuild while `-list`, memory, the MCP trust, saved
+  grants and the header's `dax.workspace` still know the project by
+  the name (#155).
+- Added: `dax execute -project NAME`, the project's identity when
+  `-ref` is not it; the executor's capability carries it (`project`).
 - Added: `@<server>:<uri>` in a typed line attaches that MCP server's
   resource (`resources/read`) after the line, once, cut at 100 KiB,
   recorded as composed from the resource (`instructions_part`, source
