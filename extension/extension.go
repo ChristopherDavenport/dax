@@ -264,6 +264,12 @@ type Env interface {
 	// Reasoning is the reasoning a request to model asks for under
 	// think, fitted to what the model's vendor says it takes.
 	Reasoning(ctx context.Context, model string, think bool) openresponses.ReasoningConfig
+	// ChildBeforeTurn is the BeforeTurn hook a sub-agent's
+	// configuration takes: the AGENTS.md files below the start
+	// directory that the sub-agent's own work reaches, given as the main
+	// agent's are, each once, recorded as composed from its file. Nil
+	// when the session reads no AGENTS.md.
+	ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
 	// ChildPolicy is the BeforeToolCall hook of a sub-agent called name:
 	// the session's policy and every extension's BeforeToolCall, with a
 	// call the policy asks about put to the user from inside the run.

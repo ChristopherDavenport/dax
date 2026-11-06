@@ -203,7 +203,8 @@ before changing the shape.
   `exploit_test.go`, `widen_test.go`, `gitconfig_test.go`.
 - `ext/agents` (dax-agents): explore and task, built from every
   extension's tools and `SubagentTools`, the memory block (and task's
-  AGENTS.md) as the kit's parts (`agentkit.ChildParts`); the
+  AGENTS.md) as the kit's parts (`agentkit.ChildParts`), the nested
+  AGENTS.md hook (`Env.ChildBeforeTurn`, `agent/nestedmd.go`); the
   delegation guide.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`; `skill_manage` (`manage.go`)

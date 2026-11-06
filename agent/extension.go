@@ -408,6 +408,10 @@ func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
 
+func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error) {
+	return e.s.nestedMD
+}
+
 func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
 	return e.s.SearchScope(ctx, q)
 }

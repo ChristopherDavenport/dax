@@ -489,6 +489,10 @@ type Session struct {
 	// as Info.MCP lists them.
 	servers   []MCPServerInfo
 	serversMu sync.Mutex
+	// nestedMD gives the model the AGENTS.md files below the start
+	// that the work reaches (nestedmd.go), main agent and sub-agents
+	// alike; nil with AGENTS.md off.
+	nestedMD func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -798,7 +802,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		for _, f := range res.Files {
 			start = append(start, f.Path)
 		}
-		kopts = append(kopts, agentkit.WithBeforeTurn(nestedAgentsMD(s.files, mdOpts, start)))
+		// One hook for the main agent and its sub-agents (ChildBeforeTurn),
+		// which shares what it read of each bash line.
+		s.nestedMD = nestedAgentsMD(s.files, mdOpts, start, tool.BashSubjects(s.files, o.MaxReadBytes))
+		kopts = append(kopts, agentkit.WithBeforeTurn(s.nestedMD))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
 	// Every tool's result is cut to its cap, an MCP server's and a

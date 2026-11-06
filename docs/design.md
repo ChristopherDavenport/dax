@@ -253,7 +253,13 @@ kit's own parts (`agentkit.ChildParts`, `Kit.ChildConfig`): rendered
 again for each of the child's requests and recorded in its session with
 their source and trust, so a memory entry a model wrote is recorded as
 untrusted there as it is in the main session, not as the product's
-prompt. Of the memory tools a sub-agent has `memory_search` alone,
+prompt. An `AGENTS.md` below the start directory reaches the model the
+turn after the work reaches its directory, through a file tool's path or
+the reads and writes a bash line's facts claim names, as one message
+recorded as composed from the file (`nestedmd.go`, read back from the
+transcript, so a resume or a fold needs no state); the sub-agents take
+the same hook (`Env.ChildBeforeTurn`), so each is given what its own
+work reaches. Of the memory tools a sub-agent has `memory_search` alone,
 dax-memory's `SubagentTools`; nothing else of an extension's kit tools
 reaches it.
 

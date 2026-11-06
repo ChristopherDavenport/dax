@@ -80,6 +80,7 @@ func (o Options) task(ctx context.Context, env extension.Env) agentturn.Config {
 		MaxTurns:       taskTurns,
 		Retry:          agentturn.Retry{MaxAttempts: 3},
 		BeforeToolCall: env.ChildPolicy("task"),
+		BeforeTurn:     env.ChildBeforeTurn(),
 	}
 }
 

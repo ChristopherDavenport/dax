@@ -7,6 +7,14 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: an `AGENTS.md` below the start directory also arrives when a
+  `bash` line reads or writes in its directory (`cat svc/main.go`, a
+  redirect), as the line's facts claim names, and the `explore` and
+  `task` sub-agents are given the files their own work reaches, as the
+  main agent is (#170).
+- Changed: `extension.Env` has `ChildBeforeTurn`, the turn hook a
+  sub-agent's configuration takes; an `Env` implemented outside dax
+  needs it (#170).
 - Added: `/name <text>` names the session (agentsession's `info`
   entry), and `-list`, `/resume` and a resume's start line show it.
   `/resume` lists this project's sessions, newest first and numbered;

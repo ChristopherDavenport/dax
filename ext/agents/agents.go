@@ -132,6 +132,7 @@ func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Confi
 		MaxTurns:       10,
 		Retry:          agentturn.Retry{MaxAttempts: 3},
 		BeforeToolCall: env.ChildPolicy("explore"),
+		BeforeTurn:     env.ChildBeforeTurn(),
 	}
 }
 
