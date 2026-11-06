@@ -256,7 +256,7 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 	default:
 		p.Default = agentpolicy.Ask()
 	}
-	return shape(mode, s.Fallback, p), nil
+	return shape(mode, p), nil
 }
 
 // NoWorkAround is what the model is told with a refusal, a person's or

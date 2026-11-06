@@ -98,3 +98,16 @@ func TestTheCycleLeavesBypassOut(t *testing.T) {
 		}
 	}
 }
+
+// bypassPermissions runs what no deny rule refuses, whatever the
+// fallback: under fallback "deny" (a project may set it) an ask and a
+// call no rule names run, as -no-policy's did, and a deny still holds
+// (#145's review, M3).
+func TestBypassIgnoresAFallbackDeny(t *testing.T) {
+	s := Settings{Builtin: true, Fallback: "deny", Mode: ModeBypass, Shipped: []Shipped{acme(Rules{Deny: []string{"deploy(prod)"}, Ask: []string{"deploy(stage)"}})}}
+	for e, want := range map[string]agentturn.ToolAction{"x": agentturn.Allow, "stage": agentturn.Allow, "prod": agentturn.Block} {
+		if v := verdict(t, s, "deploy", env(e)); v.Action != want {
+			t.Errorf("deploy(%s) = %v (%s), want %v", e, v.Action, v.Reason, want)
+		}
+	}
+}

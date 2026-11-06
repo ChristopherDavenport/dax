@@ -144,7 +144,10 @@ versions may break flags and the config file.
   tools; `agent.Session` gains `Mode`, `SetMode` and `NextMode`.
 - Changed: `-no-policy` is `-mode bypassPermissions`: the policy is
   always built, the deny rules hold, and `/mode` can leave it, where
-  before no policy ran at all for the session. `policy.Settings.Off` is
+  before no policy ran at all for the session. In `bypassPermissions`
+  the asks become allows and the fallback is set aside: under
+  `"fallback": "deny"`, yours or a project's, a call no rule names
+  runs, as under the old `-no-policy`, rather than being refused. `policy.Settings.Off` is
   gone, in favour of `Settings.Mode`.
 - Added: "yes, always" (#146). Beside a permission dax offers a rule
   when no rule asked about the call: `bash(<first two words>:*)` for a

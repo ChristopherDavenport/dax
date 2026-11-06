@@ -1230,7 +1230,7 @@ client, which moves to the next of `default`, `acceptEdits` and
 | `default` | the rules as they are: what no rule allows asks |
 | `acceptEdits` | `write` and `edit` run without asking, but for a path that changes what runs or is trusted (`.git`, `.dax`, `.github`, `.circleci`, `.husky`, `.vscode`, `.idea`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, at any depth) or looks like a secret (the paths a read asks about, `.env*` among them); commands and other tools still ask |
 | `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. The rules are `default`'s, so a carve-out lifts no more than it does there, and in a box under `box.confine` a confined call still runs. It is what `-p` does with every question once its input ends |
-| `bypassPermissions` | nothing asks: what no deny rule refuses runs |
+| `bypassPermissions` | nothing asks: what no deny rule refuses runs. The asks become allows and the fallback is set aside, so under `"fallback": "deny"` (yours or a project's) a call no rule names runs too, as it did under `-no-policy` before modes |
 
 A mode is yours: an A2A caller of `dax serve -a2a` is held to
 `default` whatever the mode (see [Serving peers](#serving-peers-dax-serve--a2a)).

@@ -26,7 +26,8 @@ const (
 	// it lifts in default and a box's confinement still answers its
 	// asks.
 	ModeDontAsk = "dontAsk"
-	// ModeBypass asks about nothing: what no deny rule refuses runs.
+	// ModeBypass asks about nothing: what no deny rule refuses runs,
+	// whatever the fallback.
 	ModeBypass = "bypassPermissions"
 )
 
@@ -88,13 +89,20 @@ const DontAskNote = "refused without asking in dontAsk mode. " + NoWorkAround
 // shape is p as mode m makes it: what becomes of the asks and the
 // default. acceptEdits' rules are the extensions' own, added before the
 // merge; dontAsk's rules are default's (ModeDontAsk).
-func shape(m string, fallback string, p agentpolicy.Policy) agentpolicy.Policy {
+func shape(m string, p agentpolicy.Policy) agentpolicy.Policy {
 	switch m {
 	case ModeBypass:
-		p.Ask = nil
-		if fallback != "deny" {
-			p.Default = agentpolicy.Allow()
+		// The asks become allows, their carve-outs dropped, and the
+		// default allows whatever the fallback: what no deny rule
+		// refuses runs, as -no-policy's session did, a fallback "deny"
+		// (the user's or a project's) included.
+		for _, r := range p.Ask {
+			if _, carve := r.CarveOut(); !carve {
+				p.Allow = append(p.Allow, r)
+			}
 		}
+		p.Ask = nil
+		p.Default = agentpolicy.Allow()
 	}
 	return p
 }
