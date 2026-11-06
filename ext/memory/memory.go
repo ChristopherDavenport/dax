@@ -17,6 +17,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentmemory/filestore"
+	"github.com/ChristopherDavenport/agenttool"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/extension"
@@ -32,27 +33,51 @@ const Name = "dax-memory"
 // when the session starts, with a warning if it was not. The model
 // reads and writes a user scope and the scope of the project the tools
 // act in (WorkspaceScope). It owns the memory tools and ships one rule: a search
-// runs unasked, while a save, a patch and a forget ask.
+// runs unasked, while a save, a patch and a forget ask. The sub-agents
+// take memory_search over the same scopes (SubagentTools), and see the
+// block the kit renders as its parts; they are offered no writer.
 func New(dir string) extension.Extension {
 	return extension.Extension{
 		Name:   Name,
 		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool},
 		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool}},
-		Kit: func(env extension.Env) ([]agentkit.Option, error) {
-			if err := private.SecureDir(dir); err != nil {
-				return nil, fmt.Errorf("memory: %w", err)
-			}
-			mem, err := filestore.Open(dir)
+		SubagentTools: func(env extension.Env) ([]agenttool.Tool, error) {
+			mem, scopes, err := open(dir, env)
 			if err != nil {
-				return nil, fmt.Errorf("memory: %w", err)
+				return nil, err
 			}
-			project := ProjectScope(env.Dir())
-			if ws := env.ToolEnv().Workspace; ws != nil {
-				project = WorkspaceScope(ws.Descriptor(), env.Dir())
+			for _, t := range agentmemory.Tools(mem, scopes) {
+				if t.Name() == agentmemory.SearchTool {
+					return []agenttool.Tool{t}, nil
+				}
 			}
-			return []agentkit.Option{agentkit.WithMemory(mem, "user", project)}, nil
+			return nil, nil
+		},
+		Kit: func(env extension.Env) ([]agentkit.Option, error) {
+			mem, scopes, err := open(dir, env)
+			if err != nil {
+				return nil, err
+			}
+			return []agentkit.Option{agentkit.WithMemory(mem, scopes...)}, nil
 		},
 	}
+}
+
+// open is the store in dir, made private, and the session's scopes:
+// the user's and the project's the tools act in.
+func open(dir string, env extension.Env) (agentmemory.Store, []agentmemory.Scope, error) {
+	if err := private.SecureDir(dir); err != nil {
+		return nil, nil, fmt.Errorf("memory: %w", err)
+	}
+	mem, err := filestore.Open(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("memory: %w", err)
+	}
+	project := ProjectScope(env.Dir())
+	if ws := env.ToolEnv().Workspace; ws != nil {
+		project = WorkspaceScope(ws.Descriptor(), env.Dir())
+	}
+	return mem, []agentmemory.Scope{"user", project}, nil
 }
 
 // ProjectScope is the memory scope of a working directory. One store

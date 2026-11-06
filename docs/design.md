@@ -248,7 +248,14 @@ reply, since a front shows only the start of a report. The tools'
 descriptions say how each works; the guide says how to divide the work.
 A `task` sub-agent is told the main prompt without the guide
 (`Env.SystemPrompt` leaving dax-agents out), having no sub-agents of its
-own.
+own. The memory block, and for `task` the AGENTS.md chain, follow as the
+kit's own parts (`agentkit.ChildParts`, `Kit.ChildConfig`): rendered
+again for each of the child's requests and recorded in its session with
+their source and trust, so a memory entry a model wrote is recorded as
+untrusted there as it is in the main session, not as the product's
+prompt. Of the memory tools a sub-agent has `memory_search` alone,
+dax-memory's `SubagentTools`; nothing else of an extension's kit tools
+reaches it.
 
 ## Tools
 

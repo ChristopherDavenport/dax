@@ -198,11 +198,14 @@ before changing the shape.
   aliases and bash stamp, the prompt's nudge, and the policy tests:
   `exploit_test.go`, `widen_test.go`, `gitconfig_test.go`.
 - `ext/agents` (dax-agents): explore and task, built from every
-  extension's tools; the delegation guide.
+  extension's tools and `SubagentTools`, the memory block (and task's
+  AGENTS.md) as the kit's parts (`agentkit.ChildParts`); the
+  delegation guide.
 - `ext/skills` (dax-skills): skill directories, the screening of the
   project's, grants under `-trust-skills`.
 - `ext/memory` (dax-memory): the store, the scopes (the project's is
-  its workspace's), the memory tools.
+  its workspace's), the memory tools, `memory_search` for the
+  sub-agents.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's

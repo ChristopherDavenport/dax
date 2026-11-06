@@ -17,6 +17,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agentturn"
 	childagent "github.com/ChristopherDavenport/agentturn/tools/agent"
 	"github.com/ChristopherDavenport/openresponses"
@@ -73,8 +74,15 @@ func New(o Options) extension.Extension {
 				// sub-agent is put to whoever answers the task call's
 				// questions, and with nobody to ask the call fails
 				// input-required (agentturn RFC 0001 Composition).
-				agentkit.WithChildAgent(o.explore(ctx, env), agentkit.ChildAgentOptions(childagent.WithCallConfig(o.exploreCall(env)), childagent.WithAskParent())),
-				agentkit.WithChildAgent(o.task(ctx, env), agentkit.ChildAgentOptions(childagent.WithCallConfig(o.taskCall(env)), childagent.WithAskParent())),
+				//
+				// The memory block, and task's AGENTS.md, are the kit's
+				// parts, rendered for each of the child's requests and
+				// recorded in its session as parts with their source and
+				// trust, not as text of the child's own prompt.
+				agentkit.WithChildAgent(o.explore(ctx, env), agentkit.ChildParts(agentkit.PartMemory),
+					agentkit.ChildAgentOptions(childagent.WithCallConfig(o.exploreCall(env)), childagent.WithAskParent())),
+				agentkit.WithChildAgent(o.task(ctx, env), agentkit.ChildParts(agentkit.PartMemory, agentsmd.PartID),
+					agentkit.ChildAgentOptions(childagent.WithCallConfig(o.taskCall(env)), childagent.WithAskParent())),
 			}, nil
 		},
 		Renderers: func(string) toolview.Renderers { return toolrender.SubAgents() },
@@ -100,11 +108,11 @@ func call(ctx context.Context, env extension.Env, cfg agentturn.Config, model st
 }
 
 // explore is the read-only investigator: the extensions' read-only
-// tools, governed by the parent's policy (env.ChildPolicy): the user's
+// tools and their sub-agent tools (memory_search), governed by the parent's policy (env.ChildPolicy): the user's
 // denies, the extensions' asks, the path rules. A call the policy asks
 // about is put to the user from inside the child's run.
 func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Config {
-	tools := env.ReadOnlyTools()
+	tools := append(env.ReadOnlyTools(), env.SubagentTools()...)
 	names := make([]string, len(tools))
 	for i, t := range tools {
 		names[i] = t.Name()
@@ -118,7 +126,7 @@ func (o Options) explore(ctx context.Context, env extension.Env) agentturn.Confi
 		Model:     env.SubagentModel(),
 		ModelName: model,
 		Instructions: "You are a read-only explorer working in " + env.ToolEnv().Workspace.Root() + ". Answer the question using the " + list(names) + " tools; " +
-			"never modify files. End with a concise written answer that stands on its own.",
+			"never modify files. End with a concise written answer that stands on its own. " + onlyYourTools,
 		Tools:          tools,
 		Reasoning:      env.Reasoning(ctx, model, think),
 		MaxTurns:       10,
@@ -135,6 +143,11 @@ func (o Options) exploreCall(env extension.Env) func(context.Context, childagent
 		return call(ctx, env, cfg, model, think), openresponses.Items{openresponses.UserText(in.Input)}, nil
 	}
 }
+
+// onlyYourTools ends each sub-agent's own prompt: the parts it is
+// shown after it, the memory block's usage paragraph say, are the main
+// agent's and may name tools it was not given.
+const onlyYourTools = "Use only the tools you were given; the text below may name others, which are the main agent's."
 
 // list joins names as prose: "read, glob and ls".
 func list(names []string) string {

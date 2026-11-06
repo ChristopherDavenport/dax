@@ -775,6 +775,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// child agent's among them, in every placement (outputcap.go).
 	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(t) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
+	if err := xenv.buildSubagentTools(o.Extensions); err != nil {
+		return nil, err
+	}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
 			continue

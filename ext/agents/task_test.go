@@ -245,8 +245,9 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 		t.Errorf("the child asked %q, want the sub-agent model", req.Model)
 	}
 	// dax's prompt, the user's instructions and the project's AGENTS.md
-	// reach the child; the memory and skills blocks, whose tools it
-	// lacks, do not.
+	// reach the child; the skills block, whose tool it lacks, does not.
+	// The memory block does, with memory_search alone
+	// (TestTheSubagentsReadTheSessionsMemory).
 	for _, want := range []string{"You are a sub-agent of dax", "You are dax, a coding agent", "Use tabs.", "Run go test before saying done."} {
 		if !strings.Contains(req.Instructions, want) {
 			t.Errorf("child instructions lack %q", want)
@@ -254,7 +255,7 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	}
 	// The guide to the sub-agents is the main agent's: the child has
 	// no sub-agents of its own.
-	for _, not := range []string{"greet", "memory_save", "let sub-agents do"} {
+	for _, not := range []string{"greet", "let sub-agents do"} {
 		if strings.Contains(req.Instructions, not) {
 			t.Errorf("child instructions carry %q", not)
 		}

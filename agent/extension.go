@@ -343,6 +343,41 @@ type sessionEnv struct {
 	te       extension.ToolEnv
 	agentsMD string
 	eng      *atomic.Pointer[agentpolicy.Engine]
+	// sub are the extensions' SubagentTools, built before their kit
+	// options (buildSubagentTools).
+	sub []agenttool.Tool
+}
+
+// buildSubagentTools builds every extension's SubagentTools over e,
+// and checks each: one of the names its extension owns, given once,
+// and annotated read-only and not destructive, since a sub-agent is
+// given it beside the tools that only look.
+func (e *sessionEnv) buildSubagentTools(exts []extension.Extension) error {
+	seen := map[string]bool{}
+	for _, x := range exts {
+		if x.SubagentTools == nil {
+			continue
+		}
+		ts, err := x.SubagentTools(e)
+		if err != nil {
+			return fmt.Errorf("extension %s: %w", x.Name, err)
+		}
+		for _, t := range ts {
+			name := t.Name()
+			an := agenttool.AnnotationsOf(t)
+			switch {
+			case !slices.Contains(x.Owns, name):
+				return fmt.Errorf("extension %s: sub-agent tool %q is not one of the names it owns", x.Name, name)
+			case seen[name]:
+				return fmt.Errorf("extension %s: sub-agent tool %q is given twice", x.Name, name)
+			case !an.ReadOnly || an.Destructive:
+				return fmt.Errorf("extension %s: sub-agent tool %q is not annotated read-only", x.Name, name)
+			}
+			seen[name] = true
+			e.sub = append(e.sub, t)
+		}
+	}
+	return nil
 }
 
 var _ extension.Env = (*sessionEnv)(nil)
@@ -368,6 +403,7 @@ func (e *sessionEnv) Dir() string                          { return e.s.opts.Dir
 func (e *sessionEnv) UserDir() string                      { return e.s.opts.UserDir }
 func (e *sessionEnv) Tools() []agenttool.Tool              { return e.capped(e.a.tools) }
 func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return e.capped(e.a.readOnly) }
+func (e *sessionEnv) SubagentTools() []agenttool.Tool      { return e.capped(e.sub) }
 func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
 func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
 func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }

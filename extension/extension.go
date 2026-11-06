@@ -77,6 +77,14 @@ type Extension struct {
 	// facts claim (agenttool.Factual) is decided on that claim, as a
 	// call of one of Tools is, once the session's kit is built.
 	Owns []string
+	// SubagentTools are tools of the extension's that the sub-agents
+	// other extensions build may take too (Env.SubagentTools): control
+	// tools that only read, such as dax-memory's memory_search over the
+	// session's memory scopes, which explore and task are given beside
+	// Env.Tools. Each is one of the names in Owns, decided under that
+	// name's rules, and annotated read-only and not destructive. They are
+	// built over the session's Env before any extension's Kit runs.
+	SubagentTools func(Env) ([]agenttool.Tool, error)
 
 	// Matchers say how a rule's specifier matches a call of one of the
 	// extension's tools: bash(git status:*) is dax-coding's bash matcher
@@ -215,6 +223,10 @@ type Env interface {
 	// in extension order; ReadOnlyTools are those alone.
 	Tools() []agenttool.Tool
 	ReadOnlyTools() []agenttool.Tool
+	// SubagentTools are every extension's SubagentTools, in extension
+	// order, cut to their caps as Tools are: what a sub-agent may read
+	// of the session beyond the workspace, such as its memory.
+	SubagentTools() []agenttool.Tool
 	// SystemPrompt is the main agent's part of the system prompt, with
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.

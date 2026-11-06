@@ -461,3 +461,50 @@ func TestTheProgramsName(t *testing.T) {
 		s.Close()
 	}
 }
+
+// An extension's SubagentTools are checked before its kit options are
+// built: each one of the names it owns, once, and read-only (#158).
+func TestWhatAnExtensionOffersSubagentsIsChecked(t *testing.T) {
+	sub := func(names ...string) func(extension.Env) ([]agenttool.Tool, error) {
+		return func(extension.Env) ([]agenttool.Tool, error) {
+			var out []agenttool.Tool
+			for _, n := range names {
+				out = append(out, fn(n, nil, agenttool.WithAnnotations(agenttool.Annotations{ReadOnly: true})))
+			}
+			return out, nil
+		}
+	}
+	writer := func(extension.Env) ([]agenttool.Tool, error) {
+		return []agenttool.Tool{fn("note_save", nil)}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		ext  extension.Extension
+		want string // empty: accepted
+	}{
+		{"a read-only tool it owns", extension.Extension{Name: "a", Owns: []string{"note_search"}, SubagentTools: sub("note_search")}, ""},
+		{"a tool it does not own", extension.Extension{Name: "a", SubagentTools: sub("note_search")}, `sub-agent tool "note_search" is not one of the names it owns`},
+		{"a tool given twice", extension.Extension{Name: "a", Owns: []string{"note_search"}, SubagentTools: sub("note_search", "note_search")}, "given twice"},
+		{"a tool that writes", extension.Extension{Name: "a", Owns: []string{"note_save"}, SubagentTools: writer}, `"note_save" is not annotated read-only`},
+		{"an error", extension.Extension{Name: "a", SubagentTools: func(extension.Env) ([]agenttool.Tool, error) { return nil, errors.New("no store") }}, "extension a: no store"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &echo.Adapter{})
+			o.Extensions = append(o.Extensions, tc.ext)
+			s, err := New(context.Background(), o)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				s.Close()
+				return
+			}
+			if err == nil {
+				s.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want one saying %q", err, tc.want)
+			}
+		})
+	}
+}

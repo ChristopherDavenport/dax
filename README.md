@@ -261,8 +261,8 @@ sub-agent model, recorded as a child session:
   and bash) and returns a written answer.
 - `task` carries out a coding task with the file tools and bash, then
   reports what it changed, what it ran and what is left. Its instructions
-  are dax's, your `instructions_file` and the AGENTS.md chain, without
-  skills or memory. The main agent chooses, per call:
+  are dax's, your `instructions_file`, the memory block and the AGENTS.md
+  chain, without skills. The main agent chooses, per call:
   - `context`: `fresh` (the default) sees only the brief, so the brief
     must be complete; `fork` also sees the conversation so far, for a
     task that depends on what was said or decided in it.
@@ -278,6 +278,12 @@ sub-agent model, recorded as a child session:
   the defaults were the cheapest in a trial: a fresh Flash sub-agent
   cost about a twentieth of a Pro one at the same pass rate, and a Pro
   fork about twice a fresh Pro task.
+
+Both see the memory block as the main agent does, rendered again for
+each of their requests, and can search memory with `memory_search`; they
+cannot save, patch or forget an entry. Their sessions record the block
+as memory parts, each entry with its trust, so a sub-agent's record
+says where that text came from.
 
 Several calls in one turn run at once, so the main agent can hand out
 independent pieces of work in parallel. Writes and edits take a
@@ -1949,9 +1955,9 @@ dax's own extensions are built the same way, from the same fields:
 | Extension | Package | What it offers |
 |---|---|---|
 | `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan and the facts the policy approved |
-| `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`) |
+| `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`), its sub-agent tools, and the memory block as the kit's parts |
 | `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
-| `dax-memory` | `ext/memory` | the memory tools and block |
+| `dax-memory` | `ext/memory` | the memory tools and block; `memory_search` for the sub-agents |
 | `dax-a2a` | `ext/a2a` | a tool per configured peer, added through its kit as memory's are; their renderers; no rules |
 
 `dax-coding` and `dax-a2a` are always on (`dax-a2a` offers nothing
@@ -1966,6 +1972,7 @@ whatever the settings say (any other name is an error), and
 | `Tools` | tools (`agenttool.Tool`), in order, for the main agent and for `task` |
 | `ReadOnly` | the names of its tools that only look, which `explore` gets too; one annotated destructive is refused |
 | `Owns` | names of tools it adds through `Kit` (`skill`, `memory_save`), so its rules may name them |
+| `SubagentTools` | tools among those it owns that the sub-agents take too (`Env.SubagentTools`), built before any `Kit`: read-only control tools, such as dax-memory's `memory_search`; one it does not own, or one not annotated read-only, is refused |
 | `Matchers` | how a rule's specifier reads a call of one of its tools: `deploy(staging)` above. Built over the session's `ToolEnv`, so one that looks at files looks at the session's workspace; `extension.FixedMatchers` wraps ones that read only the arguments |
 | `Aliases` | names a rule may use for several of its tools: `Read` for read, grep, glob and ls |
 | `Policy` | the allow, ask and deny rules it ships for its tools |

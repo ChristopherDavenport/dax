@@ -7,6 +7,15 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: the `explore` and `task` sub-agents see the memory block and
+  can search memory with `memory_search`; they cannot write it. Their
+  sessions record the block as memory parts with each entry's trust,
+  and `task`'s the AGENTS.md chain as its part, where it was text of
+  the sub-agent's own prompt (#158).
+- Changed: `extension.Extension` has `SubagentTools`, read-only tools an
+  extension owns that the sub-agents take too, and `extension.Env` has
+  `SubagentTools()`, every extension's; an `Env` implemented outside dax
+  needs the method (#158).
 - Dependencies, in one step, since agentsession v0.0.38 writes a format
   older readers refuse: agentkit v0.0.17, up from v0.0.16; agentturn,
   agentturn/session, front/a2a and tools/a2a v0.0.39, up from v0.0.37;
