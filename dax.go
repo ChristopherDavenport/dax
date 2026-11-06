@@ -109,7 +109,8 @@ func Main(ctx context.Context, args []string, opts ...Option) int {
 		if errors.As(err, &ended) {
 			return ended.status
 		}
-		if s, ok := render.Explain(err); ok {
+		// The program has ended, so no /compact is offered.
+		if s, ok := render.Explain(err, false); ok {
 			// The provider's raw JSON is the record's, not the user's.
 			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, s)
 		} else {

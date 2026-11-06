@@ -45,7 +45,7 @@ func TestExplainSaysAQuotaRefusalInWords(t *testing.T) {
 		{"none", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := Explain(tc.err)
+			got, ok := Explain(tc.err, true)
 			if ok != (len(tc.want) > 0) {
 				t.Fatalf("Explain = %q, %v", got, ok)
 			}
@@ -65,9 +65,42 @@ func TestExplainSaysAQuotaRefusalInWords(t *testing.T) {
 // error.
 func TestThePrinterExplainsAQuotaRefusal(t *testing.T) {
 	var b bytes.Buffer
-	p := &Printer{W: &b}
+	p := &Printer{W: &b, Compact: true}
 	p.Handle(context.Background(), &agentturn.RunEnd{Reason: agentturn.ReasonError, Err: httpError(402, openRouterLimit)})
 	if out := b.String(); strings.Contains(out, "previous_errors") || !strings.Contains(out, "OpenRouter key's spend limit") {
 		t.Errorf("the printer says:\n%s", out)
+	}
+}
+
+// A body that is not the spec's envelope and says no message of its own
+// leaves the adapter's message standing; a front with no /compact does
+// not suggest it (the -p printer, dax's exit line).
+func TestExplainKeepsTheAdaptersMessageAndNamesOnlyAnOfferedCommand(t *testing.T) {
+	err := &openresponses.Error{StatusCode: 402, Code: openresponses.CodeInsufficientQuota, Message: "the adapter says the key has no credit", Body: []byte(`{"error":{"code":402}}`)}
+	got, ok := Explain(err, true)
+	if !ok || !strings.Contains(got, "the adapter says the key has no credit") {
+		t.Errorf("Explain = %q, %v; want the adapter's message", got, ok)
+	}
+	if !strings.Contains(got, "/compact") {
+		t.Errorf("a front with /compact is not told of it: %q", got)
+	}
+	// A message that is itself a body with no message of its own is not
+	// shown raw.
+	raw := &openresponses.Error{StatusCode: 402, Code: openresponses.CodeInsufficientQuota, Message: `{"error":{"code":402}}`}
+	if got, _ := Explain(raw, true); strings.Contains(got, `{"error"`) {
+		t.Errorf("the explanation carries the raw JSON: %q", got)
+	}
+	if got, _ := Explain(err, false); strings.Contains(got, "/compact") {
+		t.Errorf("a front without /compact is told of it: %q", got)
+	}
+	var b bytes.Buffer
+	(&Printer{W: &b}).Handle(context.Background(), &agentturn.RunEnd{Reason: agentturn.ReasonError, Err: err})
+	if strings.Contains(b.String(), "/compact") {
+		t.Errorf("the -p printer names /compact:\n%s", b.String())
+	}
+	b.Reset()
+	(&Printer{W: &b, Compact: true}).Handle(context.Background(), &agentturn.RunEnd{Reason: agentturn.ReasonError, Err: err})
+	if !strings.Contains(b.String(), "/compact") {
+		t.Errorf("the REPL's printer does not name /compact:\n%s", b.String())
 	}
 }

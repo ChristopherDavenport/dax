@@ -69,8 +69,10 @@ versions may break flags and the config file.
   OpenRouter's 402 at a key's daily limit among them) is said in words
   at the REPL, under `-p` and in the terminal client: that the limit
   was reached, that it was not retried, the provider's own message and
-  remedy, and that `/compact` may fit what is left; not the provider's
-  raw JSON, which stays whole in the session's record (#15).
+  remedy, and that a shorter request may fit what is left (with
+  `/compact` named where the front offers it); not the provider's raw
+  JSON, which stays whole in the session's record. A body with no
+  message of its own leaves the adapter's message standing (#15).
 - Added: `/mcp` says where each MCP server's session is: live, ended
   (its process exited or its connection dropped; the next call to one
   of its tools starts it again), restarting, failed to start again with

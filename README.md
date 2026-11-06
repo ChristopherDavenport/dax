@@ -78,9 +78,10 @@ A request the key's or account's credit or spend limit cannot cover
 (the code `insufficient_quota`, OpenAI's, and OpenRouter's 402 when a
 key passes its daily limit) is not retried. dax says so in words, with
 the provider's own message and remedy, in place of the provider's raw
-JSON, and the whole error stays in the session's record. `/compact` or
-a shorter prompt may fit what is left. `dax attach` still shows the
-error as the served session reports it.
+JSON, and the whole error stays in the session's record. A shorter
+prompt may fit what is left, and at the REPL and in the terminal client
+`/compact` (`-p` has none). `dax attach` still shows the error as the
+served session reports it.
 
 `-model` names another model. `-subagent-model` names the one the
 sub-agents run; without it a sub-agent runs the provider's default for

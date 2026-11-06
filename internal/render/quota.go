@@ -12,9 +12,10 @@ import (
 // account's credit or spend limit cannot cover (openresponses'
 // insufficient_quota, OpenRouter's 402 among them): what happened, that
 // it was not retried, the provider's own message and remedy, and what
-// may fit. The provider's raw JSON is left out; the whole error stays
-// in the session's record. Any other error is not explained (ok false).
-func Explain(err error) (string, bool) {
+// may fit, naming /compact only where the front offers it (compact).
+// The provider's raw JSON is left out; the whole error stays in the
+// session's record. Any other error is not explained (ok false).
+func Explain(err error, compact bool) (string, bool) {
 	if err == nil || !openresponses.IsInsufficientQuota(err) {
 		return "", false
 	}
@@ -31,12 +32,19 @@ func Explain(err error) (string, bool) {
 				Metadata any    `json:"metadata"`
 			} `json:"error"`
 		}
-		raw := oe.Body
+		raw, fromMsg := oe.Body, false
 		if len(raw) == 0 && strings.HasPrefix(strings.TrimSpace(msg), "{") {
-			raw = []byte(msg)
+			raw, fromMsg = []byte(msg), true
 		}
 		if len(raw) > 0 && json.Unmarshal(raw, &body) == nil {
-			msg = body.Error.Message
+			// The body's own message, where it says one; else the
+			// adapter's stands, unless that was the body itself.
+			switch {
+			case body.Error.Message != "":
+				msg = body.Error.Message
+			case fromMsg:
+				msg = ""
+			}
 			if r, s := quotaMetadata(body.Error.Metadata); r != "" || s != "" {
 				remedy, source = r, s
 			}
@@ -54,7 +62,11 @@ func Explain(err error) (string, bool) {
 	if remedy = strings.TrimSpace(remedy); remedy != "" {
 		b.WriteString(" " + remedy)
 	}
-	b.WriteString(" A shorter request may fit what is left: /compact folds the conversation. The full error is in the session's record.")
+	b.WriteString(" A shorter request may fit what is left")
+	if compact {
+		b.WriteString(": /compact folds the conversation")
+	}
+	b.WriteString(". The full error is in the session's record.")
 	return Clean(b.String()), true
 }
 

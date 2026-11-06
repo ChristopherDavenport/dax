@@ -346,7 +346,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	if w == nil {
 		w = os.Stdout
 	}
-	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think}).Handle)()
+	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think, Compact: true}).Handle)()
 	abortOnInterrupt(t)
 	// What the person types here is sent as theirs: a prompt, a steer
 	// and the run their answers resume start under the trigger of the
@@ -492,7 +492,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				})
 				continue
 			case r.err != nil:
-				if s, ok := render.Explain(r.err); ok {
+				if s, ok := render.Explain(r.err, true); ok {
 					fmt.Fprintln(os.Stderr, "\n"+s)
 				} else {
 					fmt.Fprintln(os.Stderr, "\nerror:", r.err)

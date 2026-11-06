@@ -402,7 +402,7 @@ type explained struct{ client.Source }
 func (x explained) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
 	return x.Source.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
 		if e, ok := ev.(*agentturn.RunEnd); ok && e.Err != nil {
-			if s, ok := render.Explain(e.Err); ok {
+			if s, ok := render.Explain(e.Err, true); ok {
 				c := *e
 				c.Err = explainedError{s, e.Err}
 				ev = &c

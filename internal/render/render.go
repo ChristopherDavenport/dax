@@ -26,6 +26,9 @@ type Printer struct {
 	W io.Writer
 	// Think shows reasoning deltas in a [thinking] block.
 	Think bool
+	// Compact says the front offers /compact, which the explanation of
+	// a quota refusal then names (Explain).
+	Compact bool
 
 	kind    string
 	open    bool
@@ -134,7 +137,7 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		}
 		fmt.Fprintf(p.w(), "[%s · %d model call(s) · %d tool call(s) · %d in / %d out tokens]\n", reason, p.turns, p.calls, p.in, p.out)
 		if e.Err != nil && e.Reason != agentturn.ReasonAborted {
-			if s, ok := Explain(e.Err); ok {
+			if s, ok := Explain(e.Err, p.Compact); ok {
 				fmt.Fprintf(p.w(), "[%s]\n", s)
 			} else {
 				fmt.Fprintf(p.w(), "[error: %v]\n", e.Err)
