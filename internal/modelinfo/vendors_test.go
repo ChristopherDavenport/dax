@@ -280,3 +280,40 @@ func TestWithWindow(t *testing.T) {
 		}
 	}
 }
+
+// #166: whether a model takes images: Ollama's vision capability,
+// OpenRouter's input modalities; unknown where the vendor says nothing.
+func TestImagesSupport(t *testing.T) {
+	ollama := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/ps" {
+			io.WriteString(w, `{"models":[]}`)
+			return
+		}
+		var body struct{ Model string }
+		json.NewDecoder(r.Body).Decode(&body)
+		caps := `["completion"]`
+		if body.Model == "llava" {
+			caps = `["completion","vision"]`
+		}
+		io.WriteString(w, `{"capabilities":`+caps+`}`)
+	})
+	o := Ollama(ollama.URL+"/v1", nil)
+	for model, want := range map[string]Support{"llava": Yes, "qwen3": No} {
+		if info, err := o.Describe(context.Background(), model); err != nil || info.Images != want {
+			t.Errorf("ollama %s: images %v, %v; want %v", model, info.Images, err, want)
+		}
+	}
+	or := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"id":"v","architecture":{"input_modalities":["text","image"]}},{"id":"t","architecture":{"input_modalities":["text"]}},{"id":"u"}]}`)
+	})
+	d := OpenRouter(or.URL, nil)
+	for model, want := range map[string]Support{"v": Yes, "t": No, "u": Unknown} {
+		if info, err := d.Describe(context.Background(), model); err != nil || info.Images != want {
+			t.Errorf("openrouter %s: images %v, %v; want %v", model, info.Images, err, want)
+		}
+	}
+	s := Of(Wrap(&recorder{}, d, nil))
+	if !s.TakesImages(context.Background(), "v") || s.TakesImages(context.Background(), "u") {
+		t.Error("TakesImages is not the vendor's yes")
+	}
+}

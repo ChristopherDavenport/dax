@@ -178,6 +178,9 @@ before changing the shape.
   `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's
   prompts as slash commands and its resources as `@server:uri`
   mentions, sent marked as the server's, untrusted.
+  `agent/images.go`: a read's image shown only to a model that takes
+  images (`Options.TakesImages`), the person's `@path.png` (`Image`);
+  sessions keep media as sidecar blobs.
   `agent/reopen.go`: `Reopen`, another session (`/new`, `/resume`)
   over the live settings, the store handed to it. `agent/names.go`:
   `SetName` (`/name`, an `info` entry), `Name`, and `Sessions`, this

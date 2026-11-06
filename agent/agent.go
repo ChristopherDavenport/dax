@@ -120,8 +120,13 @@ type Options struct {
 	// as configured. It is applied where each configuration is built,
 	// never to a request on its way out, so the session records the
 	// request that was sent.
-	Fit   func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
-	Think bool
+	Fit func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
+	// TakesImages reports whether model takes images as input, as its
+	// vendor says (internal/modelinfo). An image a file read returns,
+	// or one the person attaches, is sent only to a model it says yes
+	// for; nil is never.
+	TakesImages func(ctx context.Context, model string) bool
+	Think       bool
 	// Effort is the reasoning effort Think asks for; empty is low.
 	Effort openresponses.ReasoningEffort
 	// Dir is the directory on this machine the session started in.
@@ -817,7 +822,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
 	// Every tool's result is cut to its cap, an MCP server's and a
 	// child agent's among them, in every placement (outputcap.go).
-	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(t) }))
+	// A read's image is shown only to a model that takes images (images.go).
+	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(s.imageGate(t)) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
 	if err := xenv.buildSubagentTools(o.Extensions); err != nil {
 		return nil, err
@@ -1125,6 +1131,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 // (extras), which say which machine.
 func (s *Session) header() agentsession.Header {
 	return agentsession.Header{
+		// Media, an image a read returned or the person attached, is
+		// kept as the store's blobs beside the log (images.go).
+		Media:   agentsession.MediaSidecar,
 		CWD:     s.ws.Root(),
 		Harness: &agentsession.Harness{Name: s.opts.Name, Version: s.opts.Version},
 		Extra:   s.extras(),

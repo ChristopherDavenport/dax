@@ -41,6 +41,10 @@ func (d anthropicDescriber) Describe(ctx context.Context, model string) (Info, e
 	if c.Thinking.Supported {
 		info.Reasons = Yes
 	}
+	info.Images = No
+	if c.ImageInput.Supported {
+		info.Images = Yes
+	}
 	if c.Effort.Supported {
 		efforts := []openresponses.ReasoningEffort{none}
 		for _, l := range []struct {
@@ -104,7 +108,10 @@ type openRouterModel struct {
 	ID                  string   `json:"id"`
 	ContextLength       int64    `json:"context_length"`
 	SupportedParameters []string `json:"supported_parameters"`
-	TopProvider         struct {
+	Architecture        struct {
+		InputModalities []string `json:"input_modalities"`
+	} `json:"architecture"`
+	TopProvider struct {
 		MaxCompletionTokens int64 `json:"max_completion_tokens"`
 	} `json:"top_provider"`
 	Reasoning *struct {
@@ -134,6 +141,12 @@ func (d *openRouterDescriber) Describe(ctx context.Context, model string) (Info,
 		return Info{}, fmt.Errorf("openrouter has no model %q", model)
 	}
 	info := Info{Source: "openrouter", ContextWindow: m.ContextLength, MaxOutput: m.TopProvider.MaxCompletionTokens}
+	if mods := m.Architecture.InputModalities; mods != nil {
+		info.Images = No
+		if slices.Contains(mods, "image") {
+			info.Images = Yes
+		}
+	}
 	switch {
 	case m.Reasoning != nil:
 		info.Reasons = Yes
@@ -185,9 +198,12 @@ func (d ollamaDescriber) Describe(ctx context.Context, model string) (Info, erro
 	if err := getJSON(ctx, d.client, http.MethodPost, d.url, req, &show); err != nil {
 		return Info{}, err
 	}
-	info := Info{Source: "ollama", Reasons: No, Efforts: noReasoning}
+	info := Info{Source: "ollama", Reasons: No, Efforts: noReasoning, Images: No}
 	if slices.Contains(show.Capabilities, "thinking") {
 		info.Reasons, info.Efforts = Yes, nil
+	}
+	if slices.Contains(show.Capabilities, "vision") {
+		info.Images = Yes
 	}
 	var trained int64
 	for k, v := range show.ModelInfo {

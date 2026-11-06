@@ -42,6 +42,8 @@ type Info struct {
 	Source string
 	// Reasons says whether the model reasons at all.
 	Reasons Support
+	// Images says whether the model takes images as input.
+	Images Support
 	// Efforts are the reasoning efforts the model accepts, in [Order];
 	// "none" is among them when reasoning can be turned off. Nil is
 	// unknown, and a request's effort is then sent as asked.

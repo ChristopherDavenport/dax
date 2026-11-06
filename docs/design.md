@@ -468,6 +468,15 @@ call (tools/agent's `WithAskParent`, agentturn RFC 0001 Composition),
 never handed to the main agent to make under the conversation's
 grants.
 
+Images (`agent/images.go`): dax-coding's `read` returns an image file
+as an image part wherever it runs, since a tool cannot know the model;
+the session shows it to a model whose vendor says it takes images
+(`Options.TakesImages`, from `internal/modelinfo`) and puts a line in
+its place otherwise. An image the person attaches (`@path.png`) is
+read on this machine, theirs as the line is. The store keeps media as
+blobs beside the log (sidecar media), which agentturn's recorder
+writes and reads back.
+
 ## Workspaces
 
 A `workspace.Workspace` is where a session's tools act: a root (the

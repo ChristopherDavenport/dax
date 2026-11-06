@@ -603,6 +603,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// session records the effort that is sent.
 	if w := modelinfo.Of(opts.Streamer); w != nil {
 		opts.Fit = w.Fit
+		opts.TakesImages = w.TakesImages
 		// The sub-agents' own streamer, when they have one, is checked
 		// against what the main one knows.
 		if m.SubagentStreamer != nil {

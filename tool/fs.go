@@ -2,13 +2,17 @@ package tool
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/openresponses"
 )
 
 const (
@@ -65,14 +69,29 @@ func Read(ws *Files, opts ...ReadOption) agenttool.Tool {
 
 func readTool(ws *Files, claim agenttool.Option, opts ...ReadOption) agenttool.Tool {
 	limitBytes := readCap(opts)
-	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files; only the first "+fmt.Sprint(limitBytes>>10)+" KiB of a file can be read, so use grep to find a line in a larger one.",
-		func(_ context.Context, in ReadArgs) (string, error) {
+	return agenttool.New("read", "Read a file. Returns numbered lines. Use offset and limit for large files; only the first "+fmt.Sprint(limitBytes>>10)+" KiB of a file can be read, so use grep to find a line in a larger one. An image (PNG, JPEG, GIF or WebP, up to "+fmt.Sprint(MaxImageBytes>>20)+" MiB) is returned as the image, for a model that takes images.",
+		func(_ context.Context, in ReadArgs) (agenttool.Result, error) {
+			text := func(s string, err error) (agenttool.Result, error) {
+				return agenttool.Result{Output: openresponses.FunctionCallOutputData{Text: s}}, err
+			}
 			if err := ws.checkTouched("read", "", in.Path, in.Stamp); err != nil {
-				return "", err
+				return text("", err)
+			}
+			if mt := ImageType(in.Path, nil); mt != "" {
+				f, _, size, err := ws.openRegular(in.Path)
+				if err != nil {
+					return text("", err)
+				}
+				res, ok, err := readImage(f, in.Path, mt, size)
+				f.Close()
+				if ok || err != nil {
+					return res, err
+				}
+				// Not the image its name says: read as text.
 			}
 			f, _, size, err := ws.openRegular(in.Path)
 			if err != nil {
-				return "", err
+				return text("", err)
 			}
 			defer f.Close()
 			start := max(in.Offset, 1)
@@ -103,9 +122,9 @@ func readTool(ws *Files, claim agenttool.Option, opts ...ReadOption) agenttool.T
 			capped := size > limitBytes
 			switch {
 			case shown == 0 && !capped:
-				return fmt.Sprintf("(file has %d lines; offset %d is past the end)", n, start), nil
+				return text(fmt.Sprintf("(file has %d lines; offset %d is past the end)", n, start), nil)
 			case shown == 0:
-				return fmt.Sprintf("(offset %d is beyond the first %d bytes of this %d-byte file, which is all read will scan; use grep to find a line)", start, limitBytes, size), nil
+				return text(fmt.Sprintf("(offset %d is beyond the first %d bytes of this %d-byte file, which is all read will scan; use grep to find a line)", start, limitBytes, size), nil)
 			}
 			if full {
 				fmt.Fprintf(&b, "... (%d more lines; use offset=%d)\n", n-(start-1)-shown, start+shown)
@@ -113,8 +132,69 @@ func readTool(ws *Files, claim agenttool.Option, opts ...ReadOption) agenttool.T
 			if capped {
 				fmt.Fprintf(&b, "... (stopped after the first %d of %d bytes; use grep to find a line later in the file)\n", limitBytes, size)
 			}
-			return truncate(b.String(), maxReadBytes+maxLineBytes), nil
+			return text(truncate(b.String(), maxReadBytes+maxLineBytes), nil)
 		}, claim)
+}
+
+// MaxImageBytes is the largest image read returns as one: about what a
+// provider takes in one image.
+const MaxImageBytes = 5 << 20
+
+// imageMagic are the image types read returns as images, by extension,
+// each with the bytes its data starts with.
+var imageMagic = map[string]struct {
+	mediaType string
+	magic     func([]byte) bool
+}{
+	".png":  {"image/png", func(b []byte) bool { return bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")) }},
+	".jpg":  {"image/jpeg", func(b []byte) bool { return bytes.HasPrefix(b, []byte{0xff, 0xd8, 0xff}) }},
+	".jpeg": {"image/jpeg", func(b []byte) bool { return bytes.HasPrefix(b, []byte{0xff, 0xd8, 0xff}) }},
+	".gif": {"image/gif", func(b []byte) bool {
+		return bytes.HasPrefix(b, []byte("GIF87a")) || bytes.HasPrefix(b, []byte("GIF89a"))
+	}},
+	".webp": {"image/webp", func(b []byte) bool { return len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP" }},
+}
+
+// ImageType is the media type of an image file named name, by its
+// extension, any case; with data, only when data starts as that type
+// does. "" for a name that is no image read returns, or data that is
+// not the image its name says.
+func ImageType(name string, data []byte) string {
+	t, ok := imageMagic[strings.ToLower(path.Ext(name))]
+	if !ok || data != nil && !t.magic(data) {
+		return ""
+	}
+	return t.mediaType
+}
+
+// ImageURL is data as a data URL of media type mt.
+func ImageURL(mt string, data []byte) string {
+	return "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+// readImage is read's result for the image file f, named name, of size
+// bytes and media type mt by its name: the image, with a line saying
+// what it is, as an image part. ok is false when its bytes are not of
+// that type, to be read as text. One over MaxImageBytes is said, not
+// sent.
+func readImage(f io.Reader, name, mt string, size int64) (agenttool.Result, bool, error) {
+	if size > MaxImageBytes {
+		return agenttool.Result{Output: openresponses.FunctionCallOutputData{Text: fmt.Sprintf("(%s is a %d-byte image; read returns an image of at most %d bytes)", name, size, MaxImageBytes)}}, true, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
+	if err != nil {
+		return agenttool.Result{}, false, err
+	}
+	if len(data) > MaxImageBytes {
+		return agenttool.Result{Output: openresponses.FunctionCallOutputData{Text: fmt.Sprintf("(%s is an image of more than %d bytes, which is all read returns)", name, MaxImageBytes)}}, true, nil
+	}
+	if ImageType(name, data) == "" {
+		return agenttool.Result{}, false, nil
+	}
+	return agenttool.Result{Output: openresponses.FunctionCallOutputData{Parts: openresponses.Contents{
+		&openresponses.InputText{Text: fmt.Sprintf("%s: %s, %d bytes", name, mt, len(data))},
+		&openresponses.InputImage{ImageURL: ImageURL(mt, data)},
+	}}}, true, nil
 }
 
 // readLine reads one line without its newline, keeping at most

@@ -104,6 +104,13 @@ func (s *Streamer) Describe(ctx context.Context, model string) (Info, error) {
 	return info, err
 }
 
+// TakesImages reports whether model takes images as input, as its
+// vendor says; false when the vendor says no, or nothing.
+func (s *Streamer) TakesImages(ctx context.Context, model string) bool {
+	info, _ := s.Describe(ctx, model)
+	return info.Images == Yes
+}
+
 // Fit is the effort to ask model for in place of want: want when the
 // model takes it or nothing is known, else the nearest effort it takes,
 // as [Info.Fit] decides. A change, and a vendor that could not be

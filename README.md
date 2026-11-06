@@ -561,7 +561,7 @@ no other account could have written it.
 
 | tool | what it does |
 |---|---|
-| `read` | numbered lines of a file, with `offset` and `limit` |
+| `read` | numbered lines of a file, with `offset` and `limit`; a PNG, JPEG, GIF or WebP file (by its name and its first bytes, up to 5 MiB) is returned as the image, shown to a model whose vendor says it takes images (Anthropic's `image_input`, OpenRouter's input modalities, Ollama's `vision`) and otherwise said not to be shown |
 | `write` | create or replace a file, making parent directories |
 | `edit` | replace one exact occurrence of a string |
 | `glob` | paths matching a doublestar pattern (`**/*.go`, `cmd/*/main.go`, `*.{md,txt}`), sorted |
@@ -1628,6 +1628,11 @@ the input until the next line, and an error gives the line back to edit.
   that prompt (`instructions_part`, source `dax.mcp_prompt`) and marked
   untrusted: a third party's text, never words you wrote. `/help` lists
   the servers' prompts as they offer them now. `dax attach` offers none.
+- `@path.png` (a PNG, JPEG, GIF or WebP, up to 5 MiB) in a line you
+  type attaches that image file on this machine to your message, once,
+  for a model whose vendor says it takes images; one it does not, or a
+  file that is not the image its name says, sends nothing and says why.
+  A leading `~/` is your home. `dax attach` sends the line as typed.
 - `@<server>:<uri>` in a line you type attaches that MCP server's
   resource (`resources/read`) after your message, once however often
   the line names it, cut at 100 KiB, recorded as composed from the
@@ -2007,6 +2012,13 @@ dax -repair <id>                   # rewrite a damaged log from what still reads
 
 `-list`, `-verify` and `-project` open the store read-only, so they work
 beside a running dax. `-sessions ""` disables recording.
+
+A session keeps its media apart from its log (agentsession's sidecar
+media, the header's `"media": "sidecar"`): an image a `read` returned
+or you attached is stored once as a blob in the store, and the log
+names it by its hash (`sidecar:sha256:...`); a resume reads it back
+into the request. A fold weighs an image by its pixels, not its
+encoded size (agentturn's default estimate).
 
 Inside a session, `/name <text>` names it (an `info` entry on its
 record; a later one replaces it), and `-list`, `/resume` and the start

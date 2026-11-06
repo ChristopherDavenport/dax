@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: images. `read` returns a PNG, JPEG, GIF or WebP file (by name
+  and first bytes, up to 5 MiB) as the image, through the workspace's
+  files on any workspace, and the session shows it only to a model
+  whose vendor says it takes images (`modelinfo.Info.Images`: Anthropic's
+  `image_input`, OpenRouter's input modalities, Ollama's `vision`),
+  telling any other model it is not shown. `@path.png` in a typed line
+  attaches an image file on this machine to your message. New sessions
+  keep media as blobs beside the log (header `media: sidecar`), read
+  back on resume. `agent.Options.TakesImages`, `agent.Session.Image`,
+  `tool.ImageType`, `tool.ImageURL`, `tool.MaxImageBytes` (#166).
+- Changed: a new session's header says `"media": "sidecar"`; a reader
+  built on agentsession before sidecar media refuses such a session's
+  item that names a blob (#166).
 - Added: `servers_workspaces`, more servers workspaces by name, each as
   `servers_workspace` is with a `token_env` of its own, so a session
   reaches several hosts' secret-holding servers. Across them (and

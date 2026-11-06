@@ -16,6 +16,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // A line that starts with a slash is dax's, never the model's: every
@@ -415,6 +416,13 @@ type mcpPrompter interface {
 	MCPPrompt(ctx context.Context, command, args string) (openresponses.Items, error)
 }
 
+// imager is what an @path.png in a typed line asks of the session's
+// controls: the session's own (agent.Session.Image), which reads it on
+// this machine; dax attach offers none, and the line goes as typed.
+type imager interface {
+	Image(ctx context.Context, path string) (*openresponses.InputImage, error)
+}
+
 // mentioner is what an @ mention asks of the session's controls: the
 // session's own (agent.Session.MCPMentions and MCPResources), which hold
 // its servers; dax attach offers none, and its lines go as typed.
@@ -427,7 +435,25 @@ type mentioner interface {
 // words, and after it each MCP resource it mentions (@server:uri),
 // attached once, marked as the server's text.
 func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openresponses.Item, error) {
-	items := []openresponses.Item{openresponses.UserText(text)}
+	msg := openresponses.UserText(text)
+	// The images it names (@path.png), each once, attached to the
+	// person's message: theirs, as the line is.
+	if im, ok := ctl.(imager); ok {
+		seen := map[string]bool{}
+		for _, word := range strings.Fields(text) {
+			p, ok := strings.CutPrefix(strings.TrimRight(word, ".,;!?"), "@")
+			if !ok || seen[p] || tool.ImageType(p, nil) == "" {
+				continue
+			}
+			seen[p] = true
+			img, err := im.Image(ctx, p)
+			if err != nil {
+				return nil, errors.New(render.Clean("@" + p + ": " + err.Error()))
+			}
+			msg.Content = append(msg.Content, img)
+		}
+	}
+	items := []openresponses.Item{msg}
 	m, ok := ctl.(mentioner)
 	if !ok {
 		return items, nil
