@@ -30,8 +30,14 @@ const (
 	ModeBypass = "bypassPermissions"
 )
 
-// Modes are the modes in the order Shift-Tab cycles them.
+// Modes are the modes there are.
 var Modes = []string{ModeDefault, ModeAcceptEdits, ModeDontAsk, ModeBypass}
+
+// Cycle are the modes Shift-Tab cycles through, in order. Bypass is
+// not among them: one key must not turn every ask off, so it is
+// reached only by its name (/mode bypassPermissions, -mode,
+// -no-policy).
+var Cycle = []string{ModeDefault, ModeAcceptEdits, ModeDontAsk}
 
 // strictness orders the modes, the strictest last: a project's
 // default_mode may only move the user's toward it.
@@ -56,10 +62,11 @@ func ParseMode(s string) (string, error) {
 // Stricter reports whether mode a refuses or asks more than b.
 func Stricter(a, b string) bool { return strictness[a] > strictness[b] }
 
-// NextMode is the mode after m in Modes, the first after the last.
+// NextMode is the mode after m in Cycle, the first after the last or
+// after a mode not in it (bypassPermissions).
 func NextMode(m string) string {
-	i := slices.Index(Modes, m)
-	return Modes[(i+1)%len(Modes)]
+	i := slices.Index(Cycle, m)
+	return Cycle[(i+1)%len(Cycle)]
 }
 
 // DescribeMode is what the model is told when the mode changes.

@@ -1220,7 +1220,10 @@ Your answer is recorded in the session as a person's.
 A mode is the same rules made stricter or looser as a whole, which you
 pick at start (`-mode`, or `policy.default_mode` in your config) and
 change in the session with `/mode NAME`, or Shift-Tab in the terminal
-client, which moves to the next one:
+client, which moves to the next of `default`, `acceptEdits` and
+`dontAsk` (`bypassPermissions` is reached only by its name, with
+`/mode`, `-mode` or `-no-policy`, and Shift-Tab from it goes to
+`default`):
 
 | mode | what it does |
 |---|---|
@@ -1465,7 +1468,7 @@ drawn as the client draws any call, its name and arguments.
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
 | drag | select text anywhere on the screen; it stays drawn until the next key or press |
-| Shift-Tab | the next permission mode: default, acceptEdits, dontAsk, bypassPermissions (see [Permission modes](#permission-modes)) |
+| Shift-Tab | the next permission mode: default, acceptEdits, dontAsk, never bypassPermissions (see [Permission modes](#permission-modes)) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and

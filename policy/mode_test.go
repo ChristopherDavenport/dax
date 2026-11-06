@@ -84,7 +84,17 @@ func TestParseModeAndStricter(t *testing.T) {
 	if !Stricter(ModeDontAsk, ModeDefault) || Stricter(ModeAcceptEdits, ModeDefault) || Stricter(ModeDefault, ModeDefault) {
 		t.Error("Stricter")
 	}
-	if NextMode(ModeDefault) != ModeAcceptEdits || NextMode(ModeBypass) != ModeDefault {
-		t.Error("NextMode")
+}
+
+// Shift-Tab cycles default, acceptEdits and dontAsk; bypassPermissions
+// is reached only by its name (/mode, -mode, -no-policy), and the next
+// mode after it is default (#145's review, M2).
+func TestTheCycleLeavesBypassOut(t *testing.T) {
+	for from, want := range map[string]string{
+		ModeDefault: ModeAcceptEdits, ModeAcceptEdits: ModeDontAsk, ModeDontAsk: ModeDefault, ModeBypass: ModeDefault,
+	} {
+		if got := NextMode(from); got != want {
+			t.Errorf("NextMode(%s) = %s, want %s", from, got, want)
+		}
 	}
 }

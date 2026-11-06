@@ -123,6 +123,10 @@ versions may break flags and the config file.
   `write` and `edit`, confined or not. The rules are now `default`'s,
   and the session refuses each call the engine would ask about, with
   `policy.DontAskNote`, asking no one (#145).
+- Changed: Shift-Tab cycles `default`, `acceptEdits` and `dontAsk`
+  only (`policy.Cycle`); `bypassPermissions` is reached by its name
+  alone (`/mode`, `-mode`, `-no-policy`), so one key never turns every
+  ask off (#145).
 - Added: permission modes (#145). `default`, `acceptEdits` (`write`
   and `edit` run unasked but for a protected or secret-looking path;
   commands still ask), `dontAsk` (what would ask is refused, the model

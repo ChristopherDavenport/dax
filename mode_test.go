@@ -28,7 +28,7 @@ func TestTheModeCommand(t *testing.T) {
 	cmd := serveCommands(r.sess, r.sess, "")[cmdMode]
 	for _, tc := range []struct{ args, want string }{
 		{``, `{"mode":"dontAsk"}`},
-		{`{"next":true}`, `{"mode":"bypassPermissions"}`},
+		{`{"next":true}`, `{"mode":"default"}`},
 		{`{"name":"acceptEdits"}`, `{"mode":"acceptEdits"}`},
 	} {
 		out, err := cmd.Run(ctx, json.RawMessage(tc.args))
