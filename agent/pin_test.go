@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -128,5 +130,55 @@ func TestAFoldKeepsDrivesTaskVerbatim(t *testing.T) {
 	}
 	if slices.Contains(seen, "a line no trigger claims") {
 		t.Error("a message nobody claimed was kept")
+	}
+}
+
+// A prompt template's message and an MCP prompt's are composed (their
+// layers say so, and agentturn does not count them as the person's),
+// but each is the request the person chose to send: a fold keeps it
+// verbatim as it keeps Drive's task, whichever front sent it (#173).
+func TestAFoldKeepsATemplatesAndAnMCPPromptsRequestVerbatim(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	m := &seeing{}
+	o := options(t, m)
+	o.Compact = 1
+	o.MCP = []MCPServer{{Name: "team", Command: os.Args[0]}}
+	write(t, filepath.Join(o.UserDir, "prompts", "review.md"), "Review $ARGUMENTS for races; start with $1.\n")
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	byPerson := agentturn.ContextWithTrigger(ctx, AtTerminal)
+	tmpl, err := s.Template("review", "internal/box tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sent as the fronts send it, under the person's trigger, not
+	// through Drive.
+	if _, err := s.Prompt(byPerson, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	mp, err := s.MCPPrompt(ctx, "mcp__team__review_pr", "456 the error paths")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Prompt(byPerson, mp...); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"a line no trigger claims", "another", "and another"} {
+		if _, err := s.Prompt(ctx, openresponses.UserText(p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.mu.Lock()
+	seen := userTexts(m.last)
+	m.mu.Unlock()
+	joined := strings.Join(seen, "\n\x00")
+	for _, want := range []string{"Review internal/box tool for races; start with internal/box.", "Review PR 456 for the error paths."} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the last request lost the request %q: it carries %q", want, seen)
+		}
 	}
 }

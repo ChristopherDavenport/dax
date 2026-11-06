@@ -44,9 +44,11 @@ versions may break flags and the config file.
 - Changed: a compaction keeps verbatim the messages the record holds as
   yours (agentturn's fold, agentkit v0.0.17), up to 8 KiB each and the
   newest of them up to a quarter of the budget in all, and `-p`'s
-  prompt; where dax pinned every user message it did not know to be a
-  `!` command's output, whoever sent it. A message dax composed (a
-  template's, an MCP prompt's) is now folded like the rest (#173).
+  prompt and the request a prompt template or an MCP prompt sends,
+  which are not your words but are what you chose to send; where dax
+  pinned every user message it did not know to be a `!` command's
+  output, whoever sent it. Another message dax composed (an `AGENTS.md`
+  below the start) is now folded like the rest (#173).
 - Changed: `dax serve` lets its own token claim who typed a line
   (agentturn's `WithTriggerClaims`, under dax's scope `dax.typed`), so
   what you type and answer in `dax attach` is recorded as your words,
