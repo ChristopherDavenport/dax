@@ -121,7 +121,9 @@ versions may break flags and the config file.
   project's, the kept grants, a box's confinement) in `default`, which
   no switch touches. While a switch replaces the policy the floor
   reads the looser of the two modes, so no caller's call is decided
-  under the looser rules unfloored (#145).
+  under the looser rules unfloored. In `dontAsk`, the person's or a
+  project's `default_mode`, a caller's call that would ask is refused
+  without asking, as the session's own is (#145).
 - Fixed: `dontAsk` turned every ask rule into a deny, so a user's ask
   carve-out cancelled deny rules (a call denied in `default` could run
   in `dontAsk`), and a box's `dax:box` asks refused every `bash`,

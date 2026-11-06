@@ -233,7 +233,8 @@ func (s *Session) modeNote() openresponses.Item {
 // is stricter, since the fold keeps the strictest. In default and
 // dontAsk the session's policy is the default one, so the floor adds
 // nothing there and a caller's skill grants, which live in the
-// session's engine, decide as before. A switch never touches the
+// session's engine, decide as before; in dontAsk a caller's would-ask
+// call is refused as the session's is (dontAskRefusal). A switch never touches the
 // peers' engine, so a caller's batch decided across one is decided
 // under the default mode throughout.
 func (s *Session) peerFloor(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
@@ -280,13 +281,13 @@ type dontAskProbe struct{}
 // one, while the mode is dontAsk. The rules stay default's, so a
 // carve-out lifts only what it lifts there and a box's confinement
 // still answers its own asks. A refusal is not an ask, so it holds
-// none of the batch's other calls. An A2A caller's call is held to the
-// default mode (peerFloor), and so is asked as there.
+// none of the batch's other calls. An A2A caller's call is refused
+// too: a caller is held to the stricter of default and the person's
+// mode (peerFloor below default, this hook in dontAsk), so a person who
+// asked for nothing to ask, or a project's default_mode dontAsk, is
+// not asked on a caller's behalf.
 func (s *Session) dontAskRefusal(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	if s.modes.current() != policy.ModeDontAsk || ctx.Value(dontAskProbe{}) != nil {
-		return nil, nil
-	}
-	if _, peer := ctx.Value(peerKey{}).(string); peer {
 		return nil, nil
 	}
 	eng := s.Kit.Engine()

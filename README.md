@@ -1232,8 +1232,9 @@ client, which moves to the next of `default`, `acceptEdits` and
 | `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. The rules are `default`'s, so a carve-out lifts no more than it does there, and in a box under `box.confine` a confined call still runs. It is what `-p` does with every question once its input ends |
 | `bypassPermissions` | nothing asks: what no deny rule refuses runs. The asks become allows and the fallback is set aside, so under `"fallback": "deny"` (yours or a project's) a call no rule names runs too, as it did under `-no-policy` before modes |
 
-A mode is yours: an A2A caller of `dax serve -a2a` is held to
-`default` whatever the mode (see [Serving peers](#serving-peers-dax-serve--a2a)).
+A mode never loosens what an A2A caller of `dax serve -a2a` may do: it
+is held to the stricter of `default` and your mode (see [Serving
+peers](#serving-peers-dax-serve--a2a)).
 A deny rule, an extension's or yours, holds in every mode, and a grant
 for the session (a skill's) survives a switch. A project's
 `default_mode` may only be stricter than yours (`dontAsk`), and
@@ -1752,11 +1753,13 @@ dax serve -a2a -listen 127.0.0.1:7878
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in
   flight is refused, and the caller sends it again.
-- **Never your mode.** A conversation's calls, and its sub-agents', are
-  decided as the `default` [permission mode](#permission-modes) decides
-  them, whatever mode you started serve in or switch to: under
-  `acceptEdits`, `bypassPermissions` or `-no-policy` a caller's `write`
-  or `bash` still asks an attached view, and is refused with none. Your
+- **Never looser than `default`.** A conversation's calls, and its
+  sub-agents', are decided by the stricter of the `default`
+  [permission mode](#permission-modes) and yours: under `acceptEdits`,
+  `bypassPermissions` or `-no-policy` a caller's `write` or `bash`
+  still asks an attached view, and is refused with none; under
+  `dontAsk` (yours, or a project's `default_mode`) it is refused
+  without asking anyone. Your
   rules, the rules you kept with `A` and a box's confinement hold for
   it as for you; a grant you made for your own session (`a`) does not
   reach it. A switch never reaches a caller's run, so a batch of its

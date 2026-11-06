@@ -114,3 +114,39 @@ func TestAModeSwitchDuringAPeersRunDoesNotReachIt(t *testing.T) {
 		t.Errorf("asked %q, want both calls, the second after the switch", asked)
 	}
 }
+
+// A caller is held at least as strictly as the person: in dontAsk,
+// switched to or started in (a project's default_mode), a caller's
+// call that would ask is refused without asking an attached view
+// (#145's review, R2-M3).
+func TestAnA2ACallerIsRefusedInDontAsk(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(map[bool]string{false: "/mode dontAsk", true: "started in dontAsk"}[started], func(t *testing.T) {
+			rig := startRig(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, func(o *agent.Options) {
+				if started {
+					o.Policy.Mode = policy.ModeDontAsk
+				}
+			}, nil, false)
+			if !started {
+				if _, err := rig.sess.SetMode(t.Context(), policy.ModeDontAsk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := serveA2A(t, rig, false, t.TempDir())
+			v := &answeringView{}
+			v.attach(t, s.rig.sess, agenttool.ActionAccept)
+			if _, err := send(t, s.client(aliceToken), say("c1", "make it")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); err == nil {
+				t.Error("PEER was made")
+			}
+			if asked := v.questions(); len(asked) != 0 {
+				t.Errorf("the view was asked %q, want the call refused unasked", asked)
+			}
+			if got := strings.Join(decisions(s.session("c1")), "\n"); !strings.Contains(got, "dontAsk") {
+				t.Errorf("the conversation's decisions:\n%s\nwant dontAsk's refusal", got)
+			}
+		})
+	}
+}

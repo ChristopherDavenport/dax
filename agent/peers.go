@@ -34,8 +34,9 @@ import (
 // session.
 //
 // Its calls, and its sub-agents', are decided by the session's engine
-// held to the default permission mode (peerFloor): the person's mode,
-// at start or switched to since, never loosens them.
+// held to the stricter of the default permission mode and the person's
+// (peerFloor, dontAskRefusal): the person's mode, at start or switched
+// to since, never loosens them, and dontAsk refuses what would ask.
 //
 // The conversations share the workspace with the session, and with each
 // other, as parallel sub-agents do.
