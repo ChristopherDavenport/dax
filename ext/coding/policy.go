@@ -13,6 +13,7 @@ package coding
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
@@ -109,11 +110,34 @@ func acceptEditsRules() policy.Rules {
 	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
 }
 
+// launchers are the programs that run whatever follows them: shells,
+// interpreters (a version suffix, python3.12, included) and the
+// commands that start another (env, sudo, xargs, find's -exec ...). A
+// rule of their first words would allow any code, so "yes, always"
+// offers none for them.
+var launchers = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "mksh": true, "fish": true, "csh": true, "tcsh": true, "ash": true, "busybox": true, "pwsh": true, "powershell": true,
+	"python": true, "pypy": true, "ruby": true, "perl": true, "php": true, "node": true, "nodejs": true, "deno": true, "bun": true, "lua": true, "luajit": true, "tclsh": true, "wish": true, "Rscript": true, "julia": true, "osascript": true,
+	"awk": true, "gawk": true, "mawk": true, "nawk": true, "sed": true,
+	"env": true, "sudo": true, "doas": true, "su": true, "runuser": true, "nohup": true, "timeout": true, "nice": true, "ionice": true, "time": true, "exec": true, "eval": true, "command": true, "builtin": true,
+	"setsid": true, "stdbuf": true, "unbuffer": true, "chroot": true, "xargs": true, "parallel": true, "find": true, "watch": true, "strace": true, "ltrace": true, "gdb": true, "flock": true, "systemd-run": true, "script": true, "ssh": true,
+	"npx": true, "pnpx": true, "bunx": true, "uvx": true, "pipx": true,
+}
+
+// launcher reports whether the program word names a launcher, by its
+// base name, with or without a version suffix.
+func launcher(word string) bool {
+	base := path.Base(word)
+	return launchers[base] || launchers[strings.TrimRight(base, "0123456789.")]
+}
+
 // grantRule is the rule "yes, always" grants for a call of dax-coding's
 // tools: for bash, bash(<first two words>:*) of a line the analyzer
 // reads (tool.Analyzer's safe subset) whose stages, cd aside, all start
 // with those words, so the grant answers the whole line next time; for
-// any other tool, and any other line, none.
+// any other tool, and any other line, none. None either when the first
+// word is a launcher, an assignment, or the second word a flag: their
+// prefix would name what runs no more than the program alone does.
 func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, args json.RawMessage) string {
 	a := &tool.Analyzer{Files: env.Files, MaxFile: env.MaxReadBytes}
 	return func(ctx context.Context, name string, args json.RawMessage) string {
@@ -136,7 +160,13 @@ func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, arg
 				continue
 			}
 			p := st.Words[0]
+			if launcher(p) || strings.Contains(p, "=") {
+				return ""
+			}
 			if len(st.Words) > 1 {
+				if strings.HasPrefix(st.Words[1], "-") {
+					return ""
+				}
 				p += " " + st.Words[1]
 			}
 			if prefix != "" && p != prefix {

@@ -1258,7 +1258,11 @@ has it), for every later session there too. The rule is
 `bash(<first two words>:*)` for a command line dax's analyzer reads
 whose commands, `cd` aside, all start with those words (`go test
 ./...` offers `bash(go test:*)`, so `go test ./pkg/...` then runs
-unasked), the tool's name for an MCP server's tool, and nothing for
+unasked), but none when the first word runs whatever follows it (a
+shell, an interpreter such as `python` or `node`, or a launcher such
+as `env`, `sudo`, `xargs`, `timeout`, `find` or `npx`), is an
+assignment (`X=1 make`), or is followed by a flag (`git -c ...`, `go
+-C ...`), since such a prefix would allow any code; the tool's name for an MCP server's tool, and nothing for
 `write` or `edit` (a [mode](#permission-modes) is the way to let edits
 run). A grant ranks below every other source, so it answers only what
 asks for want of a rule: never a rule's ask (dax-coding's secret paths,
