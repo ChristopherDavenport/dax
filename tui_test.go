@@ -997,3 +997,48 @@ func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
 		t.Fatal("/quit did not end the client")
 	}
 }
+
+// wordsOf is whose words each user message on sess's path is, by its
+// text, as the record says (agentsession.WordsOf).
+func wordsOf(t *testing.T, sess *agent.Session) map[string]agentsession.Words {
+	t.Helper()
+	r, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]agentsession.Words{}
+	for _, e := range rec.Path(rec.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if m, ok := it.Item.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
+				out[m.Text()] = agentsession.WordsOf(e)
+			}
+		}
+	}
+	return out
+}
+
+// What the person types in the terminal client is recorded as their
+// words (format 0.21's trigger kind human), a prompt and a steer alike;
+// the output of a command they ran with ! is not (#183).
+func TestTheTUIRecordsTypedInputAsThePersons(t *testing.T) {
+	m := &steps{}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("!echo from-a-command\r")
+	r.waitOutput("[exit 0]")
+	r.type_("hello\r")
+	r.waitOutput("all done")
+	words := wordsOf(t, r.sess)
+	if got, ok := words["hello"]; !ok || got != agentsession.WordsPerson {
+		t.Errorf("the typed prompt is recorded as %v (found %v), want the person's: %v", got, ok, words)
+	}
+	for text, w := range words {
+		if strings.Contains(text, "from-a-command") && w == agentsession.WordsPerson {
+			t.Errorf("a command's output is recorded as the person's words: %q", text)
+		}
+	}
+	r.quit()
+}

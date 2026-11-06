@@ -99,7 +99,10 @@ func (s *Session) RunUserCommand(ctx context.Context, line string) (UserCommand,
 	if s.State().Running {
 		mode = agentturn.QueueFollowUp
 	}
-	if err := s.Queue(ctx, mode, openresponses.UserText(b.String())); err != nil {
+	// The person ran the command; its output is not their words, so
+	// it is queued under no trigger whatever the caller's context
+	// claims, and a fold does not keep it as their request.
+	if err := s.Queue(agentturn.ContextWithTrigger(ctx, agentturn.Trigger{}), mode, openresponses.UserText(b.String())); err != nil {
 		return UserCommand{}, err
 	}
 	return c, nil

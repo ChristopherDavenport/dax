@@ -223,7 +223,10 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 // refuses (a run going, an entry that leaves calls unanswered) comes
 // back as the command's error, which the view shows as it does locally.
 func attachController(ctl *control.Client, controls *remoteControls) client.Controller {
-	act := detaching(client.Direct(ctl))
+	// What the person types is claimed as theirs, as in the local
+	// client; dax serve records the claim for its own attach token
+	// alone (WithTriggerClaims), and as control for any other.
+	act := detaching(answeredBy(client.Direct(ctl), agent.AtTerminal))
 	return func(ctx context.Context, in client.Intent) error {
 		if m, ok := in.(client.ContinueFrom); ok {
 			return controls.ContinueFrom(ctx, m.EntryID)

@@ -42,6 +42,14 @@ versions may break flags and the config file.
   no bash, `bash` tells the model so as it does on this machine, where
   the call failed with the wire's error.
 
+- Changed: what you type at the REPL or in the terminal client, a
+  prompt, a steer or a note with an answer, is recorded as your words
+  (a trigger of kind `human`, source `terminal`, agentsession format
+  0.21), where only an answer to a question named you; the terminal
+  client labels it "user" rather than "user (unclaimed)". The output of
+  a `!` command is recorded under no trigger, so it never reads as
+  yours. `-p`'s prompt claims nobody (#183).
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format

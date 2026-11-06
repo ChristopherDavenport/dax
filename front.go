@@ -347,6 +347,13 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think}).Handle)()
 	abortOnInterrupt(t)
+	// What the person types here is sent as theirs: a prompt, a steer
+	// and the run their answers resume start under the trigger of the
+	// person at this terminal (agentturn.TriggerHuman), which the record
+	// writes as their words and a fold keeps verbatim. A command runs
+	// under ctx, and a message dax composes (a template's, a !
+	// command's output) is recorded as composed whatever its trigger.
+	byPerson := agentturn.ContextWithTrigger(ctx, agent.AtTerminal)
 	info := ctl.Info()
 	fmt.Fprintf(w, "%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
 	if f.info.ModelInfo != "" {
@@ -475,11 +482,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				steerText = ""
 				start(func() (*agentturn.RunEnd, error) {
 					if text != "" {
-						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 							return nil, err
 						}
 					}
-					return t.Resume(ctx)
+					return t.Resume(byPerson)
 				})
 				continue
 			case r.err != nil:
@@ -519,7 +526,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					text := userText(line)
 					switch {
 					case running:
-						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
 							fmt.Fprintln(w, "\n[typed before the question: queued as steering]")
@@ -567,11 +574,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					answers, steerText = nil, ""
 					start(func() (*agentturn.RunEnd, error) {
 						if text != "" {
-							if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+							if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 								return nil, err
 							}
 						}
-						return t.Resume(ctx, give...)
+						return t.Resume(byPerson, give...)
 					})
 				}
 				prompt()
@@ -593,7 +600,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					// A prompt template's message, sent as a typed line
 					// is, marked with the file it came from.
 					if running {
-						if err := t.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, items...); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
 							fmt.Fprintln(w, "[queued as steering]")
@@ -604,7 +611,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					// it again unmarked: were calls held, they are asked,
 					// and the REPL says the command was not sent.
 					sent, sentCommand = "", strings.Fields(line)[0]
-					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, items...) })
+					start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, items...) })
 					continue
 				}
 				if r.quit {
@@ -621,7 +628,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 			}
 			text := userText(line)
 			if running {
-				if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+				if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				} else {
 					fmt.Fprintln(w, "[queued as steering]")
@@ -629,7 +636,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				continue
 			}
 			sent, sentCommand = text, ""
-			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(text)) })
+			start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, openresponses.UserText(text)) })
 		}
 	}
 }

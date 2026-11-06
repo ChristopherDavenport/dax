@@ -241,15 +241,22 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess), agent.AtTerminal), sess, sess, opts)
 }
 
-// answeredBy is act with by named as who answered on every Reply's
-// context (agentturn.ContextWithAnswerer), which the record writes
-// beside the answer: the view holds no identity, and the front knows
-// the person at its terminal. Only a Reply carries it: a prompt's or an
-// answer's context is its run's, and an answerer there would name by
-// for any reply made with that run's event context.
+// answeredBy is act with by claimed for what the person sends: the
+// trigger of a Prompt's and a Queue's input, and of the run an Answer
+// resumes, whose notes are what they typed (agentturn.ContextWithTrigger),
+// which the record writes as their words and a fold keeps verbatim, and
+// the answerer of a Reply (agentturn.ContextWithAnswerer), which the
+// record writes beside the answer. The view holds no identity, and the
+// front knows the person at its terminal. A message dax composes and
+// sends as a line (a template's, an MCP prompt's) carries the layers it
+// came from, and is recorded as composed whatever its trigger; a slash
+// command runs outside the controller, under no claim.
 func answeredBy(act client.Controller, by agentturn.Trigger) client.Controller {
 	return func(ctx context.Context, in client.Intent) error {
-		if _, ok := in.(client.Reply); ok {
+		switch in.(type) {
+		case client.Prompt, client.Queue, client.Answer:
+			ctx = agentturn.ContextWithTrigger(ctx, by)
+		case client.Reply:
 			ctx = agentturn.ContextWithAnswerer(ctx, by)
 		}
 		return act(ctx, in)

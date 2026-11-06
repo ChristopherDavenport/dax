@@ -407,3 +407,33 @@ func TestALineTypedBeforeAQuestionDoesNotAnswerIt(t *testing.T) {
 		t.Fatalf("a line typed before the question approved the call:\n%s", out.String())
 	}
 }
+
+// What the person types at the REPL is recorded as their words (format
+// 0.21's trigger kind human); the output of a command they ran with !
+// is not (#183).
+func TestTheREPLRecordsTypedInputAsThePersons(t *testing.T) {
+	ctx := context.Background()
+	sess, _ := printSession(t, ctx, &steps{})
+	pr, pw := io.Pipe()
+	out := &syncBuf{}
+	f := &replFront{info: frontInfo{Name: "dax"}, in: bufio.NewScanner(pr), out: out}
+	done := make(chan error, 1)
+	go func() { done <- f.Run(ctx, sess) }()
+	pw.Write([]byte("!echo from-a-command\n"))
+	waitIn(t, out, "[exit 0")
+	pw.Write([]byte("hello\n"))
+	waitIn(t, out, "all done")
+	pw.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	words := wordsOf(t, sess)
+	if got, ok := words["hello"]; !ok || got != agentsession.WordsPerson {
+		t.Errorf("the typed prompt is recorded as %v (found %v), want the person's: %v", got, ok, words)
+	}
+	for text, w := range words {
+		if strings.Contains(text, "from-a-command") && w == agentsession.WordsPerson {
+			t.Errorf("a command's output is recorded as the person's words: %q", text)
+		}
+	}
+}

@@ -1730,6 +1730,14 @@ dax -repair <id>                   # rewrite a damaged log from what still reads
 `-list`, `-verify` and `-project` open the store read-only, so they work
 beside a running dax. `-sessions ""` disables recording.
 
+The record says whose words each message is. What you type at the
+REPL or in the terminal client, a prompt, a steer or a note with an
+answer, is recorded as yours (a trigger of kind `human`, source
+`terminal`). A message dax composes (a prompt template's, an MCP
+prompt's, an `AGENTS.md` below the start, the output of a `!` command)
+is recorded as composed, never as your words. `-p`'s prompt claims
+nobody: a script may have given it.
+
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
 `skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
 are read too, through the workspace. The `AGENTS.md` chain follows the
@@ -1861,7 +1869,10 @@ For a front of your own, build the session with `agent.New` and
 follow-up, answer the permissions a run stops on (`Session.Permissions`,
 `Resume`), reply to the questions asked while a call runs (the
 `agentturn.Question` events, `Reply`, after `Session.Answering`), and
-subscribe to the agent's events. Name who answered on `Reply`'s
+subscribe to the agent's events. Claim what the person typed as
+theirs on the context of `Prompt`, `Queue` and `Resume` with
+`agentturn.ContextWithTrigger(ctx, agent.AtTerminal)`, and never for a
+message the front composed. Name who answered on `Reply`'s
 context with `agentturn.ContextWithAnswerer` (`agent.AtTerminal` for
 the person at the terminal), and only for a reply that person gave:
 the record writes it beside the answer, and a reply that names nobody
