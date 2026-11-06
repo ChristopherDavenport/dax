@@ -259,7 +259,12 @@ the reads and writes a bash line's facts claim names, as one message
 recorded as composed from the file (`nestedmd.go`, read back from the
 transcript, so a resume or a fold needs no state); the sub-agents take
 the same hook (`Env.ChildBeforeTurn`), so each is given what its own
-work reaches. Of the memory tools a sub-agent has `memory_search` alone,
+work reaches. A message dax composes from someone else's text and
+sends with the person's line, an MCP server's prompt (`/mcp__S__P`) or
+a resource the line mentions (`@S:uri`, `agent/mcpresource.go`), is
+marked with agentturn's `WithProvenance`: the prompt or the resource as
+its instructions layer, and untrusted, so the record never reads a
+server's text as the person's words. Of the memory tools a sub-agent has `memory_search` alone,
 dax-memory's `SubagentTools`; nothing else of an extension's kit tools
 reaches it.
 

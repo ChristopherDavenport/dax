@@ -695,8 +695,17 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				continue
 			}
 			text := userText(line)
+			// The line, and the MCP resources it mentions attached.
+			items, err := typedItems(ctx, ctl, text)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				if !running {
+					prompt()
+				}
+				continue
+			}
 			if running {
-				if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+				if err := t.Queue(byPerson, agentturn.QueueSteer, items...); err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				} else {
 					fmt.Fprintln(w, "[queued as steering]")
@@ -704,7 +713,13 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				continue
 			}
 			sent, sentCommand = text, ""
-			start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, openresponses.UserText(text)) })
+			if len(items) > 1 {
+				// Its attachments are marked with where they came from,
+				// which a steer of the text would lose: were calls held,
+				// the line is not sent again.
+				sent, sentCommand = "", "the line with its @ mentions"
+			}
+			start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, items...) })
 		}
 	}
 }

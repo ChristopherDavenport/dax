@@ -415,6 +415,30 @@ type mcpPrompter interface {
 	MCPPrompt(ctx context.Context, command, args string) (openresponses.Items, error)
 }
 
+// mentioner is what an @ mention asks of the session's controls: the
+// session's own (agent.Session.MCPMentions and MCPResources), which hold
+// its servers; dax attach offers none, and its lines go as typed.
+type mentioner interface {
+	MCPMentions(ctx context.Context, text string) (openresponses.Items, error)
+	MCPResources(ctx context.Context) []agent.MCPResource
+}
+
+// typedItems is what a line the person typed sends: the line, their
+// words, and after it each MCP resource it mentions (@server:uri),
+// attached once, marked as the server's text.
+func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openresponses.Item, error) {
+	items := []openresponses.Item{openresponses.UserText(text)}
+	m, ok := ctl.(mentioner)
+	if !ok {
+		return items, nil
+	}
+	more, err := m.MCPMentions(ctx, text)
+	if err != nil {
+		return nil, errors.New(render.Clean(err.Error()))
+	}
+	return append(items, more...), nil
+}
+
 // templater is what a prompt template asks of the session's controls:
 // the session's own (agent.Session.Templates and Template), which read
 // the templates where the session runs; dax attach offers none.

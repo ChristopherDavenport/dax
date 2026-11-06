@@ -7,6 +7,13 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `@<server>:<uri>` in a typed line attaches that MCP server's
+  resource (`resources/read`) after the line, once, cut at 100 KiB,
+  recorded as composed from the resource (`instructions_part`, source
+  `dax.mcp_resource`) and untrusted, never as your words; the terminal
+  client completes `@` from the servers' resources (agentconsole's
+  `WithCompletion`). `agent.Session.MCPResources`, `MCPMentions` and
+  `agent.MCPResource` (#176).
 - Added: an `AGENTS.md` below the start directory also arrives when a
   `bash` line reads or writes in its directory (`cat svc/main.go`, a
   redirect), as the line's facts claim names, and the `explore` and

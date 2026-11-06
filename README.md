@@ -1604,6 +1604,14 @@ the input until the next line, and an error gives the line back to edit.
   that prompt (`instructions_part`, source `dax.mcp_prompt`) and marked
   untrusted: a third party's text, never words you wrote. `/help` lists
   the servers' prompts as they offer them now. `dax attach` offers none.
+- `@<server>:<uri>` in a line you type attaches that MCP server's
+  resource (`resources/read`) after your message, once however often
+  the line names it, cut at 100 KiB, recorded as composed from the
+  resource (source `dax.mcp_resource`) and untrusted, while the line
+  stays your words; content that is not text is said to be left out.
+  A name no server has is plain text. A resource that cannot be read
+  sends nothing and says why. In the terminal client `@` completes the
+  servers' resources. `dax attach` sends the line as typed.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
 - `/permissions` lists the policy in force: the mode, what a call no

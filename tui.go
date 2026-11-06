@@ -8,14 +8,15 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
-	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/extension"
@@ -276,6 +277,8 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 		o := sess.GrantOffer(ctx, p.CallID)
 		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
 	}))
+	// @ completes the MCP servers' resources as mentions.
+	opts = append(opts, console.WithCompletion(mentionCompletion(sess)))
 	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
 	// A command that opens a session (/new, /resume) ends this client,
 	// and Run enters it again over the new one.
@@ -288,6 +291,47 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 	}
 	return nil, err
 }
+
+// mentionCompletion completes a word that starts with @ from the MCP
+// servers' resources (agent.Session.MCPResources), listed again at most
+// every few seconds, since the client asks at every keystroke. A
+// mention or a help line that would carry a terminal's controls is
+// left out or cleaned: both are a server's text.
+func mentionCompletion(m mentioner) func(context.Context, console.Completing) []console.Completion {
+	var mu sync.Mutex
+	var cached []agent.MCPResource
+	var at time.Time
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		if !strings.HasPrefix(c.Word, "@") {
+			return nil
+		}
+		mu.Lock()
+		if time.Since(at) > resourcesFresh {
+			mu.Unlock()
+			list := m.MCPResources(ctx)
+			mu.Lock()
+			cached, at = list, time.Now()
+		}
+		rs := cached
+		mu.Unlock()
+		var out []console.Completion
+		for _, r := range rs {
+			if !strings.HasPrefix(r.Mention, c.Word) || render.Clean(r.Mention) != r.Mention {
+				continue
+			}
+			help := r.Name
+			if r.Description != "" {
+				help = strings.TrimSpace(help + "  " + r.Description)
+			}
+			out = append(out, console.Completion{Text: r.Mention, Help: oneLine(help, maxDescription)})
+		}
+		return out
+	}
+}
+
+// resourcesFresh is how long a listing of the servers' resources
+// completes mentions before it is asked again.
+const resourcesFresh = 5 * time.Second
 
 // switching is the session's controls with Reopen ending the client
 // that runs over it, once the session it opened is there to move to.
@@ -508,11 +552,15 @@ func submitLine(t agentturn.Control, ctl agent.Controls, quit func()) func(conte
 			}
 			return console.Submit{Reply: r.out}, err
 		}
-		item := openresponses.UserText(userText(l.Text))
-		if l.Running {
-			return console.Submit{Steer: []openresponses.Item{item}}, nil
+		// The line, and the MCP resources it mentions attached.
+		items, err := typedItems(ctx, ctl, userText(l.Text))
+		if err != nil {
+			return console.Submit{}, err
 		}
-		return console.Submit{Prompt: []openresponses.Item{item}}, nil
+		if l.Running {
+			return console.Submit{Steer: items}, nil
+		}
+		return console.Submit{Prompt: items}, nil
 	}
 }
 

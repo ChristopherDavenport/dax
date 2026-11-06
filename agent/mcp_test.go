@@ -59,6 +59,11 @@ func TestMain(m *testing.M) {
 					{Role: "user", Content: &mcp.TextContent{Text: "Review PR " + req.Params.Arguments["number"] + " for " + req.Params.Arguments["focus"] + "."}},
 				}}, nil
 			})
+		// A resource, which a user attaches with an @ mention (#176).
+		srv.AddResource(&mcp.Resource{URI: "file:///notes.txt", Name: "notes", Description: "the team's notes", MIMEType: "text/plain"},
+			func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+				return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: req.Params.URI, MIMEType: "text/plain", Text: "Deploys happen on Tuesdays."}}}, nil
+			})
 		if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 			os.Exit(1)
 		}
