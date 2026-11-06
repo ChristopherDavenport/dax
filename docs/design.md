@@ -834,7 +834,16 @@ of `Tools` is, through the kit's `LookupTool` at each decision, and
 the facts hook applies its rewrite. `BeforeToolCall` hooks fold with the
 policy, deny over ask over allow, for the main agent and, through
 `Env.ChildPolicy`, every sub-agent; with the policy off they are not
-run. `extension.Renderers` merges the extensions' renderers for the
+run. `PolicyHooks` are hooks inside the engine's own decision
+(agentpolicy's `WithHooks` and `WithAnsweringHooks`), so the main
+agent's and every sub-agent's calls, decided by the one engine, run
+them: `Decide` folds strictest-wins and is recorded with its decider;
+`Answer` may lift only an ask of rank 0 or below (the project's rules,
+the fallback), never an extension's or the user's ask, a deny, or an
+A2A caller's call (`agent/policyhooks.go`, `notForCallers`). With the
+policy off, `Decide` runs as a main-agent `BeforeToolCall`. dax-hooks
+(`ext/hooks`) is the user's own hooks over it, run on this machine
+with `Env.HostEnv`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.

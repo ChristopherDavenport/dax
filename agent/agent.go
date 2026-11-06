@@ -858,6 +858,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if err := xenv.buildSubagentTools(o.Extensions); err != nil {
 		return nil, err
 	}
+	// The extensions' hooks in the policy's decision (policyhooks.go).
+	decide, answer, err := policyHooks(o.Extensions, xenv)
+	if err != nil {
+		return nil, err
+	}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
 			continue
@@ -1001,14 +1006,24 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if s.modes.peers, err = agentpolicy.Build(pp, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), lookup}, confine...)...); err != nil {
 			return nil, err
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), agentpolicy.WithHooks(s.peerFloor, s.personOnlyRefusal, s.dontAskRefusal)}, confine...)...))
+		hooks := append([]agentpolicy.Option{
+			agentpolicy.WithAliases(a.aliases),
+			agentpolicy.WithHooks(s.peerFloor, s.personOnlyRefusal, s.dontAskRefusal),
+			agentpolicy.WithHooks(decide...),
+			agentpolicy.WithAnsweringHooks(notForCallers(answer)...),
+		}, confine...)
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, hooks...))
 		if h := a.hook(); h != nil {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
 	} else {
 		// With the policy off nothing is asked, and a caller is still
-		// refused what is the person's own.
+		// refused what is the person's own; the extensions' policy
+		// hooks still refuse or ask (Decide), with nothing to answer.
 		kopts = append(kopts, agentkit.WithBeforeToolCall(s.personOnlyRefusal))
+		for _, h := range decide {
+			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
+		}
 	}
 	// A tool's question mid-call is a question event to the fronts
 	// answering, past the session's rules (elicit).

@@ -30,6 +30,7 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/hooks"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
@@ -422,6 +423,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
 		MemoryDir: settings.MemoryDir,
 		Peers:     settings.Peers,
+		Hooks:     hookOptions(settings.Hooks),
 	})
 	if err != nil {
 		return err
@@ -1081,4 +1083,32 @@ func buildVersion(fallback string) string {
 		return bi.Main.Version
 	}
 	return fallback
+}
+
+// hookOptions are the user's hooks as dax-hooks takes them; the config's
+// check has compiled each matcher and split each command already.
+func hookOptions(h *config.Hooks) hooks.Options {
+	if h.Empty() {
+		return hooks.Options{}
+	}
+	of := func(ms []config.HookMatcher) []hooks.Matcher {
+		var out []hooks.Matcher
+		for _, m := range ms {
+			re, err := config.HookPattern(m.Matcher)
+			if err != nil {
+				continue
+			}
+			hm := hooks.Matcher{Tools: re}
+			for _, c := range m.Hooks {
+				argv, err := c.Command.Argv()
+				if err != nil || len(argv) == 0 {
+					continue
+				}
+				hm.Commands = append(hm.Commands, hooks.Command{Argv: argv, Timeout: time.Duration(c.Timeout) * time.Second})
+			}
+			out = append(out, hm)
+		}
+		return out
+	}
+	return hooks.Options{PreToolUse: of(h.PreToolUse), PostToolUse: of(h.PostToolUse)}
 }

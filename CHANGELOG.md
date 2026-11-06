@@ -7,6 +7,17 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: your own PreToolUse and PostToolUse hooks (config `hooks`, your
+  file alone), under Claude Code's protocol: exit 2 or a deny refuses a
+  call with the hook's words, ask asks, and allow answers the
+  project's or the fallback's ask, never your ask rules, a deny or an
+  A2A caller's call; PostToolUse's word reaches the model after the
+  result (#148).
+- Changed: `extension.Extension` has `PolicyHooks`, hooks inside the
+  policy engine's decision (`Decide`, folded strictest-wins; `Answer`,
+  which may lift a rank-0 ask), for every extension; `extension.Env` has
+  `HostEnv`, the environment a process started on this machine gets,
+  less the session's secrets; `ext/hooks` is public (#148).
 - Changed: `agent.Options` has `Recorder`, a recorder the caller opened,
   and `agent.HeaderOf`, `agent.SessionOptionsOf` and `agent.Build` run a
   dax configuration under agenteval's `Runner`: the run's session has

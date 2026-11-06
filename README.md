@@ -494,6 +494,7 @@ names the file and the field.
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `status` | the terminal client's status line: `{"position": "bottom", "style": "powerline", "segments": ["user", "dir", "git", "model", "context", "cost"], "colors": {"git": "cyan", "context": {"50": "yellow", "80": "red"}}}`; see [The status line](#the-status-line). Your file only |
+| `hooks` | your own PreToolUse and PostToolUse hooks, in Claude Code's settings shape: `{"PreToolUse": [{"matcher": "bash", "hooks": [{"type": "command", "command": "~/bin/no-force-push", "timeout": 10}]}]}`; see [Hooks](#hooks). `matcher` is a regular expression over dax's whole tool name (`bash`, `write|edit`, `mcp__github__.*`; empty or `*` is every tool); `command` a command line split as a shell splits words, nothing expanded (`["sh", "-c", "…"]` for a shell), or an array; `timeout` seconds, 60 by default. Other events (`Stop`, `UserPromptSubmit`) are refused by name. Not in a project file: a repository does not add code that runs |
 | `policy` | see below; `policy.default_mode` is the [permission mode](#permission-modes) a session starts in |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -1370,6 +1371,40 @@ an A2A caller's conversation is not the session's and asks), and ends
 with the session (a resumed session asks again). A kept one is the
 source `dax:saved`; delete it from the file to take it back. `dax
 attach` offers once only.
+
+### Hooks
+
+Your config's `hooks` (dax-hooks) run your own commands around each
+tool call, under Claude Code's hook protocol, so a hook written for
+Claude Code runs here: the call as JSON on standard input
+(`hook_event_name`, `cwd`, the workspace's root, `tool_name`,
+`tool_input`, `tool_use_id`, and for PostToolUse `tool_response`,
+`{"output", "error"}`), its exit status and output read back.
+
+- **PreToolUse** takes part in the policy's decision of each call it
+  matches, a sub-agent's included. Exit 2 refuses the call with the
+  hook's stderr as the reason the model reads; so does `"permissionDecision":
+  "deny"` in `hookSpecificOutput`, with its `permissionDecisionReason`.
+  `"ask"` asks about the call. `"allow"` answers the policy's own ask
+  as your yes would, but only where that ask is the project's rules'
+  or the fallback's: never your own ask rules, an extension's (dax-coding's
+  secret paths), a deny, or an [A2A caller's](#serving-peers-dax-serve--a2a)
+  call. `additionalContext` is said to the model beside the call's
+  result. Several hooks fold deny over ask over allow.
+- **PostToolUse** runs after each call of the main agent it matches.
+  Exit 2 (its stderr), `"decision": "block"` (its `reason`) and
+  `additionalContext` are said to the model after the result.
+- Any other exit status, a hook that does not start or one past its
+  `timeout` leaves the call as it was, and you are told.
+
+A hook is yours: dax reads `hooks` from your config alone, `-bare`
+leaves them out with it, and it runs on this machine whatever the
+workspace, in the directory dax started in, with the environment every
+child gets, less every secret (see
+[Environment of commands and servers](#environment-of-commands-and-servers)).
+A hook is asked once per call however often the policy decides it
+(a held call, a sibling's reading, dontAsk's probe), its answer kept
+by call ID and arguments.
 
 ## Security model
 

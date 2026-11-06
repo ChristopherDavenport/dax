@@ -165,6 +165,13 @@ type Extension struct {
 	// session's ToolEnv, as the tools are.
 	BeforeToolCall func(ToolEnv) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
 
+	// PolicyHooks are hooks the session's policy engine runs for every
+	// call it decides, the main agent's and its sub-agents' alike
+	// (agentpolicy's WithHooks and WithAnsweringHooks), built over the
+	// session as the kit options are. With the policy off, Decide alone
+	// runs, as a BeforeToolCall hook of the main agent.
+	PolicyHooks func(Env) (PolicyHooks, error)
+
 	// Instructions are added to the main agent's system prompt, after
 	// dax's role line and in the order the extensions are given, before
 	// the user's own instructions file. A sub-agent's prompt is its
@@ -200,6 +207,25 @@ type Extension struct {
 	Renderers func(dir string) toolview.Renderers
 }
 
+// PolicyHooks are an extension's hooks in the policy engine's decision
+// of a call. Either may be nil. Each must decide a call the same way
+// however often it is asked, since the engine asks again for a
+// sibling of the call being decided.
+type PolicyHooks struct {
+	// Decide is folded into the policy's decision strictest-wins, deny
+	// over ask over allow, and recorded with its decider (By): it can
+	// refuse a call or ask about it, never allow one the policy asks
+	// about or refuses.
+	Decide func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+	// Answer may answer the policy's own ask with an allow, as a
+	// person's yes would, and nothing else it returns counts. It lifts
+	// only an ask of a source of rank 0 or below, the project's rules
+	// and the fallback; never an extension's or the user's own ask
+	// rules, a deny, an ask a Decide hook raised, nor any call of an
+	// A2A caller's conversation, which is asked as before.
+	Answer func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+}
+
 // ToolEnv is what an extension's tools are built over.
 type ToolEnv struct {
 	// Workspace is where the tools act: this machine, a container or a
@@ -225,6 +251,11 @@ type Env interface {
 	ToolEnv() ToolEnv
 	// Name is the program's, dax unless it named itself.
 	Name() string
+	// HostEnv is the environment a process an extension starts on this
+	// machine gets: this process's, less every secret the session keeps
+	// from its children (SecretsOf, the model's key's variable, the MCP
+	// servers' token and secret variables) unless pass_env keeps it.
+	HostEnv() []string
 	// Dir is the directory on this machine the session started in
 	// (agent.Options.Dir); the tools act in ToolEnv().Workspace, which
 	// may be elsewhere, and the project's files are read through it,

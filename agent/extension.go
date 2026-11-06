@@ -409,6 +409,7 @@ func (e *sessionEnv) ToolOutput(ctx context.Context, ref string) ([]byte, error)
 
 func (e *sessionEnv) ToolEnv() extension.ToolEnv      { return e.te }
 func (e *sessionEnv) Name() string                    { return e.s.opts.Name }
+func (e *sessionEnv) HostEnv() []string               { return slices.Clone(e.s.env) }
 func (e *sessionEnv) Dir() string                     { return e.s.opts.Dir }
 func (e *sessionEnv) UserDir() string                 { return e.s.opts.UserDir }
 func (e *sessionEnv) Tools() []agenttool.Tool         { return e.capped(e.a.tools) }

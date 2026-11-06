@@ -45,6 +45,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/hooks"
 	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
@@ -162,6 +163,8 @@ type choice struct {
 	// Peers are dax-a2a's remote agents. dax-a2a is always built, and
 	// offers nothing without them.
 	Peers []a2a.Remote
+	// Hooks are the user's hooks: dax-hooks is built when there is one.
+	Hooks hooks.Options
 }
 
 // selected are dax's extensions as c chooses them, less those the
@@ -179,6 +182,9 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 		defaults = append(defaults, memory.New(c.MemoryDir))
 	}
 	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}))
+	if len(c.Hooks.PreToolUse) > 0 || len(c.Hooks.PostToolUse) > 0 {
+		defaults = append(defaults, hooks.New(c.Hooks))
+	}
 	return p.extensions(defaults)
 }
 

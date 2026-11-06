@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`, `ext/a2a`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`, `ext/hooks`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -127,7 +127,8 @@ before changing the shape.
   on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type (its `PersonOnly` tools, refused
-  to an A2A caller), `ToolEnv` (what tools are built over), `Env` (the
+  to an A2A caller; its `PolicyHooks`, inside the engine's decision),
+  `ToolEnv` (what tools are built over), `Env` (the
   session as kit options see it; `Caller` names an A2A caller's
   context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
@@ -189,6 +190,9 @@ before changing the shape.
   `agent/caller.go`: what an A2A caller's requests leave out of what
   the person's carry (their own AGENTS.md), after the kit's
   BeforeModelCall and in sub-agents' (`Env.ChildBeforeModelCall`).
+  `agent/policyhooks.go`: the extensions' `PolicyHooks` for the
+  engine (`WithHooks`, `WithAnsweringHooks`), an answer never an A2A
+  caller's (`notForCallers`).
   `agent/eval.go`: a session under an evaluation runner (agenteval's
   `Runner`): `HeaderOf` and `SessionOptionsOf`, the header and recorder
   options dax would write, and `Build`, the session over
@@ -240,6 +244,12 @@ before changing the shape.
   `memory_search` for the sub-agents, and `conversation_search` under
   `Env.SearchScope` (`agent/search.go`: this project's top-level
   sessions; an A2A caller none).
+- `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
+  hooks (config `hooks`, the user's layer only) under Claude Code's
+  protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and
+  arguments, so one call runs each hook once), PostToolUse through
+  `agentkit.WithAfterToolCall`; run on this machine in `Env.Dir` with
+  `Env.HostEnv`.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's
