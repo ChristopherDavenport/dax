@@ -57,6 +57,17 @@ versions may break flags and the config file.
   `!` command's output, whoever sent it. A message dax composed (a
   template's, an MCP prompt's) is now folded like the rest (#173).
 
+- Changed: `dax serve` lets its own token claim who typed a line
+  (agentturn's `WithTriggerClaims`, under dax's scope `dax.typed`), so
+  what you type and answer in `dax attach` is recorded as your words,
+  under the principal `attach`, where it was recorded as `control`. A
+  principal without the scope still runs as `control` (#183).
+- Added: `agent.Session` is an `agentturn.Deliverer` and an
+  `agentturn.Accepter` (`Deliver`, `Accept`), so the terminal client
+  and an attached view take a steer as soon as it is sent, even while a
+  quiet tool runs, rather than holding it behind the tool, and a steer
+  that misses the run's last drain starts a run of its own (#183).
+
 ## v0.0.33 - 2026-11-04
 
 - Dependencies, in one step, since agentsession v0.0.37 writes a format

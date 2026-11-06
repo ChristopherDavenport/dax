@@ -197,9 +197,9 @@ func TestASubagentsQuestionIsAnsweredWithANoteFromAnAttachedView(t *testing.T) {
 	if saw := m.sawInChild(); !strings.Contains(saw, "keep it short") || strings.Contains(saw, "The user said") {
 		t.Errorf("the sub-agent saw %q, want the user's note as theirs", saw)
 	}
-	// Who answered is the served session's principal, as front/control
-	// names it, not the attached view's terminal.
-	checkRecordedQuestion(t, s.rig.sess, "the task sub-agent asks", "write", "accept", "keep it short", agentsession.Trigger{Kind: "control", Ref: "attach"})
+	// Who answered is the person at the attached view's terminal, which
+	// serve's own token may claim (#183), under its principal's name.
+	checkRecordedQuestion(t, s.rig.sess, "the task sub-agent asks", "write", "accept", "keep it short", agentsession.Trigger{Kind: "human", Ref: "attach", Source: "terminal"})
 	r.quit()
 }
 
@@ -890,4 +890,109 @@ func bearerClient(t *testing.T, url, token string) *http.Client {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// What the person types in an attached view is recorded as their words:
+// dax serve lets its own token, which only the user holds, claim the
+// trigger (front/control's WithTriggerClaims), and attach claims kind
+// human for a typed line, as the local client does (#183).
+func TestATypedLineInAnAttachedViewIsThePersons(t *testing.T) {
+	s := startServe(t, &steps{}, policy.Rules{})
+	r := s.attach()
+	r.type_("hello from attach\r")
+	r.waitOutput("all done")
+	r.quit()
+	if got := wordsOf(t, s.rig.sess)["hello from attach"]; got != agentsession.WordsPerson {
+		t.Errorf("the attached view's typed line is recorded as %v, want the person's", got)
+	}
+}
+
+// A principal of the control without dax's scope cannot claim a person:
+// its input runs as control, naming it, whatever trigger its client put
+// on the context (#183).
+func TestAControlPrincipalWithoutTheScopeRunsAsControl(t *testing.T) {
+	s := startServe(t, &steps{}, policy.Rules{})
+	const token = "a-token-without-the-typed-scope"
+	srv := httptest.NewServer(serveControl(s.rig.sess, s.rig.dir, map[string]control.Principal{
+		token: {Name: "bot", Scopes: control.AllScopes},
+	}))
+	defer srv.Close()
+	ctl, err := control.Dial(t.Context(), srv.URL, control.WithHTTPClient(bearerClient(t, srv.URL, token)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctl.Prompt(agentturn.ContextWithTrigger(t.Context(), agent.AtTerminal), openresponses.UserText("claimed by a bot")); err != nil {
+		t.Fatal(err)
+	}
+	if got := wordsOf(t, s.rig.sess)["claimed by a bot"]; got == agentsession.WordsPerson {
+		t.Error("a principal without the scope was recorded as a person")
+	}
+	if src := sourceOf(t, s.rig.sess, "claimed by a bot"); src.Kind != "control" || src.Ref != "bot" {
+		t.Errorf("the input's source is %+v, want control naming bot", src)
+	}
+}
+
+// sourceOf is the source the record gives the user message text.
+func sourceOf(t *testing.T, sess *agent.Session, text string) agentsession.Trigger {
+	t.Helper()
+	r, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range rec.Path(rec.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if m, ok := it.Item.(*openresponses.Message); ok && m.Text() == text && it.Source != nil {
+				return *it.Source
+			}
+		}
+	}
+	return agentsession.Trigger{}
+}
+
+// The served session takes a steer as a delivery: Accept answers once
+// the steer is queued while the run is still going, so an attached view
+// steers without waiting out a tool; Deliver is served too (#183).
+func TestTheServedSessionAcceptsASteerWhileARunGoes(t *testing.T) {
+	g := &gated{steps: &steps{}, release: make(chan struct{})}
+	t.Cleanup(g.let)
+	s := startServeWith(t, g.steps, policy.Rules{}, func(o *agent.Options) { o.Streamer = g })
+	ctl, err := control.Dial(t.Context(), s.url+controlPrefix, control.WithHTTPClient(bearerClient(t, s.url, s.token)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := make(chan error, 1)
+	go func() {
+		_, err := ctl.Prompt(context.WithoutCancel(t.Context()), openresponses.UserText("go"))
+		ran <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for !s.rig.sess.State().Running {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := ctl.Accept(t.Context(), openresponses.UserText("and this too")); err != nil {
+		t.Fatalf("Accept while the run goes: %v", err)
+	}
+	if !s.rig.sess.State().Running {
+		t.Fatal("the run ended before the steer was accepted")
+	}
+	g.let()
+	if err := <-ran; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ctl.Deliver(t.Context(), openresponses.UserText("delivered")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	words := wordsOf(t, s.rig.sess)
+	for _, want := range []string{"and this too", "delivered"} {
+		if _, ok := words[want]; !ok {
+			t.Errorf("the record lacks %q: %v", want, words)
+		}
+	}
 }

@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -440,13 +441,9 @@ func makeToken(env, dir, name string) (token, file string, cleanup func(), err e
 // under a2aPath and its card, behind the A2A token peers takes, which
 // is not token. closeStore ends the record's follows.
 func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
-	ctl := control.Handler(viewed{sess},
-		control.WithAuthenticator(authn.New(map[string]control.Principal{
-			token: {Name: servePrincipal, Scopes: control.AllScopes},
-		}).Authenticator(control.ErrUnauthenticated)),
-		control.WithChallenge(authn.Challenge),
-		control.WithCommands(serveCommands(sess, sess, dir)),
-	)
+	ctl := serveControl(sess, dir, map[string]control.Principal{
+		token: {Name: servePrincipal, Scopes: append(slices.Clone(control.AllScopes), scopeTyped)},
+	})
 	store := remote.NewHandler(sess.Recorder().Store(),
 		remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
@@ -461,6 +458,28 @@ func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf 
 		peers.mount(mux)
 	}
 	return mux, func() { store.Close() }
+}
+
+// scopeTyped is the scope that lets a principal claim the trigger its
+// input runs under (front/control's WithTriggerClaims): the person's
+// own attached client claims kind human for what they type, which the
+// record then writes as their words. dax serve grants it on its own
+// token alone, which only the user holds; an A2A caller, behind a token
+// of its own on front/a2a, never reaches the control, and a principal
+// without it runs as control, naming itself. Who is at a client is
+// dax's to decide, not the library's.
+const scopeTyped control.Scope = "dax.typed"
+
+// serveControl is the session's control behind principals: agentturn's
+// front/control over the session as it is viewed, with dax's commands,
+// a principal holding scopeTyped claiming its own trigger.
+func serveControl(sess *agent.Session, dir string, principals map[string]control.Principal) http.Handler {
+	return control.Handler(viewed{sess},
+		control.WithAuthenticator(authn.New(principals).Authenticator(control.ErrUnauthenticated)),
+		control.WithChallenge(authn.Challenge),
+		control.WithCommands(serveCommands(sess, sess, dir)),
+		control.WithTriggerClaims(scopeTyped),
+	)
 }
 
 // servedInfo is what the info command answers: the session's Info and

@@ -98,7 +98,8 @@ before changing the shape.
   session served behind one bearer token, on loopback or over HTTPS
   with a certificate (`-tls-cert`, `-tls-key`), its control
   (agentturn's `front/control`, `agent.Controls` and the head move as
-  named commands) and its record (agentsession's `remote`).
+  named commands; its token alone holding `scopeTyped`, which claims the
+  person's trigger) and its record (agentsession's `remote`).
   `serve_a2a.go`: `dax serve -a2a`, agentturn's `front/a2a` and its card
   beside them behind a token of their own (principal `a2a`), each A2A
   context a session of its own (`agent.Session.OpenPeer`) under the
@@ -160,7 +161,8 @@ before changing the shape.
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left
   answered on the next prompt, the questions no front here can answer
-  not asked, `Answering`), `Permissions`, `Controls`, and `Drive`, the
+  not asked, `Answering`), `Deliver` and `Accept`, `Permissions`,
+  `Controls`, and `Drive`, the
   controller that answers by rule. Nothing asks a front through a hook:
   a new question is an `agentturn.Question` event, answered with
   `Reply`. `agent/peers.go`: an A2A caller's conversation on a host

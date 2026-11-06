@@ -154,6 +154,31 @@ func (s *Session) Queue(ctx context.Context, mode agentturn.QueueMode, items ...
 	return s.ctl.Queue(ctx, mode, items...)
 }
 
+// Deliver implements agentturn.Deliverer: the items join the run in
+// flight, or start the run that takes them, each on the record as a
+// queued entry first (agentkit's Control.Deliver). While calls wait on
+// a person it starts none (agentturn.ErrInputRequired), and the Resume
+// that answers them takes the items, so a delivery never settles what
+// the policy held. A view steers through it without waiting for the
+// next prompt.
+func (s *Session) Deliver(ctx context.Context, items ...openresponses.Item) (bool, *agentturn.RunEnd, error) {
+	return s.ctl.Deliver(ctx, items...)
+}
+
+// Accept implements agentturn.Accepter: Deliver in two steps, returning
+// once the items are queued, so an attached view's steer is taken while
+// a quiet tool runs rather than held behind it (agentconsole's
+// client.Direct sends a steer through it). The run it may start goes on
+// ctx's values without its cancellation, and only Abort ends it.
+func (s *Session) Accept(ctx context.Context, items ...openresponses.Item) (*agentturn.Delivery, error) {
+	return s.ctl.Accept(ctx, items...)
+}
+
+var (
+	_ agentturn.Deliverer = (*Session)(nil)
+	_ agentturn.Accepter  = (*Session)(nil)
+)
+
 // Abort implements agentturn.Control.
 func (s *Session) Abort() { s.ctl.Abort() }
 

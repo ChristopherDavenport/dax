@@ -1525,12 +1525,18 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
   set; otherwise dax serve makes one and writes it to a file under
   `~/.dax/serve` that only you can read, removed when it stops. The
   token is never printed; attach reads it from `-token-file` or
-  `$DAX_SERVE_TOKEN`.
+  `$DAX_SERVE_TOKEN`. Its holder is you: what you type in an attached
+  view, and your answers, are recorded as your words (kind `human`,
+  source `terminal`, naming the token's principal `attach`), as at the
+  session's own terminal. Nothing else may claim that: an A2A caller
+  has a token of its own and never reaches the control.
 - **One conversation.** Every view attached to a session drives the same
   conversation: what one asks, the others show, and a permission or a
   question is answered from whichever view answers first. Questions and
-  held calls wait for whoever attaches. For independent work, fork the
-  session instead.
+  held calls wait for whoever attaches. A line typed while a run goes
+  is taken as a steer as soon as it is sent, even while a quiet tool
+  runs, and one that misses the run's last look starts a run of its
+  own. For independent work, fork the session instead.
 - **Leaving is not stopping.** `/quit` in an attached view leaves the
   session's run going; ctrl+c in a view aborts it. dax serve stops on
   ctrl+c or SIGTERM, aborting a run still going, and prints the command
@@ -1735,7 +1741,8 @@ REPL or in the terminal client, a prompt, a steer or a note with an
 answer, is recorded as yours (a trigger of kind `human`, source
 `terminal`). A message dax composes (a prompt template's, an MCP
 prompt's, an `AGENTS.md` below the start, the output of a `!` command)
-is recorded as composed, never as your words. `-p`'s prompt claims
+is recorded as composed, never as your words. So is what you type in
+`dax attach` (see [Serving a session](#serving-a-session-dax-serve-and-dax-attach)). `-p`'s prompt claims
 nobody, since a script may have given it, though a compaction keeps it
 as it keeps yours.
 
