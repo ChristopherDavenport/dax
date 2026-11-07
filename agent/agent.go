@@ -2433,12 +2433,14 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 				args = h.Args
 			}
 			set.Release(bctx)
-			if v.Action == agentturn.Defer && v.Rule == nil && (h == nil || h.Action != agentturn.Defer) {
+			if _, peer := ctx.Value(peerKey{}).(string); !peer && v.Action == agentturn.Defer && v.Rule == nil && (h == nil || h.Action != agentturn.Defer) {
 				// Asked for want of a rule: "yes, always" may be
 				// offered for it (QuestionOffer), granted to the
 				// conversation, or to the sub-agent alone when it
 				// keeps its grants (never to the conversation for
-				// want of a scope of its own).
+				// want of a scope of its own). Never for an A2A
+				// caller's sub-agent, whose conversation is not the
+				// session's, though an escalation asks the person.
 				a := askedFor{name: info.Call.Name, args: json.RawMessage(info.Call.Arguments)}
 				if extension.OwnGrants(ctx) {
 					a.scope = agentpolicy.GrantScopeFromContext(ctx)

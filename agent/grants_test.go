@@ -2,13 +2,18 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dax/extension"
 )
 
 // grantPermit approves every call it is asked about with a grant of
@@ -254,5 +259,47 @@ func TestASessionGrantReachesTheSubagents(t *testing.T) {
 				t.Error("the child's call no grant covers ran")
 			}
 		})
+	}
+}
+
+// A sub-agent's asked call offers "yes, always" in the person's session
+// only when the sub-agent is the person's: an A2A caller's sub-agent,
+// whose question an escalation may put to the person, is offered no
+// grant, since its conversation is not the session's. (#160)
+func TestACallersSubagentIsOfferedNoGrant(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Policy = confirmPolicy(t)
+	var env extension.Env
+	o.Extensions = append(slices.Clone(o.Extensions), extension.Extension{Name: "probe",
+		Kit: func(e extension.Env) ([]agentkit.Option, error) { env = e; return nil, nil }})
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	bash, ok := s.Kit.LookupTool("bash")
+	if !ok {
+		t.Fatal("no bash")
+	}
+	decide := env.ChildPolicy("task")
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"the person's", ctx, "bash(echo hello)"},
+		{"a caller's", context.WithValue(ctx, peerKey{}, "A2A caller alice"), ""},
+	} {
+		args := `{"command":"echo hello"}`
+		call := &openresponses.FunctionCall{Name: "bash", Arguments: args, CallID: "c-" + tc.name}
+		d, err := decide(tc.ctx, agentturn.ToolCallInfo{Call: call, Tool: bash, Args: json.RawMessage(args), Batch: []*openresponses.FunctionCall{call}})
+		if err != nil || d == nil || d.Action != agentturn.Defer {
+			t.Fatalf("%s: %+v, %v; want asked", tc.name, d, err)
+		}
+		q := agentturn.Question{Call: &agentturn.AskedCall{CallID: call.CallID, Name: "bash", Args: json.RawMessage(args)}}
+		if got := s.QuestionOffer(ctx, q).Rule; got != tc.want {
+			t.Errorf("%s sub-agent's question offers %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

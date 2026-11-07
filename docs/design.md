@@ -913,7 +913,9 @@ question is a grant of the offered rule (`QuestionOffer`,
 `GrantQuestion`) for the rest of the session, made under the pass's own
 grant scope: the pass runs on `extension.WithOwnGrants`, so the grant
 answers the passes' writes alone, never the main agent's (whose
-`memory_save` still asks) nor another sub-agent's. A sub-agent's
+`memory_save` still asks) nor another sub-agent's. An A2A caller's
+sub-agent's question, which an escalation may put to the person, is
+offered no grant. A sub-agent's
 "always" without that mark is the conversation's session grant, which
 reaches every sub-agent through `sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer

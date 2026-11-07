@@ -204,7 +204,8 @@ before changing the shape.
   identity, loaded as `dax:saved`), both at `policy.RankGrant`;
   `QuestionOffer` and `GrantQuestion`, a session grant offered with a
   sub-agent's asked call's question when the policy asked for want of a
-  rule (`childAsked`, filled by `childPolicy`), made under the
+  rule (`childAsked`, filled by `childPolicy`; never an A2A caller's
+  sub-agent's call), made under the
   sub-agent's own grant scope when its run keeps its grants
   (`extension.WithOwnGrants`, `grantUnder`).
   `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's

@@ -244,7 +244,8 @@ func (c *childAsked) get(callID string) (askedFor, bool) {
 // call put (a background memory pass's write among them): a rule, for
 // this session alone, only when the policy asked about the call for
 // want of one, in the words of the tool's extension (GrantRule) or the
-// tool's bare name; nothing for any other question. A session grant reaches the session's
+// tool's bare name; nothing for any other question, an A2A caller's
+// sub-agent's among them. A session grant reaches the session's
 // sub-agents (sessionGrantFor) as it does the main agent, but for a
 // sub-agent that keeps its grants (extension.WithOwnGrants), whose
 // grant is its own alone.
