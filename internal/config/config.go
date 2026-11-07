@@ -2163,7 +2163,14 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.Status = l.Status
 		}
 		if l.Hooks != nil && !l.Project {
-			s.Hooks = l.Hooks
+			h := *l.Hooks
+			h.Dir = ""
+			if l.Path != "" {
+				if abs, err := filepath.Abs(filepath.Dir(l.Path)); err == nil {
+					h.Dir = abs
+				}
+			}
+			s.Hooks = &h
 		}
 		if l.Think != nil {
 			s.Think = *l.Think

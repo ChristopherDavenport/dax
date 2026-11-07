@@ -1,6 +1,8 @@
 package config
 
 import (
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -53,5 +55,56 @@ func TestABadHooksBlockFailsWithThePath(t *testing.T) {
 				t.Fatalf("err %v, want %q with the path", err, tc.want)
 			}
 		})
+	}
+}
+
+// A hook's command runs as the user wrote it: a line through the shell,
+// as Claude Code runs it, whatever its syntax; and a program named by a
+// relative path is the one beside the user's config, never the
+// repository's (review M3 and low).
+func TestAHookCommandIsTheUsersOwn(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(t.TempDir(), "dax")
+	block := `{"hooks":{"PreToolUse":[{"hooks":[
+		{"type":"command","command":"~/bin/no-force-push"},
+		{"type":"command","command":"jq -r '.tool_input.command' | grep -q 'rm -rf' && exit 2; exit 0"},
+		{"type":"command","command":"./guard --strict \"$CLAUDE_PROJECT_DIR\""},
+		{"type":"command","command":["hooks/check", "-v"]},
+		{"type":"command","command":["~/bin/check"]},
+		{"type":"command","command":["/usr/bin/true"]}]}]}}`
+	l, err := Parse([]byte(block), filepath.Join(cfgDir, "config.json"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Resolve([]Layer{l}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type run struct {
+		shell string
+		argv  []string
+	}
+	var got []run
+	for _, c := range s.Hooks.PreToolUse[0].Hooks {
+		shell, argv, err := c.Program(s.Hooks.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, run{shell, argv})
+	}
+	want := []run{
+		{shell: "~/bin/no-force-push"},
+		{shell: "jq -r '.tool_input.command' | grep -q 'rm -rf' && exit 2; exit 0"},
+		{shell: "'" + filepath.Join(cfgDir, "guard") + "' --strict \"$CLAUDE_PROJECT_DIR\""},
+		{argv: []string{filepath.Join(cfgDir, "hooks/check"), "-v"}},
+		{argv: []string{filepath.Join(home, "bin/check")}},
+		{argv: []string{"/usr/bin/true"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hooks run as\n%q\nwant\n%q", got, want)
+	}
+	if _, _, err := (HookCommand{Type: "command", Command: s.Hooks.PreToolUse[0].Hooks[2].Command}).Program(""); err == nil {
+		t.Error("a relative program with no config directory to resolve it against was taken")
 	}
 }

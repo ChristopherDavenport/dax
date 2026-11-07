@@ -20,8 +20,19 @@
 // decision's note to the model. A PostToolUse hook runs after each call
 // of the main agent it matches: exit 2, or "decision": "block", gives
 // the model its stderr or reason after the result, and so does its
-// additionalContext. Any other failure, a timeout or another exit
-// status, is the user's to see and leaves the call as it was.
+// additionalContext.
+//
+// A command given as a line runs as Claude Code runs it, through
+// /bin/sh -c, so a pipe, && and ~ work, with CLAUDE_PROJECT_DIR set to
+// the session's directory; the call itself reaches it on standard
+// input alone. A PreToolUse hook that cannot answer (it does not
+// start, the shell cannot run its program, a signal kills it, it runs
+// past its timeout, or the call's arguments are not JSON) refuses the
+// call: a guard fails closed. Another exit status than 0 and 2 is
+// Claude Code's non-blocking error: the user is told and the call is
+// decided as if the hook had said nothing. A PostToolUse hook's
+// failure is the user's to see and leaves the result as it was. A run
+// cancelled while a hook runs kills the hook's process group at once.
 package hooks
 
 import (
@@ -33,6 +44,7 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,11 +82,30 @@ type Matcher struct {
 	Commands []Command
 }
 
-// Command is one hook: the program and its arguments, run with no
-// shell, and its time limit (zero is DefaultTimeout).
+// Command is one hook: Shell, a command line /bin/sh runs, as Claude
+// Code runs a hook's command; or Argv, the program and its arguments,
+// run with no shell. Timeout is its time limit (zero is
+// DefaultTimeout).
 type Command struct {
+	Shell   string
 	Argv    []string
 	Timeout time.Duration
+}
+
+// argv is the process c starts.
+func (c Command) argv() []string {
+	if c.Shell != "" {
+		return []string{"/bin/sh", "-c", c.Shell}
+	}
+	return c.Argv
+}
+
+// String names c in a line to the user.
+func (c Command) String() string {
+	if c.Shell != "" {
+		return c.Shell
+	}
+	return strings.Join(c.Argv, " ")
 }
 
 // New is dax-hooks over o. With no hook it adds nothing to the session.
@@ -125,11 +156,15 @@ type output struct {
 }
 
 // result is one hook's run: blocked (exit 2) with its stderr, or its
-// output read.
+// output read; or failed, when it could say nothing, with fatal set
+// when it gave no answer at all (it did not start or run to its end),
+// which refuses the call it guards.
 type result struct {
 	blocked bool
 	stderr  string
 	out     output
+	failed  string
+	fatal   bool
 }
 
 // preResult is the PreToolUse hooks' word on a call, folded: said is
@@ -176,9 +211,10 @@ func (r *runner) pre(ctx context.Context, info agentturn.ToolCallInfo) preResult
 	if len(cmds) == 0 {
 		return preResult{}
 	}
-	args := info.Args
-	if args == nil {
-		args = json.RawMessage(info.Call.Arguments)
+	args := argsOf(info.Args, info.Call.Arguments)
+	if !json.Valid(args) {
+		r.env.Log("[PreToolUse hooks: the arguments of %s are not JSON; the call is refused]", info.Call.Name)
+		return preResult{said: true, action: agentturn.Block, reason: "the call's arguments are not JSON, which a PreToolUse hook cannot read, so the call is refused"}
 	}
 	sum := sha256.Sum256(args)
 	key := info.Call.CallID + "\x00" + info.Call.Name + "\x00" + string(sum[:])
@@ -192,8 +228,14 @@ func (r *runner) pre(ctx context.Context, info agentturn.ToolCallInfo) preResult
 	var p preResult
 	var notes []string
 	for _, c := range cmds {
-		res, ok := r.run(ctx, c, in)
-		if !ok {
+		res := r.run(ctx, c, in)
+		if res.fatal {
+			// A guard that gave no answer refuses: failing open would
+			// let through the calls it is there to stop.
+			p.said, p.action, p.reason = true, agentturn.Block, "a PreToolUse hook ("+c.String()+") could not answer ("+res.failed+"), so the call is refused"
+			break
+		}
+		if res.failed != "" {
 			continue
 		}
 		if n := res.out.Specific.AdditionalContext; n != "" {
@@ -223,6 +265,11 @@ func (r *runner) pre(ctx context.Context, info agentturn.ToolCallInfo) preResult
 		p.reason = "a PreToolUse hook asks about this call"
 	}
 	p.note = strings.Join(notes, "\n")
+	if ctx.Err() != nil {
+		// A word cut short by a cancelled run is not the hooks' word on
+		// the call, which may be decided again.
+		return p
+	}
 	r.mu.Lock()
 	if _, ok := r.memo[key]; !ok {
 		r.order = append(r.order, key)
@@ -286,9 +333,10 @@ func (r *runner) after(ctx context.Context, info agentturn.ToolResultInfo) (*age
 	if len(cmds) == 0 {
 		return nil, nil
 	}
-	args := info.Args
-	if args == nil {
-		args = json.RawMessage(info.Call.Arguments)
+	args := argsOf(info.Args, info.Call.Arguments)
+	if !json.Valid(args) {
+		r.env.Log("[PostToolUse hooks: the arguments of %s are not JSON; the hooks are not run]", info.Call.Name)
+		return nil, nil
 	}
 	resp := &response{Output: info.Result.Output.String()}
 	if info.Err != nil {
@@ -297,8 +345,8 @@ func (r *runner) after(ctx context.Context, info agentturn.ToolResultInfo) (*age
 	in := input{Event: "PostToolUse", CWD: r.root(), Tool: info.Call.Name, ToolInput: args, ToolUseID: info.Call.CallID, ToolResponse: resp}
 	var said []string
 	for _, c := range cmds {
-		res, ok := r.run(ctx, c, in)
-		if !ok {
+		res := r.run(ctx, c, in)
+		if res.failed != "" {
 			continue
 		}
 		switch {
@@ -339,52 +387,92 @@ func (r *runner) root() string {
 	return r.env.Dir()
 }
 
-// run runs one hook with in on its standard input. ok is false when it
-// could not say anything: it did not start, timed out or exited with a
-// status other than 0 and 2, which the user is told.
-func (r *runner) run(ctx context.Context, c Command, in input) (result, bool) {
-	if len(c.Argv) == 0 {
-		return result{}, false
+// argsOf is a call's arguments as a hook reads them: the decoded ones,
+// else the call's, and {} for none.
+func argsOf(decoded json.RawMessage, raw string) json.RawMessage {
+	args := decoded
+	if args == nil {
+		args = json.RawMessage(raw)
+	}
+	if len(bytes.TrimSpace(args)) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return args
+}
+
+// run runs one hook with in on its standard input, in its own process
+// group, which a timeout or the run's cancellation kills whole. A
+// result that failed says why, and the user is told.
+func (r *runner) run(ctx context.Context, c Command, in input) result {
+	argv := c.argv()
+	what := "the call goes on as it was"
+	if in.Event == "PreToolUse" {
+		what = "the call is refused"
+	}
+	fail := func(fatal bool, why string) result {
+		if fatal || in.Event != "PreToolUse" {
+			r.env.Log("[%s hook %s: %s; %s]", in.Event, c, why, what)
+		} else {
+			r.env.Log("[%s hook %s: %s]", in.Event, c, why)
+		}
+		return result{failed: why, fatal: fatal}
+	}
+	if len(argv) == 0 || argv[0] == "" {
+		return fail(true, "no program")
 	}
 	data, err := json.Marshal(in)
 	if err != nil {
-		return result{}, false
+		return fail(true, "its input: "+err.Error())
 	}
 	limit := c.Timeout
 	if limit <= 0 {
 		limit = DefaultTimeout
 	}
-	// The hook is the user's, not the call's: it runs to its own limit
-	// even when the run is cancelled mid-decision, and no longer.
-	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	hctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	cmd := exec.CommandContext(hctx, c.Argv[0], c.Argv[1:]...)
+	cmd := exec.CommandContext(hctx, argv[0], argv[1:]...)
 	cmd.Dir = r.env.Dir()
-	cmd.Env = r.env.HostEnv()
+	cmd.Env = append(slices.Clone(r.env.HostEnv()), "CLAUDE_PROJECT_DIR="+r.env.Dir())
 	cmd.Stdin = bytes.NewReader(data)
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = time.Second
+	ownGroup(cmd)
 	err = cmd.Run()
-	name := strings.Join(c.Argv, " ")
+	errText := strings.TrimSpace(stderr.String())
 	var exit *exec.ExitError
 	switch {
+	case ctx.Err() != nil:
+		return fail(true, "the run was cancelled")
 	case hctx.Err() != nil:
-		r.env.Log("[%s hook %s: no answer within %s; the call goes on as it was]", in.Event, name, limit)
-		return result{}, false
+		return fail(true, "no answer within "+limit.String())
 	case errors.As(err, &exit) && exit.ExitCode() == 2:
-		return result{blocked: true, stderr: strings.TrimSpace(stderr.String())}, true
+		return result{blocked: true, stderr: errText}
+	case errors.As(err, &exit) && exit.ExitCode() == -1:
+		return fail(true, "killed: "+exit.Error())
+	case errors.As(err, &exit) && (exit.ExitCode() == 126 || exit.ExitCode() == 127):
+		// The shell's word for a program it could not find or run.
+		return fail(true, joinText("could not run its program ("+exit.Error()+")", errText))
+	case errors.As(err, &exit):
+		return fail(false, joinText(exit.Error(), errText))
 	case err != nil:
-		r.env.Log("[%s hook %s: %v: %s]", in.Event, name, err, strings.TrimSpace(stderr.String()))
-		return result{}, false
+		return fail(true, "did not start: "+err.Error())
 	}
 	var res result
 	if t := bytes.TrimSpace(stdout.Bytes()); len(t) > 0 && t[0] == '{' {
 		if err := json.Unmarshal(t, &res.out); err != nil {
-			r.env.Log("[%s hook %s: its output is not the hook's JSON: %v]", in.Event, name, err)
+			r.env.Log("[%s hook %s: its output is not the hook's JSON: %v]", in.Event, c, err)
 		}
 	}
-	return res, true
+	return res
+}
+
+// joinText is a and, when there is one, b after a colon.
+func joinText(a, b string) string {
+	if b == "" {
+		return a
+	}
+	return a + ": " + b
 }
 
 // capped is a buffer that keeps the first maxOutput bytes and drops the

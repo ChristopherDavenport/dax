@@ -256,7 +256,10 @@ before changing the shape.
   protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and
   arguments, so one call runs each hook once), PostToolUse through
   `agentkit.WithAfterToolCall`; run on this machine in `Env.Dir` with
-  `Env.HostEnv`.
+  `Env.HostEnv`, a config line through `/bin/sh -c`, in a process
+  group of its own (`proc_unix.go`); a PreToolUse hook that cannot
+  answer refuses the call. `config.HookCommand.Program` resolves a
+  relative program against the user's config directory.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's

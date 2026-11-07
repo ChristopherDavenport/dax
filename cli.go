@@ -412,6 +412,10 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
+	hookOpts, err := hookOptions(settings.Hooks)
+	if err != nil {
+		return err
+	}
 	// What the session offers the model: dax's extensions as the
 	// settings say, then the program's. They are chosen before the
 	// executor starts, whose command must not get their credentials;
@@ -423,7 +427,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
 		MemoryDir: settings.MemoryDir,
 		Peers:     settings.Peers,
-		Hooks:     hookOptions(settings.Hooks),
+		Hooks:     hookOpts,
 	})
 	if err != nil {
 		return err
@@ -1085,32 +1089,42 @@ func buildVersion(fallback string) string {
 	return fallback
 }
 
-// hookOptions are the user's hooks as dax-hooks takes them; the config's
-// check has compiled each matcher and split each command already.
-func hookOptions(h *config.Hooks) hooks.Options {
+// hookOptions are the user's hooks as dax-hooks takes them: a line run
+// by the shell, an array with no shell, a relative program the one in
+// the user's config directory; the config's check has compiled each
+// matcher already.
+func hookOptions(h *config.Hooks) (hooks.Options, error) {
 	if h.Empty() {
-		return hooks.Options{}
+		return hooks.Options{}, nil
 	}
-	of := func(ms []config.HookMatcher) []hooks.Matcher {
+	of := func(event string, ms []config.HookMatcher) ([]hooks.Matcher, error) {
 		var out []hooks.Matcher
-		for _, m := range ms {
+		for i, m := range ms {
 			re, err := config.HookPattern(m.Matcher)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("hooks.%s[%d]: %w", event, i, err)
 			}
 			hm := hooks.Matcher{Tools: re}
-			for _, c := range m.Hooks {
-				argv, err := c.Command.Argv()
-				if err != nil || len(argv) == 0 {
-					continue
+			for j, c := range m.Hooks {
+				shell, argv, err := c.Program(h.Dir)
+				if err != nil {
+					return nil, fmt.Errorf("hooks.%s[%d].hooks[%d]: %w", event, i, j, err)
 				}
-				hm.Commands = append(hm.Commands, hooks.Command{Argv: argv, Timeout: time.Duration(c.Timeout) * time.Second})
+				hm.Commands = append(hm.Commands, hooks.Command{Shell: shell, Argv: argv, Timeout: time.Duration(c.Timeout) * time.Second})
 			}
 			out = append(out, hm)
 		}
-		return out
+		return out, nil
 	}
-	return hooks.Options{PreToolUse: of(h.PreToolUse), PostToolUse: of(h.PostToolUse)}
+	pre, err := of("PreToolUse", h.PreToolUse)
+	if err != nil {
+		return hooks.Options{}, err
+	}
+	post, err := of("PostToolUse", h.PostToolUse)
+	if err != nil {
+		return hooks.Options{}, err
+	}
+	return hooks.Options{PreToolUse: pre, PostToolUse: post}, nil
 }
 
 // oauthOf is a url server's oauth block as the session takes it.

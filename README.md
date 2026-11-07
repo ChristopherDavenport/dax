@@ -496,7 +496,7 @@ names the file and the field.
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
 | `status` | the terminal client's status line: `{"position": "bottom", "style": "powerline", "segments": ["user", "dir", "git", "model", "context", "cost"], "colors": {"git": "cyan", "context": {"50": "yellow", "80": "red"}}}`; see [The status line](#the-status-line). Your file only |
-| `hooks` | your own PreToolUse and PostToolUse hooks, in Claude Code's settings shape: `{"PreToolUse": [{"matcher": "bash", "hooks": [{"type": "command", "command": "~/bin/no-force-push", "timeout": 10}]}]}`; see [Hooks](#hooks). `matcher` is a regular expression over dax's whole tool name (`bash`, `write|edit`, `mcp__github__.*`; empty or `*` is every tool); `command` a command line split as a shell splits words, nothing expanded (`["sh", "-c", "…"]` for a shell), or an array; `timeout` seconds, 60 by default. Other events (`Stop`, `UserPromptSubmit`) are refused by name. Not in a project file: a repository does not add code that runs |
+| `hooks` | your own PreToolUse and PostToolUse hooks, in Claude Code's settings shape: `{"PreToolUse": [{"matcher": "bash", "hooks": [{"type": "command", "command": "~/bin/no-force-push", "timeout": 10}]}]}`; see [Hooks](#hooks). `matcher` is a regular expression over dax's whole tool name (`bash`, `write|edit`, `mcp__github__.*`; empty or `*` is every tool); `command` a shell command line, run by `/bin/sh -c` as Claude Code runs it (pipes, `&&`, `~` and `$CLAUDE_PROJECT_DIR` work), or an array, the program and its arguments with no shell; a program named by a relative path (`./guard`, `hooks/check`) is the one beside your config file, never the repository's; `timeout` seconds, 60 by default. Other events (`Stop`, `UserPromptSubmit`) are refused by name. Not in a project file: a repository does not add code that runs |
 | `policy` | see below; `policy.default_mode` is the [permission mode](#permission-modes) a session starts in |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
@@ -1381,7 +1381,10 @@ tool call, under Claude Code's hook protocol, so a hook written for
 Claude Code runs here: the call as JSON on standard input
 (`hook_event_name`, `cwd`, the workspace's root, `tool_name`,
 `tool_input`, `tool_use_id`, and for PostToolUse `tool_response`,
-`{"output", "error"}`), its exit status and output read back.
+`{"output", "error"}`), its exit status and output read back. A
+`command` line runs through `/bin/sh -c`, as Claude Code's does, with
+`CLAUDE_PROJECT_DIR` set to the directory dax started in; the call
+reaches it on standard input alone, never in its command line.
 
 - **PreToolUse** takes part in the policy's decision of each call it
   matches, a sub-agent's included. Exit 2 refuses the call with the
@@ -1396,8 +1399,15 @@ Claude Code runs here: the call as JSON on standard input
 - **PostToolUse** runs after each call of the main agent it matches.
   Exit 2 (its stderr), `"decision": "block"` (its `reason`) and
   `additionalContext` are said to the model after the result.
-- Any other exit status, a hook that does not start or one past its
-  `timeout` leaves the call as it was, and you are told.
+- A PreToolUse hook that cannot answer refuses the call, with the
+  reason: one that does not start, whose program the shell cannot find
+  or run (exit 126 or 127), that a signal kills, that runs past its
+  `timeout`, or a call whose arguments are not JSON. A guard fails
+  closed, so a broken hook stops calls rather than letting them by.
+- Any other exit status (1, say) is Claude Code's non-blocking error:
+  you are told, and the call is decided as if the hook said nothing. A
+  PostToolUse hook that fails leaves the result as it was.
+- Esc or Ctrl-C during a hook kills it and every process it started.
 
 A hook is yours: dax reads `hooks` from your config alone, `-bare`
 leaves them out with it, and it runs on this machine whatever the

@@ -3,8 +3,12 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -14,6 +18,10 @@ import (
 type Hooks struct {
 	PreToolUse  []HookMatcher
 	PostToolUse []HookMatcher
+	// Dir is the directory of the config file that set the hooks, which
+	// a program named by a relative path is resolved against; Resolve
+	// sets it.
+	Dir string `json:"-"`
 }
 
 // HookEvents are the events a hooks block may name.
@@ -29,7 +37,9 @@ type HookMatcher struct {
 
 // HookCommand is one hook: a command run on this machine, given the
 // call as JSON on its standard input, within Timeout seconds (0 is
-// DefaultHookTimeout).
+// DefaultHookTimeout). A string is a shell's command line, run by
+// /bin/sh -c as Claude Code runs a hook's; an array is the program and
+// its arguments, run with no shell.
 type HookCommand struct {
 	// Type is "command", the one kind dax runs.
 	Type    string  `json:"type"`
@@ -105,11 +115,11 @@ func (h *Hooks) check() error {
 				if c.Type != "command" {
 					return fmt.Errorf(`%s.type %q: dax runs "command" hooks`, at, c.Type)
 				}
-				argv, err := c.Command.Argv()
-				if err != nil {
-					return fmt.Errorf("%s.command: %w", at, err)
-				}
-				if len(argv) == 0 || argv[0] == "" {
+				if c.Command.array {
+					if len(c.Command.argv) == 0 || c.Command.argv[0] == "" {
+						return fmt.Errorf("%s.command: no program", at)
+					}
+				} else if strings.TrimSpace(c.Command.line) == "" {
 					return fmt.Errorf("%s.command: no program", at)
 				}
 				if c.Timeout < 0 || c.Timeout > maxHookTimeout {
@@ -138,3 +148,63 @@ func HookPattern(matcher string) (*regexp.Regexp, error) {
 func (h *Hooks) Empty() bool {
 	return h == nil || len(h.PreToolUse) == 0 && len(h.PostToolUse) == 0
 }
+
+// Program is the hook as it runs: shell, the line /bin/sh runs, for a
+// string; argv, the program and its arguments, for an array. A program
+// named by a relative path (one with a slash, "./guard", "hooks/x") is
+// the one in dir, the user's config directory, never one in the
+// directory the session runs in, which is the repository's: an
+// array's first element is joined to dir, and a line whose first word
+// is such a path, a plain word, has it replaced by dir's, quoted. An
+// array's "~/" is the user's home; a line's ~ is the shell's.
+func (c HookCommand) Program(dir string) (shell string, argv []string, err error) {
+	resolve := func(p string) (string, bool, error) {
+		switch {
+		case strings.HasPrefix(p, "~/"):
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", false, fmt.Errorf("hook %q: %w", p, err)
+			}
+			return filepath.Join(home, p[2:]), true, nil
+		case filepath.IsAbs(p) || !strings.Contains(p, "/"):
+			return p, false, nil
+		case !filepath.IsAbs(dir):
+			return "", false, fmt.Errorf("hook %q: a relative program, and no config directory to find it in", p)
+		}
+		return filepath.Join(dir, p), true, nil
+	}
+	if c.Command.array {
+		argv = slices.Clone(c.Command.argv)
+		if len(argv) == 0 {
+			return "", nil, errors.New("hook: no program")
+		}
+		if argv[0], _, err = resolve(argv[0]); err != nil {
+			return "", nil, err
+		}
+		return "", argv, nil
+	}
+	line := strings.TrimLeft(c.Command.line, " \t")
+	word, rest, _ := strings.Cut(line, " ")
+	if strings.HasPrefix(word, "~") || !plainWord.MatchString(word) {
+		return line, nil, nil
+	}
+	p, changed, err := resolve(word)
+	if err != nil {
+		return "", nil, err
+	}
+	if !changed {
+		return line, nil, nil
+	}
+	if strings.Contains(p, "'") {
+		return "", nil, fmt.Errorf("hook %q: its resolved path %s has a quote", word, p)
+	}
+	shell = "'" + p + "'"
+	if rest != "" {
+		shell += " " + rest
+	}
+	return shell, nil, nil
+}
+
+// plainWord is a shell word with nothing the shell reads in it, which
+// may be replaced by another quoted.
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9._/+-]+$`)
