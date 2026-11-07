@@ -414,8 +414,10 @@ before changing the shape.
   library's `BearerTokens` or `WithBearerToken`.
 - `internal/acp`: ACP's wire, JSON-RPC 2.0 one message per line
   (`Conn`: requests both ways, notifications, a handler per message so
-  `session/cancel` reaches a running `session/prompt`), and the v1
-  messages dax sends and takes. Standard library only.
+  `session/cancel` reaches a running `session/prompt`; a line past 16
+  MiB or not JSON-RPC answered with an error and the next read; the end
+  of input cancels the handlers running), and the v1 messages dax
+  sends and takes. Standard library only.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every
   command dax runs from a line (`-executor`, MCP servers, the key

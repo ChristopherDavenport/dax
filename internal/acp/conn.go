@@ -8,6 +8,7 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -79,6 +80,9 @@ type Conn struct {
 	next    int
 	waiting map[string]chan message
 	closed  bool
+
+	// max is the longest line taken, 0 for maxMessage.
+	max int
 }
 
 // NewConn is a connection writing to w.
@@ -86,19 +90,41 @@ func NewConn(w io.Writer) *Conn {
 	return &Conn{w: w, waiting: map[string]chan message{}}
 }
 
+// maxMessage is the longest line Serve takes: a longer one is refused
+// with an error, and the connection goes on.
+const maxMessage = 16 << 20
+
 // Serve reads messages from r until it ends or ctx does, handling each
 // request and notification with h and routing each response to the
-// Request waiting on it. It waits for the handlers it started.
+// Request waiting on it. A line too long or not JSON-RPC 2.0 is
+// answered with an error, and the next is read. When r ends, the
+// Requests waiting fail with ErrClosed and the handlers' context is
+// cancelled, the editor being gone; Serve returns once they have.
 func (c *Conn) Serve(ctx context.Context, r io.Reader, h Handler) error {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var wg sync.WaitGroup
-	defer wg.Wait()
-	defer c.close()
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64<<10), 16<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
+	defer func() {
+		c.close()
+		cancel()
+		wg.Wait()
+	}()
+	max := c.max
+	if max <= 0 {
+		max = maxMessage
+	}
+	br := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, tooLong, err := readLine(br, max)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if tooLong {
+			_ = c.write(message{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: Errorf(CodeInvalidRequest, "a message longer than %d bytes", max)})
+			continue
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -153,7 +179,30 @@ func (c *Conn) Serve(ctx context.Context, r io.Reader, h Handler) error {
 			}()
 		}
 	}
-	return sc.Err()
+}
+
+// readLine is the next line of br without its line ending. A line
+// longer than max is read to its end and dropped, tooLong set. A last
+// line with no newline is a line; then io.EOF.
+func readLine(br *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
+	var buf []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		if !tooLong {
+			if len(buf)+len(bytes.TrimRight(frag, "\r\n")) > max {
+				tooLong, buf = true, nil
+			} else {
+				buf = append(buf, frag...)
+			}
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case err != nil && len(buf) == 0 && !tooLong:
+			return nil, false, err
+		}
+		return bytes.TrimRight(buf, "\r\n"), tooLong, nil
+	}
 }
 
 // close fails every Request still waiting: the editor is gone.
