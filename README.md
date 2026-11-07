@@ -358,9 +358,10 @@ sub-agent asks: ...)`); in the REPL `a` allows that rule to the passes
 for the rest of the session, and to the passes alone: the model you talk
 to still asks before its own `memory_save` (the terminal client's
 question panel offers y and n). A write you do not answer, or that
-nobody is there to answer, is not made. Under `-p` and `dax serve`
-nobody is shown a proposal, so a pass that would propose does not run,
-and you are told once. `/memory undo` reverts the latest
+nobody is there to answer, is not made. Under `-p` and `dax serve` no
+pass runs at all, `auto` or `propose`: memory is updated in the
+background only from your own interactive sessions (the terminal
+client, the REPL, an editor over ACP), and you are told once. `/memory undo` reverts the latest
 pass of this project's, entry by entry, leaving any entry changed
 since; again, the pass before. `off` is the default, since a pass
 spends your tokens. The `memory` block is your file's alone.

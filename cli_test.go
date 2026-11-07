@@ -657,3 +657,27 @@ func TestBareDoesNotReadTheUsersConfig(t *testing.T) {
 		t.Error("a run that is not bare did not read the config")
 	}
 }
+
+// Neither -p nor dax serve runs a background memory pass, auto or
+// propose: the pass is headless there, and only the person's own
+// interactive session (the terminal client, the REPL, an editor) runs
+// one. (#160)
+func TestNoBackgroundPassUnderPOrServe(t *testing.T) {
+	for _, mode := range []string{"auto", "propose"} {
+		m := config.Memory{Background: mode}
+		for _, tc := range []struct {
+			name             string
+			oneShot, serving bool
+			headless         bool
+		}{
+			{"-p", true, false, true},
+			{"serve", false, true, true},
+			{"interactive", false, false, false},
+		} {
+			b := backgroundPass(m, "sub", tc.oneShot, tc.serving)
+			if b.Headless != tc.headless || b.Mode != mode || b.Model != "sub" {
+				t.Errorf("%s %s: %+v, want headless %v", mode, tc.name, b, tc.headless)
+			}
+		}
+	}
+}

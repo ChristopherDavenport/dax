@@ -146,8 +146,8 @@ func (r *afterRuns) handle(_ context.Context, ev agentturn.Event) error {
 }
 
 // afterRunGrace is how long a closing session lets its hooks finish
-// before it ends their context: a pass after -p's one run is short, and
-// should land.
+// before it ends their context: a hook after the last run is short,
+// and should land.
 const afterRunGrace = 30 * time.Second
 
 // stop waits for the hooks running, at most afterRunGrace, then ends

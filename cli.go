@@ -430,16 +430,10 @@ func run(ctx context.Context, args []string, p program) error {
 		MaxReadBytes: settings.MaxReadBytes,
 		Agents:       settings.Agents, SubagentModel: m.SubagentName,
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
-		MemoryDir: settings.MemoryDir,
-		MemoryBackground: memory.Background{
-			Mode: settings.Memory.Background, Every: settings.Memory.BackgroundEvery,
-			MaxTokens: settings.Memory.BackgroundMaxTokens, TrivialTokens: settings.Memory.BackgroundTrivialTokens,
-			// Nobody is shown a proposal under -p or dax serve.
-			Headless: *once != "" || serving,
-			Model:    m.SubagentName,
-		},
-		Peers: settings.Peers,
-		Hooks: hookOpts,
+		MemoryDir:        settings.MemoryDir,
+		MemoryBackground: backgroundPass(settings.Memory, m.SubagentName, *once != "", serving),
+		Peers:            settings.Peers,
+		Hooks:            hookOpts,
 	})
 	if err != nil {
 		return err
@@ -1102,6 +1096,20 @@ func buildVersion(fallback string) string {
 		return bi.Main.Version
 	}
 	return fallback
+}
+
+// backgroundPass is dax-memory's background pass as the user's
+// settings ask for it, on the sub-agent model, headless under -p
+// (oneShot) and dax serve (serving): there no pass runs at all, auto or
+// propose, since memory is updated in the background only from the
+// person's own interactive sessions (#160).
+func backgroundPass(m config.Memory, model string, oneShot, serving bool) memory.Background {
+	return memory.Background{
+		Mode: m.Background, Every: m.BackgroundEvery,
+		MaxTokens: m.BackgroundMaxTokens, TrivialTokens: m.BackgroundTrivialTokens,
+		Headless: oneShot || serving,
+		Model:    model,
+	}
 }
 
 // hookOptions are the user's hooks as dax-hooks takes them: a line run

@@ -58,9 +58,10 @@ type Background struct {
 	// TrivialTokens: a run with no tool call and fewer output tokens than
 	// this starts no pass; 0 is 500.
 	TrivialTokens int
-	// Headless says nobody can be shown a proposal (-p, dax serve): a
-	// pass that would propose does not run, and the person is told
-	// once.
+	// Headless says the session is not the person's own interactive
+	// one (-p, dax serve): no pass runs at all, auto or propose, since
+	// memory is updated in the background only from the person's own
+	// sessions, and the person is told once.
 	Headless bool
 	// Model is the pass's model; "" is the main model in force.
 	Model string
@@ -117,9 +118,20 @@ func orDefault(n, d int) int {
 
 // after is the AfterRun hook: it keeps the run, and when a pass is due
 // runs it now (auto), or leaves it for the person's next prompt
-// (propose).
+// (propose); headless, it runs none.
 func (p *passer) after(ctx context.Context, run extension.Run) {
 	p.mu.Lock()
+	if p.b.Headless {
+		// Neither auto nor propose: memory is updated in the background
+		// only from the person's own interactive sessions. The note is
+		// for a run that would have started one.
+		if !p.noted && (len(run.Calls) > 0 || run.OutputTokens >= p.b.trivial()) {
+			p.noted = true
+			p.env.Log("memory: no background pass under -p or dax serve; it runs only in your own interactive sessions")
+		}
+		p.mu.Unlock()
+		return
+	}
 	if run.End != nil {
 		p.items = append(p.items, run.End.Items...)
 		if n := len(p.items); n > maxPassItems {
@@ -143,14 +155,8 @@ func (p *passer) after(ctx context.Context, run extension.Run) {
 		mode = BackgroundPropose
 	}
 	if mode != BackgroundAuto {
-		switch {
-		case !p.b.Headless:
-			// It runs when the person is back, at their next prompt.
-			p.due = true
-		case !p.noted:
-			p.noted = true
-			p.env.Log("memory: no background pass here; a pass that proposes needs someone to answer it, and nobody is asked under -p or dax serve")
-		}
+		// It runs when the person is back, at their next prompt.
+		p.due = true
 		p.mu.Unlock()
 		return
 	}

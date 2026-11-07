@@ -885,7 +885,9 @@ one annotated open-world, as dax-a2a's peers are) and its output
 tokens (`agent/afterrun.go`). It runs off the loop, under a context
 that carries the session's elicitor and that the session's close
 ends, after up to 30 seconds' wait; an A2A caller's conversation and a
-sub-agent call none. dax-memory's background pass starts there: a child
+sub-agent call none. dax-memory's background pass starts there, in the
+person's own interactive sessions alone (never under `-p` or `dax
+serve`, where `Background.Headless` runs none): a child
 the host starts through `Env.Kit` (agentkit's `StartChild`, one spawn
 ID per conversation, continued by every later pass), so it is a
 subsession of the conversation and decides under a grant scope of its

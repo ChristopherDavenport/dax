@@ -53,8 +53,9 @@ versions may break flags and the config file.
   next prompt and asks about each write as a sub-agent's call is asked;
   the REPL's `a` allows the offered rule to the passes alone for the
   rest of the session (the model you talk to still asks before its own
-  memory writes); a sub-agent's asked call gets `a` too. Under `-p` and `dax
-  serve` it does not run, and says so once (#160).
+  memory writes); a sub-agent's asked call gets `a` too. Under `-p` and
+  `dax serve` no pass runs at all, `auto` or `propose`, and dax says so
+  once (#160).
 - Changed: `extension.Extension.BeforePrompt`;
   `agent.Session.QuestionOffer` and `GrantQuestion`, "yes, always" for a
   sub-agent's asked call (#160).
