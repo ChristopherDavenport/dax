@@ -5,9 +5,11 @@ package agent
 // with a token sent to the URL's origin alone.
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -36,7 +38,8 @@ import (
 // The first dial asks the server whether it speaks streamable HTTP: a
 // POST of initialize, as the MCP transports' backwards compatibility
 // has a client do. A 4xx (but an authorization's 401 or 403, a 408 or a
-// 429) is a server of the older HTTP+SSE transport, dialled over
+// 429) followed by a GET that opens an SSE stream whose first event is
+// "endpoint" is a server of the older HTTP+SSE transport, dialled over
 // SSEClientTransport from then on, which the user is told once; any
 // other answer is streamable HTTP's, and a session the probe opened is
 // ended. Each dial is a new transport.
@@ -101,7 +104,10 @@ func (s *Session) mcpURL(ctx context.Context, m MCPServer) (mcpDial, error) {
 
 // refusesStreamable POSTs an initialize to endpoint and returns the
 // status of a 4xx that says the server does not speak streamable HTTP,
-// 0 for any other answer. A session the POST opened is ended.
+// 0 for any other answer. A 4xx says so only when a GET of endpoint
+// then opens an SSE stream whose first event is "endpoint", the old
+// transport's own greeting: a streamable server answering 400 for a
+// missing credential is not moved. A session the POST opened is ended.
 func refusesStreamable(ctx context.Context, client *http.Client, endpoint string) int {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -128,9 +134,45 @@ func refusesStreamable(ctx context.Context, client *http.Client, endpoint string
 			}
 		}
 	case code >= 400 && code < 500 && code != http.StatusUnauthorized && code != http.StatusForbidden && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests:
-		return code
+		if greetsOverSSE(ctx, client, endpoint) {
+			return code
+		}
 	}
 	return 0
+}
+
+// greetsOverSSE says whether a GET of endpoint opens an SSE stream whose
+// first event is "endpoint", within ten seconds. The stream is closed.
+func greetsOverSSE(ctx context.Context, client *http.Client, endpoint string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return false
+	}
+	sc := bufio.NewScanner(io.LimitReader(resp.Body, 64<<10))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		switch {
+		case line == "" || strings.HasPrefix(line, ":"):
+			continue
+		case strings.HasPrefix(line, "event:"):
+			return strings.TrimSpace(strings.TrimPrefix(line, "event:")) == "endpoint"
+		default:
+			// Data before any event name is a "message" event.
+			return false
+		}
+	}
+	return false
 }
 
 // originGuard holds an MCP server's requests to its origin and adds the

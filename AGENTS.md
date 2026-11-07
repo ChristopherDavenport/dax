@@ -142,7 +142,8 @@ before changing the shape.
   a `dax.mcp.restart` entry (`mcpStart`, the one path every placement
   takes): a command's in the workspace or here, one placed on the host,
   one at a URL (`agent/mcpurl.go`, its token held to the URL's origin,
-  HTTP+SSE for a server whose first `initialize` gets a 4xx;
+  HTTP+SSE for a server whose first `initialize` gets a 4xx and whose
+  GET opens an SSE stream with its `endpoint` event;
   `agent/mcpoauth.go`, an `oauth` server's sign-in through go-sdk's
   `AuthorizationCodeHandler` and mcpclient's `StoreTokens` into
   `~/.dax/mcp-tokens.json`, each save under an flock on a file beside

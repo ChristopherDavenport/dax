@@ -18,7 +18,8 @@ versions may break flags and the config file.
   its metadata names, one on this machine's loopback only for a server
   on loopback itself. Your file only (#175).
 - Added: a URL server that refuses streamable HTTP (a 4xx to its first
-  `initialize`) is reached over HTTP+SSE, and you are told once (#175).
+  `initialize`, and an SSE stream opening with its `endpoint` event to
+  a GET) is reached over HTTP+SSE, and you are told once (#175).
 - Added: your own PreToolUse and PostToolUse hooks (config `hooks`, your
   file alone), under Claude Code's protocol: exit 2 or a deny refuses a
   call with the hook's words, ask asks, and allow answers the

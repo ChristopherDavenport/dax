@@ -503,3 +503,28 @@ func TestTheCallbackPortIsHeldFromTheStart(t *testing.T) {
 	}
 	ln.Close()
 }
+
+// A 4xx to the initialize probe moves a server to HTTP+SSE only when a
+// GET then opens an SSE stream whose first event is the endpoint, as
+// the transports' backwards compatibility has a client check: a
+// streamable server that answers 400 for a missing credential stays on
+// streamable HTTP (review low 12).
+func TestOnlyAnSSEServerIsMovedToSSE(t *testing.T) {
+	streamable400 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Error(w, "no", http.StatusMethodNotAllowed)
+			return
+		}
+		http.Error(w, "missing x-api-key", http.StatusBadRequest)
+	}))
+	defer streamable400.Close()
+	if code := refusesStreamable(context.Background(), streamable400.Client(), streamable400.URL); code != 0 {
+		t.Errorf("a streamable server's 400 moved it to SSE (%d)", code)
+	}
+	srv := mcp.NewServer(&mcp.Implementation{Name: "legacy", Version: "1"}, nil)
+	legacy := httptest.NewServer(mcp.NewSSEHandler(func(*http.Request) *mcp.Server { return srv }, nil))
+	defer legacy.Close()
+	if code := refusesStreamable(context.Background(), legacy.Client(), legacy.URL); code == 0 {
+		t.Error("an HTTP+SSE server was not moved to SSE")
+	}
+}

@@ -615,8 +615,8 @@ What is not equal yet, and why:
   authorization servers its metadata names (`authGuard`; one on
   loopback only for a server on loopback), and consent
   asked only while a session opens at the terminal. A server that
-  refuses streamable HTTP's `initialize` with a 4xx is reached over
-  HTTP+SSE; that stays dax's until a second product wants it in
+  refuses streamable HTTP's `initialize` with a 4xx, and greets a GET
+  with the old transport's `endpoint` event, is reached over HTTP+SSE; that stays dax's until a second product wants it in
   mcpclient.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
