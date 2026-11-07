@@ -53,8 +53,8 @@ type modes struct {
 	// applied).
 	before string
 	// approved says an approval of the plan's exit was given since the
-	// last run started: leaving plan mode then applies act_model, not
-	// before.
+	// last run started: actModel has moved the model, and leaving plan
+	// mode puts nothing back.
 	approved bool
 	// inForce is mode, read by the decisions without the lock, which a
 	// switch holds while it replaces the policy.
@@ -128,9 +128,11 @@ func (s *Session) setMode(ctx context.Context, name, why string) (pending bool, 
 
 // actModel notes an approval in answers of the plan's exit, a call
 // plan mode asks about (modes.planAsks), pending in plan mode, and moves
-// to Options.ActModel when one is set: before the Resume that runs it,
-// since SetModel refuses a running agent; the call itself moves the
-// mode, and leaving plan mode so puts back no earlier model.
+// to the model the plan is carried out on: Options.ActModel when one is
+// set, else the model plan_model replaced (modes.before), unless the
+// person chose another in plan mode. It does so before the Resume that
+// runs the call, since SetModel refuses a running agent; the call itself
+// moves the mode, and leaving plan mode so puts back nothing more.
 func (s *Session) actModel(answers []agentturn.Answer) {
 	mode, _ := s.Mode()
 	if mode != policy.ModePlan {
@@ -144,12 +146,16 @@ func (s *Session) actModel(answers []agentturn.Answer) {
 			if a.CallID == p.Call.CallID && a.Output == nil {
 				s.modes.mu.Lock()
 				s.modes.approved = true
+				to, what := s.opts.ActModel, "act_model"
+				if to == "" && s.modes.before != "" && s.Model() == s.opts.PlanModel {
+					to, what = s.modes.before, "the model before plan mode"
+				}
 				s.modes.mu.Unlock()
-				if s.opts.ActModel == "" {
+				if to == "" {
 					return
 				}
-				if err := s.SetModel(s.opts.ActModel); err != nil {
-					fmt.Fprintf(warnings{}, "dax: act_model %s: %v\n", s.opts.ActModel, err)
+				if err := s.SetModel(to); err != nil {
+					fmt.Fprintf(warnings{}, "dax: %s %s: %v\n", what, to, err)
 				}
 				return
 			}
@@ -184,8 +190,8 @@ func (s *Session) modelBeforeRun() {
 }
 
 // leavePlan is what leaving plan mode does to the model, under
-// modes.mu: an approved exit has applied act_model (actModel) and puts
-// nothing back; any other way puts back the model plan_model replaced,
+// modes.mu: an approved exit has moved the model already (actModel:
+// act_model, or the model before plan mode) and puts nothing back; any other way puts back the model plan_model replaced,
 // before the next run, unless the person chose another since. A
 // plan_model not yet applied is not.
 func (s *Session) leavePlan() {

@@ -31,7 +31,8 @@ versions may break flags and the config file.
   and the model's `exit_plan_mode` puts its plan to you, shown whole.
   Approving it moves the session to acceptEdits (recorded as `plan
   approved`) and, with `act_model` set, to that model before the call
-  runs; `plan_model` is the model plan mode moves to, and leaving plan
+  runs (without it, back to the model you had before plan mode, unless
+  you chose another in it); `plan_model` is the model plan mode moves to, and leaving plan
   mode another way (Shift-Tab, `/mode`) puts back the model you had
   before it. Refused bare in
   every other mode, and to an A2A caller (#147).

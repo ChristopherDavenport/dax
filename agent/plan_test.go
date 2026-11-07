@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ChristopherDavenport/openresponses"
@@ -152,5 +153,77 @@ func TestLeavingPlanModeRestoresTheModel(t *testing.T) {
 	}
 	if m := s.Model(); m != "chosen" {
 		t.Errorf("a model chosen in plan mode: %q after leaving, want chosen", m)
+	}
+}
+
+// modelsSeen is scripted, keeping the model each request named.
+type modelsSeen struct {
+	scripted
+	mu     sync.Mutex
+	models []string
+}
+
+func (m *modelsSeen) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	m.models = append(m.models, req.Model)
+	m.mu.Unlock()
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+// An approved plan with plan_model set and no act_model is carried out
+// on the model the session had before plan mode, from the request after
+// the approval; a model the person chose in plan mode stays. (#147)
+func TestAnApprovedPlanWithoutActModelGoesBackToTheEarlierModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, chosen string
+	}{
+		{"back to the earlier model", ""},
+		{"the person's choice stays", "chosen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			model := &modelsSeen{scripted: scripted{calls: [][2]string{
+				{"exit_plan_mode", `{"plan":"1. add retries"}`},
+				{"write", `{"path":"c.go","content":"x"}`},
+			}}}
+			o := options(t, model)
+			o.Policy = confirmPolicy(t)
+			o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+			o.PlanModel = "plan-model"
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			main := s.Model()
+			if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+				t.Fatal(err)
+			}
+			if m := s.Model(); m != "plan-model" {
+				t.Fatalf("in plan mode: %q, want plan-model", m)
+			}
+			want := main
+			if tc.chosen != "" {
+				if err := s.SetModel(tc.chosen); err != nil {
+					t.Fatal(err)
+				}
+				want = tc.chosen
+			}
+			if _, err := promptOn(ctx, s, "add retries", func(*openresponses.FunctionCall, string) bool { return true }); err != nil {
+				t.Fatal(err)
+			}
+			if mode, _ := s.Mode(); mode != policy.ModeAcceptEdits {
+				t.Errorf("mode %q after the approval, want acceptEdits", mode)
+			}
+			if _, err := os.Stat(filepath.Join(o.Dir, "c.go")); err != nil {
+				t.Errorf("the write after the approval did not run: %v", err)
+			}
+			model.mu.Lock()
+			seen := slices.Clone(model.models)
+			model.mu.Unlock()
+			if len(seen) < 3 || seen[1] != want || seen[len(seen)-1] != want || s.Model() != want {
+				t.Errorf("requests went to %q, the session's model is %q; want %q from the approval on", seen, s.Model(), want)
+			}
+		})
 	}
 }
