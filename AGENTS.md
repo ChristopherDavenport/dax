@@ -238,7 +238,8 @@ before changing the shape.
   project's sessions for `/resume`.
   `agent/permissions.go`: `PolicyInfo`, the policy in force read from
   the engine for `Info` and `/permissions` (`permissionLines` in
-  `commands.go`).
+  `commands.go`), and the sub-agents' own grants (`grants.own`) by
+  scope.
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left

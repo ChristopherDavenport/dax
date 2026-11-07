@@ -14,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // grantPermit approves every call it is asked about with a grant of
@@ -301,5 +302,32 @@ func TestACallersSubagentIsOfferedNoGrant(t *testing.T) {
 		if got := s.QuestionOffer(ctx, q).Rule; got != tc.want {
 			t.Errorf("%s sub-agent's question offers %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// /permissions lists a sub-agent's own grant for the session (the
+// memory pass's "yes, always") with the scope it decides under, held
+// or not in the engine at the moment. (#160)
+func TestPermissionsListASubagentsOwnGrant(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	scope := s.Kit.GrantScope(ctx) + "/pass"
+	if err := s.grantUnder(ctx, scope, "memory_save"); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, g := range s.Info().Policy.Grants {
+		if g.Scope == scope && g.Source == policy.SourceSession && slices.Equal(g.Allow, []string{"memory_save"}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the grants listed %+v lack the sub-agent's memory_save under %s", s.Info().Policy.Grants, scope)
 	}
 }

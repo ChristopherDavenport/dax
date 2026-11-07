@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // PolicyInfo is the policy in force, as /permissions lists it: the
@@ -101,5 +105,14 @@ func (s *Session) policyInfo() *PolicyInfo {
 		}
 		info.Grants = append(info.Grants, g)
 	}
+	// The sub-agents' own grants for the session (the memory pass's
+	// "yes, always"), each under its scope, as granted: the engine may
+	// hold one only from the sub-agent's next decision (ownGrantsHeld).
+	s.grants.mu.Lock()
+	scopes := slices.Sorted(maps.Keys(s.grants.own))
+	for _, sc := range scopes {
+		info.Grants = append(info.Grants, PolicyGrant{Source: policy.SourceSession, Scope: sc, Allow: slices.Clone(s.grants.own[sc])})
+	}
+	s.grants.mu.Unlock()
 	return info
 }

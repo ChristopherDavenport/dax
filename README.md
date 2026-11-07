@@ -1760,7 +1760,8 @@ the input until the next line, and an error gives the line back to edit.
   rules kept with `A`) and its rules, deny, ask and allow, as the engine
   holds them (an alias such as `Read` expanded), the box's confinement
   claim, and the grant sets in force with their scope (a skill's, yours
-  for the session). `git push` ran unasked? This shows the `allow
+  for the session, and the memory pass's own `a` under the pass's
+  scope). `git push` ran unasked? This shows the `allow
   bash(git push:*)` in your config. It works during a run, and over
   `dax attach`.
 - `/mode [name]`: the permission mode, or a switch to `default`,
