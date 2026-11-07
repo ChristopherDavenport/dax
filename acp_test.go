@@ -202,6 +202,9 @@ func TestAnEditorDrivesDaxOverACP(t *testing.T) {
 	if m := e.call(acp.MethodSessionNew, acp.NewSessionRequest{CWD: filepath.Join(base, "elsewhere")}); m.Error == nil || !strings.Contains(m.Error.Message, "serves "+dir) {
 		t.Errorf("a cwd outside the start: %+v", m.Error)
 	}
+	if m := e.call(acp.MethodSessionNew, acp.NewSessionRequest{}); m.Error == nil || m.Error.Code != acp.CodeInvalidParams {
+		t.Errorf("no cwd: %+v, want refused", m.Error)
+	}
 	var created acp.NewSessionResponse
 	json.Unmarshal(e.call(acp.MethodSessionNew, acp.NewSessionRequest{CWD: dir}).Result, &created)
 	if created.SessionID != sess.ID() || created.Modes == nil || created.Modes.CurrentModeID != policy.ModeDefault {

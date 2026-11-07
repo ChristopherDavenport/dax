@@ -1871,7 +1871,8 @@ dax's other commands act on a terminal. Loading a session takes one of
 this project's top-level sessions and shows it again from the record,
 a failed call marked failed; one already open in this dax is refused,
 since two sessions would then record one conversation. The editor's working directory must be
-the one dax started in, or below it: start dax there (the editor does).
+given, and be the one dax started in or below it: start dax there (the
+editor does).
 The editor's MCP servers start only under `-trust-mcp` (`"args":
 ["-front", "acp", "-trust-mcp"]`), stdio ones alone, on this machine
 whatever the workspace, with the `env` the editor gives handed to that

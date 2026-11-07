@@ -226,11 +226,15 @@ func (s *acpServer) handle(ctx context.Context, method string, params json.RawMe
 }
 
 // checkCWD takes the directory dax started in, or one inside it, and
-// refuses any other: the settings, the project's config, MCP trust and
-// the workspace were resolved for that directory.
+// refuses any other, and none (ACP's cwd is required): the settings,
+// the project's config, MCP trust and the workspace were resolved for
+// that directory.
 func (s *acpServer) checkCWD(cwd string) error {
 	start := s.f.info.Dir
-	if cwd == "" || start == "" {
+	if cwd == "" {
+		return acp.Errorf(acp.CodeInvalidParams, "cwd is required: the absolute path of %s or a directory below it", start)
+	}
+	if start == "" {
 		return nil
 	}
 	rel, err := filepath.Rel(start, filepath.Clean(cwd))
