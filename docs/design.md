@@ -612,7 +612,8 @@ What is not equal yet, and why:
   the grant in the user's private `~/.dax/mcp-tokens.json`, never a
   workspace's; the access token held to the server's origin
   (`originGuard`), the sign-in's own requests to that origin and the
-  authorization servers its metadata names (`authGuard`), and consent
+  authorization servers its metadata names (`authGuard`; one on
+  loopback only for a server on loopback), and consent
   asked only while a session opens at the terminal. A server that
   refuses streamable HTTP's `initialize` with a 4xx is reached over
   HTTP+SSE; that stays dax's until a second product wants it in

@@ -125,7 +125,7 @@ func (s *Session) oauthHandler(ctx context.Context, m MCPServer, origin string) 
 	// A kept grant is refreshed at the token endpoint it was granted by,
 	// one the server's metadata named then, before any discovery now.
 	if rec, err := store.Load(ctx, key); err == nil && rec != nil && rec.TokenURL != "" {
-		if u, err := url.Parse(rec.TokenURL); err == nil && u.Host != "" {
+		if u, err := url.Parse(rec.TokenURL); err == nil && g.admits(u) {
 			g.name(originOf(u))
 		}
 	}
@@ -221,15 +221,40 @@ func (s *Session) consent(name string, port int) auth.AuthorizationCodeFetcher {
 // the metadata as it passes; any other request, and a redirect off
 // those origins, is refused. It adds nothing: the MCP access token is
 // never on these requests.
+//
+// An authorization server on this machine's loopback is named only by
+// a server that is on loopback itself: a hosted server's metadata
+// naming http://127.0.0.1:8080 would otherwise have dax send discovery,
+// and with go-sdk's fallback endpoints a registration and the code's
+// exchange, to whatever local service listens there.
 type authGuard struct {
-	server string
-	rt     http.RoundTripper
-	mu     sync.Mutex
-	named  map[string]bool
+	server   string
+	loopback bool // the server's own host is loopback
+	rt       http.RoundTripper
+	mu       sync.Mutex
+	named    map[string]bool
 }
 
 func newAuthGuard(serverOrigin string, rt http.RoundTripper) *authGuard {
-	return &authGuard{server: serverOrigin, rt: rt, named: map[string]bool{}}
+	g := &authGuard{server: serverOrigin, rt: rt, named: map[string]bool{}}
+	if u, err := url.Parse(serverOrigin); err == nil {
+		g.loopback = loopbackHost(u.Hostname())
+	}
+	return g
+}
+
+// admits says whether u may be an authorization server of the guard's
+// server: https, or http on loopback, and on loopback at all only when
+// the server is.
+func (g *authGuard) admits(u *url.URL) bool {
+	if u == nil || u.Host == "" {
+		return false
+	}
+	local := loopbackHost(u.Hostname())
+	if local && !g.loopback {
+		return false
+	}
+	return u.Scheme == "https" || u.Scheme == "http" && local
 }
 
 // name allows the origin o, an authorization server's.
@@ -272,7 +297,7 @@ func (g *authGuard) RoundTrip(req *http.Request) (*http.Response, error) {
 	if json.Unmarshal(body, &prm) == nil {
 		g.mu.Lock()
 		for _, a := range prm.AuthorizationServers {
-			if u, err := url.Parse(a); err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && loopbackHost(u.Hostname())) {
+			if u, err := url.Parse(a); err == nil && g.admits(u) {
 				g.named[originOf(u)] = true
 			}
 		}
@@ -292,9 +317,11 @@ func (g *authGuard) redirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// loopbackHost says whether host is this machine's loopback.
+// loopbackHost says whether host is this machine's loopback: localhost
+// and its subdomains, or a loopback address.
 func loopbackHost(host string) bool {
-	if host == "localhost" {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)

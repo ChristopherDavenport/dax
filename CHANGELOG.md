@@ -13,7 +13,8 @@ versions may break flags and the config file.
   loopback port, the grant kept in `~/.dax/mcp-tokens.json` and
   refreshed by later sessions; the access token goes to the server's
   origin alone, and the sign-in's requests to the authorization servers
-  its metadata names. Your file only (#175).
+  its metadata names, one on this machine's loopback only for a server
+  on loopback itself. Your file only (#175).
 - Added: a URL server that refuses streamable HTTP (a 4xx to its first
   `initialize`) is reached over HTTP+SSE, and you are told once (#175).
 - Added: your own PreToolUse and PostToolUse hooks (config `hooks`, your

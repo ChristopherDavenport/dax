@@ -271,6 +271,54 @@ func TestTheOAuthGuardHoldsDiscoveryToTheNamedServer(t *testing.T) {
 	}
 }
 
+// A remote server's metadata cannot send the sign-in to this machine:
+// an authorization server on a loopback host is named only by a server
+// that is itself on loopback, so a hosted server cannot make dax POST
+// a registration or a code to a local service (#175, review M1).
+func TestARemoteServerCannotNameALoopbackAuthorizationServer(t *testing.T) {
+	prmNaming := func(as ...string) http.RoundTripper {
+		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body := `{}`
+			if strings.HasPrefix(r.URL.Path, "/.well-known/oauth-protected-resource") {
+				b, _ := json.Marshal(map[string]any{"resource": "x", "authorization_servers": as})
+				body = string(b)
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+		})
+	}
+	send := func(g *authGuard, raw string) error {
+		req, _ := http.NewRequest("POST", raw, strings.NewReader(`{}`))
+		resp, err := g.RoundTrip(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+		return err
+	}
+	local := []string{"http://127.0.0.1:8080", "https://localhost:9443", "http://[::1]:7000", "https://127.0.0.2"}
+	remote := newAuthGuard("https://mcp.example:443", prmNaming(append(local, "https://as.example")...))
+	if err := send(remote, "https://mcp.example/.well-known/oauth-protected-resource/mcp"); err != nil {
+		t.Fatal(err)
+	}
+	for _, as := range local {
+		if err := send(remote, as+"/register"); err == nil {
+			t.Errorf("a remote server's metadata sent the sign-in to %s on this machine", as)
+		}
+	}
+	if err := send(remote, "https://as.example/register"); err != nil {
+		t.Errorf("the remote server's own authorization server: %v", err)
+	}
+
+	// A server on loopback may name an authorization server on loopback.
+	loop := newAuthGuard("http://127.0.0.1:3000", prmNaming("http://127.0.0.1:8080"))
+	if err := send(loop, "http://127.0.0.1:3000/.well-known/oauth-protected-resource"); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(loop, "http://127.0.0.1:8080/register"); err != nil {
+		t.Errorf("a loopback server's loopback authorization server: %v", err)
+	}
+}
+
 // A server that refuses streamable HTTP is reached over HTTP+SSE, once,
 // and the user is told (#175).
 func TestAServerThatRefusesStreamableHTTPIsReachedOverSSE(t *testing.T) {
