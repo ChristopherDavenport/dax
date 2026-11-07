@@ -418,6 +418,12 @@ func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
 
+// SetMode implements extension.Env.
+func (e *sessionEnv) SetMode(ctx context.Context, mode, reason string) error {
+	_, err := e.s.setMode(ctx, mode, reason)
+	return err
+}
+
 // Kit implements extension.Env: nil until open has built it.
 func (e *sessionEnv) Kit() *agentkit.Kit { return e.s.Kit }
 

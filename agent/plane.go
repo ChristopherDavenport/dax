@@ -100,7 +100,9 @@ func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*age
 	if slices.ContainsFunc(s.ag.State().Pending, held) {
 		return nil, ErrHeld
 	}
-	// The extensions' BeforePrompt hooks, the person being here.
+	// The model a mode switch asked for (plan_model), then the
+	// extensions' BeforePrompt hooks, the person being here.
+	s.modelBeforeRun()
 	s.promptHooks(ctx)
 	pending := s.ag.State().Pending
 	outs := make([]openresponses.Item, 0, len(pending)+len(items)+1)
@@ -119,6 +121,8 @@ func (s *Session) Resume(ctx context.Context, answers ...agentturn.Answer) (*age
 	for _, a := range answers {
 		given[a.CallID] = true
 	}
+	s.modelBeforeRun()
+	s.actModel(answers)
 	for _, p := range s.ag.State().Pending {
 		if !held(p) && !given[p.Call.CallID] {
 			answers = append(answers, agentturn.Output(answerOf(p)))

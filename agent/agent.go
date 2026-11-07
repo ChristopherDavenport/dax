@@ -206,6 +206,11 @@ type Options struct {
 	// UserDir is the user's dax directory, ~/.dax: its AGENTS.md is
 	// read before the project's.
 	UserDir string
+	// PlanModel is the model plan mode moves the session to, before
+	// the next run once the mode is entered; ActModel the one the
+	// person's approval of the plan moves it to, before the Resume that
+	// answers it. "" leaves the model as it is.
+	PlanModel, ActModel string
 	// MemoryDir is where dax-memory keeps the person's memory, which
 	// /memory undo acts on; "" with memory off.
 	MemoryDir string
@@ -1025,6 +1030,11 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		s.modes.settings, s.modes.mode = &settings, settings.Mode
 		if s.modes.mode == "" {
 			s.modes.mode = policy.ModeDefault
+		}
+		s.modes.planAsks = policy.PlanAsks(settings.Shipped)
+		if s.modes.mode == policy.ModePlan && o.PlanModel != "" {
+			// Started in plan mode: its model before the first run.
+			s.modes.model = o.PlanModel
 		}
 		s.modes.inForce.Store(s.modes.mode)
 		// The A2A callers' floor: the same rules in the default mode,
@@ -2450,7 +2460,7 @@ func (s *Session) sessionGrantFor(ctx context.Context, e *agentpolicy.Engine, in
 		return v
 	}
 	asks := v.Action == agentturn.Defer && v.Rule == nil
-	refused := v.Action == agentturn.Block && v.Reason == policy.DontAskNote
+	refused := v.Action == agentturn.Block && (v.Reason == policy.DontAskNote || v.Reason == policy.PlanNote)
 	if !asks && !refused {
 		return v
 	}

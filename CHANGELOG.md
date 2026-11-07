@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: plan mode (`/mode plan`, `-mode plan`, Shift-Tab between
+  acceptEdits and dontAsk; a project's `default_mode` may pick it):
+  reads and read-only commands run, `write` and `edit` are denied over
+  any allow, everything else that would ask is refused in plan's words,
+  and the model's `exit_plan_mode` puts its plan to you, shown whole.
+  Approving it moves the session to acceptEdits (recorded as `plan
+  approved`) and, with `act_model` set, to that model before the call
+  runs; `plan_model` is the model plan mode moves to. Refused bare in
+  every other mode, and to an A2A caller (#147).
+- Changed: `policy.ModePlan`, `policy.PlanNote`, `policy.Refuses`,
+  `policy.PlanAsks`; an extension's `ModeRules` may name any mode;
+  `extension.Env.SetMode`; `ext/plan` (dax-plan); `toolrender.Plan`;
+  `agent.Options.PlanModel` and `ActModel` (#147).
 - Added: a background memory pass after a run, your config's
   `"memory": {"background": "auto"}` or `-memory-background auto`
   (off by default; a project file cannot set it): a child agent with

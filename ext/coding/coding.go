@@ -63,10 +63,14 @@ func New(maxRead int64) extension.Extension {
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			return []agentkit.Option{agentkit.WithTools(tool.ReadOutput(env.ToolOutput))}, nil
 		},
-		Matchers:     extension.FixedMatchers(matchers()),
-		Aliases:      aliases,
-		Policy:       policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},
-		ModeRules:    map[string]policy.Rules{policy.ModeAcceptEdits: acceptEditsRules()},
+		Matchers: extension.FixedMatchers(matchers()),
+		Aliases:  aliases,
+		Policy:   policy.Rules{Allow: strings.Fields(allowRules), Ask: strings.Fields(askRules())},
+		ModeRules: map[string]policy.Rules{
+			policy.ModeAcceptEdits: acceptEditsRules(),
+			// Plan mode is for reading: no write or edit, over any allow.
+			policy.ModePlan: {Deny: []string{"write", "edit"}},
+		},
 		GrantRule:    grantRule,
 		Lifts:        lifts,
 		Instructions: instructions,

@@ -3,6 +3,7 @@ package toolrender
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -368,5 +369,29 @@ func TestTheRendererSetsAreSeparate(t *testing.T) {
 		if agents[name] == nil {
 			t.Errorf("no renderer for %s", name)
 		}
+	}
+}
+
+// exit_plan_mode's plan is drawn whole while the call waits for the
+// person, so the terminal client shows it above the permission panel,
+// and to its start once the call has ended. (#147)
+func TestThePlanIsDrawnWholeWhileItWaits(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"plan":{"type":"string"}},"required":["plan"]}`)
+	var plan []string
+	for i := 1; i <= 12; i++ {
+		plan = append(plan, fmt.Sprintf("%d. step %d", i, i))
+	}
+	args, _ := json.Marshal(map[string]string{"plan": strings.Join(plan, "\n")})
+	r := Plan()["exit_plan_mode"]
+	c := view.Call{Name: "exit_plan_mode", Args: string(args), Schema: schema, State: view.CallDeferred}
+	if h := head(r, c); !strings.Contains(h, "1. step 1") || !strings.Contains(h, "12 lines") {
+		t.Errorf("head %q", h)
+	}
+	if b, _ := r.Body(c, false); len(b) != 12 {
+		t.Errorf("waiting: %d lines, want the whole plan", len(b))
+	}
+	c.State = view.CallEnded
+	if b, _ := r.Body(c, false); len(b) != collapsedLines+1 {
+		t.Errorf("ended: %d lines, want %d and a more line", len(b), collapsedLines+1)
 	}
 }

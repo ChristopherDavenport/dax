@@ -60,7 +60,7 @@ const commandHelp = `commands:
   /mcp                      the MCP servers, where each runs and what it is for
   /mcp add <name> <command> start an MCP server; its tools from the next prompt
   /mcp remove <label>       stop an MCP server
-  /mode [name]              the permission mode, or switch to default, acceptEdits, dontAsk or bypassPermissions
+  /mode [name]              the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions
   /permissions              the rules in force, where each came from, the mode and the grants
   /skills approve <name>    let a skill the model wrote grant its allowed-tools under -trust-skills
   /memory undo              revert the latest background memory pass's changes; again for the pass before

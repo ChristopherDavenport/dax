@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`, `ext/a2a`, `ext/hooks`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -270,6 +270,13 @@ before changing the shape.
   pass due at the person's next prompt (`BeforePrompt`); `ledger.go`, the passes' ledger
   (`.dax-passes.jsonl` beside the journal) and `Undo` (`/memory undo`
   in `commands.go`).
+- `ext/plan` (dax-plan): `exit_plan_mode`, a kit tool asked about in
+  plan mode (its `ModeRules`) and denied bare in every other, the
+  person's own (`PersonOnly`); approved, it moves the session to
+  acceptEdits through `Env.SetMode` ("plan approved"). Plan mode's
+  refusal is `dontAskRefusal`'s, but for the plan's asks
+  (`policy.PlanAsks`); `plan_model`/`act_model` are `agent/mode.go`'s
+  (`modelBeforeRun`, `actModel` in `Resume`, before the run).
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
   hooks (config `hooks`, the user's layer only) under Claude Code's
   protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and

@@ -73,25 +73,26 @@ func TestACarveOutNeverLiftsADeny(t *testing.T) {
 }
 
 func TestParseModeAndStricter(t *testing.T) {
-	for in, want := range map[string]string{"default": ModeDefault, "acceptedits": ModeAcceptEdits, "acceptEdits": ModeAcceptEdits, "dontAsk": ModeDontAsk, "bypassPermissions": ModeBypass, "bypass": ModeBypass} {
+	for in, want := range map[string]string{"default": ModeDefault, "acceptedits": ModeAcceptEdits, "acceptEdits": ModeAcceptEdits, "dontAsk": ModeDontAsk, "plan": ModePlan, "bypassPermissions": ModeBypass, "bypass": ModeBypass} {
 		if got, err := ParseMode(in); err != nil || got != want {
 			t.Errorf("ParseMode(%q) = %q, %v", in, got, err)
 		}
 	}
-	if _, err := ParseMode("plan"); err == nil {
-		t.Error("plan parsed; it is dax#147's")
+	if _, err := ParseMode("planning"); err == nil {
+		t.Error("planning parsed")
 	}
-	if !Stricter(ModeDontAsk, ModeDefault) || Stricter(ModeAcceptEdits, ModeDefault) || Stricter(ModeDefault, ModeDefault) {
+	if !Stricter(ModeDontAsk, ModeDefault) || Stricter(ModeAcceptEdits, ModeDefault) || Stricter(ModeDefault, ModeDefault) ||
+		!Stricter(ModePlan, ModeDefault) || !Stricter(ModeDontAsk, ModePlan) {
 		t.Error("Stricter")
 	}
 }
 
-// Shift-Tab cycles default, acceptEdits and dontAsk; bypassPermissions
+// Shift-Tab cycles default, acceptEdits, plan and dontAsk; bypassPermissions
 // is reached only by its name (/mode, -mode, -no-policy), and the next
 // mode after it is default (#145's review, M2).
 func TestTheCycleLeavesBypassOut(t *testing.T) {
 	for from, want := range map[string]string{
-		ModeDefault: ModeAcceptEdits, ModeAcceptEdits: ModeDontAsk, ModeDontAsk: ModeDefault, ModeBypass: ModeDefault,
+		ModeDefault: ModeAcceptEdits, ModeAcceptEdits: ModePlan, ModePlan: ModeDontAsk, ModeDontAsk: ModeDefault, ModeBypass: ModeDefault,
 	} {
 		if got := NextMode(from); got != want {
 			t.Errorf("NextMode(%s) = %s, want %s", from, got, want)

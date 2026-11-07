@@ -101,11 +101,28 @@ type Shipped struct {
 	// Lifts are its tools whose asks a user's allow rule with a
 	// specifier for the same tool lifts.
 	Lifts []string
-	// Modes are the rules it adds in a mode, by the mode's name: only
-	// ModeAcceptEdits takes any. They are held to Owns as its rules
-	// are, and kept whether or not Builtin is, since the user chose the
-	// mode.
+	// Modes are the rules it adds in a mode, by the mode's name (one
+	// of Modes). They are held to Owns as its rules are, and kept
+	// whether or not Builtin is, since the user chose the mode. An ask
+	// one adds for ModePlan stays an ask there, where every other is
+	// refused (PlanAsks).
 	Modes map[string]Rules
+}
+
+// PlanAsks are the tools whose calls plan mode still asks about: those
+// the extensions' plan rules ask about (dax-plan's exit_plan_mode).
+func PlanAsks(shipped []Shipped) map[string]bool {
+	out := map[string]bool{}
+	for _, sh := range shipped {
+		rules, err := agentpolicy.ParseRules(strings.Join(sh.Modes[ModePlan].Ask, " "))
+		if err != nil {
+			continue
+		}
+		for _, r := range rules {
+			out[r.Tool] = true
+		}
+	}
+	return out
 }
 
 // Ranks of the sources: the user's config above the extensions, the
@@ -167,8 +184,8 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 			set.Allow = nil
 		}
 		for m := range sh.Modes {
-			if _, ok := strictness[m]; !ok || m != ModeAcceptEdits {
-				return agentpolicy.Policy{}, fmt.Errorf("policy extension %s: rules for mode %q: only %s takes an extension's rules", sh.Name, m, ModeAcceptEdits)
+			if _, ok := strictness[m]; !ok {
+				return agentpolicy.Policy{}, fmt.Errorf("policy extension %s: rules for mode %q: want one of %s", sh.Name, m, strings.Join(Modes, ", "))
 			}
 		}
 		if mr, ok := sh.Modes[mode]; ok {

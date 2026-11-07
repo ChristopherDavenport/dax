@@ -122,9 +122,12 @@ type Extension struct {
 	// may not be a carve-out.
 	Policy policy.Rules
 	// ModeRules are the rules the extension adds in a permission mode,
-	// by the mode's name; only policy.ModeAcceptEdits takes any:
-	// dax-coding allows write and edit there and asks about the paths
-	// that change what runs or is trusted. They are held to the
+	// by the mode's name (policy.Modes): dax-coding allows write and
+	// edit in acceptEdits, asking about the paths that change what runs
+	// or is trusted, and denies them in plan; dax-plan asks about
+	// exit_plan_mode in plan and denies it in every other mode. An ask
+	// one adds for plan stays an ask there, where every other call that
+	// would ask is refused. They are held to the
 	// extension's own tools and aliases as Policy is, and kept with
 	// "builtin": false, since the user chose the mode.
 	ModeRules map[string]policy.Rules
@@ -383,6 +386,11 @@ type Env interface {
 	Omit(o agentkit.Omission)
 	// Log is a note for the user, as the front shows them.
 	Log(format string, args ...any)
+	// SetMode puts the session in the permission mode (policy.Modes),
+	// recorded with reason, as /mode does: during a run, from its next
+	// turn. A tool the person's approval runs moves the session out of
+	// a mode this way (dax-plan's exit_plan_mode).
+	SetMode(ctx context.Context, mode, reason string) error
 	// Kit is the session's kit once it is built, and nil while the
 	// extensions' Kit options are being made: a hook that runs later,
 	// AfterRun's say, starts a child agent the host runs itself through

@@ -353,8 +353,15 @@ A permission mode is the same sources made stricter or looser as a
 whole (`policy/mode.go`): `acceptEdits` adds each extension's
 `ModeRules` for the mode (dax-coding's: write and edit allowed, protected
 and secret-looking paths asked), `dontAsk` turns every ask into a deny
-with a note and the default into a deny, `bypassPermissions` drops the
-asks and allows by default. A deny holds in every mode. The session
+with a note and the default into a deny, `plan` does the same but for
+the asks the extensions add for it (dax-plan's `exit_plan_mode`), while
+dax-coding's plan rules deny `write` and `edit`, and `bypassPermissions` drops the
+asks and allows by default. A deny holds in every mode. The person's
+approval of a plan runs `exit_plan_mode`, which moves the session to
+`acceptEdits` from the next turn (`Env.SetMode`, recorded as `plan
+approved`); `act_model` is set by the plane before the `Resume` that
+answers it, since a running agent's model cannot change, and
+`plan_model` before the first run once plan is entered. The session
 keeps the settings it built the policy from (the box's confinement
 included) and a switch rebuilds them and replaces the engine's policy
 with agentpolicy's `SetPolicy`, journaled with the mode as its reason,
@@ -642,6 +649,7 @@ own are built from the same fields a program's are:
 | dax-skills | `ext/skills` | the skill tool and catalogue; grants under `-trust-skills` |
 | dax-memory | `ext/memory` | the memory tools and block; the background pass after a run |
 | dax-a2a | `ext/a2a` | a tool per peer in the user's config; renderers; no rules |
+| dax-plan | `ext/plan` | `exit_plan_mode`, plan mode's one ask; its renderer |
 
 `dax.Main` builds dax-coding and dax-a2a always (dax-a2a offers nothing
 without peers) and the others as the settings say, less those

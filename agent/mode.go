@@ -38,7 +38,15 @@ type modes struct {
 	settings *policy.Settings // nil: the session has no policy
 	mode     string
 	pending  string
-	note     string
+	// why is the reason the pending switch is recorded with.
+	why  string
+	note string
+	// planAsks are the calls plan mode still asks about
+	// (policy.PlanAsks): the plan's exit.
+	planAsks map[string]bool
+	// model is a model to move to before the next run starts:
+	// Options.PlanModel, when plan mode was entered.
+	model string
 	// inForce is mode, read by the decisions without the lock, which a
 	// switch holds while it replaces the policy.
 	inForce atomic.Value
@@ -76,6 +84,11 @@ func (s *Session) Mode() (mode, pending string) {
 // is decided under two policies; pending says so. The model is told at
 // the next turn (modeTurn).
 func (s *Session) SetMode(ctx context.Context, name string) (pending bool, err error) {
+	return s.setMode(ctx, name, "/mode")
+}
+
+// setMode is SetMode, the switch recorded with why.
+func (s *Session) setMode(ctx context.Context, name, why string) (pending bool, err error) {
 	mode, err := policy.ParseMode(name)
 	if err != nil {
 		return false, err
@@ -86,18 +99,64 @@ func (s *Session) SetMode(ctx context.Context, name string) (pending bool, err e
 		return false, ErrNoPolicy
 	}
 	s.modes.mu.Unlock()
-	err = s.ag.WhileIdle(func() error { return s.applyMode(ctx, mode, "/mode") })
+	err = s.ag.WhileIdle(func() error { return s.applyMode(ctx, mode, why) })
 	if errors.Is(err, agentturn.ErrRunning) {
 		s.modes.mu.Lock()
 		if mode == s.modes.mode {
-			s.modes.pending = ""
+			s.modes.pending, s.modes.why = "", ""
 		} else {
-			s.modes.pending = mode
+			s.modes.pending, s.modes.why = mode, why+", at the next turn"
 		}
 		s.modes.mu.Unlock()
 		return true, nil
 	}
+	if err == nil {
+		// Plan mode's model, now that no run goes.
+		s.modelBeforeRun()
+	}
 	return false, err
+}
+
+// actModel moves to Options.ActModel when answers approve the plan's
+// exit, a call plan mode asks about (modes.planAsks), pending in plan
+// mode: before the Resume that runs it, since SetModel refuses a running
+// agent; the call itself moves the mode.
+func (s *Session) actModel(answers []agentturn.Answer) {
+	if s.opts.ActModel == "" {
+		return
+	}
+	mode, _ := s.Mode()
+	if mode != policy.ModePlan {
+		return
+	}
+	for _, p := range s.ag.State().Pending {
+		if p.Call == nil || !s.modes.planAsks[p.Call.Name] {
+			continue
+		}
+		for _, a := range answers {
+			if a.CallID == p.Call.CallID && a.Output == nil {
+				if err := s.SetModel(s.opts.ActModel); err != nil {
+					fmt.Fprintf(warnings{}, "dax: act_model %s: %v\n", s.opts.ActModel, err)
+				}
+				return
+			}
+		}
+	}
+}
+
+// modelBeforeRun moves to the model a switch asked for (plan_model),
+// before a run starts: SetModel refuses a running agent.
+func (s *Session) modelBeforeRun() {
+	s.modes.mu.Lock()
+	m := s.modes.model
+	s.modes.model = ""
+	s.modes.mu.Unlock()
+	if m == "" {
+		return
+	}
+	if err := s.SetModel(m); err != nil {
+		fmt.Fprintf(warnings{}, "dax: plan_model %s: %v\n", m, err)
+	}
 }
 
 // NextMode moves to the mode after the one in force, or after the one
@@ -117,7 +176,7 @@ func (s *Session) NextMode(ctx context.Context) (string, error) {
 func (s *Session) applyMode(ctx context.Context, mode, why string) error {
 	s.modes.mu.Lock()
 	defer s.modes.mu.Unlock()
-	s.modes.pending = ""
+	s.modes.pending, s.modes.why = "", ""
 	if mode == s.modes.mode {
 		return nil
 	}
@@ -153,6 +212,10 @@ func (s *Session) applyMode(ctx context.Context, mode, why string) error {
 	s.modes.inForce.Store(mode)
 	s.modes.mode, s.modes.settings.Mode = mode, mode
 	s.modes.note = policy.DescribeMode(mode)
+	if mode == policy.ModePlan && s.opts.PlanModel != "" {
+		// Applied before the next run (modelBeforeRun).
+		s.modes.model = s.opts.PlanModel
+	}
 	s.annotateMode(ctx, modeEntry{Mode: mode, From: from, Reason: why})
 	return nil
 }
@@ -178,12 +241,12 @@ func (s *Session) modeAtTurn(ctx context.Context, ev agentturn.Event) error {
 		return nil
 	}
 	s.modes.mu.Lock()
-	pending := s.modes.pending
+	pending, why := s.modes.pending, s.modes.why
 	s.modes.mu.Unlock()
 	if pending == "" {
 		return nil
 	}
-	if err := s.applyMode(ctx, pending, "/mode, at the next turn"); err != nil {
+	if err := s.applyMode(ctx, pending, why); err != nil {
 		fmt.Fprintf(warnings{}, "dax: mode %s: %v\n", pending, err)
 	}
 	return nil
@@ -197,10 +260,10 @@ func (s *Session) modeAtTurn(ctx context.Context, ev agentturn.Event) error {
 // caller's run (PeerConfig) has the kit's BeforeTurn alone.
 func (s *Session) modeTurn(ctx context.Context, _ agentturn.TurnStartInfo) (openresponses.Items, error) {
 	s.modes.mu.Lock()
-	pending := s.modes.pending
+	pending, why := s.modes.pending, s.modes.why
 	s.modes.mu.Unlock()
 	if pending != "" {
-		if err := s.applyMode(ctx, pending, "/mode, at the next turn"); err != nil {
+		if err := s.applyMode(ctx, pending, why); err != nil {
 			fmt.Fprintf(warnings{}, "dax: mode %s: %v\n", pending, err)
 		}
 	}
@@ -307,8 +370,17 @@ type dontAskProbe struct{}
 // mode (peerFloor below default, this hook in dontAsk), so a person who
 // asked for nothing to ask, or a project's default_mode dontAsk, is
 // not asked on a caller's behalf.
+//
+// Plan mode refuses the same way, with policy.PlanNote, but for the
+// calls its own rules ask about (modes.planAsks: the plan's exit),
+// which stay asks.
 func (s *Session) dontAskRefusal(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
-	if s.modes.current() != policy.ModeDontAsk || ctx.Value(dontAskProbe{}) != nil {
+	mode := s.modes.current()
+	note, refuses := policy.Refuses(mode)
+	if !refuses || ctx.Value(dontAskProbe{}) != nil {
+		return nil, nil
+	}
+	if mode == policy.ModePlan && info.Call != nil && s.modes.planAsks[info.Call.Name] {
 		return nil, nil
 	}
 	eng := s.Kit.Engine()
@@ -322,5 +394,5 @@ func (s *Session) dontAskRefusal(ctx context.Context, info agentturn.ToolCallInf
 	if v.Action != agentturn.Defer {
 		return nil, nil
 	}
-	return &agentturn.ToolDecision{Action: agentturn.Block, Reason: policy.DontAskNote, Subject: v.Subject, By: agentpolicy.ByPolicy}, nil
+	return &agentturn.ToolDecision{Action: agentturn.Block, Reason: note, Subject: v.Subject, By: agentpolicy.ByPolicy}, nil
 }

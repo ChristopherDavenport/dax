@@ -650,7 +650,7 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 			},
 		},
 		cmdMode: {
-			Description: "the permission mode: read it, switch to one by name (default, acceptEdits, dontAsk, bypassPermissions) or to the next; during a run the switch waits for its next turn",
+			Description: "the permission mode: read it, switch to one by name (default, acceptEdits, plan, dontAsk, bypassPermissions) or to the next; during a run the switch waits for its next turn",
 			Schema:      json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"next":{"type":"boolean"}}}`),
 			Run: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
 				var a modeArgs

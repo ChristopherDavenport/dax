@@ -22,6 +22,7 @@ package dax
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +45,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/plan"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/render"
@@ -470,6 +472,10 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 	ask := func(perms []agent.Permission) {
 		for _, pm := range perms {
+			if p := planOf(pm.Call); p != "" {
+				// The plan, whole, before its question.
+				fmt.Fprintf(w, "\nplan:\n%s\n", render.Clean(p))
+			}
 			o := offerOf(ctx, ctl, pm.Call.CallID)
 			asks = append(asks, waiting{q: questionOffer(pm.Call, pm.Reason, o), call: pm.Call, offer: o})
 		}
@@ -759,6 +765,21 @@ func questionOffer(c *openresponses.FunctionCall, reason string, o agent.GrantOf
 		keys = "[y/a/N] (a: allow " + o.Rule + " for this session) "
 	}
 	return render.Clean(fmt.Sprintf("? allow %s %s%s %s", c.Name, c.Arguments, reason, keys))
+}
+
+// planOf is the plan of a call of dax-plan's exit_plan_mode, "" for any
+// other call.
+func planOf(c *openresponses.FunctionCall) string {
+	if c == nil || c.Name != plan.Tool {
+		return ""
+	}
+	var a struct {
+		Plan string `json:"plan"`
+	}
+	if json.Unmarshal([]byte(c.Arguments), &a) != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Plan)
 }
 
 // granter is what "yes, always" asks of the session's controls: the

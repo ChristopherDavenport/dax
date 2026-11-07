@@ -249,3 +249,43 @@ func plural(n int, noun, nouns string) string {
 	}
 	return fmt.Sprintf("%d %s", n, nouns)
 }
+
+// Plan is the renderer of dax-plan's exit_plan_mode: the plan, whole
+// while the call waits for the person's approval, so the terminal client
+// shows it above the permission panel, which clips the arguments to a
+// line; collapsed to its start once the call has ended.
+func Plan() toolview.Renderers {
+	return toolview.Renderers{"exit_plan_mode": planRenderer{}}
+}
+
+type planRenderer struct{}
+
+func (planRenderer) Head(c view.Call) (toolview.Line, bool) {
+	a := parseArgs(c.Args)
+	plan := strings.TrimSpace(a.str("plan"))
+	if !fits(c.Schema, "plan") || plan == "" {
+		return nil, false
+	}
+	return toolview.Line{toolview.S(toolview.Emphasis, clipTo(lines(plan)[0], headRunes)), toolview.S(toolview.Dim, " ("+plural(len(lines(plan)), "line", "lines")+")")}, true
+}
+
+func (planRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
+	if msg, failed := failure(c); failed {
+		return errorLines(msg, expanded), true
+	}
+	a := parseArgs(c.Args)
+	plan := strings.TrimSpace(a.str("plan"))
+	if plan == "" {
+		return nil, false
+	}
+	var out []toolview.Line
+	ls := lines(plan)
+	for i, l := range ls {
+		if c.State == view.CallEnded && !expanded && i == collapsedLines {
+			out = append(out, more(len(ls)-i))
+			break
+		}
+		out = append(out, toolview.Line{toolview.S(toolview.Plain, "  "+l)})
+	}
+	return out, true
+}

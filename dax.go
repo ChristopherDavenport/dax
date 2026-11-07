@@ -47,6 +47,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/ext/hooks"
 	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/ext/plan"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/render"
@@ -183,7 +184,7 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 	if c.MemoryDir != "" {
 		defaults = append(defaults, memory.New(c.MemoryDir, memory.WithBackground(c.MemoryBackground)))
 	}
-	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}))
+	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}), plan.New())
 	if len(c.Hooks.PreToolUse) > 0 || len(c.Hooks.PostToolUse) > 0 {
 		defaults = append(defaults, hooks.New(c.Hooks))
 	}

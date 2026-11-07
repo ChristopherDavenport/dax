@@ -58,6 +58,10 @@ type Config struct {
 	// Model is the provider's model name; empty takes the provider's
 	// default.
 	Model string `json:"model,omitempty"`
+	// PlanModel is the model plan mode moves to, ActModel the one the
+	// person's approval of a plan moves to; empty leaves the model.
+	PlanModel string `json:"plan_model,omitempty"`
+	ActModel  string `json:"act_model,omitempty"`
 	// SubagentModel is the model the sub-agents run; empty takes the
 	// provider's default for them, else the main model.
 	SubagentModel string `json:"subagent_model,omitempty"`
@@ -940,7 +944,7 @@ func (l *Layer) validate() error {
 			name string
 			set  bool
 		}{
-			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
+			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"plan_model", c.PlanModel != ""}, {"act_model", c.ActModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
@@ -1073,7 +1077,7 @@ func (l *Layer) validate() error {
 				return fmt.Errorf("policy.default_mode: %w", err)
 			}
 			if l.Project && policy.Stricter(policy.ModeDefault, m) {
-				return fmt.Errorf("policy.default_mode %q: a project file may only pick a stricter mode (%s)", p.DefaultMode, policy.ModeDontAsk)
+				return fmt.Errorf("policy.default_mode %q: a project file may only pick a stricter mode (%s or %s)", p.DefaultMode, policy.ModePlan, policy.ModeDontAsk)
 			}
 			p.DefaultMode = m
 		}
@@ -2080,28 +2084,31 @@ type Flags struct {
 // Settings is what dax runs with: the layers folded, the flags laid
 // over them, validated as a whole.
 type Settings struct {
-	Provider         string
-	Model            string   // empty: the provider's default
-	SubagentModel    string   // empty: the provider's default, else Model
-	BaseURL          string   // empty: the provider's default
-	APIKeyEnv        string   // empty: the openresponses provider sends no key
-	APIKeyCommand    []string // empty: the key comes from the environment
-	APIKeyLogin      string   // empty: no sign-in hint with a key error
-	SessionHeader    string   // empty: no session header on model calls
-	ClientHeader     string   // empty: no client header on model calls
-	CacheTTL         string   // empty: Claude's default, 5m
-	SubagentCacheTTL string   // empty: Claude's default, 5m
-	Think            bool
-	Effort           string // the effort Think asks for
-	Agents           bool
-	InstructionsFile string
-	SkillsDirs       []string
-	AgentsMDGlobal   []string // the user's own instruction files, absolute
-	MemoryDir        string   // empty: off; Resolve fills the default in
-	PricingFile      string   // empty: no terminal-client cost
-	Executor         []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
-	ExecutorURL      string   // where the executor serves, when it is not started here
-	ExecutorPassEnv  []string // what only the executor's command is given
+	Provider      string
+	Model         string // empty: the provider's default
+	SubagentModel string // empty: the provider's default, else Model
+	// PlanModel and ActModel are plan mode's model and the one an
+	// approved plan moves to; empty leaves the model as it is.
+	PlanModel, ActModel string
+	BaseURL             string   // empty: the provider's default
+	APIKeyEnv           string   // empty: the openresponses provider sends no key
+	APIKeyCommand       []string // empty: the key comes from the environment
+	APIKeyLogin         string   // empty: no sign-in hint with a key error
+	SessionHeader       string   // empty: no session header on model calls
+	ClientHeader        string   // empty: no client header on model calls
+	CacheTTL            string   // empty: Claude's default, 5m
+	SubagentCacheTTL    string   // empty: Claude's default, 5m
+	Think               bool
+	Effort              string // the effort Think asks for
+	Agents              bool
+	InstructionsFile    string
+	SkillsDirs          []string
+	AgentsMDGlobal      []string // the user's own instruction files, absolute
+	MemoryDir           string   // empty: off; Resolve fills the default in
+	PricingFile         string   // empty: no terminal-client cost
+	Executor            []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
+	ExecutorURL         string   // where the executor serves, when it is not started here
+	ExecutorPassEnv     []string // what only the executor's command is given
 	// Box is the box the tools run in, nil for none; the caller starts
 	// its box host and sets Executor to that command, since nothing here
 	// runs one.
@@ -2189,6 +2196,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Model != "" {
 			s.Model, s.Sources["model"], setFor["model"] = l.Model, l.Path, s.Provider
+		}
+		if l.PlanModel != "" {
+			s.PlanModel, setFor["plan_model"] = l.PlanModel, s.Provider
+		}
+		if l.ActModel != "" {
+			s.ActModel, setFor["act_model"] = l.ActModel, s.Provider
 		}
 		if l.SubagentModel != "" {
 			s.SubagentModel, s.Sources["subagent_model"], setFor["subagent_model"] = l.SubagentModel, l.Path, s.Provider
@@ -2412,6 +2425,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.Model = ""
 		case "subagent_model":
 			s.SubagentModel = ""
+		case "plan_model":
+			s.PlanModel = ""
+		case "act_model":
+			s.ActModel = ""
 		case "base_url":
 			s.BaseURL = ""
 		case "api_key_env":

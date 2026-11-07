@@ -16,14 +16,14 @@ func TestTheModeCommand(t *testing.T) {
 	r := startFront(t, &steps{}, nil)
 	ctx := context.Background()
 	res, err := command(ctx, r.sess, r.sess, "/mode", false)
-	if err != nil || !strings.HasPrefix(res.out, "mode default\nmodes: default, acceptEdits, dontAsk, bypassPermissions") {
+	if err != nil || !strings.HasPrefix(res.out, "mode default\nmodes: default, acceptEdits, plan, dontAsk, bypassPermissions") {
 		t.Fatalf("/mode: %q, %v", res.out, err)
 	}
 	if res, err = command(ctx, r.sess, r.sess, "/mode dontask", false); err != nil || res.out != "[mode dontAsk]" {
 		t.Fatalf("/mode dontask: %q, %v", res.out, err)
 	}
-	if _, err = command(ctx, r.sess, r.sess, "/mode plan", false); err == nil {
-		t.Error("/mode plan was taken")
+	if _, err = command(ctx, r.sess, r.sess, "/mode planning", false); err == nil {
+		t.Error("/mode planning was taken")
 	}
 	cmd := serveCommands(r.sess, r.sess, "")[cmdMode]
 	for _, tc := range []struct{ args, want string }{
@@ -53,7 +53,11 @@ func TestShiftTabCyclesTheModes(t *testing.T) {
 	if m, _ := r.sess.Mode(); m != policy.ModeAcceptEdits {
 		t.Errorf("mode %q after Shift-Tab", m)
 	}
+	mark := r.mark()
 	r.type_("\x1b[Z")
-	r.waitOutput("dontAsk")
+	r.waitOutputSince(mark, "plan")
+	if m, _ := r.sess.Mode(); m != policy.ModePlan {
+		t.Errorf("mode %q after a second Shift-Tab, want plan", m)
+	}
 	r.quit()
 }

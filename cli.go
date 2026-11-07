@@ -111,7 +111,7 @@ func run(ctx context.Context, args []string, p program) error {
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
 	noPolicy := fs.Bool("no-policy", false, "the old name of -mode bypassPermissions: run every call no deny rule refuses, without asking")
-	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
+	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, plan, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
 	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
@@ -592,6 +592,8 @@ func run(ctx context.Context, args []string, p program) error {
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		MemoryDir:      settings.MemoryDir,
+		PlanModel:      settings.PlanModel,
+		ActModel:       settings.ActModel,
 		AgentsMD:       *agentsMD,
 		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
 		NoMCPTrustFile: leftOut != nil,

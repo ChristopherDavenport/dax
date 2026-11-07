@@ -500,6 +500,7 @@ names the file and the field.
 | field | meaning |
 |---|---|
 | `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
+| `plan_model`, `act_model` | the model plan mode moves to, and the one your approval of a plan moves to (see [Permission modes](#permission-modes)); empty leaves the model as it is. Like `model`, each is the provider's it was set beside |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `api_key_command` | a program and its arguments, `["program", "arg", ...]`, that prints the provider's key; run again as the key ages or is refused (see above) |
@@ -542,7 +543,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 `"fallback"` to `ask` or `deny`, and `"default_mode"` to `dontAsk`, when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `plan_model`, `act_model`, `think`, `effort`, `agents`,
 `instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -1347,7 +1348,7 @@ Your answer is recorded in the session as a person's.
 A mode is the same rules made stricter or looser as a whole, which you
 pick at start (`-mode`, or `policy.default_mode` in your config) and
 change in the session with `/mode NAME`, or Shift-Tab in the terminal
-client, which moves to the next of `default`, `acceptEdits` and
+client, which moves to the next of `default`, `acceptEdits`, `plan` and
 `dontAsk` (`bypassPermissions` is reached only by its name, with
 `/mode`, `-mode` or `-no-policy`, and Shift-Tab from it goes to
 `default`):
@@ -1356,6 +1357,7 @@ client, which moves to the next of `default`, `acceptEdits` and
 |---|---|
 | `default` | the rules as they are: what no rule allows asks |
 | `acceptEdits` | `write` and `edit` run without asking, but for a path that changes what runs or is trusted (`.git`, `.dax`, `.github`, `.circleci`, `.husky`, `.vscode`, `.idea`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, at any depth) or looks like a secret (the paths a read asks about, `.env*` among them); commands and other tools still ask |
+| `plan` | for reading and planning: what would ask is refused without asking, in plan's words, as in `dontAsk`, and `write` and `edit` are denied even where your own rules allow them, so only reads and the read-only commands run. The one call that asks is `exit_plan_mode`, with which the model puts its plan to you: the plan is shown whole (in the terminal client above the permission panel, in the REPL before the question). Approve it and the session moves to `acceptEdits` from the model's next turn (to `act_model` too, when you set one), the switch recorded as `plan approved`, and the model carries the plan out; refuse it with a reason and it stays in plan mode and is told why. `plan_model` is the model plan mode moves to. `exit_plan_mode` is refused bare in every other mode, and an A2A caller is refused it in any |
 | `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. The rules are `default`'s, so a carve-out lifts no more than it does there, and in a box under `box.confine` a confined call still runs. It is what `-p` does with every question once its input ends |
 | `bypassPermissions` | nothing asks: what no deny rule refuses runs. The asks become allows and the fallback is set aside, so under `"fallback": "deny"` (yours or a project's) a call no rule names runs too, as it did under `-no-policy` before modes |
 
@@ -1364,7 +1366,7 @@ is held to the stricter of `default` and your mode (see [Serving
 peers](#serving-peers-dax-serve--a2a)).
 A deny rule, an extension's or yours, holds in every mode, and a grant
 for the session (a skill's) survives a switch. A project's
-`default_mode` may only be stricter than yours (`dontAsk`), and
+`default_mode` may only be stricter than yours (`plan` or `dontAsk`), and
 `-mode` is over both. The policy changes for the next call decided: a
 switch typed during a run waits for the run's next turn, so no batch of
 calls is decided under two policies. Each switch is on the record, as
@@ -1656,7 +1658,7 @@ drawn as the client draws any call, its name and arguments.
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
 | drag | select text anywhere on the screen; it stays drawn until the next key or press |
-| Shift-Tab | the next permission mode: default, acceptEdits, dontAsk, never bypassPermissions (see [Permission modes](#permission-modes)) |
+| Shift-Tab | the next permission mode: default, acceptEdits, plan, dontAsk, never bypassPermissions (see [Permission modes](#permission-modes)) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and

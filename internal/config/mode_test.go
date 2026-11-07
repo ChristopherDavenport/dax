@@ -53,13 +53,28 @@ func TestTheModesPrecedence(t *testing.T) {
 		project bool
 		want    string
 	}{
-		{`{"policy":{"default_mode":"plan"}}`, false, `policy.default_mode: mode "plan": want one of default, acceptEdits, dontAsk, bypassPermissions`},
+		{`{"policy":{"default_mode":"planning"}}`, false, `policy.default_mode: mode "planning": want one of default, acceptEdits, plan, dontAsk, bypassPermissions`},
 		{`{"policy":{"default_mode":"acceptEdits"}}`, true, `policy.default_mode "acceptEdits": a project file may only pick a stricter mode`},
 		{`{"policy":{"default_mode":"bypassPermissions"}}`, true, "a project file may only pick a stricter mode"},
 	} {
 		if _, err := Parse([]byte(tc.json), "/x/config.json", tc.project); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", tc.json, err, tc.want)
 		}
+	}
+	// A project may start its sessions in plan mode, which only
+	// tightens (#147); and plan_model and act_model are the user's.
+	if l, err := Parse([]byte(`{"policy":{"default_mode":"plan"}}`), "/p/.dax/config.json", true); err != nil {
+		t.Errorf("a project's default_mode plan: %v", err)
+	} else if s, _ := Resolve([]Layer{user("default"), l}, Flags{}, ""); s.Policy.Mode != "plan" {
+		t.Errorf("a project's plan resolved to %q", s.Policy.Mode)
+	}
+	if _, err := Parse([]byte(`{"plan_model":"big"}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "plan_model: a project file may only tighten") {
+		t.Errorf("a project's plan_model: %v", err)
+	}
+	if l, err := Parse([]byte(`{"plan_model":"big","act_model":"fast"}`), "/u/config.json", false); err != nil {
+		t.Fatal(err)
+	} else if s, _ := Resolve([]Layer{l}, Flags{}, ""); s.PlanModel != "big" || s.ActModel != "fast" {
+		t.Errorf("plan_model %q act_model %q", s.PlanModel, s.ActModel)
 	}
 	// The policy's sources name the files they came from.
 	s, err := Resolve([]Layer{user("default"), project("dontAsk")}, Flags{}, "")
