@@ -31,6 +31,7 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/hooks"
+	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
@@ -145,6 +146,7 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
+	memoryBackground := fs.String("memory-background", "", "the background memory pass after a run: off, propose (asks at your next prompt) or auto (writes unasked); overrides the config's memory.background")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost, and for -max-cost")
 	contextWindow := fs.Int("context-window", 0, "the context window, in tokens, the model is served at, which sizes the default compaction budget; overrides the config's context_window for the model and what the vendor says, 0 leaves them")
 	maxTurns := fs.Int("max-turns", 0, "stop each run after this many turns (stopped, max_turns); overrides max_turns, 0 is no limit")
@@ -330,6 +332,9 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		flags.MemoryDir = &m
 	}
+	if given["memory-background"] {
+		flags.MemoryBackground = memoryBackground
+	}
 	flags.NoPolicy = *noPolicy
 	if given["mode"] {
 		flags.Mode = modeFlag
@@ -426,8 +431,15 @@ func run(ctx context.Context, args []string, p program) error {
 		Agents:       settings.Agents, SubagentModel: m.SubagentName,
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
 		MemoryDir: settings.MemoryDir,
-		Peers:     settings.Peers,
-		Hooks:     hookOpts,
+		MemoryBackground: memory.Background{
+			Mode: settings.Memory.Background, Every: settings.Memory.BackgroundEvery,
+			MaxTokens: settings.Memory.BackgroundMaxTokens, TrivialTokens: settings.Memory.BackgroundTrivialTokens,
+			// Nobody is shown a proposal under -p or dax serve.
+			Headless: *once != "" || serving,
+			Model:    m.SubagentName,
+		},
+		Peers: settings.Peers,
+		Hooks: hookOpts,
 	})
 	if err != nil {
 		return err
@@ -579,6 +591,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, ServersWorkspaces: named, Executor: ex, Root: *root, Sync: policyMode,
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
+		MemoryDir:      settings.MemoryDir,
 		AgentsMD:       *agentsMD,
 		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
 		NoMCPTrustFile: leftOut != nil,

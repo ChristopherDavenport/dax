@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
@@ -29,6 +30,8 @@ type afterRuns struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	// closed is set once the session closes: no hook starts after.
+	closed bool
 }
 
 // afterRunHooks builds the extensions' AfterRun hooks over env.
@@ -96,7 +99,7 @@ func (r *afterRuns) handle(_ context.Context, ev agentturn.Event) error {
 			return nil
 		}
 		run.End = e
-		if r.ctx == nil || r.ctx.Err() != nil {
+		if r.ctx == nil || r.closed {
 			return nil
 		}
 		done := *run
@@ -111,13 +114,28 @@ func (r *afterRuns) handle(_ context.Context, ev agentturn.Event) error {
 	return nil
 }
 
-// stop ends the hooks' context and waits for them.
+// afterRunGrace is how long a closing session lets its hooks finish
+// before it ends their context: a pass after -p's one run is short, and
+// should land.
+const afterRunGrace = 30 * time.Second
+
+// stop waits for the hooks running, at most afterRunGrace, then ends
+// their context and waits for them.
 func (r *afterRuns) stop() {
-	// Under the lock, so no hook starts once the context has ended.
 	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
+	finished := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(afterRunGrace):
+	}
 	if r.cancel != nil {
 		r.cancel()
 	}
-	r.mu.Unlock()
-	r.wg.Wait()
+	<-finished
 }

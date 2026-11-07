@@ -186,6 +186,51 @@ type Config struct {
 	// Claude Code's shape (dax-hooks). The user sets them; a project
 	// cannot, since a hook is a command run on this machine.
 	Hooks *Hooks `json:"hooks,omitempty"`
+	// Memory is dax-memory's background pass. The user's alone: a
+	// project cannot turn on writes to the user's memory nobody is
+	// asked about.
+	Memory *Memory `json:"memory,omitempty"`
+}
+
+// Memory is dax-memory's background pass after a run (#160).
+type Memory struct {
+	// Background is off (the default), propose or auto.
+	Background string `json:"background,omitempty"`
+	// BackgroundEvery is the runs between passes; 0 is 1.
+	BackgroundEvery int `json:"background_every,omitempty"`
+	// BackgroundMaxTokens caps a pass's tokens, input and output; 0 is
+	// 8000.
+	BackgroundMaxTokens int `json:"background_max_tokens,omitempty"`
+	// BackgroundTrivialTokens: a run with no tool call and fewer output
+	// tokens than this starts no pass; 0 is 500.
+	BackgroundTrivialTokens int `json:"background_trivial_tokens,omitempty"`
+}
+
+// MemoryModes are memory.background's values.
+var MemoryModes = []string{"off", "propose", "auto"}
+
+// CheckMemoryBackground refuses a memory.background value that is not
+// one of MemoryModes; "" is off.
+func CheckMemoryBackground(v string) error {
+	if v == "" || slices.Contains(MemoryModes, v) {
+		return nil
+	}
+	return fmt.Errorf("memory.background %q: want off, propose or auto", v)
+}
+
+func (m *Memory) check() error {
+	if err := CheckMemoryBackground(m.Background); err != nil {
+		return err
+	}
+	for _, f := range []struct {
+		name string
+		n    int
+	}{{"background_every", m.BackgroundEvery}, {"background_max_tokens", m.BackgroundMaxTokens}, {"background_trivial_tokens", m.BackgroundTrivialTokens}} {
+		if f.n < 0 {
+			return fmt.Errorf("memory.%s %d: want 0 or more", f.name, f.n)
+		}
+	}
+	return nil
 }
 
 // Peer is one remote A2A agent (dax-a2a).
@@ -902,7 +947,7 @@ func (l *Layer) validate() error {
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil}, {"memory", c.Memory != nil},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -1005,6 +1050,11 @@ func (l *Layer) validate() error {
 	}
 	if c.Hooks != nil {
 		if err := c.Hooks.check(); err != nil {
+			return err
+		}
+	}
+	if c.Memory != nil {
+		if err := c.Memory.check(); err != nil {
 			return err
 		}
 	}
@@ -1986,6 +2036,8 @@ func checkPaths(field string, paths []string) error {
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
+	// MemoryBackground is -memory-background: off, propose or auto.
+	MemoryBackground *string
 	// APIKeyCommand is the program and arguments; nil was not given.
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
@@ -2085,6 +2137,11 @@ type Settings struct {
 	// Hooks are the user's hooks, nil for none; the last user layer
 	// that sets them wins, and a project's are refused when it is read.
 	Hooks *Hooks
+	// Memory is dax-memory's background pass, from the user's layers
+	// and -memory-background, its defaults filled: Background off,
+	// BackgroundEvery 1, BackgroundMaxTokens 8000,
+	// BackgroundTrivialTokens 500.
+	Memory Memory
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -2114,6 +2171,7 @@ type Rules = policy.Rules
 func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
+		Memory:        Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500},
 		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
@@ -2161,6 +2219,20 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Status != nil {
 			s.Status = l.Status
+		}
+		if m := l.Memory; m != nil && !l.Project {
+			if m.Background != "" {
+				s.Memory.Background = m.Background
+			}
+			if m.BackgroundEvery > 0 {
+				s.Memory.BackgroundEvery = m.BackgroundEvery
+			}
+			if m.BackgroundMaxTokens > 0 {
+				s.Memory.BackgroundMaxTokens = m.BackgroundMaxTokens
+			}
+			if m.BackgroundTrivialTokens > 0 {
+				s.Memory.BackgroundTrivialTokens = m.BackgroundTrivialTokens
+			}
 		}
 		if l.Hooks != nil && !l.Project {
 			h := *l.Hooks
@@ -2370,6 +2442,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.MemoryDir != nil {
 		s.MemoryDir = *f.MemoryDir
+	}
+	if f.MemoryBackground != nil {
+		if err := CheckMemoryBackground(*f.MemoryBackground); err != nil {
+			return Settings{}, fmt.Errorf("-memory-background: %w", err)
+		}
+		s.Memory.Background = *f.MemoryBackground
 	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile

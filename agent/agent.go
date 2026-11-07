@@ -206,6 +206,9 @@ type Options struct {
 	// UserDir is the user's dax directory, ~/.dax: its AGENTS.md is
 	// read before the project's.
 	UserDir string
+	// MemoryDir is where dax-memory keeps the person's memory, which
+	// /memory undo acts on; "" with memory off.
+	MemoryDir string
 	// Instructions is text of the user's own, from the config's
 	// instructions_file, added to dax's part of the system prompt.
 	Instructions string
@@ -1187,7 +1190,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	s.ag.Subscribe(s.modeAtTurn)
 	// The extensions' AfterRun hooks, once a run is on the record.
 	if len(s.after.hooks) > 0 {
-		s.after.ctx, s.after.cancel = context.WithCancel(context.WithoutCancel(ctx))
+		actx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		// A hook's question goes to the fronts answering, as a
+		// sub-agent's asked call does (elicit).
+		s.after.ctx, s.after.cancel = agenttool.ContextWithElicitor(actx, s.elicit), cancel
 		s.after.lookup = kit.LookupTool
 		s.ag.Subscribe(s.after.handle)
 	}
@@ -1631,6 +1637,14 @@ func (s *Session) mcpServers() []MCPServerInfo {
 // that change what the user keeps there, such as approving a skill the
 // model wrote, act on it.
 func (s *Session) UserDir() string { return s.opts.UserDir }
+
+// MemoryDir is Options.MemoryDir: the person's memory, for /memory
+// undo, which acts on this machine.
+func (s *Session) MemoryDir() string { return s.opts.MemoryDir }
+
+// Dir is Options.Dir, the directory on this machine the session
+// started in.
+func (s *Session) Dir() string { return s.opts.Dir }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
 // model in force, and keeps the setting for a later SetModel. The

@@ -43,12 +43,25 @@ const Name = "dax-memory"
 // ships one rule: the searches run unasked, while a save, a patch, a
 // forget and an insert ask. The sub-agents take memory_search
 // over the same scopes (SubagentTools), and see the block the kit
-// renders as its parts; they are offered no writer.
-func New(dir string) extension.Extension {
+// renders as its parts; they are offered no writer. WithBackground
+// adds the background pass after a run (#160).
+func New(dir string, opts ...Option) extension.Extension {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	var after func(extension.Env) (func(context.Context, extension.Run), error)
+	if m := o.background.Mode; m == BackgroundAuto || m == BackgroundPropose {
+		after = func(env extension.Env) (func(context.Context, extension.Run), error) {
+			p := &passer{dir: dir, env: env, b: o.background}
+			return p.after, nil
+		}
+	}
 	return extension.Extension{
-		Name:   Name,
-		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
-		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
+		AfterRun: after,
+		Name:     Name,
+		Owns:     []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
+		Policy:   policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
 		// The memory is the person's: an A2A caller is refused every
 		// memory tool outright (conversation_search refuses it through
 		// Env.SearchScope), and the store reads empty on its context.
@@ -82,6 +95,18 @@ func New(dir string) extension.Extension {
 			}, nil
 		},
 	}
+}
+
+// Option is a choice New makes beyond the store's directory.
+type Option func(*options)
+
+type options struct{ background Background }
+
+// WithBackground runs the background pass b after the person's runs:
+// the person's own setting (memory.background), which a project cannot
+// make.
+func WithBackground(b Background) Option {
+	return func(o *options) { o.background = b }
 }
 
 // archives are the archive scopes beside scopes, in order.

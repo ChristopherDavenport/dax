@@ -256,7 +256,15 @@ before changing the shape.
   its workspace's) and their archives, the memory tools,
   `memory_search` for the sub-agents, and `conversation_search` under
   `Env.SearchScope` (`agent/search.go`: this project's top-level
-  sessions; an A2A caller none).
+  sessions; an A2A caller none); the background pass (`pass.go`,
+  `WithBackground`): an `AfterRun` hook that runs a child through
+  `Env.Kit`'s `StartChild`/`ContinueChild` (spawn `dax-memory-pass`)
+  with the memory tools over `passStore` (every Put `IfHash`, each
+  rendered scope within the block's bound), its own policy source
+  granted under its grant scope (auto), a token cap, an entry no pass
+  wrote asked about; `ledger.go`, the passes' ledger
+  (`.dax-passes.jsonl` beside the journal) and `Undo` (`/memory undo`
+  in `commands.go`).
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
   hooks (config `hooks`, the user's layer only) under Claude Code's
   protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and

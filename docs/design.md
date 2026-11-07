@@ -640,7 +640,7 @@ own are built from the same fields a program's are:
 | dax-coding | `ext/coding` | read, write, edit, glob, grep, ls, bash; their rules, matchers, aliases, the bash stamp, the prompt's nudge, renderers |
 | dax-agents | `ext/agents` | explore and task, from every extension's tools; the delegation guide |
 | dax-skills | `ext/skills` | the skill tool and catalogue; grants under `-trust-skills` |
-| dax-memory | `ext/memory` | the memory tools and block |
+| dax-memory | `ext/memory` | the memory tools and block; the background pass after a run |
 | dax-a2a | `ext/a2a` | a tool per peer in the user's config; renderers; no rules |
 
 `dax.Main` builds dax-coding and dax-a2a always (dax-a2a offers nothing
@@ -862,8 +862,18 @@ main agent ends and is on the record, what the run did: the tools it
 called, whether one reached an open world (an MCP server's tool, or
 one annotated open-world, as dax-a2a's peers are) and its output
 tokens (`agent/afterrun.go`). It runs off the loop, under a context
-the session's close ends and waits on; an A2A caller's conversation
-and a sub-agent call none. `extension.Renderers` merges the extensions' renderers for the
+that carries the session's elicitor and that the session's close
+ends, after up to 30 seconds' wait; an A2A caller's conversation and a
+sub-agent call none. dax-memory's background pass starts there: a child
+the host starts through `Env.Kit` (agentkit's `StartChild`, one spawn
+ID per conversation, continued by every later pass), so it is a
+subsession of the conversation and decides under a grant scope of its
+own, where under `auto` its own source (`dax:memory-pass`, at
+`policy.RankGrant`) allows the memory writers, below every ask and deny
+the user and the extensions have. It asks, through the question path a
+sub-agent's asked call takes, before it changes an entry no pass wrote
+(the journal's `Change.Session` against the passes' ledger), and
+every write it makes is conditional on what it read (`IfHash`). `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.

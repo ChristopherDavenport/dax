@@ -328,6 +328,31 @@ wrote them. It is dax-memory's, so `-memory off` and `-bare` leave it
 out; an A2A caller cannot use it, nor any memory tool, and its
 requests carry no memory block (see Serving peers).
 
+### The background pass
+
+With `"memory": {"background": "auto"}` in your config (or
+`-memory-background auto`), a pass runs after a run that called a tool
+or wrote 500 output tokens or more (`background_trivial_tokens`): a
+child agent with the memory tools alone, on the sub-agent model, reads
+the conversation since the last pass and keeps the memory current. It
+is recorded as a subsession of the conversation (`dax-memory-pass`),
+writes the `user` scope, the project's and their archives, and no other
+project's, unasked, through a policy source of its own that the user's
+denies and ask rules still hold over, and tells you `memory updated:
+saved user/errors (/memory undo reverts it)`. Its limits are not the
+model's or a project's to change: it changes only an entry a pass wrote
+last (one you or the conversation's model wrote is asked about first),
+each write lands only if the entry is still what the pass read (one
+changed since is left, and you are told), a scope may not grow past the
+memory block's bound, and a pass stops at 8,000 tokens
+(`background_max_tokens`). `background_every` runs a pass every N such
+runs. A run that reached an open world (an MCP server's tool, a remote
+agent) gets `propose` instead of `auto`, since what it read may be an
+injection meant to become a memory. `/memory undo` reverts the latest
+pass of this project's, entry by entry, leaving any entry changed
+since; again, the pass before. `off` is the default, since a pass
+spends your tokens. The `memory` block is your file's alone.
+
 ## Skills the model writes
 
 dax-skills offers the model `skill_manage`, which creates, updates or
@@ -476,6 +501,7 @@ names the file and the field.
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
+| `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. Not in a project file: a repository cannot turn on writes to your memory |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, or an older HTTP+SSE one (a server that answers the first `initialize` with a 4xx other than 401, 403, 408 or 429, and then a GET with an SSE stream whose first event is `endpoint`, is reached over SSE from then on, and you are told once), and `token_env` names the variable whose token is sent to its origin alone and which no child process gets; `oauth` signs in instead (below). A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
@@ -507,7 +533,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers` or `status`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -1708,6 +1734,10 @@ the input until the next line, and an error gives the line back to edit.
   sends the line as typed.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/memory undo` reverts the latest background memory pass of this
+  project's (see [The background pass](#the-background-pass)), each
+  entry back to what it held unless changed since; again, the pass
+  before. It acts on this machine's memory, so not over `dax attach`.
 - `/permissions` lists the policy in force: the mode, what a call no
   rule names gets, each source in turn with the file it came from (your
   config, the project's `.dax/config.json`, `~/.dax/grants.json` for the

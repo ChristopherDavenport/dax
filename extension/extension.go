@@ -177,8 +177,10 @@ type Extension struct {
 	// resume, a steer that started a run), with what the run did. It
 	// is built over the session as the kit options are, and called
 	// off the loop, in a goroutine of its own, once the run's end is
-	// on the record, under a context that ends when the session
-	// closes, which waits for it first. A run of an A2A caller's
+	// on the record. Its context carries the session's elicitor
+	// (agenttool.ElicitorFrom), which puts a question to the fronts
+	// answering as a sub-agent's asked call is put; the session's close
+	// waits for it, up to 30 seconds, then ends the context. A run of an A2A caller's
 	// conversation, or a sub-agent's, calls none. dax-memory's
 	// background pass starts here.
 	AfterRun func(Env) (func(ctx context.Context, run Run), error)
@@ -373,6 +375,13 @@ type Env interface {
 	Omit(o agentkit.Omission)
 	// Log is a note for the user, as the front shows them.
 	Log(format string, args ...any)
+	// Kit is the session's kit once it is built, and nil while the
+	// extensions' Kit options are being made: a hook that runs later,
+	// AfterRun's say, starts a child agent the host runs itself through
+	// it (agentkit's StartChild, ContinueChild, AttachChild and
+	// ChildConfig), recorded as a subsession of the conversation and
+	// decided by the session's engine under a grant scope of its own.
+	Kit() *agentkit.Kit
 	// ToolOutput is the whole of a tool result the session cut to its
 	// cap, by the output id the cut result names (out_<hex>): only an
 	// output this session kept.

@@ -418,6 +418,9 @@ func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
 
+// Kit implements extension.Env: nil until open has built it.
+func (e *sessionEnv) Kit() *agentkit.Kit { return e.s.Kit }
+
 func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error) {
 	return e.s.nestedMD
 }

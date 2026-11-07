@@ -13,6 +13,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -62,6 +63,7 @@ const commandHelp = `commands:
   /mode [name]              the permission mode, or switch to default, acceptEdits, dontAsk or bypassPermissions
   /permissions              the rules in force, where each came from, the mode and the grants
   /skills approve <name>    let a skill the model wrote grant its allowed-tools under -trust-skills
+  /memory undo              revert the latest background memory pass's changes; again for the pass before
   /compact [instructions]   fold the conversation at the next request, keeping what you say
   /port <port>              reach a port where the tools act from this machine's loopback
   /follow <text>            a follow-up, taken when the model would stop
@@ -186,6 +188,9 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 		// An approval changes what the next read of the skill grants,
 		// not the run, so it works during one.
 		return skillsCommand(ctl, arg)
+	case "/memory":
+		// The store, not the run: it works during one.
+		return memoryCommand(ctx, ctl, arg)
 	case "/port":
 		// A forward changes nothing the run does, so it works during one.
 		port, err := strconv.Atoi(arg)
@@ -679,6 +684,31 @@ func userCommand(ctx context.Context, ctl agent.Controls, cmd string) (commandRe
 		out += fmt.Sprintf(" [%d bytes cut]", c.Cut)
 	}
 	return commandResult{out: strings.TrimLeft(out, "\n")}, nil
+}
+
+// memoryDirer is a session whose memory a command acts on: the session
+// in this process, never one over a wire.
+type memoryDirer interface {
+	MemoryDir() string
+	Dir() string
+}
+
+// memoryCommand is /memory undo: the latest background pass of this
+// project's (dax-memory's) reverted, each entry it changed back to what
+// it held, unless changed since.
+func memoryCommand(ctx context.Context, ctl agent.Controls, arg string) (commandResult, error) {
+	if arg != "undo" {
+		return commandResult{}, errors.New("usage: /memory undo")
+	}
+	m, ok := ctl.(memoryDirer)
+	if !ok || m.MemoryDir() == "" {
+		return commandResult{}, errors.New("/memory undo acts on this machine's memory; it is not offered over dax attach or with memory off")
+	}
+	out, err := memory.Undo(ctx, m.MemoryDir(), memory.WorkspaceScope(ctl.Info().Workspace, m.Dir()))
+	if err != nil {
+		return commandResult{}, err
+	}
+	return commandResult{out: "[" + out + "]"}, nil
 }
 
 // userDirer is a session whose user directory a command acts on: the
