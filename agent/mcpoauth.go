@@ -85,21 +85,37 @@ const consentTimeout = 5 * time.Minute
 func (s *Session) oauthHandler(ctx context.Context, m MCPServer, origin string) (*auth.AuthorizationCodeHandler, error) {
 	o := m.OAuth
 	port := o.CallbackPort
+	// The redirect's port is bound now, while consent may still be
+	// asked, and held until the session has opened (releaseCallbacks),
+	// so no other process takes it between the registration that names
+	// it and the browser's redirect. A fixed port that is taken fails
+	// the consent alone: a kept grant may never need one.
+	var ln net.Listener
+	var lnErr error
+	if !s.opened.Load() && !s.opts.noConsent {
+		ln, lnErr = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		if lnErr == nil {
+			port = ln.Addr().(*net.TCPAddr).Port
+			s.holdCallback(ln)
+		} else if port == 0 {
+			return nil, fmt.Errorf("oauth: a loopback port for the redirect: %w", lnErr)
+		}
+	}
 	if port == 0 {
-		// A port free now, which a dynamic registration names; the
-		// listener is opened on it when consent is asked for.
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		// No consent can be asked: a port for the registration to name,
+		// which nothing will listen on.
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			return nil, fmt.Errorf("oauth: a loopback port for the redirect: %w", err)
 		}
-		port = ln.Addr().(*net.TCPAddr).Port
-		ln.Close()
+		port = probe.Addr().(*net.TCPAddr).Port
+		probe.Close()
 	}
 	redirect := "http://127.0.0.1:" + strconv.Itoa(port) + "/callback"
 	g := newAuthGuard(origin, oauthBase)
 	cfg := &auth.AuthorizationCodeHandlerConfig{
 		RedirectURL:              redirect,
-		AuthorizationCodeFetcher: s.consent(m.Name, port),
+		AuthorizationCodeFetcher: s.consent(m.Name, port, ln, lnErr),
 		RequestRefreshToken:      true,
 		Client:                   &http.Client{Transport: g, CheckRedirect: g.redirect, Timeout: 30 * time.Second},
 	}
@@ -121,6 +137,9 @@ func (s *Session) oauthHandler(ctx context.Context, m MCPServer, origin string) 
 		}}
 	}
 	store := s.tokenStore()
+	if o.ClientID != "" && o.ClientSecretEnv != "" {
+		store = secretFromEnv(store, o.ClientID, o.ClientSecretEnv)
+	}
 	key := mcpclient.TokenKey{Endpoint: m.URL, Subject: tokenSubject()}
 	// A kept grant is refreshed at the token endpoint it was granted by,
 	// one the server's metadata named then, before any discovery now.
@@ -152,6 +171,58 @@ func (s *Session) tokenStore() mcpclient.TokenStore {
 	return &fileTokens{path: TokensFile(s.opts.UserDir)}
 }
 
+// secretFromEnv is store with the secret of the client clientID, the
+// one registered for the user, kept out of it: blanked before a save
+// and read from env on each load, so the file never holds it and a
+// changed variable is the secret used. Another client's secret, one
+// registered dynamically, which has no variable, is kept as it is.
+func secretFromEnv(store mcpclient.TokenStore, clientID, env string) mcpclient.TokenStore {
+	return &envSecret{TokenStore: store, client: clientID, env: env}
+}
+
+type envSecret struct {
+	mcpclient.TokenStore
+	client, env string
+}
+
+func (e *envSecret) Load(ctx context.Context, key mcpclient.TokenKey) (*mcpclient.TokenRecord, error) {
+	rec, err := e.TokenStore.Load(ctx, key)
+	if err != nil || rec == nil || rec.ClientID != e.client {
+		return rec, err
+	}
+	c := *rec
+	c.ClientSecret = os.Getenv(e.env)
+	return &c, nil
+}
+
+func (e *envSecret) Save(ctx context.Context, key mcpclient.TokenKey, rec *mcpclient.TokenRecord) error {
+	if rec != nil && rec.ClientID == e.client {
+		c := *rec
+		c.ClientSecret = ""
+		rec = &c
+	}
+	return e.TokenStore.Save(ctx, key, rec)
+}
+
+// holdCallback keeps ln, a redirect's listener, until the session has
+// opened or closes.
+func (s *Session) holdCallback(ln net.Listener) {
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
+	s.callbacks = append(s.callbacks, ln)
+}
+
+// releaseCallbacks closes the redirects' listeners: once the session has
+// opened no consent is asked, and on its close or a failed open.
+func (s *Session) releaseCallbacks() {
+	s.cbMu.Lock()
+	defer s.cbMu.Unlock()
+	for _, ln := range s.callbacks {
+		ln.Close()
+	}
+	s.callbacks = nil
+}
+
 // tokenSubject names the user a grant is kept for.
 func tokenSubject() string {
 	if u, err := user.Current(); err == nil {
@@ -162,18 +233,34 @@ func tokenSubject() string {
 
 // consent is the fetcher that asks the person to sign in to the server
 // called name: it prints the authorization URL and takes the code from
-// the browser's redirect to the loopback port. It is asked only while
-// the session opens at the terminal dax was started from; later (a
-// server started again mid-session, a /new or /resume while a front has
-// the screen) the sign-in fails with what to do.
-func (s *Session) consent(name string, port int) auth.AuthorizationCodeFetcher {
+// the browser's redirect to ln, the loopback port bound for it (lnErr
+// when it could not be). Only a redirect carrying the authorization
+// URL's state ends the wait; any other request to the port is turned
+// away. It is asked only while the session opens at the terminal dax
+// was started from; later (a server started again mid-session, a /new
+// or /resume while a front has the screen) the sign-in fails with what
+// to do.
+func (s *Session) consent(name string, port int, ln net.Listener, lnErr error) auth.AuthorizationCodeFetcher {
+	var once sync.Once
 	return func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
-		if s.opened.Load() || s.opts.noConsent {
+		if s.opened.Load() || s.opts.noConsent || ln == nil && lnErr == nil {
 			return nil, fmt.Errorf("mcp %s needs you to sign in again, which dax asks only as a session starts at your terminal; start dax again", name)
 		}
-		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
-		if err != nil {
-			return nil, fmt.Errorf("mcp %s: the redirect's port %d: %w", name, port, err)
+		if lnErr != nil {
+			return nil, fmt.Errorf("mcp %s: the redirect's port %d: %w", name, port, lnErr)
+		}
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return nil, fmt.Errorf("mcp %s: a second sign-in in one start; start dax again", name)
+		}
+		var state string
+		if u, err := url.Parse(args.URL); err == nil {
+			state = u.Query().Get("state")
+		}
+		if state == "" {
+			ln.Close()
+			return nil, fmt.Errorf("mcp %s: the authorization URL carries no state", name)
 		}
 		type got struct {
 			res *auth.AuthorizationResult
@@ -186,6 +273,12 @@ func (s *Session) consent(name string, port int) auth.AuthorizationCodeFetcher {
 				return
 			}
 			q := r.URL.Query()
+			if q.Get("state") != state {
+				// Not this sign-in's redirect: a page's request to the
+				// port, say. It ends nothing.
+				http.Error(w, "not the redirect dax waits for", http.StatusBadRequest)
+				return
+			}
 			var g got
 			if e := q.Get("error"); e != "" {
 				g.err = fmt.Errorf("mcp %s: the authorization server refused: %s %s", name, e, q.Get("error_description"))

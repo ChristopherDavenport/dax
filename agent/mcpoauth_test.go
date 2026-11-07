@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -382,4 +383,123 @@ func TestTwoWritersOfTheTokensFileKeepEachOthersGrants(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The consent's loopback listener answers only the redirect of this
+// sign-in: a request whose state is not the authorization URL's, such
+// as a web page's hit on the port, is turned away and the wait goes on
+// (review low 5).
+func TestTheConsentWaitsForItsOwnState(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	cb := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	var out bytes.Buffer
+	defer swapConsentOut(&out)()
+	s := &Session{}
+	fetch := s.consent("hosted", port, ln, nil)
+	type got struct {
+		res *auth.AuthorizationResult
+		err error
+	}
+	done := make(chan got, 1)
+	go func() {
+		res, err := fetch(context.Background(), &auth.AuthorizationArgs{URL: "https://as.example/authorize?state=right-state&client_id=x"})
+		done <- got{res, err}
+	}()
+	hit := func(q string) int {
+		for range 50 {
+			resp, err := http.Get(cb + "?" + q)
+			if err == nil {
+				resp.Body.Close()
+				return resp.StatusCode
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("the callback never listened")
+		return 0
+	}
+	if code := hit("error=access_denied&state=wrong"); code == http.StatusOK {
+		t.Errorf("a stranger's error was answered %d", code)
+	}
+	if code := hit("code=stolen"); code == http.StatusOK {
+		t.Errorf("a redirect with no state was answered %d", code)
+	}
+	select {
+	case g := <-done:
+		t.Fatalf("the sign-in ended on another's request: %+v %v", g.res, g.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if code := hit("code=good&state=right-state"); code != http.StatusOK {
+		t.Errorf("the sign-in's own redirect: %d", code)
+	}
+	g := <-done
+	if g.err != nil || g.res == nil || g.res.Code != "good" {
+		t.Fatalf("got %+v %v, want the code of the matching redirect", g.res, g.err)
+	}
+}
+
+// A preregistered client's secret is read from its variable each time
+// and never kept in the tokens file; a dynamically registered client's,
+// which has no variable, is kept (review low 6).
+func TestTheClientSecretFromTheEnvironmentIsNotKept(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dax", "mcp-tokens.json")
+	t.Setenv("DAX_TEST_CLIENT_SECRET", "first")
+	store := secretFromEnv(&fileTokens{path: path}, "corp", "DAX_TEST_CLIENT_SECRET")
+	key := mcpclient.TokenKey{Endpoint: "https://mcp.example/mcp", Subject: "me"}
+	if err := store.Save(ctx, key, &mcpclient.TokenRecord{ClientID: "corp", ClientSecret: "first", TokenURL: "https://as.example/token"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if bytes.Contains(data, []byte("first")) {
+		t.Errorf("the tokens file holds the client secret: %s", data)
+	}
+	t.Setenv("DAX_TEST_CLIENT_SECRET", "rotated")
+	rec, err := store.Load(ctx, key)
+	if err != nil || rec == nil || rec.ClientSecret != "rotated" {
+		t.Fatalf("loaded %+v (%v), want the secret from the variable now", rec, err)
+	}
+	dyn := mcpclient.TokenKey{Endpoint: "https://other.example/mcp", Subject: "me"}
+	if err := store.Save(ctx, dyn, &mcpclient.TokenRecord{ClientID: "dyn-client", ClientSecret: "dyn-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := store.Load(ctx, dyn); rec == nil || rec.ClientSecret != "dyn-secret" {
+		t.Errorf("a registered client's secret: %+v", rec)
+	}
+}
+
+// The redirect's port is bound when the handler is made and held until
+// the session has opened, so no other process takes it between the
+// registration that names it and the consent (review low 7).
+func TestTheCallbackPortIsHeldFromTheStart(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	s := &Session{opts: o}
+	h, err := s.oauthHandler(ctx, MCPServer{Name: "hosted", URL: "https://mcp.example/mcp", OAuth: &OAuth{}}, "https://mcp.example:443")
+	if err != nil || h == nil {
+		t.Fatal(err)
+	}
+	s.cbMu.Lock()
+	n := len(s.callbacks)
+	var addr string
+	if n == 1 {
+		addr = s.callbacks[0].Addr().String()
+	}
+	s.cbMu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d listeners held, want the redirect's", n)
+	}
+	if ln, err := net.Listen("tcp", addr); err == nil {
+		ln.Close()
+		t.Fatalf("%s was free for another process", addr)
+	}
+	s.releaseCallbacks()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("%s still held after the session opened: %v", addr, err)
+	}
+	ln.Close()
 }

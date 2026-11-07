@@ -10,7 +10,9 @@ versions may break flags and the config file.
 - Added: a URL MCP server can sign in with OAuth (`"oauth": {}`, or a
   `client_id` registered for you): discovery from its 401, dynamic
   registration, consent at a printed URL with the redirect on a
-  loopback port, the grant kept in `~/.dax/mcp-tokens.json` (saved
+  loopback port held from the start and answered only with the
+  sign-in's own state, a `client_secret_env` secret read from its
+  variable and never kept, the grant kept in `~/.dax/mcp-tokens.json` (saved
   under a lock between dax processes) and refreshed by later sessions; the access token goes to the server's
   origin alone, and the sign-in's requests to the authorization servers
   its metadata names, one on this machine's loopback only for a server

@@ -529,6 +529,10 @@ type Session struct {
 	// opened is set once open has returned the session: a URL server's
 	// sign-in is asked for only before (consent).
 	opened atomic.Bool
+	// callbacks are the OAuth redirects' loopback listeners, held from
+	// their handler's making until the session has opened.
+	cbMu      sync.Mutex
+	callbacks []net.Listener
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -772,6 +776,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	ok := false
 	defer func() {
 		if !ok {
+			s.releaseCallbacks()
 			s.closeTools()
 			s.closeHost()
 			if ownWS {
@@ -1187,6 +1192,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	}
 	ok = true
 	s.opened.Store(true)
+	s.releaseCallbacks()
 	return s, nil
 }
 
@@ -1687,6 +1693,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) close() error {
+	s.releaseCallbacks()
 	if s.detach != nil {
 		s.detach()
 	}
