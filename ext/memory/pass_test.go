@@ -2,8 +2,13 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/ChristopherDavenport/agentturn/compact"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
 )
@@ -55,5 +60,30 @@ func TestNoPassRunsHeadless(t *testing.T) {
 				t.Errorf("due %v, running %v, notes %q; want none due and one note", h.due, h.running, env.logs)
 			}
 		})
+	}
+}
+
+// The pass's token cap holds for the request about to go, not only for
+// those that went: one whose input would reach the cap is refused, and
+// another may write no more output than is left. (#160)
+func TestAPassRequestStaysWithinTheCap(t *testing.T) {
+	ctx := context.Background()
+	big := openresponses.Request{Input: openresponses.Items{openresponses.UserText(strings.Repeat("x", 4000))}}
+	b := &tokenBudget{max: 1000, used: 400}
+	if err := b.check(ctx, &big); !errors.Is(err, errBudget) {
+		t.Errorf("a request whose input reaches the cap: %v, want refused", err)
+	}
+	small := openresponses.Request{Input: openresponses.Items{openresponses.UserText("remember tabs")}}
+	if err := b.check(ctx, &small); err != nil {
+		t.Fatal(err)
+	}
+	in := compact.Estimate(small.Input) + compact.EstimateSettings(small)
+	if small.MaxOutputTokens == nil || b.used+in+*small.MaxOutputTokens > b.max {
+		t.Errorf("max output %v with %d used and %d in: past the cap of %d", small.MaxOutputTokens, b.used, in, b.max)
+	}
+	less := 10
+	own := openresponses.Request{Input: small.Input, MaxOutputTokens: &less}
+	if err := b.check(ctx, &own); err != nil || *own.MaxOutputTokens != 10 {
+		t.Errorf("a smaller limit of the request's own: %v, %v", *own.MaxOutputTokens, err)
 	}
 }

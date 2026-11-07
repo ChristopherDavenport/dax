@@ -282,7 +282,8 @@ before changing the shape.
   Forget compared on the entry's hash as `decide` read it, by call ID,
   before anything is asked; each rendered scope within the block's
   bound), its own policy source
-  granted under its grant scope (auto), a token cap, an entry no pass
+  granted under its grant scope (auto), a token cap (each request's
+  estimated input and its output held to what is left), an entry no pass
   wrote asked about, and under propose (or after an open-world run) a
   pass due at the person's next prompt (`BeforePrompt`); `ledger.go`, the passes' ledger
   (`.dax-passes.jsonl` beside the journal) and `Undo` (`/memory undo`

@@ -345,7 +345,8 @@ last (one you or the conversation's model wrote is asked about first),
 each write, a forget too, lands only if the entry is still what the
 pass read when it decided the write, before it asked you (one changed
 since is left, and you are told), a scope may not grow past the
-memory block's bound, and a pass stops at 8,000 tokens
+memory block's bound, and a pass stops at 8,000 tokens, each request
+held to what is left of them
 (`background_max_tokens`). `background_every` runs a pass every N such
 runs. A run that reached an open world (an MCP server's tool, a remote
 agent) gets `propose` instead of `auto`, since what it read may be an

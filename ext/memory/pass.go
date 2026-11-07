@@ -21,6 +21,7 @@ import (
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -479,12 +480,17 @@ func clip(s string, n int) string {
 // errBudget ends a pass at its token cap.
 var errBudget = errors.New("the memory pass reached its token cap")
 
-// tokenBudget counts a pass's tokens and refuses a request past its cap.
+// tokenBudget counts a pass's tokens and holds each request to what is
+// left of its cap.
 type tokenBudget struct {
 	mu   sync.Mutex
 	used int
 	max  int
 }
+
+// passMinOutput is the least output a pass's request is let write: a
+// request left less is refused, the pass ending at its cap.
+const passMinOutput = 256
 
 func (t *tokenBudget) count(_ context.Context, ev agentturn.Event) error {
 	if e, ok := ev.(*agentturn.ResponseEnd); ok && e.Response != nil && e.Response.Usage != nil {
@@ -496,11 +502,21 @@ func (t *tokenBudget) count(_ context.Context, ev agentturn.Event) error {
 	return nil
 }
 
-func (t *tokenBudget) check(context.Context, *openresponses.Request) error {
+// check is the pass's BeforeModelCall: the request's input, estimated
+// as compaction does, and the tokens used so far must leave room for
+// passMinOutput, and the request may write no more output than is left,
+// so the pass stays within its cap by the estimate rather than passing
+// it by a request.
+func (t *tokenBudget) check(_ context.Context, req *openresponses.Request) error {
+	in := compact.Estimate(req.Input) + compact.EstimateSettings(*req)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.used >= t.max {
+	left := t.max - t.used - in
+	if left < passMinOutput {
 		return errBudget
+	}
+	if req.MaxOutputTokens == nil || *req.MaxOutputTokens > left {
+		req.MaxOutputTokens = &left
 	}
 	return nil
 }
