@@ -857,7 +857,13 @@ policy off, `Decide` runs as a main-agent `BeforeToolCall`. dax-hooks
 with `Env.HostEnv`, a line through `/bin/sh -c` as Claude Code runs
 one, in a process group the run's cancellation kills; a PreToolUse
 hook that cannot answer refuses the call (it fails closed, as rule 8
-asks). `extension.Renderers` merges the extensions' renderers for the
+asks). An extension's `AfterRun` is told, after each run of the person's
+main agent ends and is on the record, what the run did: the tools it
+called, whether one reached an open world (an MCP server's tool, or
+one annotated open-world, as dax-a2a's peers are) and its output
+tokens (`agent/afterrun.go`). It runs off the loop, under a context
+the session's close ends and waits on; an A2A caller's conversation
+and a sub-agent call none. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.

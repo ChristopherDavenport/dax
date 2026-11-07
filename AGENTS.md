@@ -127,7 +127,8 @@ before changing the shape.
   on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type (its `PersonOnly` tools, refused
-  to an A2A caller; its `PolicyHooks`, inside the engine's decision),
+  to an A2A caller; its `PolicyHooks`, inside the engine's decision;
+  its `AfterRun`, told what each of the main agent's runs did, `Run`),
   `ToolEnv` (what tools are built over), `Env` (the
   session as kit options see it; `Caller` names an A2A caller's
   context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
@@ -198,6 +199,9 @@ before changing the shape.
   `agent/caller.go`: what an A2A caller's requests leave out of what
   the person's carry (their own AGENTS.md), after the kit's
   BeforeModelCall and in sub-agents' (`Env.ChildBeforeModelCall`).
+  `agent/afterrun.go`: the extensions' `AfterRun` hooks, the run's
+  calls, open-world reach and output tokens gathered from the main
+  agent's events, each hook in a goroutine the close waits for.
   `agent/policyhooks.go`: the extensions' `PolicyHooks` for the
   engine (`WithHooks`, `WithAnsweringHooks`), an answer never an A2A
   caller's (`notForCallers`).

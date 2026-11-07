@@ -7,6 +7,12 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: `extension.Extension.AfterRun` and `extension.Run`: a hook
+  every extension may take, told after each run of the person's main
+  agent what it called, whether a call reached an open world (an MCP
+  server's tool, or one annotated open-world, which dax-a2a's peers now
+  are) and its output tokens, off the loop, the session waiting for it
+  before it closes (#160).
 - Added: a URL MCP server can sign in with OAuth (`"oauth": {}`, or a
   `client_id` registered for you): discovery from its 401, dynamic
   registration, consent at a printed URL with the redirect on a

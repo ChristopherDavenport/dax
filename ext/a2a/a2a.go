@@ -283,6 +283,14 @@ func connect(ctx context.Context, r Remote, timeout time.Duration, rt http.Round
 // gave is said once, by the loop, in their voice.
 type exchanged struct{ agenttool.Tool }
 
+// Annotations implements agenttool.Annotated: a remote agent is an
+// open world, whose answer may say anything (extension.Run.OpenWorld).
+func (t exchanged) Annotations() agenttool.Annotations {
+	a := agenttool.AnnotationsOf(t.Tool)
+	a.OpenWorld = true
+	return a
+}
+
 func (t exchanged) Execute(ctx context.Context, call agenttool.Call) (agenttool.Result, error) {
 	x := &exchange{}
 	res, err := t.Tool.Execute(context.WithValue(ctx, exchangeKey{}, x), call)

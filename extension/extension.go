@@ -172,6 +172,17 @@ type Extension struct {
 	// runs, as a BeforeToolCall hook of the main agent.
 	PolicyHooks func(Env) (PolicyHooks, error)
 
+	// AfterRun is called after each run of the person's main agent
+	// ends, however it ended and whatever started it (a prompt, a
+	// resume, a steer that started a run), with what the run did. It
+	// is built over the session as the kit options are, and called
+	// off the loop, in a goroutine of its own, once the run's end is
+	// on the record, under a context that ends when the session
+	// closes, which waits for it first. A run of an A2A caller's
+	// conversation, or a sub-agent's, calls none. dax-memory's
+	// background pass starts here.
+	AfterRun func(Env) (func(ctx context.Context, run Run), error)
+
 	// Instructions are added to the main agent's system prompt, after
 	// dax's role line and in the order the extensions are given, before
 	// the user's own instructions file. A sub-agent's prompt is its
@@ -224,6 +235,26 @@ type PolicyHooks struct {
 	// rules, a deny, an ask a Decide hook raised, nor any call of an
 	// A2A caller's conversation, which is asked as before.
 	Answer func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+}
+
+// Run is a run of the person's main agent that ended, as AfterRun
+// sees it.
+type Run struct {
+	// ID is the run's, and End how it ended: its reason, the items it
+	// appended to the conversation, the calls it left pending.
+	ID  string
+	End *agentturn.RunEnd
+	// Calls are the tools the run called, by name, in the order they
+	// started.
+	Calls []string
+	// OpenWorld says a call of the run reached past the workspace and
+	// the session, so the conversation may hold text from anyone: an
+	// MCP server's tool, or a tool annotated open-world (a remote
+	// agent's). Memory's own reads are not.
+	OpenWorld bool
+	// OutputTokens are the output tokens the run's model responses
+	// reported.
+	OutputTokens int
 }
 
 // ToolEnv is what an extension's tools are built over.

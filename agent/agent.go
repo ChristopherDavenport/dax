@@ -533,6 +533,8 @@ type Session struct {
 	// their handler's making until the session has opened.
 	cbMu      sync.Mutex
 	callbacks []net.Listener
+	// after are the extensions' AfterRun hooks (afterrun.go).
+	after afterRuns
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -878,6 +880,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if err != nil {
 		return nil, err
 	}
+	if s.after.hooks, err = afterRunHooks(o.Extensions, xenv); err != nil {
+		return nil, err
+	}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
 			continue
@@ -1180,6 +1185,12 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
 	// A mode asked for during a run starts at its next turn.
 	s.ag.Subscribe(s.modeAtTurn)
+	// The extensions' AfterRun hooks, once a run is on the record.
+	if len(s.after.hooks) > 0 {
+		s.after.ctx, s.after.cancel = context.WithCancel(context.WithoutCancel(ctx))
+		s.after.lookup = kit.LookupTool
+		s.ag.Subscribe(s.after.handle)
+	}
 	if s.modes.settings != nil && s.modes.mode != policy.ModeDefault {
 		s.annotateMode(ctx, modeEntry{Mode: s.modes.mode, Reason: "start"})
 	}
@@ -1694,6 +1705,9 @@ func (s *Session) Close() error {
 
 func (s *Session) close() error {
 	s.releaseCallbacks()
+	// The extensions' AfterRun hooks end first, while the kit and the
+	// recorder they write through are open.
+	s.after.stop()
 	if s.detach != nil {
 		s.detach()
 	}
