@@ -90,8 +90,8 @@ before changing the shape.
   `acp.go`: `-front acp`, an editor over the Agent Client Protocol v1
   on standard input and output (`internal/acp`): the first
   `session/new` takes the opened session, later ones `Reopen`;
-  `session/load` (this project's top-level sessions, `Sessions`)
-  replays `Session.Conversation`; permissions and sub-agents' asked
+  `session/load` (this project's top-level sessions, `Sessions`, none
+  already open in the process) replays `Session.Conversation`; permissions and sub-agents' asked
   calls go to `session/request_permission` (allow always = a session
   grant); the editor's stdio MCP servers start on the host under
   `-trust-mcp` (`Session.AddEditorMCP`, their env as secret values,

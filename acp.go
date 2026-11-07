@@ -256,14 +256,19 @@ func (s *acpServer) loadable(ctx context.Context, id string) error {
 }
 
 // open is the session for a session/new (id "") or a session/load: the
-// one the command line opened, for the first new, else one reopened
-// over its live settings.
+// one the command line opened, for the first new or a load of its own
+// ID before any new took it, else one reopened over its live settings.
+// A load of a session already open in this process is refused: one
+// session, one conversation, so two sessions never record to one.
 func (s *acpServer) open(ctx context.Context, id string) (*agent.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if id == "" && !s.taken {
+	if !s.taken && (id == "" || id == s.first.ID()) {
 		s.taken = true
 		return s.first, nil
+	}
+	if id != "" && (id == s.first.ID() || slices.ContainsFunc(s.opened, func(o *agent.Session) bool { return o.ID() == id })) {
+		return nil, acp.Errorf(acp.CodeInvalidParams, "session %s is already open in this dax", id)
 	}
 	from := s.first
 	if n := len(s.opened); n > 0 {

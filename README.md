@@ -1868,7 +1868,8 @@ a run. Its mode picker has the modes Shift-Tab cycles (`default`,
 commands are your prompt templates and the MCP servers' prompts, since
 dax's other commands act on a terminal. Loading a session takes one of
 this project's top-level sessions and shows it again from the record,
-a failed call marked failed. The editor's working directory must be
+a failed call marked failed; one already open in this dax is refused,
+since two sessions would then record one conversation. The editor's working directory must be
 the one dax started in, or below it: start dax there (the editor does).
 The editor's MCP servers start only under `-trust-mcp` (`"args":
 ["-front", "acp", "-trust-mcp"]`), stdio ones alone, on this machine

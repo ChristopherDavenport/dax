@@ -17,7 +17,8 @@ versions may break flags and the config file.
   editor's permission prompts (allow once, reject, allow always for the
   session when dax offers a rule), cancel, the modes Shift-Tab cycles,
   prompt templates and MCP prompts as commands, `session/load` of this
-  project's sessions replayed from the record, and the editor's stdio
+  project's sessions replayed from the record (one already open in
+  this dax refused), and the editor's stdio
   MCP servers on this machine under `-trust-mcp`, their `env` given to
   that server alone and redacted from its output. The `cwd` must be the
   directory dax started in or below it (#167).

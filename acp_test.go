@@ -265,5 +265,16 @@ func TestAnEditorDrivesDaxOverACP(t *testing.T) {
 			t.Errorf("the replay has no %s with %s: %+v", want.kind, want.text, us)
 		}
 	}
+	// One session, one conversation: the loaded session is live in this
+	// process, so loading it again, after other sessions were opened, is
+	// refused rather than opening a second session that records to it.
+	for range 2 {
+		if m := e2.call(acp.MethodSessionNew, acp.NewSessionRequest{CWD: dir}); m.Error != nil {
+			t.Fatalf("session/new: %+v", m.Error)
+		}
+	}
+	if m := e2.call(acp.MethodSessionLoad, acp.LoadSessionRequest{SessionID: created.SessionID, CWD: dir}); m.Error == nil || m.Error.Code != acp.CodeInvalidParams || !strings.Contains(m.Error.Message, "already open") {
+		t.Errorf("a second load of an open session: %+v, want refused as already open", m.Error)
+	}
 	e2.stop()
 }

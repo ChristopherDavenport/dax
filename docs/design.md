@@ -446,7 +446,8 @@ the session); `-front acp` is an editor over the Agent Client Protocol
 session, the first the one the command line opened and each later one
 `Session.Reopen` over the live settings, `session/load` one of this
 project's top-level sessions replayed from the record (a failed call
-marked failed), the editor's permissions answering the session's
+marked failed; one already open in the process refused, one session
+being one conversation), the editor's permissions answering the session's
 (allow once, reject, allow always as a session grant when dax offers
 a rule), its stdio MCP servers started on this machine under
 `-trust-mcp` alone with their `env` as `secret_env` values, and its
