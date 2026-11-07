@@ -100,3 +100,57 @@ func TestExitPlanModeIsDeniedOutsidePlanMode(t *testing.T) {
 		t.Error("Shift-Tab skips plan")
 	}
 }
+
+// Leaving plan mode any way but an approved exit_plan_mode (Shift-Tab
+// on past it, /mode) puts back the model the session had before plan
+// mode moved it to plan_model; a model the person chose while in plan
+// mode stays. (#147)
+func TestLeavingPlanModeRestoresTheModel(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Policy = confirmPolicy(t)
+	o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+	o.PlanModel = "plan-model"
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	main := s.Model()
+	for _, want := range []struct{ mode, model string }{
+		{policy.ModeAcceptEdits, main},
+		{policy.ModePlan, "plan-model"},
+		{policy.ModeDontAsk, main},
+		{policy.ModeDefault, main},
+	} {
+		mode, err := s.NextMode(ctx)
+		if err != nil || mode != want.mode {
+			t.Fatalf("Shift-Tab: %q, %v; want %s", mode, err, want.mode)
+		}
+		if m := s.Model(); m != want.model {
+			t.Errorf("in %s: model %q, want %q", mode, m, want.model)
+		}
+	}
+	if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetMode(ctx, policy.ModeDefault); err != nil {
+		t.Fatal(err)
+	}
+	if m := s.Model(); m != main {
+		t.Errorf("/mode plan, then default: model %q, want %q", m, main)
+	}
+	// A model chosen in plan mode is the person's: leaving keeps it.
+	if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetModel("chosen"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetMode(ctx, policy.ModeDefault); err != nil {
+		t.Fatal(err)
+	}
+	if m := s.Model(); m != "chosen" {
+		t.Errorf("a model chosen in plan mode: %q after leaving, want chosen", m)
+	}
+}

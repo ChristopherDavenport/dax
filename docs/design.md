@@ -361,7 +361,10 @@ approval of a plan runs `exit_plan_mode`, which moves the session to
 `acceptEdits` from the next turn (`Env.SetMode`, recorded as `plan
 approved`); `act_model` is set by the plane before the `Resume` that
 answers it, since a running agent's model cannot change, and
-`plan_model` before the first run once plan is entered. The session
+`plan_model` before the first run once plan is entered, while the
+session is still in plan. Leaving plan any other way (Shift-Tab past
+it, `/mode`) puts back the model `plan_model` replaced, before the next
+run, unless the person chose another meanwhile. The session
 keeps the settings it built the policy from (the box's confinement
 included) and a switch rebuilds them and replaces the engine's policy
 with agentpolicy's `SetPolicy`, journaled with the mode as its reason,

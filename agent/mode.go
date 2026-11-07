@@ -45,8 +45,17 @@ type modes struct {
 	// (policy.PlanAsks): the plan's exit.
 	planAsks map[string]bool
 	// model is a model to move to before the next run starts:
-	// Options.PlanModel, when plan mode was entered.
+	// Options.PlanModel, when plan mode was entered, or the model it
+	// replaced, when plan mode was left unapproved.
 	model string
+	// before is the model plan_model replaced, put back when plan mode
+	// is left any way but an approved exit ("" when plan_model was not
+	// applied).
+	before string
+	// approved says an approval of the plan's exit was given since the
+	// last run started: leaving plan mode then applies act_model, not
+	// before.
+	approved bool
 	// inForce is mode, read by the decisions without the lock, which a
 	// switch holds while it replaces the policy.
 	inForce atomic.Value
@@ -117,14 +126,12 @@ func (s *Session) setMode(ctx context.Context, name, why string) (pending bool, 
 	return false, err
 }
 
-// actModel moves to Options.ActModel when answers approve the plan's
-// exit, a call plan mode asks about (modes.planAsks), pending in plan
-// mode: before the Resume that runs it, since SetModel refuses a running
-// agent; the call itself moves the mode.
+// actModel notes an approval in answers of the plan's exit, a call
+// plan mode asks about (modes.planAsks), pending in plan mode, and moves
+// to Options.ActModel when one is set: before the Resume that runs it,
+// since SetModel refuses a running agent; the call itself moves the
+// mode, and leaving plan mode so puts back no earlier model.
 func (s *Session) actModel(answers []agentturn.Answer) {
-	if s.opts.ActModel == "" {
-		return
-	}
 	mode, _ := s.Mode()
 	if mode != policy.ModePlan {
 		return
@@ -135,6 +142,12 @@ func (s *Session) actModel(answers []agentturn.Answer) {
 		}
 		for _, a := range answers {
 			if a.CallID == p.Call.CallID && a.Output == nil {
+				s.modes.mu.Lock()
+				s.modes.approved = true
+				s.modes.mu.Unlock()
+				if s.opts.ActModel == "" {
+					return
+				}
 				if err := s.SetModel(s.opts.ActModel); err != nil {
 					fmt.Fprintf(warnings{}, "dax: act_model %s: %v\n", s.opts.ActModel, err)
 				}
@@ -144,18 +157,45 @@ func (s *Session) actModel(answers []agentturn.Answer) {
 	}
 }
 
-// modelBeforeRun moves to the model a switch asked for (plan_model),
-// before a run starts: SetModel refuses a running agent.
+// modelBeforeRun moves to the model a switch asked for, before a run
+// starts (SetModel refuses a running agent): plan_model while the
+// session is still in plan mode, the model it replaced, keeping that
+// to put back, or that model once plan mode was left unapproved. It
+// starts the run with no approval of the plan's exit noted.
 func (s *Session) modelBeforeRun() {
 	s.modes.mu.Lock()
 	m := s.modes.model
-	s.modes.model = ""
+	s.modes.model, s.modes.approved = "", false
+	toPlan := m != "" && s.modes.mode == policy.ModePlan
+	if toPlan && s.modes.before == "" {
+		s.modes.before = s.Model()
+	}
 	s.modes.mu.Unlock()
 	if m == "" {
 		return
 	}
 	if err := s.SetModel(m); err != nil {
-		fmt.Fprintf(warnings{}, "dax: plan_model %s: %v\n", m, err)
+		what := "the model before plan mode"
+		if toPlan {
+			what = "plan_model"
+		}
+		fmt.Fprintf(warnings{}, "dax: %s %s: %v\n", what, m, err)
+	}
+}
+
+// leavePlan is what leaving plan mode does to the model, under
+// modes.mu: an approved exit has applied act_model (actModel) and puts
+// nothing back; any other way puts back the model plan_model replaced,
+// before the next run, unless the person chose another since. A
+// plan_model not yet applied is not.
+func (s *Session) leavePlan() {
+	before := s.modes.before
+	s.modes.before, s.modes.model = "", ""
+	if s.modes.approved || before == "" {
+		return
+	}
+	if s.Model() == s.opts.PlanModel {
+		s.modes.model = before
 	}
 }
 
@@ -212,9 +252,12 @@ func (s *Session) applyMode(ctx context.Context, mode, why string) error {
 	s.modes.inForce.Store(mode)
 	s.modes.mode, s.modes.settings.Mode = mode, mode
 	s.modes.note = policy.DescribeMode(mode)
-	if mode == policy.ModePlan && s.opts.PlanModel != "" {
+	switch {
+	case mode == policy.ModePlan && s.opts.PlanModel != "":
 		// Applied before the next run (modelBeforeRun).
 		s.modes.model = s.opts.PlanModel
+	case from == policy.ModePlan:
+		s.leavePlan()
 	}
 	s.annotateMode(ctx, modeEntry{Mode: mode, From: from, Reason: why})
 	return nil

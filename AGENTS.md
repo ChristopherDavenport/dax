@@ -292,7 +292,9 @@ before changing the shape.
   acceptEdits through `Env.SetMode` ("plan approved"). Plan mode's
   refusal is `dontAskRefusal`'s, but for the plan's asks
   (`policy.PlanAsks`); `plan_model`/`act_model` are `agent/mode.go`'s
-  (`modelBeforeRun`, `actModel` in `Resume`, before the run).
+  (`modelBeforeRun`, `actModel` in `Resume`, before the run;
+  `leavePlan`, the model `plan_model` replaced put back when plan is
+  left unapproved).
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
   hooks (config `hooks`, the user's layer only) under Claude Code's
   protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and
