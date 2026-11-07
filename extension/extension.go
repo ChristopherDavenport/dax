@@ -438,6 +438,28 @@ func SecretsOf(exts []Extension) []string {
 	return out
 }
 
+// ownGrantsKey marks a sub-agent's run whose "yes, always" stays its
+// own (WithOwnGrants).
+type ownGrantsKey struct{}
+
+// WithOwnGrants is ctx, the context a sub-agent's run is prompted on
+// (a host-started child's, Env.Kit's StartChild or ContinueChild), with
+// the person's "yes, always" to one of its asked calls kept to that
+// sub-agent: granted under its own grant scope for the rest of the
+// session, not to the conversation, so neither the main agent nor any
+// other sub-agent gains the rule. A background pass that writes
+// unasked once the person said so (dax-memory's) is run on it, so the
+// person's yes to the pass is no yes to the model they talk to.
+func WithOwnGrants(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownGrantsKey{}, true)
+}
+
+// OwnGrants says whether ctx is a sub-agent's run WithOwnGrants marked.
+func OwnGrants(ctx context.Context) bool {
+	own, _ := ctx.Value(ownGrantsKey{}).(bool)
+	return own
+}
+
 // textSchema is the form of a TextQuestion: one string property,
 // "answer", and dax's mark, which tells it from anyone else's form.
 const textSchema = `{"type":"object","x-dax":"text-question","properties":{"answer":{"type":"string"}},"required":["answer"]}`

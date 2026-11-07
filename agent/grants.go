@@ -50,10 +50,12 @@ type GrantOffer struct {
 }
 
 // grants are the rules granted for the session, which each grant
-// activates again as one set.
+// activates again as one set: the conversation's, and, by grant scope,
+// the sub-agents' that keep their grants (extension.WithOwnGrants).
 type grants struct {
 	mu      sync.Mutex
 	session []string
+	own     map[string][]string
 }
 
 // GrantOffer is the grant dax offers for the pending call callID: a rule
@@ -147,10 +149,21 @@ func (s *Session) Grant(ctx context.Context, callID string, kind GrantKind, rule
 // grantSession activates the session's grants, rule among them, as one
 // set under the conversation's grant scope.
 func (s *Session) grantSession(ctx context.Context, rule string) error {
+	return s.grantUnder(ctx, "", rule)
+}
+
+// grantUnder activates the grants under scope, rule among them, as one
+// set: scope "" is the conversation's, any other a sub-agent's own
+// (extension.WithOwnGrants), which decides that sub-agent's calls
+// alone.
+func (s *Session) grantUnder(ctx context.Context, scope, rule string) error {
 	eng := s.Kit.Engine()
 	s.grants.mu.Lock()
 	defer s.grants.mu.Unlock()
 	rules := s.grants.session
+	if scope != "" {
+		rules = s.grants.own[scope]
+	}
 	if !slices.Contains(rules, rule) {
 		rules = append(slices.Clone(rules), rule)
 	}
@@ -158,7 +171,11 @@ func (s *Session) grantSession(ctx context.Context, rule string) error {
 	if err != nil {
 		return err
 	}
-	sctx := agentpolicy.ContextWithGrantScope(ctx, s.Kit.GrantScope(ctx))
+	in := scope
+	if in == "" {
+		in = s.Kit.GrantScope(ctx)
+	}
+	sctx := agentpolicy.ContextWithGrantScope(ctx, in)
 	_, refused := eng.GrantSet(sctx, agentpolicy.RuleSet{
 		Source: agentpolicy.Source{Name: policy.SourceSession, Trusted: true, Rank: policy.RankGrant},
 		Allow:  parsed,
@@ -168,7 +185,14 @@ func (s *Session) grantSession(ctx context.Context, rule string) error {
 			return fmt.Errorf("%s was not granted: %s", rule, r.Reason)
 		}
 	}
-	s.grants.session = rules
+	if scope == "" {
+		s.grants.session = rules
+		return nil
+	}
+	if s.grants.own == nil {
+		s.grants.own = map[string][]string{}
+	}
+	s.grants.own[scope] = rules
 	return nil
 }
 
@@ -182,15 +206,18 @@ type childAsked struct {
 	calls map[string]askedFor
 }
 
-// askedFor is a sub-agent's call asked about: its tool and arguments.
+// askedFor is a sub-agent's call asked about: its tool and arguments,
+// and the grant scope "yes, always" grants under, "" for the
+// conversation's (a sub-agent that keeps its grants names its own).
 type askedFor struct {
-	name string
-	args json.RawMessage
+	name  string
+	args  json.RawMessage
+	scope string
 }
 
 const maxChildAsked = 256
 
-func (c *childAsked) add(callID, name string, args json.RawMessage) {
+func (c *childAsked) add(callID string, a askedFor) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.calls == nil {
@@ -199,7 +226,7 @@ func (c *childAsked) add(callID, name string, args json.RawMessage) {
 	if _, ok := c.calls[callID]; !ok {
 		c.order = append(c.order, callID)
 	}
-	c.calls[callID] = askedFor{name: name, args: args}
+	c.calls[callID] = a
 	if len(c.order) > maxChildAsked {
 		delete(c.calls, c.order[0])
 		c.order = c.order[1:]
@@ -217,9 +244,10 @@ func (c *childAsked) get(callID string) (askedFor, bool) {
 // call put (a background memory pass's write among them): a rule, for
 // this session alone, only when the policy asked about the call for
 // want of one, in the words of the tool's extension (GrantRule) or the
-// tool's bare name; nothing for any other question. A session grant
-// reaches the session's sub-agents (sessionGrantFor) as it does the
-// main agent.
+// tool's bare name; nothing for any other question. A session grant reaches the session's
+// sub-agents (sessionGrantFor) as it does the main agent, but for a
+// sub-agent that keeps its grants (extension.WithOwnGrants), whose
+// grant is its own alone.
 func (s *Session) QuestionOffer(ctx context.Context, q agentturn.Question) GrantOffer {
 	if s.Kit == nil || s.Kit.Engine() == nil || q.Call == nil {
 		return GrantOffer{}
@@ -239,13 +267,16 @@ func (s *Session) QuestionOffer(ctx context.Context, q agentturn.Question) Grant
 }
 
 // GrantQuestion makes the session grant a person chose with their yes to
-// the question q: rule must be the one QuestionOffer offers. Make it
-// before the Reply that answers q.
+// the question q: rule must be the one QuestionOffer offers. It is the
+// conversation's, or, for a sub-agent that keeps its grants
+// (extension.WithOwnGrants), that sub-agent's alone. Make it before the
+// Reply that answers q.
 func (s *Session) GrantQuestion(ctx context.Context, q agentturn.Question, rule string) error {
 	if o := s.QuestionOffer(ctx, q); o.Rule == "" || o.Rule != rule {
 		return fmt.Errorf("dax offers no grant of %s for this question", rule)
 	}
-	return s.grantSession(ctx, rule)
+	a, _ := s.childAsked.get(q.Call.CallID)
+	return s.grantUnder(ctx, a.scope, rule)
 }
 
 // ruleString is a rule as it is written.

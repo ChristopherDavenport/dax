@@ -144,6 +144,8 @@ before changing the shape.
   session as kit options see it; `Caller` names an A2A caller's
   context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
+  `WithOwnGrants`, a sub-agent's run whose "yes, always" stays its own
+  (the memory pass's), and
   `TextQuestion`, `IsTextQuestion`, `TextAnswer` and `TextContent`,
   dax's own marked form asking for a line of text, which every front
   answers (anyone else's form is cancelled).
@@ -202,7 +204,9 @@ before changing the shape.
   identity, loaded as `dax:saved`), both at `policy.RankGrant`;
   `QuestionOffer` and `GrantQuestion`, a session grant offered with a
   sub-agent's asked call's question when the policy asked for want of a
-  rule (`childAsked`, filled by `childPolicy`).
+  rule (`childAsked`, filled by `childPolicy`), made under the
+  sub-agent's own grant scope when its run keeps its grants
+  (`extension.WithOwnGrants`, `grantUnder`).
   `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's
   prompts as slash commands and its resources as `@server:uri`
   mentions, sent marked as the server's, untrusted.

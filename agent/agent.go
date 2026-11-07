@@ -2435,8 +2435,17 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 			set.Release(bctx)
 			if v.Action == agentturn.Defer && v.Rule == nil && (h == nil || h.Action != agentturn.Defer) {
 				// Asked for want of a rule: "yes, always" may be
-				// offered for it (QuestionOffer).
-				s.childAsked.add(info.Call.CallID, info.Call.Name, json.RawMessage(info.Call.Arguments))
+				// offered for it (QuestionOffer), granted to the
+				// conversation, or to the sub-agent alone when it
+				// keeps its grants (never to the conversation for
+				// want of a scope of its own).
+				a := askedFor{name: info.Call.Name, args: json.RawMessage(info.Call.Arguments)}
+				if extension.OwnGrants(ctx) {
+					a.scope = agentpolicy.GrantScopeFromContext(ctx)
+				}
+				if a.scope != "" || !extension.OwnGrants(ctx) {
+					s.childAsked.add(info.Call.CallID, a)
+				}
 			}
 			// The deferral stands, and tools/agent's WithAskParent puts
 			// it to the task call's elicitor with agentturn.Ask: the

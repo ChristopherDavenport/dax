@@ -900,9 +900,13 @@ for the person: an extension's `BeforePrompt` runs at the start of the
 person's prompt (`Session.Prompt`), before it is sent, and the prompt
 waits for it, so each write it asks about is answered by the front
 there, as a sub-agent's asked call is. "Yes, always" to such a
-question is a session grant of the offered rule (`QuestionOffer`,
-`GrantQuestion`), which reaches every sub-agent through
-`sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
+question is a grant of the offered rule (`QuestionOffer`,
+`GrantQuestion`) for the rest of the session, made under the pass's own
+grant scope: the pass runs on `extension.WithOwnGrants`, so the grant
+answers the passes' writes alone, never the main agent's (whose
+`memory_save` still asks) nor another sub-agent's. A sub-agent's
+"always" without that mark is the conversation's session grant, which
+reaches every sub-agent through `sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.

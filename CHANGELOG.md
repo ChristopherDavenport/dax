@@ -7,6 +7,9 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: `extension.WithOwnGrants` and `OwnGrants`: a sub-agent's run
+  marked so keeps the person's "yes, always" to its asked calls to
+  itself, under its own grant scope (#160).
 - Added: `-front acp`, dax in an editor (Zed and others) over the Agent
   Client Protocol v1 on standard input and output: sessions (each a dax
   session under the same settings, policy and record), prompts with
@@ -47,8 +50,9 @@ versions may break flags and the config file.
   (#160).
 - Added: `"background": "propose"`: the pass runs at the start of your
   next prompt and asks about each write as a sub-agent's call is asked;
-  the REPL's `a` allows the offered rule for the session, which reaches
-  the passes and every sub-agent's asked call. Under `-p` and `dax
+  the REPL's `a` allows the offered rule to the passes alone for the
+  rest of the session (the model you talk to still asks before its own
+  memory writes); a sub-agent's asked call gets `a` too. Under `-p` and `dax
   serve` it does not run, and says so once (#160).
 - Changed: `extension.Extension.BeforePrompt`;
   `agent.Session.QuestionOffer` and `GrantQuestion`, "yes, always" for a

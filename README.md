@@ -353,8 +353,9 @@ injection meant to become a memory.
 With `propose` the pass waits for you: it runs at the start of your
 next prompt, before the prompt is sent, and each write is asked as a
 sub-agent's call is (`? allow memory_save {...} (the memory pass
-sub-agent asks: ...)`); in the REPL `a` allows that rule for the rest of
-the session, the passes' later writes included (the terminal client's
+sub-agent asks: ...)`); in the REPL `a` allows that rule to the passes
+for the rest of the session, and to the passes alone: the model you talk
+to still asks before its own `memory_save` (the terminal client's
 question panel offers y and n). A write you do not answer, or that
 nobody is there to answer, is not made. Under `-p` and `dax serve`
 nobody is shown a proposal, so a pass that would propose does not run,

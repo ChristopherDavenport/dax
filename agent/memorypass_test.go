@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -152,12 +153,14 @@ func TestAnAutoPassAsksBeforeItChangesAnEntryItDidNotWrite(t *testing.T) {
 
 // Under propose the pass waits for the person's next prompt and asks
 // about each write through the question a sub-agent's asked call puts;
-// a yes writes it, and "yes, always" (a session grant of the offered
-// rule) lets the next pass write unasked. With nobody answering, the
-// write is not made. (#160 c)
+// a yes writes it, and "yes, always" (a grant of the offered rule to
+// the pass, for the session) lets the next pass write unasked, while
+// the main agent's own memory_save still asks. With nobody answering,
+// the write is not made. (#160 c)
 func TestAProposingPassAsksAtTheNextPrompt(t *testing.T) {
 	ctx := context.Background()
-	o := options(t, &scripted{calls: [][2]string{{"ls", `{}`}}})
+	main := &switchable{parent: scripted{calls: [][2]string{{"ls", `{}`}}}}
+	o := options(t, main)
 	o.Policy = confirmPolicy(t)
 	var logs logLines
 	o.Log = logs.log
@@ -227,5 +230,19 @@ func TestAProposingPassAsksAtTheNextPrompt(t *testing.T) {
 	}
 	if _, err := mem.Get(ctx, "user", "errors"); err != nil {
 		t.Errorf("the pass under the grant did not write: %v\n%s", err, logs.all())
+	}
+	// The grant was the pass's: the main agent's memory_save still asks.
+	main.next("memory_save", `{"scope":"user","name":"tabs","content":"Tabs, not spaces."}`)
+	var permitted []string
+	rules.Permit = func(c *openresponses.FunctionCall, _ string) PermitAnswer {
+		permitted = append(permitted, c.Name)
+		return PermitAnswer{Allow: true}
+	}
+	if _, err := Drive(ctx, s, rules, openresponses.UserText("remember tabs")); err != nil {
+		t.Fatal(err)
+	}
+	settled(s)
+	if !slices.Contains(permitted, "memory_save") {
+		t.Errorf("the main agent's memory_save ran unasked after the pass's yes, always (asked about %q)", permitted)
 	}
 }

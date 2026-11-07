@@ -219,6 +219,9 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 	if err != nil {
 		return err
 	}
+	// The person's "yes, always" to a write is the pass's alone, kept
+	// under its grant scope for the session: never the main agent's.
+	cctx = extension.WithOwnGrants(cctx)
 	passID := agentsession.SpawnedSessionID(kit.SessionID(), passSpawn)
 	from, err := lastSeq(cctx, mem)
 	if err != nil {
