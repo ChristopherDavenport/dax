@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.34 - 2026-11-06
 
 - Changed: `extension.WithOwnGrants` and `OwnGrants`: a sub-agent's run
   marked so keeps the person's "yes, always" to its asked calls to
