@@ -310,7 +310,7 @@ func (l *logged) String() string {
 // open is a session of dax-a2a over remotes, whose model calls the
 // first remote once with input, under the policy's default of asking
 // and the user's allow rules.
-func open(t *testing.T, remotes []daxa2a.Remote, allow []string, input string) (*agent.Session, *logged) {
+func open(t *testing.T, remotes []daxa2a.Remote, allow []string, input string, extra ...extension.Extension) (*agent.Session, *logged) {
 	t.Helper()
 	var log logged
 	model := &scripted{}
@@ -323,7 +323,7 @@ func open(t *testing.T, remotes []daxa2a.Remote, allow []string, input string) (
 		Dir: t.TempDir(), UserDir: t.TempDir(),
 		Store:      agentsession.NewMemoryStore(),
 		Policy:     &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: allow}},
-		Extensions: []extension.Extension{daxa2a.New(daxa2a.Options{Remotes: remotes, CardTimeout: 2 * time.Second}.WithTransport(tlsTransport))},
+		Extensions: append([]extension.Extension{daxa2a.New(daxa2a.Options{Remotes: remotes, CardTimeout: 2 * time.Second}.WithTransport(tlsTransport))}, extra...),
 		Log:        log.log,
 	}
 	s, err := agent.New(context.Background(), o)
@@ -434,6 +434,29 @@ func TestASlowCardIsNotWaitedOn(t *testing.T) {
 	}
 	if slices.Contains(offered(s), "slow") || !strings.Contains(log.String(), "peer slow not offered") {
 		t.Errorf("tools %v, notes %q", offered(s), log.String())
+	}
+}
+
+// A call to a remote agent reaches an open world, whose answer may say
+// anything: the run that made it is told so to an AfterRun hook, which
+// is what turns a background memory pass's auto into propose. (#160)
+func TestACallToARemoteIsOpenWorld(t *testing.T) {
+	up := serve(t, echoing{})
+	got := make(chan extension.Run, 2)
+	watcher := extension.Extension{Name: "watcher", AfterRun: func(extension.Env) (func(context.Context, extension.Run), error) {
+		return func(_ context.Context, r extension.Run) { got <- r }, nil
+	}}
+	s, _ := open(t, []daxa2a.Remote{{Name: "painter", URL: up.URL}}, []string{"painter"}, "paint the fence", watcher)
+	if _, err := agent.Drive(t.Context(), s, agent.Rules{}, openresponses.UserText("go")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-got:
+		if !slices.Equal(r.Calls, []string{"painter"}) || !r.OpenWorld {
+			t.Errorf("the hook was told %+v; want the painter call, open-world", r)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the hook was not told about the run")
 	}
 }
 
