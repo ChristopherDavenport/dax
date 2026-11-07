@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -345,5 +346,40 @@ func TestAServerThatRefusesStreamableHTTPIsReachedOverSSE(t *testing.T) {
 	}
 	if !strings.Contains(warned.String(), "HTTP+SSE") {
 		t.Errorf("warnings %q: want the fallback said", warned.String())
+	}
+}
+
+// Two dax processes saving grants into one tokens file keep both: each
+// save reads, changes and replaces the file under a lock on a file
+// beside it, which an flock holds across processes. Two fileTokens on
+// one path stand in for the two processes, since an flock is held by
+// the open file, not the process (#175, review M2).
+func TestTwoWritersOfTheTokensFileKeepEachOthersGrants(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dax", "mcp-tokens.json")
+	a, b := &fileTokens{path: path}, &fileTokens{path: path}
+	const n = 40
+	var wg sync.WaitGroup
+	for i, f := range []*fileTokens{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range n {
+				key := mcpclient.TokenKey{Endpoint: fmt.Sprintf("https://s%d-%d.example/mcp", i, j), Subject: "me"}
+				if err := f.Save(ctx, key, &mcpclient.TokenRecord{ClientID: key.Endpoint}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	for i := range 2 {
+		for j := range n {
+			key := mcpclient.TokenKey{Endpoint: fmt.Sprintf("https://s%d-%d.example/mcp", i, j), Subject: "me"}
+			if rec, err := a.Load(ctx, key); err != nil || rec == nil {
+				t.Fatalf("the grant of %s was lost (%v)", key.Endpoint, err)
+			}
+		}
 	}
 }

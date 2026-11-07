@@ -145,7 +145,8 @@ before changing the shape.
   HTTP+SSE for a server whose first `initialize` gets a 4xx;
   `agent/mcpoauth.go`, an `oauth` server's sign-in through go-sdk's
   `AuthorizationCodeHandler` and mcpclient's `StoreTokens` into
-  `~/.dax/mcp-tokens.json`, its discovery held to the server's origin
+  `~/.dax/mcp-tokens.json`, each save under an flock on a file beside
+  it (`agent/filelock_unix.go`), its discovery held to the server's origin
   and the authorization servers its metadata names by `authGuard`, the
   consent URL printed only while a session opens at the terminal),
   those the workspace offers of its own (`workspace.ServerProvider`, a

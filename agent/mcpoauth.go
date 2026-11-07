@@ -374,13 +374,22 @@ func (f *fileTokens) Load(_ context.Context, key mcpclient.TokenKey) (*mcpclient
 	return d.Grants[tokensKey(key)], nil
 }
 
-// Save keeps rec under key, the file replaced whole.
+// Save keeps rec under key, the file replaced whole. The read, the
+// change and the rename are held under a lock on mcp-tokens.json.lock,
+// across processes, so two dax processes saving at once each keep the
+// other's grant; a Load needs none, since the rename replaces the file
+// whole.
 func (f *fileTokens) Save(_ context.Context, key mcpclient.TokenKey, rec *mcpclient.TokenRecord) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := private.SecureDir(filepath.Dir(f.path)); err != nil {
 		return err
 	}
+	unlock, err := lockBeside(f.path)
+	if err != nil {
+		return fmt.Errorf("locking the MCP sign-in file %s: %w", f.path, err)
+	}
+	defer unlock()
 	d, err := f.read()
 	if err != nil {
 		return err
