@@ -17,7 +17,9 @@ import (
 func prompt(ctx context.Context, s *agent.Session, text string, approve func(*openresponses.FunctionCall, string) bool) (*agentturn.RunEnd, error) {
 	var r agent.Rules
 	if approve != nil {
-		r.Permit = func(c *openresponses.FunctionCall, reason string) (bool, string) { return approve(c, reason), "" }
+		r.Permit = func(c *openresponses.FunctionCall, reason string) agent.PermitAnswer {
+			return agent.PermitAnswer{Allow: approve(c, reason)}
+		}
 		r.Reply = func(q agentturn.Question) agenttool.Answer {
 			if q.Call != nil && approve(&openresponses.FunctionCall{CallID: q.Call.CallID, Name: q.Call.Name, Arguments: string(q.Call.Args)}, q.Elicitation.Message) {
 				return agenttool.Answer{Action: agenttool.ActionAccept}

@@ -65,6 +65,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	kind := fs.String("kind", workspace.KindRemote, "the workspace's kind as the session records it: "+strings.Join(executeKinds, ", "))
 	ref := fs.String("ref", "", "the workspace's ref as the session records it: an image, a host, an instance; default this host's name")
 	host := fs.String("host", "", "the machine the workspace is on, as the session records it (workspace.host); default none")
+	project := fs.String("project", "", "the project's identity, for -list, memory and the session's header, when -ref is not it: a box's name beside the image digest -ref names; default the ref")
 	instance := fs.String("instance", "", "the file system's instance as the session records it (workspace.instance): a container's ID, set when a restart gives a new file system; default none")
 	listen := fs.String("listen", "", "serve over HTTP at this address (127.0.0.1:7777) instead of on standard input and output; a loopback address unless -insecure-no-auth")
 	insecure := fs.Bool("insecure-no-auth", false, "with -listen, take an address that is not loopback: nothing authenticates a client, so anyone who can reach it can run commands here")
@@ -135,6 +136,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	srv, err := executor.NewServer(executor.ServeOptions{
 		Name: p.name, Version: p.version,
 		Descriptor:   workspace.Descriptor{Kind: *kind, Ref: descRef, Host: *host, Instance: *instance, Root: ws.Root()},
+		Project:      *project,
 		Done:         ctx.Done(),
 		MaxReadBytes: *maxRead,
 	}, exts, extension.ToolEnv{Workspace: ws, Files: tool.NewFiles(ws)})

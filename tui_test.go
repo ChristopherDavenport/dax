@@ -902,10 +902,15 @@ func TestRefusingASubagentsAskOnTheScreenTellsItWhy(t *testing.T) {
 	m.mu.Lock()
 	saw := strings.Join(slices.Collect(maps.Values(m.childSaw)), "\n")
 	m.mu.Unlock()
-	// agentturn.Ask's decline text; dax's #150 sentence waits on
-	// agentturn#304.
-	if !strings.Contains(saw, "the user said: wrong file") {
-		t.Errorf("the sub-agent saw %q, want the user's reason", saw)
+	// dax's words for the decline (the deferral's DeclineText,
+	// agentturn#304), with what the user said after them (#150).
+	if !strings.Contains(saw, "declined when asked") || !strings.Contains(saw, policy.NoWorkAround[:40]) || !strings.Contains(saw, "the user said: wrong file") {
+		t.Errorf("the sub-agent saw %q, want dax's refusal and the user's reason", saw)
+	}
+	// Told as a sub-agent, which has no user of its own to let decide:
+	// its result goes to the agent that gave it the task.
+	if strings.Contains(saw, "sub-agent asks:") || strings.Contains(saw, "let the user decide") || !strings.Contains(saw, "say so in your result") {
+		t.Errorf("the sub-agent saw %q, want the refusal in a sub-agent's terms", saw)
 	}
 	checkRecordedQuestion(t, r.sess, "the task sub-agent asks", "write", "decline", "wrong file", atTerminal)
 	r.quit()
@@ -996,4 +1001,102 @@ func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("/quit did not end the client")
 	}
+}
+
+// wordsOf is whose words each user message on sess's path is, by its
+// text, as the record says (agentsession.WordsOf).
+func wordsOf(t *testing.T, sess *agent.Session) map[string]agentsession.Words {
+	t.Helper()
+	r, err := client.RecordOf(sess.Recorder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := r.Read(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]agentsession.Words{}
+	for _, e := range rec.Path(rec.Leaf()) {
+		if it, ok := e.(*agentsession.ItemEntry); ok {
+			if m, ok := it.Item.(*openresponses.Message); ok && m.Role == openresponses.RoleUser {
+				out[m.Text()] = agentsession.WordsOf(e)
+			}
+		}
+	}
+	return out
+}
+
+// What the person types in the terminal client is recorded as their
+// words (format 0.21's trigger kind human), a prompt and a steer alike;
+// the output of a command they ran with ! is not (#183).
+func TestTheTUIRecordsTypedInputAsThePersons(t *testing.T) {
+	m := &steps{}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("!echo from-a-command\r")
+	r.waitOutput("[exit 0]")
+	r.type_("hello\r")
+	r.waitOutput("all done")
+	words := wordsOf(t, r.sess)
+	if got, ok := words["hello"]; !ok || got != agentsession.WordsPerson {
+		t.Errorf("the typed prompt is recorded as %v (found %v), want the person's: %v", got, ok, words)
+	}
+	for text, w := range words {
+		if strings.Contains(text, "from-a-command") && w == agentsession.WordsPerson {
+			t.Errorf("a command's output is recorded as the person's words: %q", text)
+		}
+	}
+	r.quit()
+}
+
+// fixedSource is a client.Source that hands one event to each
+// subscriber.
+type fixedSource struct{ ev agentturn.Event }
+
+func (f fixedSource) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	fn(context.Background(), f.ev)
+	return func() {}
+}
+
+func (fixedSource) State() agentturn.State { return agentturn.State{} }
+
+// The terminal client shows a run's error as dax explains it: a request
+// the key's credit cannot cover in words, not the provider's raw JSON,
+// still the same error underneath (dax#15).
+func TestTheTUIShowsAQuotaRefusalInWords(t *testing.T) {
+	quota := &openresponses.Error{StatusCode: 402, Type: openresponses.ErrorTypeInvalidRequest, Code: openresponses.CodeInsufficientQuota,
+		Message: `{"error":{"message":"Prompt tokens limit exceeded: 162733 > 121537","code":402,"metadata":{"limit_source":"openrouter_key_limit"}}}`}
+	var got *agentturn.RunEnd
+	explained{fixedSource{&agentturn.RunEnd{Reason: agentturn.ReasonError, Err: quota}}}.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+		got, _ = ev.(*agentturn.RunEnd)
+		return nil
+	})()
+	if got == nil || !strings.Contains(got.Err.Error(), "OpenRouter key's spend limit") || strings.Contains(got.Err.Error(), `"metadata"`) {
+		t.Fatalf("the client is shown %v", got.Err)
+	}
+	if !openresponses.IsInsufficientQuota(got.Err) {
+		t.Error("the explained error lost the original")
+	}
+}
+
+// The permission panel's refusals are dax's words, the same as the
+// REPL's (agent.Refusal), through client.WithAnswers: n refuses and the
+// run goes on, and the model is told not to work around it, with the
+// reason typed (#150).
+func TestTheTUIRefusesInDaxsWords(t *testing.T) {
+	m := &steps{parent: [][2]string{{"bash", `{"command":"touch REFUSED"}`}}}
+	r := startTUI(t, m, policy.Rules{}, nil)
+	r.type_("go\r")
+	r.waitPanel()
+	r.type_("n")
+	r.waitOutput("Reason for refusing")
+	r.type_("not that\r")
+	r.waitOutput("all done")
+	if _, err := os.Stat(filepath.Join(r.dir, "REFUSED")); err == nil {
+		t.Error("the refused call ran")
+	}
+	want := agent.Refusal("x", "not that", false).Output.Output.Text
+	if got := toldOfRefusal(t, r.sess); got != want {
+		t.Errorf("the model was told %q, want the REPL's %q", got, want)
+	}
+	r.quit()
 }

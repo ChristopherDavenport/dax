@@ -4,29 +4,29 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
-	github.com/ChristopherDavenport/agentconsole v0.0.15
+	github.com/ChristopherDavenport/agentconsole v0.0.16
 	github.com/ChristopherDavenport/agenteval v0.0.13
-	github.com/ChristopherDavenport/agentkit v0.0.16
+	github.com/ChristopherDavenport/agentkit v0.0.17
 	github.com/ChristopherDavenport/agentmemory v0.0.12
-	github.com/ChristopherDavenport/agentpolicy v0.0.19
+	github.com/ChristopherDavenport/agentpolicy v0.0.20
 	github.com/ChristopherDavenport/agentredact v0.0.4
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.4
-	github.com/ChristopherDavenport/agentsession v0.0.37
+	github.com/ChristopherDavenport/agentsession v0.0.38
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.4
-	github.com/ChristopherDavenport/agenttool v0.0.29
-	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.29
-	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.29
-	github.com/ChristopherDavenport/agentturn v0.0.37
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.37
-	github.com/ChristopherDavenport/agentturn/session v0.0.37
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.37
-	github.com/ChristopherDavenport/agentworkspace v0.0.11
-	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.11
-	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.11
-	github.com/ChristopherDavenport/openresponses v0.0.18
-	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.18
-	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.18
+	github.com/ChristopherDavenport/agenttool v0.0.30
+	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.30
+	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.30
+	github.com/ChristopherDavenport/agentturn v0.0.39
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.39
+	github.com/ChristopherDavenport/agentturn/session v0.0.39
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.39
+	github.com/ChristopherDavenport/agentworkspace v0.0.12
+	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.12
+	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.12
+	github.com/ChristopherDavenport/openresponses v0.0.19
+	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.19
+	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.19
 	github.com/a2aproject/a2a-go v0.3.15
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/charmbracelet/x/ansi v0.11.8

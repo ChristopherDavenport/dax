@@ -8,12 +8,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
@@ -33,12 +36,46 @@ import (
 // PeerRecord.Attach routes a run's records to the conversation's
 // session.
 //
+// Its calls, and its sub-agents', are decided by the session's engine
+// held to the stricter of the default permission mode and the person's
+// (peerFloor, dontAskRefusal): the person's mode, at start or switched
+// to since, never loosens them, and dontAsk refuses what would ask.
+//
 // The conversations share the workspace with the session, and with each
 // other, as parallel sub-agents do.
 func (s *Session) PeerConfig() agentturn.Config {
 	cfg := s.ag.Config()
 	cfg.ToolRecorder = nil
+	// The person's memory is not a caller's: the store reads empty on
+	// a caller's context (extension.Env.Caller), so the kit renders
+	// each of its requests with no memory block, and the text a run
+	// starts with, which its record keeps, holds none either.
+	cfg.Instructions = agentsession.JoinInstructions(s.callerMD.parts(withoutMemory(s.Kit.Parts())))
+	// Nor the tools the person keeps to themselves: a caller is not
+	// offered them, and the agent card does not name them.
+	cfg.Tools = s.offeredToCallers(cfg.Tools)
+	if p := cfg.ToolProvider; p != nil {
+		cfg.ToolProvider = func(ctx context.Context) []agenttool.Tool { return s.offeredToCallers(p(ctx)) }
+	}
+	// The person's mode switches are told to the session's model, not
+	// a caller's (modeTurn).
+	cfg.BeforeTurn = s.Kit.Config().BeforeTurn
 	return cfg
+}
+
+// withoutMemory is parts without the memory block's (agentkit's
+// PartMemory group: its parts and the usage paragraph).
+func withoutMemory(parts []agentkit.Part) []agentkit.Part {
+	var out []agentkit.Part
+	for _, p := range parts {
+		switch {
+		case p.ID == agentkit.PartMemory, p.ID == agentkit.PartMemoryUsage,
+			strings.HasPrefix(p.ID, agentkit.PartMemory+"/"), strings.HasPrefix(p.ID, agentkit.PartMemory+":"):
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // PeerRecord is the record of one A2A caller's conversation: a dax
@@ -65,7 +102,10 @@ func (s *Session) OpenPeer(ctx context.Context, id string) (*PeerRecord, error) 
 	if id != "" {
 		rec, _, err = session.Resume(ctx, s.store, id, opts...)
 	} else {
-		rec, _, err = session.Start(ctx, s.store, s.header(), opts...)
+		// Marked as a caller's, so /resume leaves it out (Sessions).
+		h := s.header()
+		h.Extra[headerOrigin], _ = json.Marshal(originPeer)
+		rec, _, err = session.Start(ctx, s.store, h, opts...)
 	}
 	if err != nil {
 		return nil, err
@@ -99,13 +139,27 @@ func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string)
 	grants := context.WithoutCancel(ctx)
 	return ctx, func() {
 		unsubscribe()
-		if n := p.s.Kit.RevokeSkillGrants(grants); n > 0 {
+		n, err := p.s.Kit.RevokeSkillGrants(grants)
+		if n > 0 {
 			p.s.opts.log("[A2A conversation in session %s: its task's skill grants ended (%d rules)]", id, n)
+		}
+		if err != nil {
+			// The engine revoked them all the same; the record lost the
+			// verdict, which is the conversation's to know.
+			p.s.opts.log("[A2A conversation in session %s: a revocation was not recorded: %v]", id, err)
 		}
 	}, nil
 }
 
 type peerKey struct{}
+
+// callerOf names the A2A caller's conversation ctx is, its own or one
+// of its sub-agents' (peerKey rides into a sub-agent's run), with ok
+// false for the person's.
+func callerOf(ctx context.Context) (string, bool) {
+	who, ok := ctx.Value(peerKey{}).(string)
+	return who, ok
+}
 
 // forPeer puts the conversation a question comes from ahead of it,
 // when it comes from an A2A caller's: the fronts answering are the

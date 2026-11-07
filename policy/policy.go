@@ -31,7 +31,20 @@ const (
 	// (agentpolicy's WithConfinement), so the tool asks only when the
 	// call is not confined.
 	SourceBox = "dax:box"
+	// SourceSession is the rules a person granted for the session ("a",
+	// yes for this session): a grant set under the conversation's grant
+	// scope, at RankGrant.
+	SourceSession = "dax:session"
+	// SourceSaved is the rules a person kept for the project ("A", yes
+	// always): allow rules from the user's grants file, at RankGrant.
+	SourceSaved = "dax:saved"
 )
+
+// RankGrant is the rank of a person's grants, the session's and the
+// saved ones: below every other source, the project's included, so a
+// grant answers only what asks for want of a rule, never a rule's ask
+// (dax-coding's secret paths, a project's or the user's own asks).
+const RankGrant = -1
 
 // SourceExtension is the source of the rules the extension called name
 // ships: what a verdict a rule of them decides names in the session's
@@ -42,8 +55,8 @@ func SourceExtension(name string) string { return "extension:" + name }
 // Settings are the policy's rules, folded across the config's layers,
 // and the extensions'.
 type Settings struct {
-	// Off runs every call without asking; Build is not called.
-	Off bool
+	// Mode is the permission mode (Modes); "" is ModeDefault.
+	Mode string
 	// Builtin keeps the allow rules the extensions ship. Without it
 	// their asks and denies still apply, so a repository that turns it
 	// off loosens nothing.
@@ -56,6 +69,14 @@ type Settings struct {
 	// User and Project are the user's config's rules and the project's.
 	User    Rules
 	Project Rules
+	// Saved are the allow rules the user kept for this project ("yes,
+	// always"), from their grants file: source SourceSaved, at
+	// RankGrant. Only Allow is read.
+	Saved []string
+	// UserPath, ProjectPath and SavedPath are the files the user's, the
+	// project's and the saved rules came from, which their sources name
+	// (agentpolicy's Source.Path) so a listing says where a rule is.
+	UserPath, ProjectPath, SavedPath string
 	// Box are the tools a session's box.confine takes as confined, each
 	// a bare ask of source SourceBox: dax-coding's bash, write and edit
 	// by name, and an MCP unit's tools as mcp__<unit>__*, the one glob
@@ -80,6 +101,28 @@ type Shipped struct {
 	// Lifts are its tools whose asks a user's allow rule with a
 	// specifier for the same tool lifts.
 	Lifts []string
+	// Modes are the rules it adds in a mode, by the mode's name (one
+	// of Modes). They are held to Owns as its rules are, and kept
+	// whether or not Builtin is, since the user chose the mode. An ask
+	// one adds for ModePlan stays an ask there, where every other is
+	// refused (PlanAsks).
+	Modes map[string]Rules
+}
+
+// PlanAsks are the tools whose calls plan mode still asks about: those
+// the extensions' plan rules ask about (dax-plan's exit_plan_mode).
+func PlanAsks(shipped []Shipped) map[string]bool {
+	out := map[string]bool{}
+	for _, sh := range shipped {
+		rules, err := agentpolicy.ParseRules(strings.Join(sh.Modes[ModePlan].Ask, " "))
+		if err != nil {
+			continue
+		}
+		for _, r := range rules {
+			out[r.Tool] = true
+		}
+	}
+	return out
 }
 
 // Ranks of the sources: the user's config above the extensions, the
@@ -95,6 +138,10 @@ const (
 // allow rules are withheld, its ask and deny rules apply, and a
 // carve-out in it cannot cancel a rule of theirs.
 func Build(s Settings) (agentpolicy.Policy, error) {
+	mode, err := ParseMode(s.Mode)
+	if err != nil || (s.Mode != "" && s.Mode != mode) {
+		return agentpolicy.Policy{}, fmt.Errorf("policy: mode %q: want one of %s", s.Mode, strings.Join(Modes, ", "))
+	}
 	parse := func(what string, rules []string) ([]agentpolicy.Rule, error) {
 		out, err := agentpolicy.ParseRules(strings.Join(rules, " "))
 		if err != nil {
@@ -136,6 +183,29 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		if !s.Builtin {
 			set.Allow = nil
 		}
+		for m := range sh.Modes {
+			if _, ok := strictness[m]; !ok {
+				return agentpolicy.Policy{}, fmt.Errorf("policy extension %s: rules for mode %q: want one of %s", sh.Name, m, strings.Join(Modes, ", "))
+			}
+		}
+		if mr, ok := sh.Modes[mode]; ok {
+			for _, l := range []struct {
+				what string
+				in   []string
+				out  *[]agentpolicy.Rule
+			}{{"allow", mr.Allow, &set.Allow}, {"ask", mr.Ask, &set.Ask}, {"deny", mr.Deny, &set.Deny}} {
+				rules, err := parse("extension "+sh.Name+" "+mode+" "+l.what, l.in)
+				if err != nil {
+					return agentpolicy.Policy{}, err
+				}
+				for _, r := range rules {
+					if err := owned(sh, r); err != nil {
+						return agentpolicy.Policy{}, fmt.Errorf("policy extension %s %s %s %s: %w", sh.Name, mode, l.what, ruleText(r), err)
+					}
+				}
+				*l.out = append(*l.out, rules...)
+			}
+		}
 		for _, t := range sh.Lifts {
 			lifts[strings.ToLower(t)] = true
 		}
@@ -145,8 +215,8 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		src   agentpolicy.Source
 		rules Rules
 	}{
-		{agentpolicy.Source{Name: SourceUser, Trusted: true, Rank: rankUser}, s.User},
-		{agentpolicy.Source{Name: SourceProject, Rank: rankProject}, s.Project},
+		{agentpolicy.Source{Name: SourceUser, Path: s.UserPath, Trusted: true, Rank: rankUser}, s.User},
+		{agentpolicy.Source{Name: SourceProject, Path: s.ProjectPath, Rank: rankProject}, s.Project},
 	} {
 		var set agentpolicy.RuleSet
 		var err error
@@ -172,6 +242,13 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 		}
 		sets = append(sets, set)
 	}
+	if len(s.Saved) > 0 {
+		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceSaved, Path: s.SavedPath, Trusted: true, Rank: RankGrant}}
+		if set.Allow, err = parse("saved", s.Saved); err != nil {
+			return agentpolicy.Policy{}, err
+		}
+		sets = append(sets, set)
+	}
 	if len(s.Box) > 0 {
 		set := agentpolicy.RuleSet{Source: agentpolicy.Source{Name: SourceBox, Trusted: true, Rank: rankExtension}}
 		for _, name := range s.Box {
@@ -190,12 +267,19 @@ func Build(s Settings) (agentpolicy.Policy, error) {
 	case "allow":
 		p.Default = agentpolicy.Allow()
 	case "deny":
-		p.Default = agentpolicy.Deny()
+		// The model reads the reason of a call denied by default; the
+		// note tells it not to work around the denial (#150).
+		p.Default = agentpolicy.Deny().WithNote(NoWorkAround)
 	default:
 		p.Default = agentpolicy.Ask()
 	}
-	return p, nil
+	return shape(mode, p), nil
 }
+
+// NoWorkAround is what the model is told with a refusal, a person's or
+// the policy's by default: not to get the same result another way, and
+// to leave the choice to the user (#150).
+const NoWorkAround = "Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
 
 // boxTool reports whether name is one SourceBox may name: a file tool
 // or the shell by name, or every tool of one MCP unit, whose name is

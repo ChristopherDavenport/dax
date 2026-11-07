@@ -88,6 +88,8 @@ func TestWhatAnExtensionClaimsIsChecked(t *testing.T) {
 		{"a matcher for another's tool", []extension.Extension{{Name: "a", Tools: tools("deploy")}, {Name: "b", Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": matcher})}}, `matcher for "deploy", which is not one of its tools`},
 		{"a matcher for a tool it owns", []extension.Extension{{Name: "a", Owns: []string{"deploy"}, Matchers: extension.FixedMatchers(map[string]agentpolicy.ToolMatcher{"deploy": matcher})}}, ""},
 		{"a lift of another's tool", []extension.Extension{coding.New(0), {Name: "b", Lifts: []string{"read"}}}, `lifts "read", which is not one of its tools`},
+		{"a person-only tool it owns", []extension.Extension{{Name: "a", Owns: []string{"recall"}, PersonOnly: []string{"recall"}}}, ""},
+		{"a person-only name of another's tool", []extension.Extension{coding.New(0), {Name: "b", PersonOnly: []string{"read"}}}, `keeps "read" to the person, which is not one of its tools`},
 		{"a nil tool", []extension.Extension{{Name: "a", Tools: func(extension.ToolEnv) []agenttool.Tool { return []agenttool.Tool{nil} }}}, "extension a: a nil tool"},
 		{"an owned name another's tool has", []extension.Extension{{Name: "a", Tools: tools("skill")}, {Name: "b", Owns: []string{"skill"}}}, `"skill": extension a has that name`},
 		{"an owned name in two extensions", []extension.Extension{{Name: "a", Owns: []string{"memory_save"}}, {Name: "b", Owns: []string{"Memory_Save"}}}, `"Memory_Save": extension a has that name`},
@@ -371,7 +373,8 @@ func TestTheSessionClosesTheExtensionsTools(t *testing.T) {
 }
 
 // An extension's BeforeToolCall is part of the policy: it runs for the
-// main agent's calls when a policy is on, and not under -no-policy.
+// main agent's calls when a policy is on, and not on a session built
+// with none (Options.Policy nil).
 func TestAnExtensionsHookRunsOnlyWithAPolicy(t *testing.T) {
 	for _, withPolicy := range []bool{true, false} {
 		var mu sync.Mutex
@@ -458,5 +461,52 @@ func TestTheProgramsName(t *testing.T) {
 			t.Errorf("harness %+v, want %s %s", h.Harness, tc.wantName, tc.wantVersion)
 		}
 		s.Close()
+	}
+}
+
+// An extension's SubagentTools are checked before its kit options are
+// built: each one of the names it owns, once, and read-only (#158).
+func TestWhatAnExtensionOffersSubagentsIsChecked(t *testing.T) {
+	sub := func(names ...string) func(extension.Env) ([]agenttool.Tool, error) {
+		return func(extension.Env) ([]agenttool.Tool, error) {
+			var out []agenttool.Tool
+			for _, n := range names {
+				out = append(out, fn(n, nil, agenttool.WithAnnotations(agenttool.Annotations{ReadOnly: true})))
+			}
+			return out, nil
+		}
+	}
+	writer := func(extension.Env) ([]agenttool.Tool, error) {
+		return []agenttool.Tool{fn("note_save", nil)}, nil
+	}
+	for _, tc := range []struct {
+		name string
+		ext  extension.Extension
+		want string // empty: accepted
+	}{
+		{"a read-only tool it owns", extension.Extension{Name: "a", Owns: []string{"note_search"}, SubagentTools: sub("note_search")}, ""},
+		{"a tool it does not own", extension.Extension{Name: "a", SubagentTools: sub("note_search")}, `sub-agent tool "note_search" is not one of the names it owns`},
+		{"a tool given twice", extension.Extension{Name: "a", Owns: []string{"note_search"}, SubagentTools: sub("note_search", "note_search")}, "given twice"},
+		{"a tool that writes", extension.Extension{Name: "a", Owns: []string{"note_save"}, SubagentTools: writer}, `"note_save" is not annotated read-only`},
+		{"an error", extension.Extension{Name: "a", SubagentTools: func(extension.Env) ([]agenttool.Tool, error) { return nil, errors.New("no store") }}, "extension a: no store"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &echo.Adapter{})
+			o.Extensions = append(o.Extensions, tc.ext)
+			s, err := New(context.Background(), o)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				s.Close()
+				return
+			}
+			if err == nil {
+				s.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want one saying %q", err, tc.want)
+			}
+		})
 	}
 }

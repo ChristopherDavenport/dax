@@ -42,12 +42,17 @@ tools every key and config there, and so is a path with a colon, which
 docker's `-v` cannot take. The box host's executor is
 
 ```sh
-docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container -ref dax-app-<hash>
+docker exec -i dax-app-<hash> /usr/local/bin/dax execute -root ~/src/app -kind container \
+  -ref sha256:<image> -instance <container ID> -project dax-app-<hash> -host <box host>
 ```
 
 so everything under [Docker](#docker) holds for it: the pipe is the
 credential, there is no port, and `-list` and memory know the project
-by the box's name and the directory. `-list` with `-box` (or with a
+by the box's name and the directory. The session's env entry records
+the image the box ran (its digest, as agentworkspace RFC 0001 §12 asks
+of a container), the container's ID and the box host's machine, so a
+session after an image rebuild says it ran on another image; the
+project, its sessions and its memory stay the box's name's. `-list` with `-box` (or with a
 `box` in your config) finds its sessions without starting the box host.
 
 ### What the session says, and what the box host decides
@@ -1109,11 +1114,14 @@ since the new connection must be the same executor. What does not:
   of what a call would touch, or a read of the project's files, has no
   effect, and is read again once on the new connection.
 - Processes started in the sandbox for the session end with the old
-  connection. Your MCP servers among them are started again, on the new
+  connection. dax warns as each MCP server's session ends (`dax: MCP
+  server <name>'s session ended …`), and `/mcp` lists it `ended`. Your
+  MCP servers among them are started again, on the new
   connection, by the next call to one of their tools, with a warning
   (`dax: MCP server <name> ended and was started again …`) and an entry
   in the session's record (`dax.mcp.restart`). Whatever a server held
-  (open handles, subscriptions) is gone. The restarted server's tools
+  (open handles, subscriptions) is gone, and the first result from it
+  after the restart tells the model so, at its head. The restarted server's tools
   are offered from then on, even when they differ, and the warning says
   which were added or removed; a call the model made of a tool the
   restarted server no longer lists as it was is not sent, and fails

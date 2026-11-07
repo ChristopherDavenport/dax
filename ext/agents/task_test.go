@@ -245,8 +245,9 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 		t.Errorf("the child asked %q, want the sub-agent model", req.Model)
 	}
 	// dax's prompt, the user's instructions and the project's AGENTS.md
-	// reach the child; the memory and skills blocks, whose tools it
-	// lacks, do not.
+	// reach the child; the skills block, whose tool it lacks, does not.
+	// The memory block does, with memory_search alone
+	// (TestTheSubagentsReadTheSessionsMemory).
 	for _, want := range []string{"You are a sub-agent of dax", "You are dax, a coding agent", "Use tabs.", "Run go test before saying done."} {
 		if !strings.Contains(req.Instructions, want) {
 			t.Errorf("child instructions lack %q", want)
@@ -254,7 +255,7 @@ func TestATaskSubagentChangesTheProject(t *testing.T) {
 	}
 	// The guide to the sub-agents is the main agent's: the child has
 	// no sub-agents of its own.
-	for _, not := range []string{"greet", "memory_save", "let sub-agents do"} {
+	for _, not := range []string{"greet", "let sub-agents do"} {
 		if strings.Contains(req.Instructions, not) {
 			t.Errorf("child instructions carry %q", not)
 		}
@@ -415,9 +416,9 @@ func TestASubagentsHeldCallIsAQuestion(t *testing.T) {
 			o := options(t, model, &agents.Options{})
 			o.Policy = &policy.Settings{Builtin: true, Fallback: "ask"}
 			var asked []string
-			rules := agent.Rules{Permit: func(*openresponses.FunctionCall, string) (bool, string) {
+			rules := agent.Rules{Permit: func(*openresponses.FunctionCall, string) agent.PermitAnswer {
 				t.Error("a permission was asked about a sub-agent's call, which is a question")
-				return true, ""
+				return agent.PermitAnswer{Allow: true}
 			}}
 			if tc.ask.err == nil {
 				rules.Reply = func(q agentturn.Question) agenttool.Answer {

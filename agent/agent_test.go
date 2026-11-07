@@ -852,7 +852,10 @@ func TestAChildSessionIsListedAndAJSONLSessionImports(t *testing.T) {
 	}
 }
 
-func TestAbsentSkillDirectoriesOfferNoSkillTool(t *testing.T) {
+// With no skill directory a session still starts, and offers the
+// skill tool over the learned directory alone, empty, so a skill the
+// model writes (skill_manage) can be read in the session (#159).
+func TestAbsentSkillDirectoriesListNoSkill(t *testing.T) {
 	o := options(t, &echo.Adapter{})
 	if err := os.RemoveAll(filepath.Join(o.UserDir, "skills")); err != nil {
 		t.Fatal(err)
@@ -862,10 +865,15 @@ func TestAbsentSkillDirectoriesOfferNoSkillTool(t *testing.T) {
 		t.Fatalf("New with no skill directory: %v", err)
 	}
 	defer s.Close()
+	var names []string
 	for _, tl := range s.Tools() {
-		if tl.Name == "skill" {
-			t.Errorf("the skill tool is offered with no skill directory")
-		}
+		names = append(names, tl.Name)
+	}
+	if !slices.Contains(names, "skill") || !slices.Contains(names, "skill_manage") {
+		t.Errorf("tools %v; want skill and skill_manage", names)
+	}
+	if c := s.Kit.Catalog(); c == nil || len(c.Names()) != 0 {
+		t.Errorf("the catalogue lists %v, want nothing", c)
 	}
 }
 

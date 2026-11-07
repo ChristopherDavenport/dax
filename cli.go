@@ -10,10 +10,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,8 @@ import (
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/agents"
+	"github.com/ChristopherDavenport/dax/ext/hooks"
+	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
@@ -106,8 +110,9 @@ func run(ctx context.Context, args []string, p program) error {
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
-	noPolicy := fs.Bool("no-policy", false, "run every tool call without asking; the config's policy is ignored")
-	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
+	noPolicy := fs.Bool("no-policy", false, "the old name of -mode bypassPermissions: run every call no deny rule refuses, without asking")
+	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, plan, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
+	frontName := fs.String("front", "", "front end: tui, repl or acp (an editor over the Agent Client Protocol on standard input and output); default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
 	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
@@ -141,6 +146,7 @@ func run(ctx context.Context, args []string, p program) error {
 	trustSkills := fs.Bool("trust-skills", false, "let a skill's allowed-tools run unasked until the next message")
 	trustMCP := fs.Bool("trust-mcp", false, "start the MCP servers the project's config names, and trust this set for the project from now on")
 	memoryFlag := fs.String("memory", "", "memory store directory (default ~/.dax/memory, or the config's); off or empty disables memory")
+	memoryBackground := fs.String("memory-background", "", "the background memory pass after a run: off, propose (asks at your next prompt) or auto (writes unasked); overrides the config's memory.background")
 	pricingFile := fs.String("pricing-file", "", "JSON file of model prices for the terminal client's session cost, and for -max-cost")
 	contextWindow := fs.Int("context-window", 0, "the context window, in tokens, the model is served at, which sizes the default compaction budget; overrides the config's context_window for the model and what the vendor says, 0 leaves them")
 	maxTurns := fs.Int("max-turns", 0, "stop each run after this many turns (stopped, max_turns); overrides max_turns, 0 is no limit")
@@ -326,7 +332,13 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 		flags.MemoryDir = &m
 	}
+	if given["memory-background"] {
+		flags.MemoryBackground = memoryBackground
+	}
 	flags.NoPolicy = *noPolicy
+	if given["mode"] {
+		flags.Mode = modeFlag
+	}
 	// The project's config is the repository's, so it is read through
 	// a workspace over the project, as the session reads AGENTS.md and
 	// the project's skills, and not from this machine's directory. The
@@ -365,23 +377,36 @@ func run(ctx context.Context, args []string, p program) error {
 			return err
 		}
 	}
-	// So does the servers workspace's.
-	var swToken string
-	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
-		if swToken, err = takeTunnelToken(w.Hub.Setting(), w.Hub.TokenEnv); err != nil {
-			return err
-		}
-	} else if w != nil {
-		if swToken, err = takeWorkspaceToken(w.Flag(), w.TokenEnv); err != nil {
-			return err
-		}
+	// So does each servers workspace's.
+	type serversConn struct {
+		name  string
+		w     *config.WorkspaceSettings
+		token string
 	}
-	// The servers workspace's host is another machine, and holds its
-	// token: one token for both connections, whatever their kinds, would
-	// let that host use the session's workspace's grant (dial it, or
-	// enroll at its hub first) and the session's workspace use its.
-	if swToken != "" && swToken == wsToken {
-		return errors.New("servers_workspace: its token is the session's workspace's too; give each connection a token of its own")
+	var swConns []serversConn
+	for _, nw := range settings.Servers() {
+		var tok string
+		if nw.Hub != nil {
+			tok, err = takeTunnelToken(nw.Hub.Setting(), nw.Hub.TokenEnv)
+		} else {
+			tok, err = takeWorkspaceToken(nw.Flag(), nw.TokenEnv)
+		}
+		if err != nil {
+			return err
+		}
+		// A servers workspace's host is another machine, and holds its
+		// token: one token for two connections, whatever their kinds,
+		// would let that host use the other's grant (dial it, or enroll
+		// at its hub first).
+		if tok != "" && tok == wsToken {
+			return fmt.Errorf("%s: its token is the session's workspace's too; give each connection a token of its own", nw.Name())
+		}
+		for _, o := range swConns {
+			if tok != "" && tok == o.token {
+				return fmt.Errorf("%s: its token is %s's too; give each connection a token of its own", nw.Name(), o.w.Name())
+			}
+		}
+		swConns = append(swConns, serversConn{nw.Label, nw.WorkspaceSettings, tok})
 	}
 	cost, err := pricing(settings.PricingFile)
 	if err != nil {
@@ -389,6 +414,10 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 
 	m, err := provider.New(ctx, provider.Spec{Provider: settings.Provider, Model: settings.Model, SubagentModel: settings.SubagentModel, BaseURL: settings.BaseURL, KeyEnv: settings.APIKeyEnv, KeyCommand: settings.APIKeyCommand, KeyLogin: settings.APIKeyLogin, KeyScrub: settings.Credentials(), SessionHeader: settings.SessionHeader, ClientHeader: settings.ClientHeader, CacheTTL: settings.CacheTTL, SubagentCacheTTL: settings.SubagentCacheTTL, Client: p.name + "/" + p.version})
+	if err != nil {
+		return err
+	}
+	hookOpts, err := hookOptions(settings.Hooks)
 	if err != nil {
 		return err
 	}
@@ -401,8 +430,10 @@ func run(ctx context.Context, args []string, p program) error {
 		MaxReadBytes: settings.MaxReadBytes,
 		Agents:       settings.Agents, SubagentModel: m.SubagentName,
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
-		MemoryDir: settings.MemoryDir,
-		Peers:     settings.Peers,
+		MemoryDir:        settings.MemoryDir,
+		MemoryBackground: backgroundPass(settings.Memory, m.SubagentName, *once != "", serving),
+		Peers:            settings.Peers,
+		Hooks:            hookOpts,
 	})
 	if err != nil {
 		return err
@@ -505,33 +536,58 @@ func run(ctx context.Context, args []string, p program) error {
 	// granted more than servers.
 	var (
 		sw       workspace.Workspace
-		swLine   string
-		swHosted *hostedHub
+		named    map[string]workspace.Workspace
+		swLines  []string
+		swHosted []*hostedHub
 	)
-	if w := settings.ServersWorkspace; w != nil && w.Hub != nil {
-		if swHosted, err = hostHub(ctx, *w.Hub, swToken, p.name, os.Stderr); err != nil {
-			return err
+	for _, c := range swConns {
+		var (
+			one  workspace.Workspace
+			line string
+		)
+		if c.w.Hub != nil {
+			h, err := hostHub(ctx, *c.w.Hub, c.token, p.name, os.Stderr)
+			if err != nil {
+				return err
+			}
+			defer h.Close()
+			swHosted = append(swHosted, h)
+			one, line = h.Workspace, "remote "+c.w.Hub.Name+" through the hub at "+render.Clean(h.URL)+" · its servers alone"
+		} else {
+			served, err := dialWorkspace(ctx, *c.w, c.token)
+			if err != nil {
+				return err
+			}
+			defer served.Close()
+			d := served.Descriptor()
+			one, line = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
+			if a, ok := served.(abandoner); ok {
+				dialed = append(dialed, a)
+			}
 		}
-		defer swHosted.Close()
-		sw, swLine = swHosted.Workspace, "remote "+w.Hub.Name+" through the hub at "+render.Clean(swHosted.URL)+" · its servers alone"
-	} else if w != nil {
-		served, err := dialWorkspace(ctx, *w, swToken)
-		if err != nil {
-			return err
+		if c.name == config.ServersName {
+			sw = one
+		} else {
+			if named == nil {
+				named = map[string]workspace.Workspace{}
+			}
+			named[c.name] = one
 		}
-		defer served.Close()
-		d := served.Descriptor()
-		sw, swLine = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
-		if a, ok := served.(abandoner); ok {
-			dialed = append(dialed, a)
+		if len(swConns) > 1 {
+			line = c.name + ": " + line
 		}
+		swLines = append(swLines, line)
 	}
+	swLine := strings.Join(swLines, "; ")
 	opts := agent.Options{
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, Executor: ex, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, ServersWorkspaces: named, Executor: ex, Root: *root, Sync: policyMode,
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
+		MemoryDir:      settings.MemoryDir,
+		PlanModel:      settings.PlanModel,
+		ActModel:       settings.ActModel,
 		AgentsMD:       *agentsMD,
 		NoUserAgentsMD: slices.Contains(leftOut, "agents_md_home"),
 		NoMCPTrustFile: leftOut != nil,
@@ -562,6 +618,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// session records the effort that is sent.
 	if w := modelinfo.Of(opts.Streamer); w != nil {
 		opts.Fit = w.Fit
+		opts.TakesImages = w.TakesImages
 		// The sub-agents' own streamer, when they have one, is checked
 		// against what the main one knows.
 		if m.SubagentStreamer != nil {
@@ -611,9 +668,9 @@ func run(ctx context.Context, args []string, p program) error {
 		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
 	}
 	opts.TrustMCP = *trustMCP
-	if !settings.Policy.Off {
-		opts.Policy = &settings.Policy
-	}
+	// The policy is always built, so a session in bypassPermissions
+	// (-no-policy's old meaning) can leave it.
+	opts.Policy = &settings.Policy
 	renderers, err := extension.Renderers(wsRoot, exts)
 	if err != nil {
 		return err
@@ -626,12 +683,17 @@ func run(ctx context.Context, args []string, p program) error {
 		Name: p.name, Version: p.version, Renderers: renderers,
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
+		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
 	}
+	// The session to close at the end: the one opened here, or the one
+	// a front moved to (/new, /resume).
+	var cur *agent.Session
+	fi.switched = func(n *agent.Session) { cur = n }
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
-		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: *root, hostDir: dir}
-	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
+		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: *root, hostDir: dir, memoryDir: settings.MemoryDir}
+	} else if f, err = selectFront(*frontName, *once, fi, frontEnvOf(*root != "", *trustMCP)); err != nil {
 		return err
 	}
 	// The terminal client owns the screen, so a key command run while
@@ -651,11 +713,27 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	// With a hub hosted or a workspace dialed, the whole close is
 	// bounded, so a workspace that went away does not hold the exit.
-	defer closeSession(sess, []*hostedHub{hosted, swHosted}, dialed...)
+	cur = sess
+	defer func() { closeSession(cur, append([]*hostedHub{hosted}, swHosted...), dialed...) }()
 	// The front is the session's human plane: it drives the session as
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
 	return f.Run(ctx, sess)
+}
+
+// windowsOf are the context windows the status line divides by: the
+// user's context_window by model, and for the model the session starts
+// with the window dax settled on (the vendor's, the config's or the
+// flag's).
+func windowsOf(user map[string]int64, model string, window int64) map[string]int64 {
+	w := maps.Clone(user)
+	if w == nil {
+		w = map[string]int64{}
+	}
+	if window > 0 {
+		w[model] = window
+	}
+	return w
 }
 
 // runList prints the sessions of the project here: this directory's,
@@ -718,10 +796,19 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		// A session with a servers workspace beside its own names it
 		// after where its tools ran, by its identity, as the record does.
 		servers := ""
-		if d, _, ok := agent.ServersWorkspaceOf(s.Header); ok {
-			servers = "  servers " + render.Clean(d.Kind+" "+d.Ref)
+		for _, b := range agent.ServersWorkspacesOf(s.Header) {
+			servers += "  servers "
+			if b.Name != config.ServersName {
+				servers += render.Clean(b.Name) + "="
+			}
+			servers += render.Clean(b.Workspace.Kind + " " + b.Workspace.Ref)
 		}
-		fmt.Fprintf(w, "%s  %s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, s.Size, s.Path, at, servers)
+		// Its name (/name) is the person's text, cleaned as any is.
+		name := ""
+		if s.Name != "" {
+			name = "  " + strconv.Quote(render.Clean(s.Name))
+		}
+		fmt.Fprintf(w, "%s  %s%s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, name, s.Size, s.Path, at, servers)
 	}
 	return err
 }
@@ -850,7 +937,7 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 	for _, m := range s.MCP {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
-			URL: m.URL, TokenEnv: m.TokenEnv, Project: m.Project,
+			URL: m.URL, TokenEnv: m.TokenEnv, OAuth: oauthOf(m.OAuth), Project: m.Project,
 			Description: m.Description, SecretEnv: m.SecretEnv,
 		})
 	}
@@ -947,10 +1034,7 @@ func describeUnhashed(c agent.UnhashedCause) string {
 // policySummary says in a line what policy is in force: the rules each
 // extension ships, the user's and the project's.
 func policySummary(p config.PolicySettings, exts []extension.Extension) string {
-	if p.Off {
-		return "off (-no-policy): every call runs"
-	}
-	var parts []string
+	parts := []string{"mode " + modeName(p.Mode)}
 	for _, e := range exts {
 		allow, rest := len(e.Policy.Allow), len(e.Policy.Ask)+len(e.Policy.Deny)
 		if !p.Builtin {
@@ -970,6 +1054,14 @@ func policySummary(p config.PolicySettings, exts []extension.Extension) string {
 		parts = append(parts, fmt.Sprintf("%d rule(s) from the project", n))
 	}
 	return strings.Join(parts, ", ") + "; anything else: " + p.Fallback
+}
+
+// modeName is a mode as a front names it, "" being the default.
+func modeName(m string) string {
+	if m == "" {
+		return policy.ModeDefault
+	}
+	return m
 }
 
 // describeModel is what the model's vendor says about it, and the
@@ -1004,4 +1096,64 @@ func buildVersion(fallback string) string {
 		return bi.Main.Version
 	}
 	return fallback
+}
+
+// backgroundPass is dax-memory's background pass as the user's
+// settings ask for it, on the sub-agent model, headless under -p
+// (oneShot) and dax serve (serving): there no pass runs at all, auto or
+// propose, since memory is updated in the background only from the
+// person's own interactive sessions (#160).
+func backgroundPass(m config.Memory, model string, oneShot, serving bool) memory.Background {
+	return memory.Background{
+		Mode: m.Background, Every: m.BackgroundEvery,
+		MaxTokens: m.BackgroundMaxTokens, TrivialTokens: m.BackgroundTrivialTokens,
+		Headless: oneShot || serving,
+		Model:    model,
+	}
+}
+
+// hookOptions are the user's hooks as dax-hooks takes them: a line run
+// by the shell, an array with no shell, a relative program the one in
+// the user's config directory; the config's check has compiled each
+// matcher already.
+func hookOptions(h *config.Hooks) (hooks.Options, error) {
+	if h.Empty() {
+		return hooks.Options{}, nil
+	}
+	of := func(event string, ms []config.HookMatcher) ([]hooks.Matcher, error) {
+		var out []hooks.Matcher
+		for i, m := range ms {
+			re, err := config.HookPattern(m.Matcher)
+			if err != nil {
+				return nil, fmt.Errorf("hooks.%s[%d]: %w", event, i, err)
+			}
+			hm := hooks.Matcher{Tools: re}
+			for j, c := range m.Hooks {
+				shell, argv, err := c.Program(h.Dir)
+				if err != nil {
+					return nil, fmt.Errorf("hooks.%s[%d].hooks[%d]: %w", event, i, j, err)
+				}
+				hm.Commands = append(hm.Commands, hooks.Command{Shell: shell, Argv: argv, Timeout: time.Duration(c.Timeout) * time.Second})
+			}
+			out = append(out, hm)
+		}
+		return out, nil
+	}
+	pre, err := of("PreToolUse", h.PreToolUse)
+	if err != nil {
+		return hooks.Options{}, err
+	}
+	post, err := of("PostToolUse", h.PostToolUse)
+	if err != nil {
+		return hooks.Options{}, err
+	}
+	return hooks.Options{PreToolUse: pre, PostToolUse: post}, nil
+}
+
+// oauthOf is a url server's oauth block as the session takes it.
+func oauthOf(o *config.MCPOAuth) *agent.OAuth {
+	if o == nil {
+		return nil
+	}
+	return &agent.OAuth{ClientID: o.ClientID, ClientSecretEnv: o.ClientSecretEnv, CallbackPort: o.CallbackPort}
 }

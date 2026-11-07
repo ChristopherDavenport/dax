@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
+	"io/fs"
 	"regexp"
 	"strings"
 	"sync"
@@ -106,19 +106,25 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 				b.WriteByte('\n')
 			}
 			switch {
-			case errors.Is(runErr, exec.ErrNotFound):
-				// Said to the model as the call's output, so it can go on
-				// with the file tools rather than retry a shell it does
-				// not have. No sh in its place: the analyzer and the
-				// stamp read bash's grammar. A workspace over a wire
-				// carries this as an error of no kind yet, so only a
-				// local workspace's is told apart.
+			case errors.Is(runErr, fs.ErrNotExist):
+				// The workspace has no bash: a program not found is
+				// not-exist on every backend and over every wire
+				// (agentworkspace RFC 0001 §5); the Dir is the root,
+				// which exists. Said to the model as the call's output,
+				// so it can go on with the file tools rather than retry
+				// a shell it does not have. No sh in its place: the
+				// analyzer and the stamp read bash's grammar.
 				return noBashOutput, nil
-			case errors.Is(runErr, exec.ErrWaitDelay):
-				// The command itself exited 0, and something it left
+			case errors.Is(runErr, workspace.ErrCutShort):
+				// The command itself exited, and something it left
 				// running still holds its output: the call ends with
-				// what came, and the model learns the job outlives it.
-				b.WriteString(backgroundNote)
+				// what came and the command's status, and the model
+				// learns the job outlives it.
+				code := 0
+				if res != nil {
+					code = res.ExitCode
+				}
+				fmt.Fprintf(&b, backgroundNote, code)
 			case runErr != nil:
 				return "", runErr
 			case res.TimedOut:
@@ -130,9 +136,10 @@ func bashTool(f *Files, cfg bashConfig, claim agenttool.Option) agenttool.Tool {
 		}, agenttool.WithBarrier(), claim)
 }
 
-// backgroundNote ends the output of a command that exited 0 while a job
-// it started in the background still held its output open.
-const backgroundNote = "[exit 0; a process it left running in the background still holds its output and keeps running after this call; send a background job's output to a file (cmd > job.log 2>&1 &) so the call does not wait on it]"
+// backgroundNote, given the command's exit code, ends the output of a
+// command that exited while a job it started in the background still
+// held its output open.
+const backgroundNote = "[exit %d; a process it left running in the background still holds its output and keeps running after this call; send a background job's output to a file (cmd > job.log 2>&1 &) so the call does not wait on it]"
 
 // noBashOutput is what bash says in a workspace that has no bash.
 const noBashOutput = "Error: this workspace has no bash, so no command can run here; read, write and edit still work."

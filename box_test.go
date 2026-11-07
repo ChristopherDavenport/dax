@@ -598,7 +598,9 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 	home(t)
 	dir := t.TempDir()
 	root := t.TempDir()
+	var started []string
 	start := func(ctx context.Context, argv []string) (box.Child, error) {
+		started = argv
 		cmd := exec.CommandContext(ctx, os.Args[0])
 		cmd.Env = append(os.Environ(), executeRoot+"="+root)
 		cmd.Stderr = os.Stderr
@@ -626,7 +628,8 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+			img, id := "sha256:"+strings.Repeat("ab", 32), strings.Repeat("c0", 32)
+			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {img + " " + id + "\n"}}}
 			toHost, fromSession := io.Pipe()
 			toSession, fromHost := io.Pipe()
 			served := make(chan error, 1)
@@ -663,6 +666,13 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 			tools, err := r.Tools(ctx)
 			if err != nil || len(tools) == 0 {
 				t.Errorf("tools = %v, %v", tools, err)
+			}
+			// The executor in the box is told the image the box runs, its
+			// container and this machine, the box's name its project (#155).
+			name := box.NameFor(dir)
+			want := []string{"-ref", img, "-instance", id, "-project", name, "-host"}
+			if a := strings.Join(started, " "); !strings.Contains(a, strings.Join(want, " ")) {
+				t.Errorf("the box host started %q, want %q in it", a, want)
 			}
 			r.Close()
 			fromSession.Close()

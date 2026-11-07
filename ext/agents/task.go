@@ -55,16 +55,15 @@ type taskArgs struct {
 // replayed and the same model's were sent to the main agent.
 //
 // The instructions are fixed in the configuration, so the child
-// session records what the child is told: the preamble, the main
+// session records what the child is told: the preamble and the main
 // agent's prompt without dax-agents' delegation guide (the sub-agent
-// has no sub-agents), and the AGENTS.md chain as the kit renders it for
-// the main agent. Skills and memory are left out: their tools are
-// added through the kit, and so are not among env.Tools.
+// has no sub-agents), as the child's own part, then the kit's memory
+// block and AGENTS.md chain as their own parts (ChildParts in New).
+// The skill catalogue is left out, since the skill tool is the main
+// agent's; of memory the child has memory_search alone, the
+// extensions' SubagentTools.
 func (o Options) task(ctx context.Context, env extension.Env) agentturn.Config {
-	parts := []string{"You are a sub-agent of " + env.Name() + ". " + taskPreamble, env.SystemPrompt(Name)}
-	if md := env.AgentsMD(); md != "" {
-		parts = append(parts, md)
-	}
+	parts := []string{"You are a sub-agent of " + env.Name() + ". " + taskPreamble + " " + onlyYourTools, env.SystemPrompt(Name)}
 	model, think := o.now(env)
 	return agentturn.Config{
 		Name: "task",
@@ -73,14 +72,16 @@ func (o Options) task(ctx context.Context, env extension.Env) agentturn.Config {
 			"seeing only input, and runs the sub-agent model, which suits a task you can brief completely. Several " +
 			"task calls in one turn run in parallel; give parallel tasks separate files. Review what a task reports " +
 			"before relying on it.",
-		Model:          env.SubagentModel(),
-		ModelName:      model,
-		Instructions:   strings.Join(parts, "\n\n"),
-		Tools:          env.Tools(),
-		Reasoning:      env.Reasoning(ctx, model, think),
-		MaxTurns:       taskTurns,
-		Retry:          agentturn.Retry{MaxAttempts: 3},
-		BeforeToolCall: env.ChildPolicy("task"),
+		Model:           env.SubagentModel(),
+		ModelName:       model,
+		Instructions:    strings.Join(parts, "\n\n"),
+		Tools:           append(env.Tools(), env.SubagentTools()...),
+		Reasoning:       env.Reasoning(ctx, model, think),
+		MaxTurns:        taskTurns,
+		Retry:           agentturn.Retry{MaxAttempts: 3},
+		BeforeToolCall:  env.ChildPolicy("task"),
+		BeforeTurn:      env.ChildBeforeTurn(),
+		BeforeModelCall: env.ChildBeforeModelCall(),
 	}
 }
 

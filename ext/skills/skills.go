@@ -9,19 +9,23 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentturn"
 
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -54,10 +58,14 @@ const readTool = "read"
 // the repository's, wherever .dax/skills leads in it.
 func New(o Options) extension.Extension {
 	return extension.Extension{
-		Name:   Name,
-		Owns:   []string{agentskill.ToolName},
-		Policy: policy.Rules{Allow: []string{agentskill.ToolName}},
-		HeldTo: map[string][]string{agentskill.ToolName: {readTool}},
+		Name: Name,
+		Owns: []string{agentskill.ToolName, ManageTool},
+		// The learned skills are the person's: an A2A caller is refused
+		// skill_manage outright, and reads only installed skills
+		// (callerReads).
+		PersonOnly: []string{ManageTool},
+		Policy:     policy.Rules{Allow: []string{agentskill.ToolName}},
+		HeldTo:     map[string][]string{agentskill.ToolName: {readTool}},
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			// Neither default directory is one the user configured, so
 			// either may be absent; the project's comes first and
@@ -87,7 +95,34 @@ func New(o Options) extension.Extension {
 				}
 				sources = append(sources, src)
 			}
+			// The skills the model writes (skill_manage) come last, so
+			// they shadow nothing; the tool refuses a name the others
+			// hold anyway. The directory is made, private, so the
+			// kit has a catalogue to reload into from the start.
+			installed := slices.Clone(sources)
+			var learned string
+			var manage *manager
+			if env.UserDir() != "" {
+				learned = LearnedDir(env.UserDir())
+				if err := private.SecureDir(learned); err != nil {
+					return nil, fmt.Errorf("skills %s: %w", learned, err)
+				}
+				src, err := agentskill.Dir(learned)
+				if err != nil {
+					return nil, fmt.Errorf("skills %s: %w", learned, err)
+				}
+				learned = src.Location
+				sources = append(sources, src)
+				manage = &manager{
+					dir:    LearnedDir(env.UserDir()),
+					taken:  func() (*agentskill.Catalog, error) { return agentskill.Discover(installed...) },
+					reload: env.ReloadSkills,
+				}
+			}
 			opts := []agentkit.Option{agentkit.WithSkillSources(sources...)}
+			if manage != nil {
+				opts = append(opts, agentkit.WithTools(manage.tool()), agentkit.WithBeforeToolCall(callerReads(env, manage.taken)))
+			}
 			if ok {
 				opts = append(opts, agentkit.WithSkillTool(agentskill.WithFileClaim(projectFileClaim(env.ToolEnv().Files, project.Location))))
 			}
@@ -104,7 +139,18 @@ func New(o Options) extension.Extension {
 						// any path on this machine is consulted, since
 						// the workspace's paths need not be this
 						// machine's.
-						trusted := !(ok && inside(project.Location, sk.Location)) && under(roots, sk.Location)
+						//
+						// A skill the model wrote is trusted only as the
+						// person approved it: its frontmatter's digest
+						// in the approvals file (Approve).
+						var trusted bool
+						switch {
+						case ok && inside(project.Location, sk.Location):
+						case learned != "" && inside(learned, sk.Location):
+							trusted = approved(env.UserDir(), sk.Name, sk.FrontmatterSHA256())
+						default:
+							trusted = under(roots, sk.Location)
+						}
 						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: trusted}
 					}),
 					agentkit.WithSkillGrantScope(),
@@ -283,4 +329,43 @@ func linked(fsys fs.FS, name string) bool {
 
 func omission(path, reason string) agentkit.Omission {
 	return agentkit.Omission{Part: "skills", Source: Name, What: path, Reason: reason}
+}
+
+// callerReads is the hook that holds an A2A caller's skill reads, and
+// its sub-agents', to the skills installed (taken: the project's, the
+// user's and skills_dirs'): one the model wrote for the person, under
+// ~/.dax/learned, is the person's own, as their memory is, and is
+// refused outright, asking no one.
+//
+// The catalogue in a caller's instructions still lists a learned
+// skill's name and description: the kit renders one catalogue for
+// every conversation it serves, and leaving a skill out per
+// conversation is agentkit's to offer.
+func callerReads(env extension.Env, taken func() (*agentskill.Catalog, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+		if info.Call == nil || info.Call.Name != agentskill.ToolName {
+			return nil, nil
+		}
+		if _, caller := env.Caller(ctx); !caller {
+			return nil, nil
+		}
+		args := info.Args
+		if len(args) == 0 {
+			args = json.RawMessage(info.Call.Arguments)
+		}
+		var a struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the skill tool's arguments: " + err.Error(), By: agentpolicy.ByPolicy}, nil
+		}
+		cat, err := taken()
+		if err != nil {
+			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the installed skills could not be read: " + err.Error(), By: agentpolicy.ByPolicy}, nil
+		}
+		if _, ok := cat.Lookup(a.Name); ok {
+			return nil, nil
+		}
+		return &agentturn.ToolDecision{Action: agentturn.Block, Reason: fmt.Sprintf("%q is not an installed skill: an A2A caller reads only those, never the skills written for the person. %s", a.Name, policy.NoWorkAround), By: agentpolicy.ByPolicy}, nil
+	}
 }

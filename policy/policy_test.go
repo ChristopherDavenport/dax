@@ -263,3 +263,17 @@ func TestAnAllowOfAServersEveryTool(t *testing.T) {
 		t.Errorf("a project's server allow = %v, want withheld", v.Action)
 	}
 }
+
+// A call denied by default (fallback deny, a mode that does not ask)
+// tells the model not to get the same result another way: the default
+// carries dax's note (agentpolicy v0.0.20), which ends the reason
+// (#150).
+func TestADefaultDenyTellsTheModelNotToWorkAroundIt(t *testing.T) {
+	v := verdict(t, Settings{Fallback: "deny"}, "deploy", env("x"))
+	if v.Action != agentturn.Block || !strings.HasSuffix(v.Reason, "denied by default: "+NoWorkAround) {
+		t.Errorf("a default deny reads %q", v.Reason)
+	}
+	if v := verdict(t, Settings{Fallback: "ask"}, "deploy", env("x")); strings.Contains(v.Reason, NoWorkAround) {
+		t.Errorf("a default ask carries the note: %q", v.Reason)
+	}
+}

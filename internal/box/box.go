@@ -38,6 +38,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -146,6 +147,10 @@ type Spec struct {
 type Box struct {
 	Name, Dir string
 	Guard     string
+	// Image is the digest of the image the box's container runs
+	// (sha256:...), and ID the container's ID, as docker reports them
+	// once the box is up; empty when docker did not say.
+	Image, ID string
 }
 
 // Command is the program and its arguments that start `dax execute`
@@ -155,6 +160,24 @@ type Box struct {
 // made again.
 func (b Box) Command() []string {
 	return []string{"docker", "exec", "-i", b.Name, Binary, "execute", "-root", b.Dir, "-kind", "container", "-ref", b.Name}
+}
+
+// HostedCommand is Command as the box host starts it for a session
+// (agentworkspace RFC 0001 §12 for a container): the workspace's ref the
+// digest of the image the box runs, its instance the container's ID,
+// its host host, the box host's machine, and the box's name as the
+// project's identity (-project), which -list and memory go by and a
+// rebuild does not change. A box whose image and container docker did
+// not report is Command.
+func (b Box) HostedCommand(host string) []string {
+	if b.Image == "" || b.ID == "" {
+		return b.Command()
+	}
+	argv := []string{"docker", "exec", "-i", b.Name, Binary, "execute", "-root", b.Dir, "-kind", "container", "-ref", b.Image, "-instance", b.ID, "-project", b.Name}
+	if host != "" {
+		argv = append(argv, "-host", host)
+	}
+	return argv
 }
 
 // NameFor is the box name of the project in dir: dax-, the directory's
@@ -388,6 +411,7 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	if err := c.ensure(ctx, spec, bin, true); err != nil {
 		return b, err
 	}
+	b.Image, b.ID = c.running(ctx, spec.Name)
 	if spec.Rules.Internet == InternetOff {
 		c.notice(fmt.Sprintf("box %s has no internet; a box host profile with internet (-box-profile) opens it", spec.Name))
 	}
@@ -396,6 +420,28 @@ func (c *Client) Ensure(ctx context.Context, spec Spec) (Box, error) {
 	}
 	return b, nil
 }
+
+// running is the digest of the image the container name runs and its
+// ID, as docker inspect reports them; empty when it cannot say or says
+// something else.
+func (c *Client) running(ctx context.Context, name string) (image, id string) {
+	out, err := c.Runner.Docker(ctx, "container", "inspect", "--format", "{{.Image}} {{.Id}}", name)
+	if err != nil {
+		return "", ""
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 2 || !digest.MatchString(f[0]) || !containerID.MatchString(f[1]) {
+		return "", ""
+	}
+	return f[0], f[1]
+}
+
+// digest is an image's ID as docker writes it; containerID a
+// container's.
+var (
+	digest      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	containerID = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
+)
 
 // Guarded reports whether the box name is there and was made behind
 // the git guard, its repository read-only in it.

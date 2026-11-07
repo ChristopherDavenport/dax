@@ -365,8 +365,8 @@ func TestInfoListsTheMCPServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	here := MCPServerInfo{Name: "here", Placement: PlacedHost, Description: "runs here"}
-	added := MCPServerInfo{Name: "added", Placement: PlacedWorkspace, Where: where(s.Info().Workspace), Added: label}
+	here := MCPServerInfo{Name: "here", Placement: PlacedHost, Description: "runs here", State: "live"}
+	added := MCPServerInfo{Name: "added", Placement: PlacedWorkspace, Where: where(s.Info().Workspace), Added: label, State: "live"}
 	if got := s.Info().MCP; !slices.Equal(got, []MCPServerInfo{here, added}) {
 		t.Errorf("Info.MCP = %+v", got)
 	}

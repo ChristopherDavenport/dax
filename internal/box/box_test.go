@@ -388,8 +388,13 @@ func TestEnsure(t *testing.T) {
 			if tc.err != "" && (err == nil || !strings.Contains(err.Error(), tc.err)) {
 				t.Fatalf("Ensure error = %v, want one naming %q", err, tc.err)
 			}
-			if !slices.Equal(f.verbs(), tc.verbs) {
-				t.Errorf("docker calls = %q,\n                 want %q", f.verbs(), tc.verbs)
+			// A box made or found ends with what it runs read (#155).
+			want := tc.verbs
+			if tc.err == "" {
+				want = append(slices.Clone(want), "container")
+			}
+			if !slices.Equal(f.verbs(), want) {
+				t.Errorf("docker calls = %q,\n                 want %q", f.verbs(), want)
 			}
 			if warned != tc.warned {
 				t.Errorf("warned = %v, want %v", warned, tc.warned)
@@ -680,5 +685,50 @@ func TestQuote(t *testing.T) {
 		if got := Quote(tc.argv); got != tc.want {
 			t.Errorf("Quote(%q) = %s, want %s", tc.argv, got, tc.want)
 		}
+	}
+}
+
+// #155: the box host's command names the image the box runs as the
+// workspace's ref, its container as the instance and the box host as
+// the host, with the box's name as the project; a box docker said
+// nothing of, or something else, is Command.
+func TestEnsureReadsTheImageAndContainer(t *testing.T) {
+	img, id := "sha256:"+strings.Repeat("ab", 32), strings.Repeat("c0", 32)
+	for _, tc := range []struct {
+		name, out string
+		hosted    bool
+	}{
+		{"reported", img + " " + id + "\n", true},
+		{"not reported", "", false},
+		{"not a digest", "golang:1.26 " + id + "\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := testSpec(t)
+			bin, err := binaryLabel(spec.Binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := &fake{answers: map[string][]answer{
+				"container":       {{out: tc.out}},
+				"ps":              {{}, {out: "running\t" + specLabel(spec) + "\t" + bin + "\n"}},
+				"network inspect": {{out: "10.9.8.0/24 \n"}},
+			}}
+			c := &Client{Runner: f, StateDir: t.TempDir()}
+			b, err := c.Ensure(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(b.HostedCommand("buildhost"), " ")
+			want := strings.Join(b.Command(), " ")
+			if tc.hosted {
+				want = "docker exec -i dax-app-12345678 " + Binary + " execute -root /home/me/src/app -kind container -ref " + img + " -instance " + id + " -project dax-app-12345678 -host buildhost"
+			}
+			if got != want {
+				t.Errorf("hosted command\n%s\nwant\n%s", got, want)
+			}
+			if !strings.Contains(strings.Join(b.Command(), " "), "-ref dax-app-12345678") {
+				t.Errorf("Command %v, want the name as its ref, for dax box up's line", b.Command())
+			}
+		})
 	}
 }

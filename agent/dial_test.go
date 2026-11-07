@@ -304,7 +304,9 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 			names = append(names, tl.Name)
 		}
 	}
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output"}; !slices.Equal(names, want) {
+	// skill_manage is dax-skills' and control: it writes the user's
+	// learned skills where the session runs, never in the executor.
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output", "skill_manage"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if om := s.Omitted(); len(om) != 0 {
@@ -505,7 +507,7 @@ func TestProgressQuestionsAndReplayCrossFromTheExecutor(t *testing.T) {
 	})()
 	var questions []string
 	rules := Rules{
-		Permit: func(*openresponses.FunctionCall, string) (bool, string) { return true, "" },
+		Permit: func(*openresponses.FunctionCall, string) PermitAnswer { return PermitAnswer{Allow: true} },
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			questions = append(questions, q.Elicitation.Message)
 			if q.Call == nil {

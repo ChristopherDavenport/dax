@@ -28,6 +28,7 @@ import (
 	"github.com/ChristopherDavenport/agentconsole/toolview"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -77,6 +78,25 @@ type Extension struct {
 	// facts claim (agenttool.Factual) is decided on that claim, as a
 	// call of one of Tools is, once the session's kit is built.
 	Owns []string
+	// SubagentTools are tools of the extension's that the sub-agents
+	// other extensions build may take too (Env.SubagentTools): control
+	// tools that only read, such as dax-memory's memory_search over the
+	// session's memory scopes, which explore and task are given beside
+	// Env.Tools. Each is one of the names in Owns, decided under that
+	// name's rules, and annotated read-only and not destructive. They are
+	// built over the session's Env before any extension's Kit runs.
+	SubagentTools func(Env) ([]agenttool.Tool, error)
+	// PersonOnly names tools of the extension's (its Tools or names in
+	// Owns) that read or change what is the person's own beyond the
+	// workspace and this conversation: their memory, the skills the
+	// model wrote for them. An A2A caller's conversation, and its
+	// sub-agents', is refused every call of one outright, whatever the
+	// rules say, with policy.NoWorkAround's note, and no one is asked
+	// (agent's personOnly): one approval would otherwise let a caller
+	// read, or write into, what every later session of the person's
+	// reads. dax-memory names its memory tools and dax-skills
+	// skill_manage.
+	PersonOnly []string
 
 	// Matchers say how a rule's specifier matches a call of one of the
 	// extension's tools: bash(git status:*) is dax-coding's bash matcher
@@ -101,6 +121,26 @@ type Extension struct {
 	// A rule may name only the extension's own tools and aliases, and
 	// may not be a carve-out.
 	Policy policy.Rules
+	// ModeRules are the rules the extension adds in a permission mode,
+	// by the mode's name (policy.Modes): dax-coding allows write and
+	// edit in acceptEdits, asking about the paths that change what runs
+	// or is trusted, and denies them in plan; dax-plan asks about
+	// exit_plan_mode in plan and denies it in every other mode. An ask
+	// one adds for plan stays an ask there, where every other call that
+	// would ask is refused. They are held to the
+	// extension's own tools and aliases as Policy is, and kept with
+	// "builtin": false, since the user chose the mode.
+	ModeRules map[string]policy.Rules
+	// GrantRule is the rule a person's "yes, always" to a call of one
+	// of the extension's tools (its Tools and Owns) grants, in the
+	// policy's grammar, or "" to offer only "once": dax-coding offers
+	// bash(<first two words>:*) for a line its analyzer reads whose
+	// asking stages share them, and nothing for write or edit. A tool
+	// with no extension's GrantRule is offered its bare name. The
+	// session offers the rule only when no rule asked about the call (a
+	// grant ranks below every source, policy.RankGrant). It is built
+	// over the session's ToolEnv, as the tools are.
+	GrantRule func(ToolEnv) func(ctx context.Context, tool string, args json.RawMessage) string
 	// Lifts are the extension's tools whose asks a user's allow rule
 	// with a specifier lifts: allowing read(.env) means reading .env,
 	// though dax-coding asks about secret-looking paths.
@@ -127,6 +167,34 @@ type Extension struct {
 	// this way, with no hook of the extension's. It is built over the
 	// session's ToolEnv, as the tools are.
 	BeforeToolCall func(ToolEnv) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+
+	// PolicyHooks are hooks the session's policy engine runs for every
+	// call it decides, the main agent's and its sub-agents' alike
+	// (agentpolicy's WithHooks and WithAnsweringHooks), built over the
+	// session as the kit options are. With the policy off, Decide alone
+	// runs, as a BeforeToolCall hook of the main agent.
+	PolicyHooks func(Env) (PolicyHooks, error)
+
+	// AfterRun is called after each run of the person's main agent
+	// ends, however it ended and whatever started it (a prompt, a
+	// resume, a steer that started a run), with what the run did. It
+	// is built over the session as the kit options are, and called
+	// off the loop, in a goroutine of its own, once the run's end is
+	// on the record. Its context carries the session's elicitor
+	// (agenttool.ElicitorFrom), which puts a question to the fronts
+	// answering as a sub-agent's asked call is put; the session's close
+	// waits for it, up to 30 seconds, then ends the context. A run of an A2A caller's
+	// conversation, or a sub-agent's, calls none. dax-memory's
+	// background pass starts here.
+	AfterRun func(Env) (func(ctx context.Context, run Run), error)
+	// BeforePrompt is called at the start of each of the person's
+	// prompts (agent.Session.Prompt), before the prompt is sent, and
+	// the prompt waits for it: the person is there, so a question it
+	// asks through the session's elicitor on its context
+	// (agenttool.ElicitorFrom) is answered meanwhile, as a sub-agent's
+	// asked call is. A steer, a resume and an A2A caller's prompt call
+	// none. dax-memory's proposing pass runs here.
+	BeforePrompt func(Env) (func(ctx context.Context), error)
 
 	// Instructions are added to the main agent's system prompt, after
 	// dax's role line and in the order the extensions are given, before
@@ -163,6 +231,45 @@ type Extension struct {
 	Renderers func(dir string) toolview.Renderers
 }
 
+// PolicyHooks are an extension's hooks in the policy engine's decision
+// of a call. Either may be nil. Each must decide a call the same way
+// however often it is asked, since the engine asks again for a
+// sibling of the call being decided.
+type PolicyHooks struct {
+	// Decide is folded into the policy's decision strictest-wins, deny
+	// over ask over allow, and recorded with its decider (By): it can
+	// refuse a call or ask about it, never allow one the policy asks
+	// about or refuses.
+	Decide func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+	// Answer may answer the policy's own ask with an allow, as a
+	// person's yes would, and nothing else it returns counts. It lifts
+	// only an ask of a source of rank 0 or below, the project's rules
+	// and the fallback; never an extension's or the user's own ask
+	// rules, a deny, an ask a Decide hook raised, nor any call of an
+	// A2A caller's conversation, which is asked as before.
+	Answer func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+}
+
+// Run is a run of the person's main agent that ended, as AfterRun
+// sees it.
+type Run struct {
+	// ID is the run's, and End how it ended: its reason, the items it
+	// appended to the conversation, the calls it left pending.
+	ID  string
+	End *agentturn.RunEnd
+	// Calls are the tools the run called, by name, in the order they
+	// started.
+	Calls []string
+	// OpenWorld says a call of the run reached past the workspace and
+	// the session, so the conversation may hold text from anyone: an
+	// MCP server's tool, or a tool annotated open-world (a remote
+	// agent's). Memory's own reads are not.
+	OpenWorld bool
+	// OutputTokens are the output tokens the run's model responses
+	// reported.
+	OutputTokens int
+}
+
 // ToolEnv is what an extension's tools are built over.
 type ToolEnv struct {
 	// Workspace is where the tools act: this machine, a container or a
@@ -188,6 +295,11 @@ type Env interface {
 	ToolEnv() ToolEnv
 	// Name is the program's, dax unless it named itself.
 	Name() string
+	// HostEnv is the environment a process an extension starts on this
+	// machine gets: this process's, less every secret the session keeps
+	// from its children (SecretsOf, the model's key's variable, the MCP
+	// servers' token and secret variables) unless pass_env keeps it.
+	HostEnv() []string
 	// Dir is the directory on this machine the session started in
 	// (agent.Options.Dir); the tools act in ToolEnv().Workspace, which
 	// may be elsewhere, and the project's files are read through it,
@@ -198,13 +310,43 @@ type Env interface {
 	// in extension order; ReadOnlyTools are those alone.
 	Tools() []agenttool.Tool
 	ReadOnlyTools() []agenttool.Tool
+	// SubagentTools are every extension's SubagentTools, in extension
+	// order, cut to their caps as Tools are: what a sub-agent may read
+	// of the session beyond the workspace, such as its memory.
+	SubagentTools() []agenttool.Tool
+	// SearchScope confines a search of the session store, agentkit's
+	// conversation_search say (agentkit.SearchScope), to what the
+	// call's caller may read: for the person, this project's top-level
+	// sessions; for an A2A caller's conversation, none, the call
+	// failing. It narrows q and never widens it. An extension that
+	// searches the store sets it on every search, so a caller never
+	// reads the person's conversations.
+	SearchScope(ctx context.Context, q *agentsession.Query) error
+	// Caller says whether ctx is an A2A caller's conversation, or one of
+	// its sub-agents' (dax serve -a2a), and names it: who and the
+	// session that records it. A caller is not the person: an extension
+	// that holds the person's own data beyond the workspace shows a
+	// caller none of it, as dax-memory's store does, which reads empty
+	// on a caller's context, so a caller's requests carry no memory
+	// block (PersonOnly refuses the tools).
+	Caller(ctx context.Context) (who string, ok bool)
+	// ReloadSkills asks the session to discover its skills again
+	// (agentkit's Kit.ReloadSkills) at the main agent's next turn,
+	// before its model call, when none of its calls is being decided:
+	// a skill an extension wrote since is listed and served from that
+	// request on, in the run that wrote it or the next. A failed reload
+	// is a warning, and the catalogue in force stays.
+	ReloadSkills()
 	// SystemPrompt is the main agent's part of the system prompt, with
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.
 	SystemPrompt(except ...string) string
-	// AgentsMD is the AGENTS.md chain as the main agent's prompt carries
-	// it, empty when AGENTS.md is off.
-	AgentsMD() string
+	// AgentsMD is the AGENTS.md chain as a request on ctx carries it:
+	// the main agent's prompt's, and on an A2A caller's context (Caller)
+	// the chain without the person's own files (~/.dax/AGENTS.md,
+	// agents_md_global), as the caller's requests carry it. Empty when
+	// AGENTS.md is off.
+	AgentsMD(ctx context.Context) string
 	// Model is the session's model, and Live the model name and the
 	// reasoning setting in force now, which /model and /think change
 	// while the session runs.
@@ -219,6 +361,20 @@ type Env interface {
 	// Reasoning is the reasoning a request to model asks for under
 	// think, fitted to what the model's vendor says it takes.
 	Reasoning(ctx context.Context, model string, think bool) openresponses.ReasoningConfig
+	// ChildBeforeTurn is the BeforeTurn hook a sub-agent's
+	// configuration takes: the AGENTS.md files below the start
+	// directory that the sub-agent's own work reaches, given as the main
+	// agent's are, each once, recorded as composed from its file. Nil
+	// when the session reads no AGENTS.md.
+	ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
+	// ChildBeforeModelCall is the BeforeModelCall hook a sub-agent's
+	// configuration takes: on an A2A caller's context (Caller) its
+	// requests leave out what is the person's own, as the caller's own
+	// requests do (their AGENTS.md, the definitions of the PersonOnly
+	// tools); and a read's or the person's images are said, not shown,
+	// to a sub-agent model that does not take images, so the
+	// sub-agent's record holds what its model was sent.
+	ChildBeforeModelCall() func(context.Context, *openresponses.Request) error
 	// ChildPolicy is the BeforeToolCall hook of a sub-agent called name:
 	// the session's policy and every extension's BeforeToolCall, with a
 	// call the policy asks about put to the user from inside the run.
@@ -230,6 +386,18 @@ type Env interface {
 	Omit(o agentkit.Omission)
 	// Log is a note for the user, as the front shows them.
 	Log(format string, args ...any)
+	// SetMode puts the session in the permission mode (policy.Modes),
+	// recorded with reason, as /mode does: during a run, from its next
+	// turn. A tool the person's approval runs moves the session out of
+	// a mode this way (dax-plan's exit_plan_mode).
+	SetMode(ctx context.Context, mode, reason string) error
+	// Kit is the session's kit once it is built, and nil while the
+	// extensions' Kit options are being made: a hook that runs later,
+	// AfterRun's say, starts a child agent the host runs itself through
+	// it (agentkit's StartChild, ContinueChild, AttachChild and
+	// ChildConfig), recorded as a subsession of the conversation and
+	// decided by the session's engine under a grant scope of its own.
+	Kit() *agentkit.Kit
 	// ToolOutput is the whole of a tool result the session cut to its
 	// cap, by the output id the cut result names (out_<hex>): only an
 	// output this session kept.
@@ -268,6 +436,28 @@ func SecretsOf(exts []Extension) []string {
 		}
 	}
 	return out
+}
+
+// ownGrantsKey marks a sub-agent's run whose "yes, always" stays its
+// own (WithOwnGrants).
+type ownGrantsKey struct{}
+
+// WithOwnGrants is ctx, the context a sub-agent's run is prompted on
+// (a host-started child's, Env.Kit's StartChild or ContinueChild), with
+// the person's "yes, always" to one of its asked calls kept to that
+// sub-agent: granted under its own grant scope for the rest of the
+// session, not to the conversation, so neither the main agent nor any
+// other sub-agent gains the rule. A background pass that writes
+// unasked once the person said so (dax-memory's) is run on it, so the
+// person's yes to the pass is no yes to the model they talk to.
+func WithOwnGrants(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownGrantsKey{}, true)
+}
+
+// OwnGrants says whether ctx is a sub-agent's run WithOwnGrants marked.
+func OwnGrants(ctx context.Context) bool {
+	own, _ := ctx.Value(ownGrantsKey{}).(bool)
+	return own
 }
 
 // textSchema is the form of a TextQuestion: one string property,

@@ -71,6 +71,11 @@ const CapabilityVersion = 1
 type capability struct {
 	Version    int                  `json:"version"`
 	Descriptor capabilityDescriptor `json:"descriptor"`
+	// Project is the project's identity where the descriptor's ref is
+	// not it: a box's name, the same however often it is made again,
+	// beside the image digest its ref names. Empty from an executor
+	// older than the field, or one whose ref is the identity.
+	Project string `json:"project,omitempty"`
 	// Extensions are the extensions with Tools, in order, whether or
 	// not they built any.
 	Extensions []string `json:"extensions"`
@@ -144,6 +149,10 @@ type ServeOptions struct {
 	// Descriptor is the workspace the tools act in as the session
 	// records it. The zero value is the workspace's own.
 	Descriptor workspace.Descriptor
+	// Project is the project's identity where Descriptor's ref is not
+	// it (`dax execute -project`): a box's name beside its image's
+	// digest. Empty is the ref.
+	Project string
 	// Done, once closed, ends every process the server started for
 	// its sessions and every request waiting on one, and refuses
 	// another start: close it before a session's graceful close
@@ -288,7 +297,7 @@ func (s *Server) build(maxRead int64) (*inProcess, capability, error) {
 		return nil, capability{}, err
 	}
 	c := capability{
-		Version: CapabilityVersion, Descriptor: s.desc,
+		Version: CapabilityVersion, Descriptor: s.desc, Project: s.o.Project,
 		Extensions: []string{}, Tools: []capabilityTool{},
 		Files:        &capabilityFiles{URITemplate: wire.FilesURITemplate},
 		MaxReadBytes: maxRead,

@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
-	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/extension"
@@ -167,7 +170,7 @@ func banner(info frontInfo, si agent.Info) []string {
 	}
 	lines = append(lines, elsewhereLines(info)...)
 	if si.Recorded {
-		lines = append(lines, "session "+si.ID)
+		lines = append(lines, sessionLine(si))
 	}
 	if info.Policy != "" {
 		lines = append(lines, "policy: "+info.Policy)
@@ -193,6 +196,11 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 	} else {
 		for _, l := range elsewhereLines(f.info) {
+			// With the executor segment on the status line, where the
+			// tools act is shown there, the whole session long.
+			if f.info.Status.Shows("executor") && l == elsewhereBanner(f.info) {
+				continue
+			}
 			fmt.Fprintln(out, render.Clean(l))
 		}
 	}
@@ -228,9 +236,22 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 			panic(r)
 		}
 	}()
+	for {
+		next, err := f.session(ctx, sess)
+		if next == nil {
+			return err
+		}
+		f.info.moved(sess, next)
+		sess, si = next, next.Info()
+	}
+}
+
+// session runs the client over sess until the user leaves, or a
+// command opens another session, which it returns.
+func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Session, error) {
 	rec, err := client.RecordOf(sess.Recorder())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The client answers the questions asked while a call runs.
 	defer sess.Answering()()
@@ -238,22 +259,182 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
-	return runConsole(ctx, f.run, rec, sess, answeredBy(client.Direct(sess), agent.AtTerminal), sess, sess, opts)
+	var redraw func()
+	if f.info.Status != nil {
+		h := newStatus(f.info, sess)
+		opts = append(opts, console.WithStatus(h.line()))
+		redraw = h.redraw
+		if f.info.Status.Shows("git") || f.info.Status.Shows("mode") {
+			sctx, stop := context.WithCancel(ctx)
+			defer stop()
+			go h.run(sctx)
+		}
+	}
+	// The panel offers "yes, always" where dax offers a grant (a for the
+	// session, A kept for the project), and the grant is made before
+	// the answers resume the run.
+	opts = append(opts, console.WithGrantOffer(func(ctx context.Context, p view.Permission) client.GrantOffer {
+		o := sess.GrantOffer(ctx, p.CallID)
+		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
+	}))
+	// @ completes the MCP servers' resources as mentions.
+	opts = append(opts, console.WithCompletion(mentionCompletion(sess)))
+	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
+	// A command that opens a session (/new, /resume) ends this client,
+	// and Run enters it again over the new one.
+	cctx, leave := context.WithCancel(ctx)
+	defer leave()
+	sw := &switching{Session: sess, leave: leave}
+	err = runConsole(cctx, f.run, rec, sess, act, sess, sw, opts)
+	if n := sw.next.Load(); n != nil {
+		return n, nil
+	}
+	return nil, err
 }
 
-// answeredBy is act with by named as who answered on every Reply's
-// context (agentturn.ContextWithAnswerer), which the record writes
-// beside the answer: the view holds no identity, and the front knows
-// the person at its terminal. Only a Reply carries it: a prompt's or an
-// answer's context is its run's, and an answerer there would name by
-// for any reply made with that run's event context.
+// mentionCompletion completes a word that starts with @ from the MCP
+// servers' resources (agent.Session.MCPResources), listed again at most
+// every few seconds, since the client asks at every keystroke. A
+// mention or a help line that would carry a terminal's controls is
+// left out or cleaned: both are a server's text.
+func mentionCompletion(m mentioner) func(context.Context, console.Completing) []console.Completion {
+	var mu sync.Mutex
+	var cached []agent.MCPResource
+	var at time.Time
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		if !strings.HasPrefix(c.Word, "@") {
+			return nil
+		}
+		mu.Lock()
+		if time.Since(at) > resourcesFresh {
+			mu.Unlock()
+			list := m.MCPResources(ctx)
+			mu.Lock()
+			cached, at = list, time.Now()
+		}
+		rs := cached
+		mu.Unlock()
+		var out []console.Completion
+		for _, r := range rs {
+			if !strings.HasPrefix(r.Mention, c.Word) || render.Clean(r.Mention) != r.Mention {
+				continue
+			}
+			help := r.Name
+			if r.Description != "" {
+				help = strings.TrimSpace(help + "  " + r.Description)
+			}
+			out = append(out, console.Completion{Text: r.Mention, Help: oneLine(help, maxDescription)})
+		}
+		return out
+	}
+}
+
+// resourcesFresh is how long a listing of the servers' resources
+// completes mentions before it is asked again.
+const resourcesFresh = 5 * time.Second
+
+// switching is the session's controls with Reopen ending the client
+// that runs over it, once the session it opened is there to move to.
+type switching struct {
+	*agent.Session
+	leave func()
+	next  atomic.Pointer[agent.Session]
+}
+
+// Reopen opens the session to move to (agent.Session.Reopen) and ends
+// the client.
+func (s *switching) Reopen(ctx context.Context, id string) (*agent.Session, error) {
+	n, err := s.Session.Reopen(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.next.Store(n)
+	s.leave()
+	return n, nil
+}
+
+// withGrants is act with the grants the permission panel's answers ask
+// for made first (client.Direct makes none): each approval with a grant
+// of the session's or the project's, through the session's Grant,
+// which refuses a rule it did not offer. A grant that fails leaves the
+// approval for the call alone, said as a warning.
+func withGrants(act client.Controller, ctl agent.Controls) client.Controller {
+	g, ok := ctl.(granter)
+	if !ok {
+		return act
+	}
+	return func(ctx context.Context, in client.Intent) error {
+		if a, ok := in.(client.Answer); ok {
+			for _, c := range a.Calls {
+				if c.Verdict != client.VerdictApprove || c.Grant == client.GrantOnce {
+					continue
+				}
+				kind := agent.GrantSession
+				if c.Grant == client.GrantSaved {
+					kind = agent.GrantSaved
+				}
+				if err := g.Grant(ctx, c.CallID, kind, c.Rule); err != nil {
+					fmt.Fprintf(agent.Warnings(), "dax: approved once: %v\n", err)
+				}
+			}
+		}
+		return act(ctx, in)
+	}
+}
+
+// withModes is act with Shift-Tab's intent (client.NextMode, which
+// client.Direct refuses) taken by the session's modes: the next mode,
+// at once or from the run's next turn, then changed (the status line's
+// redraw). A session with no modes leaves the intent to act.
+func withModes(act client.Controller, ctl agent.Controls, changed func()) client.Controller {
+	m, ok := ctl.(moder)
+	if !ok {
+		return act
+	}
+	return func(ctx context.Context, in client.Intent) error {
+		if _, ok := in.(client.NextMode); !ok {
+			return act(ctx, in)
+		}
+		_, err := m.NextMode(ctx)
+		if err == nil && changed != nil {
+			changed()
+		}
+		return err
+	}
+}
+
+// answeredBy is act with by claimed for what the person sends: the
+// trigger of a Prompt's and a Queue's input, and of the run an Answer
+// resumes, whose notes are what they typed (agentturn.ContextWithTrigger),
+// which the record writes as their words and a fold keeps verbatim, and
+// the answerer of a Reply (agentturn.ContextWithAnswerer), which the
+// record writes beside the answer. The view holds no identity, and the
+// front knows the person at its terminal. A message dax composes and
+// sends as a line (a template's, an MCP prompt's) carries the layers it
+// came from, and is recorded as composed whatever its trigger; a slash
+// command runs outside the controller, under no claim.
 func answeredBy(act client.Controller, by agentturn.Trigger) client.Controller {
 	return func(ctx context.Context, in client.Intent) error {
-		if _, ok := in.(client.Reply); ok {
+		switch in.(type) {
+		case client.Prompt, client.Queue, client.Answer:
+			ctx = agentturn.ContextWithTrigger(ctx, by)
+		case client.Reply:
 			ctx = agentturn.ContextWithAnswerer(ctx, by)
 		}
 		return act(ctx, in)
 	}
+}
+
+// daxAnswer is the control's answer to a call the permission panel
+// answered: a refusal in dax's words (agent.Refusal), the same as the
+// REPL's, n letting the run go on and s ending it, with the reason
+// typed; an approval as agentconsole makes it.
+func daxAnswer(a client.CallAnswer) agentturn.Answer {
+	switch a.Verdict {
+	case client.VerdictRefuse, client.VerdictStop:
+		return agent.Refusal(a.CallID, a.Reason, a.Verdict == client.VerdictStop)
+	}
+	return client.AnswerOf(a)
 }
 
 // consoleRun is console.Run's shape, which tests replace.
@@ -270,16 +451,62 @@ func runConsole(ctx context.Context, run consoleRun, rec client.Record, src clie
 	}
 	cctx, quit := context.WithCancel(ctx)
 	defer quit()
+	// Every intent's context carries the view's own, which a context
+	// the client detaches from its cancellation still holds, so a
+	// controller can tell an intent sent after the user left (viewLeft).
+	cctx = context.WithValue(cctx, viewKey{}, cctx)
 	var quitting atomic.Bool
 	opts = append([]console.Option{
 		console.WithSubmit(submitLine(t, ctl, func() { quitting.Store(true); quit() })),
 	}, opts...)
-	err := run(cctx, rec, textQuestions{src}, act, opts...)
+	err := run(cctx, rec, textQuestions{explained{src}}, act, opts...)
 	if quitting.Load() && ctx.Err() == nil {
 		return nil
 	}
 	return err
 }
+
+type viewKey struct{}
+
+// viewLeft reports whether ctx is an intent's from a view the user has
+// left: the context runConsole ran the client under is done. The client
+// aborts at exit twice, the second time under a context detached from
+// its cancellation (agentconsole v0.0.16), whose own Err is nil.
+func viewLeft(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	v, ok := ctx.Value(viewKey{}).(context.Context)
+	return ok && v.Err() != nil
+}
+
+// explained is src with a run's error said in words where dax explains
+// it (render.Explain: a request the key's credit cannot cover), which
+// the terminal client shows as the run's error. The error still wraps
+// the original, and the record holds the original whole.
+type explained struct{ client.Source }
+
+func (x explained) Subscribe(fn func(context.Context, agentturn.Event) error) func() {
+	return x.Source.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+		if e, ok := ev.(*agentturn.RunEnd); ok && e.Err != nil {
+			if s, ok := render.Explain(e.Err, true); ok {
+				c := *e
+				c.Err = explainedError{s, e.Err}
+				ev = &c
+			}
+		}
+		return fn(ctx, ev)
+	})
+}
+
+// explainedError is err said as text.
+type explainedError struct {
+	text string
+	err  error
+}
+
+func (e explainedError) Error() string { return e.text }
+func (e explainedError) Unwrap() error { return e.err }
 
 // textQuestions is src with dax's question for text
 // (extension.TextQuestion) shown to the terminal client without its
@@ -325,11 +552,15 @@ func submitLine(t agentturn.Control, ctl agent.Controls, quit func()) func(conte
 			}
 			return console.Submit{Reply: r.out}, err
 		}
-		item := openresponses.UserText(userText(l.Text))
-		if l.Running {
-			return console.Submit{Steer: []openresponses.Item{item}}, nil
+		// The line, and the MCP resources it mentions attached.
+		items, err := typedItems(ctx, ctl, userText(l.Text))
+		if err != nil {
+			return console.Submit{}, err
 		}
-		return console.Submit{Prompt: []openresponses.Item{item}}, nil
+		if l.Running {
+			return console.Submit{Steer: items}, nil
+		}
+		return console.Submit{Prompt: items}, nil
 	}
 }
 
@@ -350,6 +581,15 @@ func (f *tuiFront) flush(out io.Writer, si agent.Info) {
 	if si.Recorded {
 		fmt.Fprintln(out, resumeLine(f.info.Name, si.ID))
 	}
+}
+
+// sessionLine is the start line naming the session: its ID, and its
+// name (/name) when it has one.
+func sessionLine(si agent.Info) string {
+	if si.Name != "" {
+		return "session " + si.ID + " " + strconv.Quote(render.Clean(si.Name))
+	}
+	return "session " + si.ID
 }
 
 // resumeLine is what the terminal client leaves on the terminal when it

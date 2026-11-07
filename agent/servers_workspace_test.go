@@ -337,7 +337,11 @@ func TestResumingWithAnotherServersWorkspaceSaysSo(t *testing.T) {
 		{"none now", with, nil, "session's servers were recorded from servers workspace remote http://127.0.0.1:7781, continuing without one"},
 		{"none then", agentsession.Header{}, gh, "session was recorded without a servers workspace, continuing with remote http://127.0.0.1:7781"},
 	} {
-		if got := serversResumed(tc.h, tc.now); got != tc.want {
+		var now []ServersBeside
+		if tc.now != nil {
+			now = []ServersBeside{{Name: config.ServersName, Workspace: *tc.now}}
+		}
+		if got := serversResumed(tc.h, now); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -362,5 +366,117 @@ func TestResumingWithAnotherServersWorkspaceSaysSo(t *testing.T) {
 	r.Close()
 	if got := warned.String(); !strings.Contains(got, "dax: session's servers were recorded from servers workspace remote http://127.0.0.1:") || !strings.Contains(got, ", continuing without one\n") {
 		t.Errorf("warnings %q", got)
+	}
+}
+
+// serversFileNamed is serversFile offering the test server as name.
+func serversFileNamed(t *testing.T, name string) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "servers.json")
+	write(t, file, `{"mcp_servers": {"`+name+`": {"command": "`+os.Args[0]+`", "description": "the test server"}}}`)
+	return file
+}
+
+// #123: two servers workspaces by name connect beside the session's
+// own, each its servers under its name in the header, which reads back
+// in name order; a server name both offer, one workspace given twice
+// and a name that is no DNS label are refused.
+func TestSeveralServersWorkspaces(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	offered := func(t *testing.T, name string) remote.Workspace {
+		return serveWS(t, offeringOf(t, t.TempDir(), serversFileNamed(t, name)), remote.ScopeServers)
+	}
+	gh, slack := offered(t, "gh"), offered(t, "slack")
+	o := options(t, &scripted{})
+	o.ServersWorkspaces = map[string]workspace.Workspace{"slack": slack, "github": gh}
+	s, err := New(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, m := range s.Info().MCP {
+		names = append(names, m.Name+" "+string(m.Placement))
+	}
+	if !slices.Contains(names, "gh servers workspace") || !slices.Contains(names, "slack servers workspace") {
+		t.Errorf("servers %v, want gh and slack from the servers workspaces", names)
+	}
+	s.Close()
+	sums, err := List(t.Context(), o.Root, o.Dir)
+	if err != nil || len(sums) != 1 {
+		t.Fatalf("listed %d, %v", len(sums), err)
+	}
+	got := ServersWorkspacesOf(sums[0].Header)
+	if len(got) != 2 || got[0].Name != "github" || got[1].Name != "slack" || got[0].Workspace.Ref != gh.Descriptor().Ref ||
+		!slices.Equal(got[0].Servers, []string{"gh"}) || !slices.Equal(got[1].Servers, []string{"slack"}) {
+		t.Errorf("recorded %+v", got)
+	}
+	if raw := string(sums[0].Header.Extra[headerServersNamed]); !strings.Contains(raw, `"github":{`) {
+		t.Errorf("the header holds %s, want the workspaces by name", raw)
+	}
+	if raw, ok := sums[0].Header.Extra[headerServers]; ok {
+		t.Errorf("with no servers_workspace the header holds %s", raw)
+	}
+	// With servers_workspace beside the named ones, its entry keeps the
+	// single form every dax reads, and the named ones are a member of
+	// their own.
+	o2 := options(t, &scripted{})
+	o2.ServersWorkspace = offered(t, "p")
+	o2.ServersWorkspaces = map[string]workspace.Workspace{"github": offered(t, "q")}
+	s2, err := New(t.Context(), o2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Close()
+	sums2, err := List(t.Context(), o2.Root, o2.Dir)
+	if err != nil || len(sums2) != 1 {
+		t.Fatalf("listed %d, %v", len(sums2), err)
+	}
+	h := sums2[0].Header
+	var single struct {
+		Kind    string   `json:"kind"`
+		Servers []string `json:"servers"`
+	}
+	if err := json.Unmarshal(h.Extra[headerServers], &single); err != nil || single.Kind == "" || !slices.Equal(single.Servers, []string{"p"}) {
+		t.Errorf("servers_workspace recorded as %s, want the single form: %v", h.Extra[headerServers], err)
+	}
+	if l := ServersWorkspacesOf(h); len(l) != 2 || l[0].Name != "github" || l[1].Name != config.ServersName {
+		t.Errorf("both read back as %+v", l)
+	}
+	// servers_workspace beside them is named servers.
+	if l := ServersWorkspacesOf(agentsession.Header{Extra: map[string]json.RawMessage{headerServers: json.RawMessage(`{"kind":"remote","ref":"http://x","servers":["p"]}`)}}); len(l) != 1 || l[0].Name != config.ServersName {
+		t.Errorf("the single form reads %+v", l)
+	}
+
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, o *Options)
+		want string
+	}{
+		{"a server both offer", func(t *testing.T, o *Options) {
+			o.ServersWorkspaces = map[string]workspace.Workspace{"a": offered(t, "p"), "b": offered(t, "p")}
+		}, "mcp p: the servers workspace a (remote"},
+		{"a server servers_workspace offers too", func(t *testing.T, o *Options) {
+			o.ServersWorkspace = offered(t, "p")
+			o.ServersWorkspaces = map[string]workspace.Workspace{"b": offered(t, "p")}
+		}, "both offer a server by that name"},
+		{"one workspace twice", func(t *testing.T, o *Options) {
+			w := offered(t, "p")
+			o.ServersWorkspaces = map[string]workspace.Workspace{"a": w, "b": w}
+		}, "is the servers workspace a too"},
+		{"not a DNS label", func(t *testing.T, o *Options) {
+			o.ServersWorkspaces = map[string]workspace.Workspace{"Git_Hub": offered(t, "p")}
+		}, "a DNS label"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &scripted{})
+			tc.set(t, &o)
+			s, err := New(t.Context(), o)
+			if err == nil {
+				s.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

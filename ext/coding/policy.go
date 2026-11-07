@@ -11,10 +11,15 @@ package coding
 // "builtin": false drops the allow list; the asks stay.
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+
+	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/policy"
+	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // allowRules is the allow list dax-coding ships. go test, build, vet and
@@ -74,6 +79,124 @@ func askRules() string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// protectedPaths are what a write or an edit asks about in acceptEdits
+// mode: what changes what runs or is trusted beyond the project's
+// source (git's hooks and config, dax's project config, an environment
+// file a shell or tool loads, CI, editor tasks), as a box's
+// confinement takes them (tool/confine.go's protectedNames). A name has
+// a form for the workspace root and one below it, each the name and
+// what is under it.
+var protectedPaths = []string{
+	".git", ".dax", ".github", ".circleci", ".husky", ".vscode", ".idea", ".gitlab-ci.yml", ".pre-commit-config.yaml",
+}
+
+// acceptEditsRules are dax-coding's rules in acceptEdits mode: write and
+// edit run unasked, but for a secret-looking or protected path; bash
+// and the rest still ask. Edit names edit and write.
+func acceptEditsRules() policy.Rules {
+	var ask []string
+	for _, s := range secretPaths {
+		ask = append(ask, "Edit(ci:"+s+")")
+		if !strings.HasPrefix(s, "*") {
+			ask = append(ask, "Edit(ci:*/"+s+")")
+		}
+	}
+	for _, n := range protectedPaths {
+		ask = append(ask, "Edit(ci:"+n+")", "Edit(ci:"+n+"/**)", "Edit(ci:*/"+n+")", "Edit(ci:*/"+n+"/**)")
+	}
+	return policy.Rules{Allow: []string{"write", "edit"}, Ask: ask}
+}
+
+// grantPrefixes are the programs "yes, always" offers a prefix rule
+// for, bash(<program>:*): listing tools with no flag that runs a
+// command or writes a file. Any other line is offered exactly as it
+// is (exactGrant), never as a prefix: a build or test tool runs
+// whatever a later flag names (go test -exec, -toolexec, -vettool;
+// make --eval, -f, SHELL=, CC=), as do shells, interpreters, launchers
+// and wrappers (uv run, docker run, git rebase --exec, tar
+// --to-command), and a deny list of them kept missing some.
+var grantPrefixes = map[string]bool{"ls": true, "wc": true, "du": true, "df": true}
+
+// grantPrefix is the allowlisted prefix of a stage's words, "" for
+// none.
+func grantPrefix(words []string) string {
+	if grantPrefixes[words[0]] {
+		return words[0]
+	}
+	return ""
+}
+
+// exactGrant is the rule that allows line, one stage whose match is
+// match, exactly: "" when the match is not the line as written (the
+// rule matches the words joined, so a quoted line would be shown
+// unquoted, another line than the one approved), would read as a
+// pattern (a *) or a carve-out (a leading !), or does not come back
+// from parsing as itself.
+func exactGrant(line, match string) string {
+	if match == "" || match != strings.TrimSpace(line) || strings.Contains(match, "*") || strings.HasPrefix(match, "!") {
+		return ""
+	}
+	rule := "bash(" + match + ")"
+	if r, err := agentpolicy.ParseRules(rule); err != nil || len(r) != 1 || r[0].Spec != match {
+		return ""
+	}
+	return rule
+}
+
+// grantRule is the rule "yes, always" grants for a call of dax-coding's
+// tools: for bash, a line the analyzer reads (tool.Analyzer's safe
+// subset) whose stages, cd aside, all share one allowlisted prefix
+// (grantPrefixes) is offered bash(<prefix>:*), so the grant answers
+// such lines next time; a line of one stage otherwise is offered
+// exactly, when it holds no quoting (exactGrant). For any other tool, and any other line,
+// none.
+func grantRule(env extension.ToolEnv) func(ctx context.Context, name string, args json.RawMessage) string {
+	a := &tool.Analyzer{Files: env.Files, MaxFile: env.MaxReadBytes}
+	return func(ctx context.Context, name string, args json.RawMessage) string {
+		if name != "bash" {
+			return ""
+		}
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(args, &in) != nil {
+			return ""
+		}
+		c := a.Check(ctx, in.Command)
+		if !c.Parsed {
+			return ""
+		}
+		var stages []tool.StageCheck
+		for _, st := range c.Stages {
+			if len(st.Words) == 0 || st.Words[0] == "cd" {
+				continue
+			}
+			stages = append(stages, st)
+		}
+		if len(stages) == 0 {
+			return ""
+		}
+		prefix := grantPrefix(stages[0].Words)
+		for _, st := range stages[1:] {
+			if grantPrefix(st.Words) != prefix {
+				prefix = ""
+				break
+			}
+		}
+		if prefix != "" {
+			rule := "bash(" + prefix + ":*)"
+			if r, err := agentpolicy.ParseRules(rule); err == nil && len(r) == 1 && r[0].Spec == prefix+":*" {
+				return rule
+			}
+			return ""
+		}
+		if len(c.Stages) == 1 {
+			return exactGrant(in.Command, c.Stages[0].Match)
+		}
+		return ""
+	}
 }
 
 // lifts are the tools whose asks a user's allow rule with a specifier

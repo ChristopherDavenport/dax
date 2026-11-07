@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -100,6 +101,9 @@ type serveFront struct {
 	a2a, a2aEscalate          bool
 	a2aURL                    string
 	a2aDir, sessions, hostDir string
+	// memoryDir is dax-memory's directory, the person's own, which an
+	// A2A caller's workspace may not hold (checkA2AWorkspace).
+	memoryDir string
 }
 
 // Prepare leaves the session's notes printed as they come: nothing
@@ -145,6 +149,9 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		defer cleanupA2A()
 		if a2aToken == token {
 			return errors.New("dax serve: $" + a2aTokenEnv + " is serve's token; A2A takes a token of its own")
+		}
+		if err := checkA2AWorkspace(si.Workspace, sess.UserDir(), f.memoryDir, storeRoot(sess, f.sessions)); err != nil {
+			return err
 		}
 		var base *neturl.URL
 		if f.a2aURL != "" {
@@ -195,6 +202,9 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 			fmt.Fprintln(out, "a2a token: "+render.Clean(a2aTokenFile))
 		} else {
 			fmt.Fprintln(out, "a2a token: $"+a2aTokenEnv)
+		}
+		if w := learnedWarning(sess); w != "" {
+			fmt.Fprintln(out, render.Clean(w))
 		}
 	}
 	// A certificate the attaching machine does not trust is named to it
@@ -440,13 +450,9 @@ func makeToken(env, dir, name string) (token, file string, cleanup func(), err e
 // under a2aPath and its card, behind the A2A token peers takes, which
 // is not token. closeStore ends the record's follows.
 func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf func(error)) (h http.Handler, closeStore func()) {
-	ctl := control.Handler(viewed{sess},
-		control.WithAuthenticator(authn.New(map[string]control.Principal{
-			token: {Name: servePrincipal, Scopes: control.AllScopes},
-		}).Authenticator(control.ErrUnauthenticated)),
-		control.WithChallenge(authn.Challenge),
-		control.WithCommands(serveCommands(sess, sess, dir)),
-	)
+	ctl := serveControl(sess, dir, map[string]control.Principal{
+		token: {Name: servePrincipal, Scopes: append(slices.Clone(control.AllScopes), scopeTyped)},
+	})
 	store := remote.NewHandler(sess.Recorder().Store(),
 		remote.WithAuthenticator(authn.New(map[string]remote.Principal{
 			token: {Name: servePrincipal, Scopes: []remote.Scope{remote.ScopeRead}},
@@ -461,6 +467,28 @@ func serveHandler(sess *agent.Session, dir, token string, peers *a2aPeers, logf 
 		peers.mount(mux)
 	}
 	return mux, func() { store.Close() }
+}
+
+// scopeTyped is the scope that lets a principal claim the trigger its
+// input runs under (front/control's WithTriggerClaims): the person's
+// own attached client claims kind human for what they type, which the
+// record then writes as their words. dax serve grants it on its own
+// token alone, which only the user holds; an A2A caller, behind a token
+// of its own on front/a2a, never reaches the control, and a principal
+// without it runs as control, naming itself. Who is at a client is
+// dax's to decide, not the library's.
+const scopeTyped control.Scope = "dax.typed"
+
+// serveControl is the session's control behind principals: agentturn's
+// front/control over the session as it is viewed, with dax's commands,
+// a principal holding scopeTyped claiming its own trigger.
+func serveControl(sess *agent.Session, dir string, principals map[string]control.Principal) http.Handler {
+	return control.Handler(viewed{sess},
+		control.WithAuthenticator(authn.New(principals).Authenticator(control.ErrUnauthenticated)),
+		control.WithChallenge(authn.Challenge),
+		control.WithCommands(serveCommands(sess, sess, dir)),
+		control.WithTriggerClaims(scopeTyped),
+	)
 }
 
 // servedInfo is what the info command answers: the session's Info and
@@ -480,6 +508,9 @@ const (
 	cmdMCPAdd    = "mcp-add"
 	cmdMCPRemove = "mcp-remove"
 	cmdCompact   = "compact"
+	// cmdMode reads or switches the permission mode, or moves to the
+	// next one.
+	cmdMode = "mode"
 	// cmdContinueFrom moves the session's head: the tree of an attached
 	// view continues from an entry, as a local view's does.
 	cmdContinueFrom = "continue-from"
@@ -491,6 +522,21 @@ type modelArgs struct {
 
 type thinkArgs struct {
 	On bool `json:"on"`
+}
+
+// modeArgs name a mode to switch to, ask for the next one, or neither,
+// which reads the mode.
+type modeArgs struct {
+	Name string `json:"name,omitempty"`
+	Next bool   `json:"next,omitempty"`
+}
+
+// modeState is the mode in force and the one waiting for the run's
+// next turn, and whether the switch asked for waits.
+type modeState struct {
+	Mode    string `json:"mode"`
+	Pending string `json:"pending,omitempty"`
+	Waits   bool   `json:"waits,omitempty"`
 }
 
 type compactArgs struct {
@@ -601,6 +647,37 @@ func serveCommands(ctl agent.Controls, head headMover, dir string) map[string]co
 					return nil, errors.New("this session does not compact on request")
 				}
 				return nil, c.Compact(ctx, a.Instructions)
+			},
+		},
+		cmdMode: {
+			Description: "the permission mode: read it, switch to one by name (default, acceptEdits, plan, dontAsk, bypassPermissions) or to the next; during a run the switch waits for its next turn",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"next":{"type":"boolean"}}}`),
+			Run: func(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+				var a modeArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &a); err != nil {
+						return nil, err
+					}
+				}
+				m, ok := ctl.(moder)
+				if !ok {
+					return nil, errors.New("this session has no modes")
+				}
+				var st modeState
+				var err error
+				switch {
+				case a.Next && a.Name != "":
+					return nil, errors.New("give a mode's name or next, not both")
+				case a.Next:
+					_, err = m.NextMode(ctx)
+				case a.Name != "":
+					st.Waits, err = m.SetMode(ctx, a.Name)
+				}
+				if err != nil {
+					return nil, err
+				}
+				st.Mode, st.Pending = m.Mode()
+				return json.Marshal(st)
 			},
 		},
 		cmdMCPRemove: {

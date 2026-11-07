@@ -22,6 +22,7 @@ package dax
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,7 +45,9 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/plan"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
@@ -86,6 +89,12 @@ type frontInfo struct {
 	Price      agent.Price
 	// Policy is a line saying what policy is in force.
 	Policy string
+	// Status is the terminal client's status line from the user's
+	// config, nil for the client's default line.
+	Status *config.Status
+	// Windows are the context windows dax believes, by model name, for
+	// the status line's context segment.
+	Windows map[string]int64
 	// Cost prices the terminal client's session pane and status line; nil
 	// shows token usage but no cost.
 	Cost client.Cost
@@ -93,6 +102,9 @@ type frontInfo struct {
 	// it takes the screen and what dax noted after it exits; without it,
 	// the client leaves only the command that resumes the session.
 	Verbose bool
+	// switched is told of the session a front moved to (/new,
+	// /resume), which is the one to close at the end; nil for none.
+	switched func(*agent.Session)
 }
 
 // front is a way to talk to a session.
@@ -112,6 +124,16 @@ type front interface {
 // is in use.
 type frontEnv struct {
 	stdinTTY, stdoutTTY, recording bool
+	// trustMCP is -trust-mcp, under which the ACP front starts the
+	// editor's MCP servers.
+	trustMCP bool
+}
+
+// frontEnvOf is processEnv with -trust-mcp.
+func frontEnvOf(recording, trustMCP bool) frontEnv {
+	e := processEnv(recording)
+	e.trustMCP = trustMCP
+	return e
 }
 
 // processEnv reads it. recording is false when -sessions is empty.
@@ -141,6 +163,9 @@ func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, erro
 	switch name {
 	case "repl":
 		return &replFront{info: info, in: in}, nil
+	case "acp":
+		// An editor drives the session over standard input and output.
+		return &acpFront{info: info, trustMCP: env.trustMCP}, nil
 	case "tui":
 		if !env.recording {
 			return nil, errors.New("the terminal client needs a session store; drop -sessions \"\" or use -front repl")
@@ -150,7 +175,7 @@ func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, erro
 		}
 		return &tuiFront{info: info, pause: true}, nil
 	}
-	return nil, fmt.Errorf("-front %q: want tui or repl", name)
+	return nil, fmt.Errorf("-front %q: want tui, repl or acp", name)
 }
 
 // isTerminal reports whether f is a terminal, by asking the system:
@@ -177,6 +202,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	defer t.Subscribe((&render.Printer{W: os.Stdout, Think: f.info.Think}).Handle)()
 	var usage runUsage
 	defer t.Subscribe(usage.count)()
+	defer abortOnInterrupt(t)()
 	if f.info.Timeout > 0 {
 		// A deadline is a cancellation: the run ends aborted, and its
 		// cause, on the record and in the end line, is the timeout.
@@ -184,7 +210,6 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		ctx, cancel = context.WithTimeoutCause(ctx, f.info.Timeout, &timeoutError{f.info.Timeout})
 		defer cancel()
 	}
-	abortOnInterrupt(t)
 	info := ctl.Info()
 	if info.Recorded {
 		// On standard error, so standard output stays the run's, and
@@ -202,7 +227,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	// they refused with s, which ends the run.
 	// The calls refused because nobody was left to answer, whose
 	// refusal is dax's rule, not the person's.
-	var answered, stops, unanswered sync.Map
+	var answered sync.Map
 	// One reader scans standard input for every answer, so a wait on a
 	// line ends with the run's context (-timeout) as no answer.
 	lines := make(chan string)
@@ -221,29 +246,21 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		}
 	}
 	rules := agent.Rules{
-		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) {
-			fmt.Print(question(c, reason))
+		Permit: func(c *openresponses.FunctionCall, reason string) agent.PermitAnswer {
+			offer := offerOf(ctx, ctl, c.CallID)
+			fmt.Print(questionOffer(c, reason, offer))
 			line, ok := readLine()
 			if !ok {
 				fmt.Println()
-				unanswered.Store(c.CallID, true)
-				return false, ""
+				// Nobody is left to answer: the refusal is dax's rule,
+				// not the person's.
+				return agent.PermitAnswer{By: agentpolicy.ByPolicy}
+			}
+			if kind, note, ok := grantLine(line, offer); ok {
+				return agent.PermitAnswer{Allow: true, Note: note, Grant: kind, Rule: offer.Rule}
 			}
 			allow, stop, note := answerLine(line)
-			if stop {
-				stops.Store(c.CallID, true)
-			}
-			return allow, note
-		},
-		Stops: func(c *openresponses.FunctionCall) bool {
-			_, ok := stops.LoadAndDelete(c.CallID)
-			return ok
-		},
-		PermitBy: func(c *openresponses.FunctionCall) string {
-			if _, ok := unanswered.LoadAndDelete(c.CallID); ok {
-				return agentpolicy.ByPolicy
-			}
-			return agentpolicy.ByHuman
+			return agent.PermitAnswer{Allow: allow, Note: note, Stop: stop}
 		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			fmt.Print(questionText(q))
@@ -304,6 +321,11 @@ type replFront struct {
 	in   *bufio.Scanner
 	// out is where the REPL writes; nil is os.Stdout.
 	out io.Writer
+	// lines are in's, read by one reader (readLines), and read the
+	// count of them.
+	reading sync.Once
+	lines   chan typedLine
+	read    atomic.Uint64
 }
 
 // waiting is something the REPL asked the user and waits on a line for:
@@ -319,6 +341,10 @@ type waiting struct {
 	// shown is how many lines had been read when the question was last
 	// shown: only a line read after it answers it.
 	shown uint64
+	// offer is the grant dax offers with a permission, or with a
+	// sub-agent's asked call's question (asked is that question).
+	offer agent.GrantOffer
+	asked agentturn.Question
 }
 
 // typedLine is a line of the REPL's input and when it was read: its
@@ -335,9 +361,50 @@ type result struct {
 }
 
 func (f *replFront) Run(ctx context.Context, sess *agent.Session) error {
-	// The REPL answers the questions asked while a call runs.
-	defer sess.Answering()()
-	return f.run(ctx, sess, sess)
+	for {
+		// The REPL answers the questions asked while a call runs.
+		answering := sess.Answering()
+		err := f.run(ctx, sess, sess)
+		answering()
+		var to *movedTo
+		if !errors.As(err, &to) {
+			return err
+		}
+		f.info.moved(sess, to.sess)
+		sess = to.sess
+	}
+}
+
+// readLines is the REPL's input, each line numbered as it is read, by
+// one reader for the front's whole life.
+func (f *replFront) readLines() (<-chan typedLine, *atomic.Uint64) {
+	f.reading.Do(func() {
+		f.lines = make(chan typedLine, 256)
+		go func() {
+			defer close(f.lines)
+			for f.in.Scan() {
+				f.lines <- typedLine{text: f.in.Text(), seq: f.read.Add(1)}
+			}
+		}()
+	})
+	return f.lines, &f.read
+}
+
+// movedTo ends a front's loop over one session for another, which a
+// command opened (/new, /resume).
+type movedTo struct{ sess *agent.Session }
+
+func (*movedTo) Error() string { return "moved to another session" }
+
+// moved is a front's move from old to n: whoever closes the session at
+// the end now closes n, and old is closed here.
+func (i frontInfo) moved(old, n *agent.Session) {
+	if i.switched != nil {
+		i.switched(n)
+	}
+	if err := old.Close(); err != nil {
+		fmt.Fprintf(agent.Warnings(), "dax: closing session %s: %v\n", old.ID(), err)
+	}
 }
 
 func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Controls) error {
@@ -345,8 +412,15 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	if w == nil {
 		w = os.Stdout
 	}
-	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think}).Handle)()
-	abortOnInterrupt(t)
+	defer t.Subscribe((&render.Printer{W: w, Think: f.info.Think, Compact: true}).Handle)()
+	defer abortOnInterrupt(t)()
+	// What the person types here is sent as theirs: a prompt, a steer
+	// and the run their answers resume start under the trigger of the
+	// person at this terminal (agentturn.TriggerHuman), which the record
+	// writes as their words and a fold keeps verbatim. A command runs
+	// under ctx, and a message dax composes (a template's, a !
+	// command's output) is recorded as composed whatever its trigger.
+	byPerson := agentturn.ContextWithTrigger(ctx, agent.AtTerminal)
 	info := ctl.Info()
 	fmt.Fprintf(w, "%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
 	if f.info.ModelInfo != "" {
@@ -356,7 +430,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		fmt.Fprintln(w, render.Clean(l))
 	}
 	if info.Recorded {
-		fmt.Fprintf(w, "session %s\n", info.ID)
+		fmt.Fprintln(w, sessionLine(info))
 	}
 	showAssembly(w, info)
 	showPending(w, t, "resumed")
@@ -381,14 +455,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	// Each line is numbered as it is read, ahead of the loop, so a line
 	// typed before a question was shown is known for one even when the
 	// loop takes it after: it never answers that question.
-	var read atomic.Uint64
-	lines := make(chan typedLine, 256)
-	go func() {
-		defer close(lines)
-		for f.in.Scan() {
-			lines <- typedLine{text: f.in.Text(), seq: read.Add(1)}
-		}
-	}()
+	// The reader outlives a move to another session (/new), whose loop
+	// reads on from the same lines.
+	lines, read := f.readLines()
 	done := make(chan result, 1)
 	running := false
 	var asks []waiting             // what waits on the user, in order
@@ -416,7 +485,12 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 	ask := func(perms []agent.Permission) {
 		for _, pm := range perms {
-			asks = append(asks, waiting{q: question(pm.Call, pm.Reason), call: pm.Call})
+			if p := planOf(pm.Call); p != "" {
+				// The plan, whole, before its question.
+				fmt.Fprintf(w, "\nplan:\n%s\n", render.Clean(p))
+			}
+			o := offerOf(ctx, ctl, pm.Call.CallID)
+			asks = append(asks, waiting{q: questionOffer(pm.Call, pm.Reason, o), call: pm.Call, offer: o})
 		}
 		answers = nil
 		next()
@@ -431,7 +505,8 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		for _, ev := range evs {
 			switch e := ev.(type) {
 			case *agentturn.Question:
-				asks = append(asks, waiting{q: questionText(*e), question: e.ID, ask: e.Elicitation})
+				o := questionOfferOf(ctx, ctl, *e)
+				asks = append(asks, waiting{q: questionTextOffer(*e, o), question: e.ID, ask: e.Elicitation, offer: o, asked: *e})
 				if len(asks) == 1 {
 					next()
 				}
@@ -475,15 +550,19 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				steerText = ""
 				start(func() (*agentturn.RunEnd, error) {
 					if text != "" {
-						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 							return nil, err
 						}
 					}
-					return t.Resume(ctx)
+					return t.Resume(byPerson)
 				})
 				continue
 			case r.err != nil:
-				fmt.Fprintln(os.Stderr, "\nerror:", r.err)
+				if s, ok := render.Explain(r.err, true); ok {
+					fmt.Fprintln(os.Stderr, "\n"+s)
+				} else {
+					fmt.Fprintln(os.Stderr, "\nerror:", r.err)
+				}
 				if h := hint(r.err); h != "" {
 					fmt.Fprintln(os.Stderr, h)
 				}
@@ -519,7 +598,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					text := userText(line)
 					switch {
 					case running:
-						if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
 							fmt.Fprintln(w, "\n[typed before the question: queued as steering]")
@@ -545,6 +624,30 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				a := asks[0]
 				asks = asks[1:]
 				allow, stop, note := answerLine(line)
+				if kind, gnote, ok := grantLine(line, a.offer); ok && a.question != "" && kind == agent.GrantSession {
+					// "Yes, always" to a sub-agent's asked call: the
+					// session grant first, then the yes.
+					if g, ok := ctl.(questionGranter); ok {
+						if err := g.GrantQuestion(ctx, a.asked, a.offer.Rule); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else {
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+							line = "y " + gnote
+						}
+					}
+				}
+				if kind, gnote, ok := grantLine(line, a.offer); ok && a.call != nil {
+					allow, stop, note = true, false, gnote
+					if g, ok := ctl.(granter); ok {
+						if err := g.Grant(ctx, a.call.CallID, kind, a.offer.Rule); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else if kind == agent.GrantSaved {
+							fmt.Fprintf(w, "  [%s kept for this project]\n", render.Clean(a.offer.Rule))
+						} else {
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+						}
+					}
+				}
 				switch {
 				case a.question != "":
 					t.Reply(agentturn.ContextWithAnswerer(ctx, agent.AtTerminal), a.question, replyOf(a.ask, line))
@@ -567,11 +670,11 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					answers, steerText = nil, ""
 					start(func() (*agentturn.RunEnd, error) {
 						if text != "" {
-							if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+							if err := t.Queue(byPerson, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
 								return nil, err
 							}
 						}
-						return t.Resume(ctx, give...)
+						return t.Resume(byPerson, give...)
 					})
 				}
 				prompt()
@@ -593,7 +696,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					// A prompt template's message, sent as a typed line
 					// is, marked with the file it came from.
 					if running {
-						if err := t.Queue(ctx, agentturn.QueueSteer, items...); err != nil {
+						if err := t.Queue(byPerson, agentturn.QueueSteer, items...); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
 							fmt.Fprintln(w, "[queued as steering]")
@@ -604,7 +707,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					// it again unmarked: were calls held, they are asked,
 					// and the REPL says the command was not sent.
 					sent, sentCommand = "", strings.Fields(line)[0]
-					start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, items...) })
+					start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, items...) })
 					continue
 				}
 				if r.quit {
@@ -614,14 +717,29 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					}
 					return nil
 				}
+				if r.open != nil {
+					// A command that opens a session waits for the run
+					// to end, so none is running.
+					fmt.Fprintf(w, "[session %s]\n", r.open.ID())
+					return &movedTo{r.open}
+				}
 				if !running {
 					prompt()
 				}
 				continue
 			}
 			text := userText(line)
+			// The line, and the MCP resources it mentions attached.
+			items, err := typedItems(ctx, ctl, text)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+				if !running {
+					prompt()
+				}
+				continue
+			}
 			if running {
-				if err := t.Queue(ctx, agentturn.QueueSteer, openresponses.UserText(text)); err != nil {
+				if err := t.Queue(byPerson, agentturn.QueueSteer, items...); err != nil {
 					fmt.Fprintln(os.Stderr, "error:", err)
 				} else {
 					fmt.Fprintln(w, "[queued as steering]")
@@ -629,29 +747,110 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				continue
 			}
 			sent, sentCommand = text, ""
-			start(func() (*agentturn.RunEnd, error) { return t.Prompt(ctx, openresponses.UserText(text)) })
+			if len(items) > 1 {
+				// Its attachments are marked with where they came from,
+				// which a steer of the text would lose: were calls held,
+				// the line is not sent again.
+				sent, sentCommand = "", "the line with its @ mentions"
+			}
+			start(func() (*agentturn.RunEnd, error) { return t.Prompt(byPerson, items...) })
 		}
 	}
 }
 
-// question is what the user is asked about a call the policy asked
-// about.
-func question(c *openresponses.FunctionCall, reason string) string {
+// questionOffer is what the user is asked about a call the policy asked
+// about, with the grant dax offers for it: a for the session, A kept
+// for the project.
+func questionOffer(c *openresponses.FunctionCall, reason string, o agent.GrantOffer) string {
 	if reason != "" {
 		reason = " (" + reason + ")"
 	}
-	return render.Clean(fmt.Sprintf("? allow %s %s%s [y/N] ", c.Name, c.Arguments, reason))
+	keys := "[y/N] "
+	switch {
+	case o.Rule != "" && o.Saved:
+		keys = "[y/a/A/N] (a: allow " + o.Rule + " for this session, A: always in this project) "
+	case o.Rule != "":
+		keys = "[y/a/N] (a: allow " + o.Rule + " for this session) "
+	}
+	return render.Clean(fmt.Sprintf("? allow %s %s%s %s", c.Name, c.Arguments, reason, keys))
+}
+
+// planOf is the plan of a call of dax-plan's exit_plan_mode, "" for any
+// other call.
+func planOf(c *openresponses.FunctionCall) string {
+	if c == nil || c.Name != plan.Tool {
+		return ""
+	}
+	var a struct {
+		Plan string `json:"plan"`
+	}
+	if json.Unmarshal([]byte(c.Arguments), &a) != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Plan)
+}
+
+// granter is what "yes, always" asks of the session's controls: the
+// session's own (agent.Session.GrantOffer and Grant); dax attach offers
+// none.
+type granter interface {
+	GrantOffer(ctx context.Context, callID string) agent.GrantOffer
+	Grant(ctx context.Context, callID string, kind agent.GrantKind, rule string) error
+}
+
+// offerOf is the grant the session offers for a pending call, none when
+// it grants nothing.
+func offerOf(ctx context.Context, ctl any, callID string) agent.GrantOffer {
+	if g, ok := ctl.(granter); ok {
+		return g.GrantOffer(ctx, callID)
+	}
+	return agent.GrantOffer{}
+}
+
+// grantLine reads an answer that approves with a grant: a (this
+// session) or A (kept for the project), in that case, when the offer
+// has it, with what follows as the note.
+func grantLine(line string, o agent.GrantOffer) (kind agent.GrantKind, note string, ok bool) {
+	word, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+	switch {
+	case word == "a" && o.Rule != "":
+		return agent.GrantSession, strings.TrimSpace(rest), true
+	case word == "A" && o.Rule != "" && o.Saved:
+		return agent.GrantSaved, strings.TrimSpace(rest), true
+	}
+	return "", "", false
+}
+
+// questionGranter is "yes, always" to a sub-agent's asked call: the
+// session's own (agent.Session.QuestionOffer and GrantQuestion).
+type questionGranter interface {
+	QuestionOffer(ctx context.Context, q agentturn.Question) agent.GrantOffer
+	GrantQuestion(ctx context.Context, q agentturn.Question, rule string) error
+}
+
+// questionOfferOf is the grant the session offers with q, none when it
+// grants nothing.
+func questionOfferOf(ctx context.Context, ctl any, q agentturn.Question) agent.GrantOffer {
+	if g, ok := ctl.(questionGranter); ok {
+		return g.QuestionOffer(ctx, q)
+	}
+	return agent.GrantOffer{}
 }
 
 // questionText is what the user is asked of a question a running call
 // asked: a sub-agent's call the policy asks about, or a tool's own.
-func questionText(q agentturn.Question) string {
+func questionText(q agentturn.Question) string { return questionTextOffer(q, agent.GrantOffer{}) }
+
+// questionTextOffer is questionText with the grant dax offers for a
+// sub-agent's asked call: a, for the session.
+func questionTextOffer(q agentturn.Question, o agent.GrantOffer) string {
 	if c := q.Call; c != nil {
 		msg := q.Elicitation.Message
 		if d := c.Decision; d != nil && d.Subject != "" && !strings.Contains(msg, d.Subject) {
 			msg += "; about: " + d.Subject
 		}
-		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg)
+		o.Saved = false
+		return questionOffer(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg, o)
 	}
 	if extension.IsTextQuestion(q.Elicitation) {
 		return "? " + render.Clean(q.Elicitation.Message) + " [your answer, or n] "
@@ -717,18 +916,29 @@ func openSession(ctx context.Context, opts agent.Options, resume string) (*agent
 
 // abortOnInterrupt makes Ctrl-C abort the run in flight; a second one,
 // or one while idle, exits.
-func abortOnInterrupt(t agentturn.Control) {
+// It returns what stops it, for a front that moves to another session.
+func abortOnInterrupt(t agentturn.Control) (stop func()) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
 	go func() {
-		for range sigs {
-			if !t.State().Running {
-				fmt.Println()
-				os.Exit(130)
+		for {
+			select {
+			case <-done:
+				return
+			case <-sigs:
+				if !t.State().Running {
+					fmt.Println()
+					os.Exit(130)
+				}
+				t.Abort()
 			}
-			t.Abort()
 		}
 	}()
+	return func() {
+		signal.Stop(sigs)
+		close(done)
+	}
 }
 
 // ended says what a run's end leaves the user to know: the calls an
@@ -789,6 +999,9 @@ func mcpLines(info agent.Info) []string {
 	lines := []string{"mcp servers:"}
 	for _, m := range info.MCP {
 		l := "  " + oneLine(m.Name, maxField) + ": " + placedText(m)
+		if st := stateText(m); st != "" {
+			l += ", " + st
+		}
 		if m.Secrets {
 			l += ", given secrets (secret_env)"
 		}
@@ -812,6 +1025,20 @@ const (
 	maxDescription = 160
 	maxField       = 80
 )
+
+// stateText says where m's session is (agent.MCPServerInfo.State), or
+// nothing for a dax that did not say.
+func stateText(m agent.MCPServerInfo) string {
+	switch m.State {
+	case "":
+		return ""
+	case "ended":
+		return "ended; the next call to one of its tools starts it again"
+	case "failed":
+		return "failed to start again (" + oneLine(m.Failure, maxField) + "); the next call tries again"
+	}
+	return oneLine(m.State, maxField)
+}
 
 // placedText says where m runs.
 func placedText(m agent.MCPServerInfo) string {

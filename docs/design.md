@@ -154,7 +154,7 @@ Where dax does not keep to this yet, and what each needs:
 | Where the tools act | `agentworkspace`: the `Workspace` interface, `Starter`, and `Local`, this machine's directory | the session's workspace (`Options.Workspace`, or a `Local` over `Dir`); MCP stdio servers started in it through `Start` |
 | Where the tools run | dax | `internal/executor`: the `Executor` the session runs the extensions' tools through, `InProcess`, `Set`, the tools bound as the kit's, with each model response's facts read together for its decisions, `NewServer`, the tools served over MCP by `dax execute` (`execute.go`), and `Remote`, the client a session started with `-executor` runs them through (`agent.Executor`) |
 | Allow, ask, deny | `agentpolicy` | `policy` merges one source per extension with the user's and the project's; dax-coding's rules, matchers and the bash splitter's use are in `ext/coding` |
-| The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc` |
+| The session record | `agentsession` | `Options.Store` or the store at `Root`, `-list`, `-verify`, `-resume`, `-gc`; or `Options.Recorder`, a recorder an evaluation runner opened (`agent/eval.go`: `HeaderOf`, `SessionOptionsOf` and `Build` for agenteval's `Runner`, a header that is not dax's refused before anything is written) |
 | AGENTS.md | `agentsmd` | the session: the chain's extent, reading it through the workspace, screening and budget |
 | Skills, memory | `agentskill`, `agentmemory` | dax-skills and dax-memory: directories, trust, scopes |
 | Settings | dax | `internal/config` |
@@ -236,6 +236,12 @@ names in `agents_md_global`, for every session whatever the repository
 holds; like `~/.dax/AGENTS.md` they are the user's, not the project's,
 so they are read on this machine whatever the workspace, a container's
 included, and are not screened. A project's config may not set it.
+An A2A caller's requests, and its sub-agents', carry the chain without
+the user's files (`agent/caller.go`): a BeforeModelCall after the
+kit's, and the sub-agents' `Env.ChildBeforeModelCall`, put the part
+rendered without them in its place, and refuse a request that still
+names one (a guard rewrote the part), so the caller's record holds what
+it was sent.
 What a layer left out, a file over the budget or a skill that
 would not load, is printed at start as `omitted:`.
 
@@ -248,7 +254,25 @@ reply, since a front shows only the start of a report. The tools'
 descriptions say how each works; the guide says how to divide the work.
 A `task` sub-agent is told the main prompt without the guide
 (`Env.SystemPrompt` leaving dax-agents out), having no sub-agents of its
-own.
+own. The memory block, and for `task` the AGENTS.md chain, follow as the
+kit's own parts (`agentkit.ChildParts`, `Kit.ChildConfig`): rendered
+again for each of the child's requests and recorded in its session with
+their source and trust, so a memory entry a model wrote is recorded as
+untrusted there as it is in the main session, not as the product's
+prompt. An `AGENTS.md` below the start directory reaches the model the
+turn after the work reaches its directory, through a file tool's path or
+the reads and writes a bash line's facts claim names, as one message
+recorded as composed from the file (`nestedmd.go`, read back from the
+transcript, so a resume or a fold needs no state); the sub-agents take
+the same hook (`Env.ChildBeforeTurn`), so each is given what its own
+work reaches. A message dax composes from someone else's text and
+sends with the person's line, an MCP server's prompt (`/mcp__S__P`) or
+a resource the line mentions (`@S:uri`, `agent/mcpresource.go`), is
+marked with agentturn's `WithProvenance`: the prompt or the resource as
+its instructions layer, and untrusted, so the record never reads a
+server's text as the person's words. Of the memory tools a sub-agent has `memory_search` alone,
+dax-memory's `SubagentTools`; nothing else of an extension's kit tools
+reaches it.
 
 ## Tools
 
@@ -313,6 +337,50 @@ allow of `read(...)` does not open it (#39). The skills the user
 installed, `~/.dax/skills` and `skills_dirs`, are the user's and are
 not held. What is not covered yet: the moment between the decision and
 the skill tool's read, in which a link can change.
+
+The skills the model writes (`skill_manage`) are on this machine, in
+`~/.dax/learned`, the last source, written through an `os.Root` on it
+with the name held to the skill grammar, so no model-supplied path
+reaches `os`. A write asks; the catalogue is reloaded
+(`Kit.ReloadSkills`) at the main agent's next turn, before its model
+call, since agentkit does not serialise a reload with the engine's
+decisions and a turn's start is a point where none is in flight. Their
+`allowed-tools` grant only under `-trust-skills` and only for the
+frontmatter digest the person approved (`/skills approve`,
+`~/.dax/skill-approvals.json`).
+
+A permission mode is the same sources made stricter or looser as a
+whole (`policy/mode.go`): `acceptEdits` adds each extension's
+`ModeRules` for the mode (dax-coding's: write and edit allowed, protected
+and secret-looking paths asked), `dontAsk` turns every ask into a deny
+with a note and the default into a deny, `plan` does the same but for
+the asks the extensions add for it (dax-plan's `exit_plan_mode`), while
+dax-coding's plan rules deny `write` and `edit`, and `bypassPermissions` drops the
+asks and allows by default. A deny holds in every mode. The person's
+approval of a plan runs `exit_plan_mode`, which moves the session to
+`acceptEdits` from the next turn (`Env.SetMode`, recorded as `plan
+approved`); `act_model` is set by the plane before the `Resume` that
+answers it, since a running agent's model cannot change (with no
+`act_model`, the model `plan_model` replaced is put back there, unless
+the person chose another in plan mode: the user's decision of
+2026-11-06 on #147), and
+`plan_model` before the first run once plan is entered, while the
+session is still in plan. Leaving plan any other way (Shift-Tab past
+it, `/mode`) puts back the model `plan_model` replaced, before the next
+run, unless the person chose another meanwhile. The session
+keeps the settings it built the policy from (the box's confinement
+included) and a switch rebuilds them and replaces the engine's policy
+with agentpolicy's `SetPolicy`, journaled with the mode as its reason,
+so the sub-agents, which decide through the same engine, follow; a
+switch asked for during a run waits for the run's next `TurnStart`, so
+no batch straddles two policies.
+
+A person's "yes, always" is a grant at `policy.RankGrant`, below every
+source: for the session a grant set under the kit's grant scope, kept
+for the project the source `dax:saved` from the user's grants file. It
+answers only an ask made for want of a rule, and dax offers one only
+then (the deferred verdict names no rule), in the words of the tool's
+extension (`GrantRule`).
 
 `bash` has a subject splitter: the command is cut at unquoted `;`, `&`,
 `|`, `&&`, `||` and newlines, a redirect to a file becomes a subject for
@@ -379,7 +447,17 @@ events and answers permissions and questions on standard input; print
 (`-p`) is `agent.Drive`, a controller whose rules ask on standard input;
 the terminal client, agentconsole, is a view of the record and the
 session's events that sends the session intents (`client.Direct` over
-the session). `dax serve` is in place of a front: it serves the session
+the session); `-front acp` is an editor over the Agent Client Protocol
+(`acp.go` over `internal/acp`'s JSON-RPC), each ACP session a dax
+session, the first the one the command line opened and each later one
+`Session.Reopen` over the live settings, `session/load` one of this
+project's top-level sessions replayed from the record (a failed call
+marked failed; one already open in the process refused, one session
+being one conversation), the editor's permissions answering the session's
+(allow once, reject, allow always as a session grant when dax offers
+a rule), its stdio MCP servers started on this machine under
+`-trust-mcp` alone with their `env` as `secret_env` values, and its
+`cwd` the start directory or below it. `dax serve` is in place of a front: it serves the session
 (`front/control` with `agent.Controls` as its commands, the record
 through agentsession's `remote`) behind one bearer token (each 401
 naming `Bearer realm="dax"`, `internal/authn`'s challenge), holding
@@ -389,12 +467,37 @@ through the served commands; leaving it leaves the session's run going.
 With `-a2a` dax serve also serves A2A callers, behind a token of their
 own, each conversation a session of its own (see Planes); their
 questions reach only the views attached when they are asked, each
-naming the conversation it is about.
+naming the conversation it is about. Those sessions are in the
+person's store, so a search of it is scoped by its caller
+(`Session.SearchScope`, the `Env.SearchScope` every extension that
+searches the store passes agentkit's `SearchScope`): the person reads
+the project's top-level sessions, a caller none. What is the person's
+own beyond the workspace is not a caller's either: an extension's
+`PersonOnly` tools (dax-memory's memory tools, dax-skills'
+`skill_manage`) are refused to a caller and its sub-agents outright by
+a hook beside the default-mode floor (`personOnlyRefusal`), asking no
+one; dax-memory's store reads empty on a caller's context
+(`Env.Caller`), so the kit renders a caller's requests with no memory
+block; and dax-skills serves a caller only installed skills. The kit
+renders one skill catalogue for every conversation, so a learned
+skill's name and description still reach a caller's instructions until
+agentkit can leave a part out per conversation.
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal
 client hands over with each submitted line (`console.WithSubmit`), and
-the model never sees it. The session asks nothing of a
+the model never sees it. One session is one conversation: `/new` does
+not reset the session but opens another (`Session.Reopen`) over the
+settings the person changed (model, reasoning, mode, `/mcp add`
+servers), and the front moves to it, the REPL's loop going on over the
+same input and the terminal client entered again over the new record;
+the old session is closed and its record kept. Over `dax attach` it is
+refused, since every view acts on the one served conversation.
+`/resume` moves the same way to an earlier session of the project
+(`Session.Sessions`, read from the store by the project's identity,
+never an A2A caller's conversation, which `OpenPeer` marks with the
+header's `dax.origin`),
+and `/name` writes agentsession's `info` entry, which listings read. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Resume`, and every question asked while a call runs is
 an `agentturn.Question` event, answered with `Reply`, what the user said
@@ -405,6 +508,30 @@ the sub-agent ends input-required and its task call fails naming the
 call (tools/agent's `WithAskParent`, agentturn RFC 0001 Composition),
 never handed to the main agent to make under the conversation's
 grants.
+
+Images (`agent/images.go`): dax-coding's `read` returns an image file
+as an image part wherever it runs, since a tool cannot know the model;
+the session shows it to a model whose vendor says it takes images
+(`Options.TakesImages`, from `internal/modelinfo`) and puts a line in
+its place otherwise. The test is made again on every request, by the
+model the request names, in the session's BeforeModelCall
+(`beforeModelCall`, the main agent's and, through
+`Env.ChildBeforeModelCall`, explore's and task's): a sub-agent on a
+model of its own is judged by that model, and the images a
+conversation holds are said, not sent, once `/model`, a resume or
+`/resume` moves it to a model that takes none. Being a hook, it acts
+before the recorder takes the request, so the record says what the
+model was sent: the items keep their images, and the request is
+recorded with the session format's omit placeholder in their place,
+its hash kept. A fold's summary and a server's compaction, which no
+hook sees and the session does not record as requests, are judged the
+same way around the session's streamers (`textOnly`). An image the person attaches (`@path.png`) is
+the workspace's file, read through it as `read` reads one (relative to
+its root, nothing outside it by name or link), so `@docs/x.png` is the
+project's file whether the tools act here, in a box or on a served
+workspace; theirs as the line is. The store keeps media as
+blobs beside the log (sidecar media), which agentturn's recorder
+writes and reads back.
 
 ## Workspaces
 
@@ -469,7 +596,9 @@ is:
   lists this directory's workspace, or the one the latest session at
   the configured executor's address recorded, without connecting to
   it; dax-memory's project scope is the workspace's (this machine's
-  stays the directory's, so older memory is kept).
+  stays the directory's, so older memory is kept), with an archive
+  beside it and beside the user's (`ArchiveScope`), searched and never
+  rendered.
 
 `agent.Options.Workspace` is the caller's workspace, which the caller
 closes; without one the session opens a `workspace.Local` over `Dir`,
@@ -496,9 +625,22 @@ What is not equal yet, and why:
   servers workspace offers (`Options.ServersWorkspace`,
   `servers_workspace`): a second workspace, granted servers alone
   (the scopes its `remote` client reports are exactly `servers`),
-  beside the one the tools act in, which nothing else uses. A server placed on
+  beside the one the tools act in, which nothing else uses; or several,
+  by name (`Options.ServersWorkspaces`, `servers_workspaces`), each so
+  held, sharing no server name, workspace, token or hub port. A server placed on
   the host (`"in": "host"`) or at a `url` is called from this machine
-  whatever the workspace, its tools never taken as confined.
+  whatever the workspace, its tools never taken as confined. A `url`'s
+  OAuth is dax's (the library is the capability, the app does auth):
+  go-sdk's `AuthorizationCodeHandler` with mcpclient's `StoreTokens`,
+  the grant in the user's private `~/.dax/mcp-tokens.json`, never a
+  workspace's; the access token held to the server's origin
+  (`originGuard`), the sign-in's own requests to that origin and the
+  authorization servers its metadata names (`authGuard`; one on
+  loopback only for a server on loopback), and consent
+  asked only while a session opens at the terminal. A server that
+  refuses streamable HTTP's `initialize` with a 4xx, and greets a GET
+  with the old transport's `endpoint` event, is reached over HTTP+SSE; that stays dax's until a second product wants it in
+  mcpclient.
 - agentsession's RFC 0003 puts a store behind HTTP, and its client is
   meant for `Options.Store`, but it is not a drop-in for today's
   `Store`: opening takes a lease, an append returns a new result, and a
@@ -506,8 +648,12 @@ What is not equal yet, and why:
   interface; the rest waits for `agentsession/remote`. `Session.Path`
   and the store's admin functions (`-list`, `-verify`, `-gc`) are the
   local store's.
-- A front driving a session elsewhere over ACP is not built; over
-  agentturn's own wire it is `dax attach`.
+- An editor drives a session over ACP (`-front acp`, `acp.go`) on this
+  machine, through the pipe that started dax: v1 takes the editor's
+  prompts, permissions and stdio MCP servers, and none of its files or
+  terminals (ACP v2 drops those methods), so the tools act in the
+  session's workspace as anywhere else. A session elsewhere is driven
+  over agentturn's own wire, `dax attach`.
 
 ## Extending
 
@@ -521,8 +667,9 @@ own are built from the same fields a program's are:
 | dax-coding | `ext/coding` | read, write, edit, glob, grep, ls, bash; their rules, matchers, aliases, the bash stamp, the prompt's nudge, renderers |
 | dax-agents | `ext/agents` | explore and task, from every extension's tools; the delegation guide |
 | dax-skills | `ext/skills` | the skill tool and catalogue; grants under `-trust-skills` |
-| dax-memory | `ext/memory` | the memory tools and block |
+| dax-memory | `ext/memory` | the memory tools and block; the background pass after a run |
 | dax-a2a | `ext/a2a` | a tool per peer in the user's config; renderers; no rules |
+| dax-plan | `ext/plan` | `exit_plan_mode`, plan mode's one ask; its renderer |
 
 `dax.Main` builds dax-coding and dax-a2a always (dax-a2a offers nothing
 without peers) and the others as the settings say, less those
@@ -726,7 +873,56 @@ of `Tools` is, through the kit's `LookupTool` at each decision, and
 the facts hook applies its rewrite. `BeforeToolCall` hooks fold with the
 policy, deny over ask over allow, for the main agent and, through
 `Env.ChildPolicy`, every sub-agent; with the policy off they are not
-run. `extension.Renderers` merges the extensions' renderers for the
+run. `PolicyHooks` are hooks inside the engine's own decision
+(agentpolicy's `WithHooks` and `WithAnsweringHooks`), so the main
+agent's and every sub-agent's calls, decided by the one engine, run
+them: `Decide` folds strictest-wins and is recorded with its decider;
+`Answer` may lift only an ask of rank 0 or below (the project's rules,
+the fallback), never an extension's or the user's ask, a deny, or an
+A2A caller's call (`agent/policyhooks.go`, `notForCallers`). With the
+policy off, `Decide` runs as a main-agent `BeforeToolCall`. dax-hooks
+(`ext/hooks`) is the user's own hooks over it, run on this machine
+with `Env.HostEnv`, a line through `/bin/sh -c` as Claude Code runs
+one, in a process group the run's cancellation kills; a PreToolUse
+hook that cannot answer refuses the call (it fails closed, as rule 8
+asks). An extension's `AfterRun` is told, after each run of the person's
+main agent ends and is on the record, what the run did: the tools it
+called, whether one reached an open world (an MCP server's tool, or
+one annotated open-world, as dax-a2a's peers are) and its output
+tokens (`agent/afterrun.go`). It runs off the loop, under a context
+that carries the session's elicitor and that the session's close
+ends, after up to 30 seconds' wait; an A2A caller's conversation and a
+sub-agent call none. dax-memory's background pass starts there, in the
+person's own interactive sessions alone (never under `-p` or `dax
+serve`, where `Background.Headless` runs none): a child
+the host starts through `Env.Kit` (agentkit's `StartChild`, one spawn
+ID per conversation, continued by every later pass), so it is a
+subsession of the conversation and decides under a grant scope of its
+own, where under `auto` its own source (`dax:memory-pass`, at
+`policy.RankGrant`) allows the memory writers, below every ask and deny
+the user and the extensions have. It asks, through the question path a
+sub-agent's asked call takes, before it changes an entry no pass wrote
+(the journal's `Change.Session` against the passes' ledger), and
+every write it makes is conditional on the entry as it read it when it
+decided the call, before any question (`IfHash` on that hash, kept by
+call ID; a forget compares the entry again just before it, the store
+having no conditional forget). Under
+`propose`, and after a run that reached an open world, the pass waits
+for the person: an extension's `BeforePrompt` runs at the start of the
+person's prompt (`Session.Prompt`), before it is sent, and the prompt
+waits for it, so each write it asks about is answered by the front
+there, as a sub-agent's asked call is. "Yes, always" to such a
+question is a grant of the offered rule (`QuestionOffer`,
+`GrantQuestion`) for the rest of the session, made under the pass's own
+grant scope and made again by the child's policy whenever the engine no
+longer holds it (agentkit ends child scopes at each new message of the
+person's under `-trust-skills`): the pass runs on `extension.WithOwnGrants`, so the grant
+answers the passes' writes alone, never the main agent's (whose
+`memory_save` still asks) nor another sub-agent's. An A2A caller's
+sub-agent's question, which an escalation may put to the person, is
+offered no grant. A sub-agent's
+"always" without that mark is the conversation's session grant, which
+reaches every sub-agent through `sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.
@@ -751,7 +947,7 @@ move to openresponses.
 
 Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
-tree to navigate; an RPC mode and ACP for editors; a container or
+tree to navigate; an RPC mode; a container or
 remote workspace (agentworkspace has the interface and `Local`, not
 those); a model catalogue with context windows; extension points
 for slash commands, the REPL's renderer, or the config's schema. Each

@@ -58,6 +58,10 @@ type Config struct {
 	// Model is the provider's model name; empty takes the provider's
 	// default.
 	Model string `json:"model,omitempty"`
+	// PlanModel is the model plan mode moves to, ActModel the one the
+	// person's approval of a plan moves to; empty leaves the model.
+	PlanModel string `json:"plan_model,omitempty"`
+	ActModel  string `json:"act_model,omitempty"`
 	// SubagentModel is the model the sub-agents run; empty takes the
 	// provider's default for them, else the main model.
 	SubagentModel string `json:"subagent_model,omitempty"`
@@ -168,10 +172,69 @@ type Config struct {
 	// project cannot, since it chooses a machine the session's tool
 	// calls go to.
 	ServersWorkspace *Workspace `json:"servers_workspace,omitempty"`
+	// ServersWorkspaces are more servers workspaces, by name, each as
+	// servers_workspace is and with a token variable of its own: a
+	// session reaches several hosts' secret-holding servers, each served
+	// alone. A name is a DNS label, the one the record, -list and
+	// messages give it; "servers" is servers_workspace's. The user sets
+	// them; a project cannot.
+	ServersWorkspaces map[string]*Workspace `json:"servers_workspaces,omitempty"`
 	// Peers are remote A2A agents offered to the model as tools, by
 	// the tool's name. The user sets them; a project cannot, since a
 	// peer is an endpoint the session's work and a token are sent to.
 	Peers map[string]Peer `json:"peers,omitempty"`
+	// Status makes up the terminal client's status line; nil keeps the
+	// client's default line. The user's alone.
+	Status *Status `json:"status,omitempty"`
+	// Hooks are the user's own PreToolUse and PostToolUse hooks, in
+	// Claude Code's shape (dax-hooks). The user sets them; a project
+	// cannot, since a hook is a command run on this machine.
+	Hooks *Hooks `json:"hooks,omitempty"`
+	// Memory is dax-memory's background pass. The user's alone: a
+	// project cannot turn on writes to the user's memory nobody is
+	// asked about.
+	Memory *Memory `json:"memory,omitempty"`
+}
+
+// Memory is dax-memory's background pass after a run (#160).
+type Memory struct {
+	// Background is off (the default), propose or auto.
+	Background string `json:"background,omitempty"`
+	// BackgroundEvery is the runs between passes; 0 is 1.
+	BackgroundEvery int `json:"background_every,omitempty"`
+	// BackgroundMaxTokens caps a pass's tokens, input and output; 0 is
+	// 8000.
+	BackgroundMaxTokens int `json:"background_max_tokens,omitempty"`
+	// BackgroundTrivialTokens: a run with no tool call and fewer output
+	// tokens than this starts no pass; 0 is 500.
+	BackgroundTrivialTokens int `json:"background_trivial_tokens,omitempty"`
+}
+
+// MemoryModes are memory.background's values.
+var MemoryModes = []string{"off", "propose", "auto"}
+
+// CheckMemoryBackground refuses a memory.background value that is not
+// one of MemoryModes; "" is off.
+func CheckMemoryBackground(v string) error {
+	if v == "" || slices.Contains(MemoryModes, v) {
+		return nil
+	}
+	return fmt.Errorf("memory.background %q: want off, propose or auto", v)
+}
+
+func (m *Memory) check() error {
+	if err := CheckMemoryBackground(m.Background); err != nil {
+		return err
+	}
+	for _, f := range []struct {
+		name string
+		n    int
+	}{{"background_every", m.BackgroundEvery}, {"background_max_tokens", m.BackgroundMaxTokens}, {"background_trivial_tokens", m.BackgroundTrivialTokens}} {
+		if f.n < 0 {
+			return fmt.Errorf("memory.%s %d: want 0 or more", f.name, f.n)
+		}
+	}
+	return nil
 }
 
 // Peer is one remote A2A agent (dax-a2a).
@@ -289,6 +352,17 @@ type WorkspaceSettings struct {
 // WorkspaceSettings.Field of the settings it gives.
 const ServersField = "servers_workspace"
 
+// ServersWorkspacesField is servers_workspaces' name in messages; an
+// entry's Field is it, a dot and the entry's name.
+const ServersWorkspacesField = "servers_workspaces"
+
+// ServersName is the name servers_workspace goes by beside the
+// servers_workspaces entries: in the record, -list and messages.
+const ServersName = "servers"
+
+// serversName is a servers_workspaces entry's name: a DNS label.
+var serversName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
 // Name is what messages call the setting w came from: workspace, or
 // servers_workspace.
 func (w WorkspaceSettings) Name() string {
@@ -303,6 +377,9 @@ func (w WorkspaceSettings) Name() string {
 func (w WorkspaceSettings) Flag() string {
 	if w.Field == ServersField {
 		return "-servers-workspace"
+	}
+	if strings.HasPrefix(w.Field, ServersWorkspacesField+".") {
+		return w.Field
 	}
 	return "-workspace"
 }
@@ -550,6 +627,12 @@ type MCPServer struct {
 	// TokenEnv names the variable holding the bearer token sent to URL's
 	// origin only; empty sends none. Refused in a project's file.
 	TokenEnv string `json:"token_env,omitempty"`
+	// OAuth signs in to a url's server with OAuth when it asks for it,
+	// in place of token_env: {} registers dax with the server's
+	// authorization server; client_id (with client_secret_env, and the
+	// callback_port its registration names) is a client registered for
+	// you. Refused in a project's file.
+	OAuth *MCPOAuth `json:"oauth,omitempty"`
 	// Description says what the server is for, shown where servers are
 	// listed (dax workspace -servers says it at start, and a served
 	// workspace lists it with the server's name).
@@ -563,6 +646,32 @@ type MCPServer struct {
 	// alone, never one sent to a workspace (SecretInWorkspace). Refused
 	// in a project's file, and for a url, whose token is token_env's.
 	SecretEnv []string `json:"secret_env,omitempty"`
+}
+
+// MCPOAuth is a url server's oauth block.
+type MCPOAuth struct {
+	ClientID        string `json:"client_id,omitempty"`
+	ClientSecretEnv string `json:"client_secret_env,omitempty"`
+	CallbackPort    int    `json:"callback_port,omitempty"`
+}
+
+// check refuses a secret with no client, a client with no port its
+// registration can name, a port out of range and a variable that is not
+// one.
+func (o *MCPOAuth) check(name string) error {
+	switch {
+	case o.ClientSecretEnv != "" && o.ClientID == "":
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env is for a client_id", name)
+	case o.ClientSecretEnv != "" && !envName.MatchString(o.ClientSecretEnv):
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env: %q is not a variable name", name, o.ClientSecretEnv)
+	case o.ClientSecretEnv != "" && IsTokenVariable(o.ClientSecretEnv):
+		return fmt.Errorf("mcp_servers.%s: oauth.client_secret_env: %s is a served workspace's token", name, o.ClientSecretEnv)
+	case o.CallbackPort < 0 || o.CallbackPort > 65535:
+		return fmt.Errorf("mcp_servers.%s: oauth.callback_port %d: want a port, 1 to 65535", name, o.CallbackPort)
+	case o.ClientID != "" && o.CallbackPort == 0:
+		return fmt.Errorf("mcp_servers.%s: oauth.client_id needs callback_port, the loopback port its registration's redirect names", name)
+	}
+	return nil
 }
 
 // SecretInWorkspace is the refusal of a session's server that names
@@ -595,10 +704,14 @@ type Policy struct {
 	Builtin *bool `json:"builtin,omitempty"`
 	// Fallback is what a call no rule names does: ask (the default),
 	// allow or deny.
-	Fallback string   `json:"fallback,omitempty"`
-	Allow    []string `json:"allow,omitempty"`
-	Ask      []string `json:"ask,omitempty"`
-	Deny     []string `json:"deny,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
+	// DefaultMode is the permission mode a session starts in:
+	// default, acceptEdits, dontAsk or bypassPermissions. A project's
+	// may only be stricter than the user's.
+	DefaultMode string   `json:"default_mode,omitempty"`
+	Allow       []string `json:"allow,omitempty"`
+	Ask         []string `json:"ask,omitempty"`
+	Deny        []string `json:"deny,omitempty"`
 }
 
 // Path is where the user's file is: $XDG_CONFIG_HOME/dax/config.json,
@@ -831,14 +944,14 @@ func (l *Layer) validate() error {
 			name string
 			set  bool
 		}{
-			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"base_url", c.BaseURL != ""},
+			{"provider", c.Provider != ""}, {"model", c.Model != ""}, {"subagent_model", c.SubagentModel != ""}, {"plan_model", c.PlanModel != ""}, {"act_model", c.ActModel != ""}, {"base_url", c.BaseURL != ""},
 			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
-			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"peers", len(c.Peers) > 0},
+			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil}, {"memory", c.Memory != nil},
 		} {
 			if f.set {
 				return fmt.Errorf("%s: a project file may only tighten the policy; put %s in your own config (%s)", f.name, f.name, Path())
@@ -897,6 +1010,27 @@ func (l *Layer) validate() error {
 			return err
 		}
 	}
+	for _, name := range sortedKeys(c.ServersWorkspaces) {
+		w, field := c.ServersWorkspaces[name], ServersWorkspacesField+"."+name
+		switch {
+		case !serversName.MatchString(name):
+			return fmt.Errorf("%s: %q is not a name: a DNS label of lower-case letters, digits and hyphens", ServersWorkspacesField, name)
+		case name == ServersName:
+			return fmt.Errorf("%s.%s: the name is servers_workspace's; give it there or pick another", ServersWorkspacesField, name)
+		case w == nil:
+			return fmt.Errorf("%s is empty", field)
+		}
+		if err := w.check(field); err != nil {
+			return err
+		}
+		// Each its own variable: no default is shared between them.
+		if w.Hub != nil && w.Hub.TokenEnv == "" {
+			return fmt.Errorf("%s.hub.token_env is required: each servers workspace's hub enrolls with a token of its own", field)
+		}
+		if w.Hub == nil && w.TokenEnv == "" {
+			return fmt.Errorf("%s.token_env is required: each servers workspace is sent a token of its own", field)
+		}
+	}
 	for _, name := range sortedKeys(c.Peers) {
 		if err := c.Peers[name].remote(name).Check(); err != nil {
 			return fmt.Errorf("peers: %w", err)
@@ -913,6 +1047,21 @@ func (l *Layer) validate() error {
 			return SecretInWorkspace(name)
 		}
 	}
+	if c.Status != nil {
+		if err := c.Status.check(); err != nil {
+			return err
+		}
+	}
+	if c.Hooks != nil {
+		if err := c.Hooks.check(); err != nil {
+			return err
+		}
+	}
+	if c.Memory != nil {
+		if err := c.Memory.check(); err != nil {
+			return err
+		}
+	}
 	if p := c.Policy; p != nil {
 		switch p.Fallback {
 		case "", "ask", "allow", "deny":
@@ -921,6 +1070,16 @@ func (l *Layer) validate() error {
 		}
 		if l.Project && p.Fallback == "allow" {
 			return errors.New(`policy.fallback "allow": a project file may only make the fallback stricter`)
+		}
+		if p.DefaultMode != "" {
+			m, err := policy.ParseMode(p.DefaultMode)
+			if err != nil {
+				return fmt.Errorf("policy.default_mode: %w", err)
+			}
+			if l.Project && policy.Stricter(policy.ModeDefault, m) {
+				return fmt.Errorf("policy.default_mode %q: a project file may only pick a stricter mode (%s or %s)", p.DefaultMode, policy.ModePlan, policy.ModeDontAsk)
+			}
+			p.DefaultMode = m
 		}
 		if l.Project && len(p.Allow) > 0 {
 			return fmt.Errorf("policy.allow: a project file may not allow anything; put allow rules in your own config (%s)", Path())
@@ -1158,7 +1317,21 @@ func (s MCPServer) check(name string, project bool) error {
 		if s.TokenEnv != "" {
 			return fmt.Errorf("mcp_servers.%s: token_env is for a url; a command's server gets its environment", name)
 		}
+		if s.OAuth != nil {
+			return fmt.Errorf("mcp_servers.%s: oauth is for a url", name)
+		}
 		return nil
+	}
+	if s.OAuth != nil {
+		switch {
+		case project:
+			return fmt.Errorf("mcp_servers.%s: oauth: a project file may not sign you in to a server, which would send your grant where the repository says; put the server in your own config (%s)", name, Path())
+		case s.TokenEnv != "":
+			return fmt.Errorf("mcp_servers.%s: give token_env or oauth, not both", name)
+		}
+		if err := s.OAuth.check(name); err != nil {
+			return err
+		}
 	}
 	if s.In != "" {
 		return fmt.Errorf("mcp_servers.%s: in is for a command; a url is called from this machine", name)
@@ -1434,6 +1607,60 @@ func ServersWorkspaceOf(user Layer, f Flags) (*WorkspaceSettings, error) {
 		s.Hub.Field = ServersField + ".hub"
 	}
 	return s, nil
+}
+
+// ServersWorkspacesOf is the user's servers_workspaces, by name, with
+// their defaults filled in; nil for none. -servers-workspace replaces
+// servers_workspace alone.
+func ServersWorkspacesOf(user Layer) (map[string]*WorkspaceSettings, error) {
+	if len(user.ServersWorkspaces) == 0 {
+		return nil, nil
+	}
+	out := map[string]*WorkspaceSettings{}
+	for name, w := range user.ServersWorkspaces {
+		field := ServersWorkspacesField + "." + name
+		s := &WorkspaceSettings{URL: w.URL, TokenEnv: w.TokenEnv, TLSCA: w.TLSCA, Field: field}
+		if w.Hub != nil {
+			var err error
+			if s.Hub, err = w.Hub.settings(field+".hub", ""); err != nil {
+				return nil, err
+			}
+			s.Hub.Field = field + ".hub"
+		}
+		out[name] = s
+	}
+	return out, nil
+}
+
+// Servers are the servers workspaces, by name: servers_workspace (or
+// -servers-workspace) as ServersName, then servers_workspaces, in the
+// order of their names.
+func (s Settings) Servers() []NamedWorkspace {
+	var out []NamedWorkspace
+	if s.ServersWorkspace != nil {
+		out = append(out, NamedWorkspace{ServersName, s.ServersWorkspace})
+	}
+	for _, name := range sortedKeys(s.ServersWorkspaces) {
+		out = append(out, NamedWorkspace{name, s.ServersWorkspaces[name]})
+	}
+	return out
+}
+
+// NamedWorkspace is a servers workspace and the name it goes by in the
+// record and -list (Label); WorkspaceSettings.Name is what messages call
+// its setting.
+type NamedWorkspace struct {
+	Label string
+	*WorkspaceSettings
+}
+
+// mapValues are m's values in the order of their keys.
+func mapValues[V any](m map[string]V) []V {
+	var out []V
+	for _, k := range sortedKeys(m) {
+		out = append(out, m[k])
+	}
+	return out
 }
 
 // HasExecutor reports whether the user's layer and the flags set an
@@ -1770,7 +1997,7 @@ func (l *Layer) resolvePaths() {
 		l.MemoryDir = &m
 	}
 	l.PricingFile = fix(l.PricingFile)
-	for _, w := range []*Workspace{l.Workspace, l.ServersWorkspace} {
+	for _, w := range append([]*Workspace{l.Workspace, l.ServersWorkspace}, mapValues(l.ServersWorkspaces)...) {
 		if w == nil {
 			continue
 		}
@@ -1813,6 +2040,8 @@ func checkPaths(field string, paths []string) error {
 // was not given.
 type Flags struct {
 	Provider, Model, SubagentModel, BaseURL, APIKeyEnv, MemoryDir *string
+	// MemoryBackground is -memory-background: off, propose or auto.
+	MemoryBackground *string
 	// APIKeyCommand is the program and arguments; nil was not given.
 	APIKeyCommand                    []string
 	APIKeyLogin, PricingFile, Effort *string
@@ -1843,8 +2072,11 @@ type Flags struct {
 	// not given and empty clears it. A relative path is the working
 	// directory's.
 	AgentsMDGlobal []string
-	// NoPolicy turns the policy off: every call runs.
+	// NoPolicy is Mode bypassPermissions, its old name: every call runs
+	// that no deny rule refuses.
 	NoPolicy bool
+	// Mode replaces the permission mode the layers chose (-mode).
+	Mode *string
 	// MaxTurns replaces max_turns; 0 turns the limit off.
 	MaxTurns *int
 }
@@ -1852,28 +2084,31 @@ type Flags struct {
 // Settings is what dax runs with: the layers folded, the flags laid
 // over them, validated as a whole.
 type Settings struct {
-	Provider         string
-	Model            string   // empty: the provider's default
-	SubagentModel    string   // empty: the provider's default, else Model
-	BaseURL          string   // empty: the provider's default
-	APIKeyEnv        string   // empty: the openresponses provider sends no key
-	APIKeyCommand    []string // empty: the key comes from the environment
-	APIKeyLogin      string   // empty: no sign-in hint with a key error
-	SessionHeader    string   // empty: no session header on model calls
-	ClientHeader     string   // empty: no client header on model calls
-	CacheTTL         string   // empty: Claude's default, 5m
-	SubagentCacheTTL string   // empty: Claude's default, 5m
-	Think            bool
-	Effort           string // the effort Think asks for
-	Agents           bool
-	InstructionsFile string
-	SkillsDirs       []string
-	AgentsMDGlobal   []string // the user's own instruction files, absolute
-	MemoryDir        string   // empty: off; Resolve fills the default in
-	PricingFile      string   // empty: no terminal-client cost
-	Executor         []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
-	ExecutorURL      string   // where the executor serves, when it is not started here
-	ExecutorPassEnv  []string // what only the executor's command is given
+	Provider      string
+	Model         string // empty: the provider's default
+	SubagentModel string // empty: the provider's default, else Model
+	// PlanModel and ActModel are plan mode's model and the one an
+	// approved plan moves to; empty leaves the model as it is.
+	PlanModel, ActModel string
+	BaseURL             string   // empty: the provider's default
+	APIKeyEnv           string   // empty: the openresponses provider sends no key
+	APIKeyCommand       []string // empty: the key comes from the environment
+	APIKeyLogin         string   // empty: no sign-in hint with a key error
+	SessionHeader       string   // empty: no session header on model calls
+	ClientHeader        string   // empty: no client header on model calls
+	CacheTTL            string   // empty: Claude's default, 5m
+	SubagentCacheTTL    string   // empty: Claude's default, 5m
+	Think               bool
+	Effort              string // the effort Think asks for
+	Agents              bool
+	InstructionsFile    string
+	SkillsDirs          []string
+	AgentsMDGlobal      []string // the user's own instruction files, absolute
+	MemoryDir           string   // empty: off; Resolve fills the default in
+	PricingFile         string   // empty: no terminal-client cost
+	Executor            []string // the executor's program and arguments; empty: ExecutorURL, or the tools run in this process
+	ExecutorURL         string   // where the executor serves, when it is not started here
+	ExecutorPassEnv     []string // what only the executor's command is given
 	// Box is the box the tools run in, nil for none; the caller starts
 	// its box host and sets Executor to that command, since nothing here
 	// runs one.
@@ -1881,6 +2116,9 @@ type Settings struct {
 	// Workspace is the served workspace the tools act in, nil for none;
 	// the caller dials it, and reads the project's layer through it.
 	Workspace *WorkspaceSettings
+	// ServersWorkspaces are servers_workspaces, by name (Servers lists
+	// them with ServersWorkspace).
+	ServersWorkspaces map[string]*WorkspaceSettings
 	// ServersWorkspace is the servers workspace beside wherever the
 	// tools act, nil for none; the caller dials it (or hosts its hub),
 	// and the session connects its offered servers alone.
@@ -1901,6 +2139,16 @@ type Settings struct {
 	// where it is lower than the window it would otherwise believe.
 	ContextWindow, ProjectContextWindow map[string]int64
 	Policy                              PolicySettings
+	// Status is the terminal client's status line, nil for its default.
+	Status *Status
+	// Hooks are the user's hooks, nil for none; the last user layer
+	// that sets them wins, and a project's are refused when it is read.
+	Hooks *Hooks
+	// Memory is dax-memory's background pass, from the user's layers
+	// and -memory-background, its defaults filled: Background off,
+	// BackgroundEvery 1, BackgroundMaxTokens 8000,
+	// BackgroundTrivialTokens 500.
+	Memory Memory
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
 	// client_header, cache_ttl and subagent_cache_ttl: "default", the
@@ -1912,6 +2160,7 @@ type Settings struct {
 // project's file named it.
 type MCP struct {
 	Name, Command, In, URL, TokenEnv string
+	OAuth                            *MCPOAuth
 	Description                      string
 	SecretEnv                        []string
 	Project                          bool
@@ -1929,8 +2178,9 @@ type Rules = policy.Rules
 func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
+		Memory:        Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500},
 		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput,
-		Policy:  PolicySettings{Builtin: true, Fallback: "ask"},
+		Policy:  PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
 	servers := map[string]MCP{}
@@ -1946,6 +2196,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Model != "" {
 			s.Model, s.Sources["model"], setFor["model"] = l.Model, l.Path, s.Provider
+		}
+		if l.PlanModel != "" {
+			s.PlanModel, setFor["plan_model"] = l.PlanModel, s.Provider
+		}
+		if l.ActModel != "" {
+			s.ActModel, setFor["act_model"] = l.ActModel, s.Provider
 		}
 		if l.SubagentModel != "" {
 			s.SubagentModel, s.Sources["subagent_model"], setFor["subagent_model"] = l.SubagentModel, l.Path, s.Provider
@@ -1973,6 +2229,33 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.SubagentCacheTTL != "" {
 			s.SubagentCacheTTL, s.Sources["subagent_cache_ttl"], setFor["subagent_cache_ttl"] = l.SubagentCacheTTL, l.Path, s.Provider
+		}
+		if l.Status != nil {
+			s.Status = l.Status
+		}
+		if m := l.Memory; m != nil && !l.Project {
+			if m.Background != "" {
+				s.Memory.Background = m.Background
+			}
+			if m.BackgroundEvery > 0 {
+				s.Memory.BackgroundEvery = m.BackgroundEvery
+			}
+			if m.BackgroundMaxTokens > 0 {
+				s.Memory.BackgroundMaxTokens = m.BackgroundMaxTokens
+			}
+			if m.BackgroundTrivialTokens > 0 {
+				s.Memory.BackgroundTrivialTokens = m.BackgroundTrivialTokens
+			}
+		}
+		if l.Hooks != nil && !l.Project {
+			h := *l.Hooks
+			h.Dir = ""
+			if l.Path != "" {
+				if abs, err := filepath.Abs(filepath.Dir(l.Path)); err == nil {
+					h.Dir = abs
+				}
+			}
+			s.Hooks = &h
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
@@ -2050,7 +2333,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					}
 				}
 			}
-			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer
@@ -2074,9 +2357,17 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					s.Policy.Fallback = p.Fallback
 				}
 			}
+			if p.DefaultMode != "" {
+				if m, err := policy.ParseMode(p.DefaultMode); err == nil && (!l.Project || policy.Stricter(m, s.Policy.Mode)) {
+					s.Policy.Mode = m
+				}
+			}
 			dst := &s.Policy.User
 			if l.Project {
 				dst = &s.Policy.Project
+				s.Policy.ProjectPath = l.Path
+			} else {
+				s.Policy.UserPath = l.Path
 			}
 			dst.Allow = append(dst.Allow, p.Allow...)
 			dst.Ask = append(dst.Ask, p.Ask...)
@@ -2134,6 +2425,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			s.Model = ""
 		case "subagent_model":
 			s.SubagentModel = ""
+		case "plan_model":
+			s.PlanModel = ""
+		case "act_model":
+			s.ActModel = ""
 		case "base_url":
 			s.BaseURL = ""
 		case "api_key_env":
@@ -2165,6 +2460,12 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	if f.MemoryDir != nil {
 		s.MemoryDir = *f.MemoryDir
 	}
+	if f.MemoryBackground != nil {
+		if err := CheckMemoryBackground(*f.MemoryBackground); err != nil {
+			return Settings{}, fmt.Errorf("-memory-background: %w", err)
+		}
+		s.Memory.Background = *f.MemoryBackground
+	}
 	if f.PricingFile != nil {
 		s.PricingFile = *f.PricingFile
 	}
@@ -2191,11 +2492,17 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if !l.Project && l.ServersWorkspace != nil {
 			user.ServersWorkspace = l.ServersWorkspace
 		}
+		if !l.Project && l.ServersWorkspaces != nil {
+			user.ServersWorkspaces = l.ServersWorkspaces
+		}
 	}
 	if s.Workspace, err = WorkspaceOf(user, f); err != nil {
 		return s, err
 	}
 	if s.ServersWorkspace, err = ServersWorkspaceOf(user, f); err != nil {
+		return s, err
+	}
+	if s.ServersWorkspaces, err = ServersWorkspacesOf(user); err != nil {
 		return s, err
 	}
 	if s.Box, err = BoxOf(user, f); err != nil {
@@ -2225,7 +2532,19 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			}
 		}
 	}
-	s.Policy.Off = f.NoPolicy
+	if f.NoPolicy && f.Mode != nil {
+		return s, errors.New("-no-policy is -mode bypassPermissions; give one")
+	}
+	if f.NoPolicy {
+		s.Policy.Mode = policy.ModeBypass
+	}
+	if f.Mode != nil {
+		m, err := policy.ParseMode(*f.Mode)
+		if err != nil {
+			return s, fmt.Errorf("-mode: %w", err)
+		}
+		s.Policy.Mode = m
+	}
 	for _, n := range sortedKeys(servers) {
 		s.MCP = append(s.MCP, servers[n])
 	}
@@ -2359,7 +2678,9 @@ func tokenOf(w *WorkspaceSettings) []connectionToken {
 func checkConnectionTokens(s Settings) error {
 	var all []connectionToken
 	all = append(all, tokenOf(s.Workspace)...)
-	all = append(all, tokenOf(s.ServersWorkspace)...)
+	for _, sw := range s.Servers() {
+		all = append(all, tokenOf(sw.WorkspaceSettings)...)
+	}
 	for i, t := range all {
 		for _, list := range []struct {
 			field string
@@ -2390,22 +2711,39 @@ func checkConnectionTokens(s Settings) error {
 	}
 	// A hub's token is not its workspace's token_env, which a flag's URL
 	// given over the hub is sent.
-	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+	conns := []*WorkspaceSettings{s.Workspace}
+	for _, sw := range s.Servers() {
+		conns = append(conns, sw.WorkspaceSettings)
+	}
+	for _, w := range conns {
 		if w != nil && w.Hub != nil && w.Hub.TokenEnv == w.TokenEnv {
 			return fmt.Errorf("%s.token_env: %s is %s.token_env too, a served workspace's token; name a variable of the hub's own", w.Hub.Setting(), w.TokenEnv, w.Name())
 		}
 	}
 	// Two hubs on one port: the second's listen would fail only once the
 	// first's workspace connected, up to its wait.
-	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Hub != nil && sw.Hub != nil {
-		_, p1, _ := net.SplitHostPort(w.Hub.Listen)
-		_, p2, _ := net.SplitHostPort(sw.Hub.Listen)
-		if p1 == p2 && p1 != "" && p1 != "0" {
-			return fmt.Errorf("servers_workspace.hub.listen %q: port %s is workspace.hub's too; give each hub a port of its own", sw.Hub.Listen, p2)
+	for i, a := range conns {
+		for _, b := range conns[i+1:] {
+			if a == nil || b == nil || a.Hub == nil || b.Hub == nil {
+				continue
+			}
+			_, p1, _ := net.SplitHostPort(a.Hub.Listen)
+			_, p2, _ := net.SplitHostPort(b.Hub.Listen)
+			if p1 == p2 && p1 != "" && p1 != "0" {
+				return fmt.Errorf("%s.listen %q: port %s is %s's too; give each hub a port of its own", b.Hub.Setting(), b.Hub.Listen, p2, a.Hub.Setting())
+			}
 		}
 	}
-	if w, sw := s.Workspace, s.ServersWorkspace; w != nil && sw != nil && w.Ref() == sw.Ref() {
-		return fmt.Errorf("servers_workspace %s is the session's workspace too; the servers workspace stands beside it, so name another or leave it out", sw.Ref())
+	for i, a := range conns {
+		for _, b := range conns[i+1:] {
+			if a == nil || b == nil || a.Ref() != b.Ref() {
+				continue
+			}
+			if a == s.Workspace {
+				return fmt.Errorf("%s %s is the session's workspace too; the servers workspace stands beside it, so name another or leave it out", b.Name(), b.Ref())
+			}
+			return fmt.Errorf("%s %s is %s too; name each servers workspace once", b.Name(), b.Ref(), a.Name())
+		}
 	}
 	return nil
 }
@@ -2430,7 +2768,11 @@ func checkSecretEnv(s Settings) error {
 			others[p.TokenEnv] = "peer " + p.Name + "'s token_env"
 		}
 	}
-	for _, w := range []*WorkspaceSettings{s.Workspace, s.ServersWorkspace} {
+	conns := []*WorkspaceSettings{s.Workspace}
+	for _, sw := range s.Servers() {
+		conns = append(conns, sw.WorkspaceSettings)
+	}
+	for _, w := range conns {
 		if w == nil {
 			continue
 		}
@@ -2482,6 +2824,9 @@ func (s Settings) Credentials() []string {
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
+		}
 		out = append(out, m.SecretEnv...)
 	}
 	for _, p := range s.Peers {
@@ -2499,6 +2844,9 @@ func (l Layer) Credentials() []string {
 		m := l.MCPServers[n]
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
+		}
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
 		}
 		out = append(out, m.SecretEnv...)
 	}

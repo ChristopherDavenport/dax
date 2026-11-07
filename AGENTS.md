@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`, `ext/a2a`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -87,6 +87,16 @@ before changing the shape.
   `Options.Workspace` as `-workspace`'s is, recorded by
   `config.TunnelRef`; `closeSession`, the session's close and the
   hub's within one deadline.
+  `acp.go`: `-front acp`, an editor over the Agent Client Protocol v1
+  on standard input and output (`internal/acp`): the first
+  `session/new` takes the opened session, later ones `Reopen`;
+  `session/load` (this project's top-level sessions, `Sessions`, none
+  already open in the process) replays `Session.Conversation`; permissions and sub-agents' asked
+  calls go to `session/request_permission` (allow always = a session
+  grant); the editor's stdio MCP servers start on the host under
+  `-trust-mcp` (`Session.AddEditorMCP`, their env as secret values,
+  redacted); the modes are Shift-Tab's; slash commands are prompt
+  templates and MCP prompts alone.
   `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
@@ -94,11 +104,15 @@ before changing the shape.
   session's record (`client.RecordOf`) and the session as its source of
   events in, and the session as its controller (`client.Direct`) for
   the intents it sends out; `runConsole`, the client's run with dax's
-  slash input, which `attach.go` shares. `serve.go`: `dax serve`, a
+  slash input, which `attach.go` shares. `status.go`: the status
+  line's host side (`console.WithStatus` from the config's `status`):
+  the user, dir, git and executor segments, git read through the
+  session's workspace (`tool.GitHead`) and again after each tool run. `serve.go`: `dax serve`, a
   session served behind one bearer token, on loopback or over HTTPS
   with a certificate (`-tls-cert`, `-tls-key`), its control
   (agentturn's `front/control`, `agent.Controls` and the head move as
-  named commands) and its record (agentsession's `remote`).
+  named commands; its token alone holding `scopeTyped`, which claims the
+  person's trigger) and its record (agentsession's `remote`).
   `serve_a2a.go`: `dax serve -a2a`, agentturn's `front/a2a` and its card
   beside them behind a token of their own (principal `a2a`), each A2A
   context a session of its own (`agent.Session.OpenPeer`) under the
@@ -122,9 +136,16 @@ before changing the shape.
   status|down|pull`, which ask it; and `dax box up|ls|down NAME|proxy`
   on this machine's docker.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
-- `extension`: the `Extension` type, `ToolEnv` (what tools are built
-  over), `Env` (the session as kit options see it), `Renderers`,
+- `extension`: the `Extension` type (its `PersonOnly` tools, refused
+  to an A2A caller; its `PolicyHooks`, inside the engine's decision;
+  its `AfterRun`, told what each of the main agent's runs did, `Run`;
+  its `BeforePrompt`, run at the person's prompt before it is sent),
+  `ToolEnv` (what tools are built over), `Env` (the
+  session as kit options see it; `Caller` names an A2A caller's
+  context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
   `SecretsOf` (the variables every child environment loses), and
+  `WithOwnGrants`, a sub-agent's run whose "yes, always" stays its own
+  (the memory pass's), and
   `TextQuestion`, `IsTextQuestion`, `TextAnswer` and `TextContent`,
   dax's own marked form asking for a line of text, which every front
   answers (anyone else's form is cancelled).
@@ -134,11 +155,20 @@ before changing the shape.
   each started again by the next call after it ends, with a warning and
   a `dax.mcp.restart` entry (`mcpStart`, the one path every placement
   takes): a command's in the workspace or here, one placed on the host,
-  one at a URL (`agent/mcpurl.go`, its token held to the URL's origin),
+  one at a URL (`agent/mcpurl.go`, its token held to the URL's origin,
+  HTTP+SSE for a server whose first `initialize` gets a 4xx and whose
+  GET opens an SSE stream with its `endpoint` event;
+  `agent/mcpoauth.go`, an `oauth` server's sign-in through go-sdk's
+  `AuthorizationCodeHandler` and mcpclient's `StoreTokens` into
+  `~/.dax/mcp-tokens.json`, each save under an flock on a file beside
+  it (`agent/filelock_unix.go`), its discovery held to the server's origin
+  and the authorization servers its metadata names by `authGuard`, the
+  consent URL printed only while a session opens at the terminal),
   those the workspace offers of its own (`workspace.ServerProvider`, a
   box host's units, a served or tunnelled workspace's `-servers`) or a
-  servers workspace beside it offers (`Options.ServersWorkspace`,
-  refused unless its grant is servers alone, `checkServersWorkspace`), and
+  servers workspace beside it offers (`Options.ServersWorkspace`, and
+  by name `Options.ServersWorkspaces`, each refused unless its grant is
+  servers alone, `checkServersWorkspace`), and
   a command holding secrets (`secret_env`, on the host alone) started
   through `internal/offer` as an offered one is (`mcpHolding`); a project's
   only once the user trusts its set (`agent/mcptrust.go`, `-trust-mcp`,
@@ -146,7 +176,9 @@ before changing the shape.
   chosen where `mcpDialOf` chooses its dial, which `/mcp` shows (`mcpLines`
   in `front.go`); and the session-store helpers. It names
   no tool. `agent/identity.go`: the project's
-  identity, the workspace and the executor's hashed address in the
+  identity (`identity`: the workspace's descriptor, or a box by its
+  name, `dax execute -project`, while the env entry records the image
+  it ran), the workspace and the executor's hashed address in the
   session's header, a servers workspace's identity and servers beside
   them (`ServersWorkspaceOf`), and the listings by it (`List`, `ListExecutor`,
   `ListWorkspaceURL`, a served workspace's by the URL its descriptor
@@ -156,11 +188,64 @@ before changing the shape.
   host's envelopes and the user's opt-in alone, with the `dax:box`
   bare asks that make it matter and a baseline engine without them, so
   nothing allowed today asks; sub-agents' decisions are not claimed.
+  `agent/mode.go`: the permission mode, the policy settings kept and
+  rebuilt into the engine on a switch (`SetMode`, `NextMode`), a switch
+  during a run applied at its next turn, the `dax.mode` entry and the
+  model's note at the next turn (`modeTurn`); `peerFloor`, which holds an A2A
+  caller's calls to the default mode through a second engine of the
+  same rules that no switch touches, `personOnlyRefusal`, which
+  refuses a caller the extensions' `PersonOnly` tools outright, and
+  `dontAskRefusal`, which refuses a would-ask call, the caller's too,
+  in dontAsk.
+  `agent/grants.go`: "yes, always", `GrantOffer` (a rule only when the
+  deferred verdict names none; the extension's `GrantRule` or the
+  tool's name) and `Grant` (a session grant set under the kit's grant
+  scope, or a rule kept in `~/.dax/grants.json` by the project's
+  identity, loaded as `dax:saved`), both at `policy.RankGrant`;
+  `QuestionOffer` and `GrantQuestion`, a session grant offered with a
+  sub-agent's asked call's question when the policy asked for want of a
+  rule (`childAsked`, filled by `childPolicy`; never an A2A caller's
+  sub-agent's call), made under the
+  sub-agent's own grant scope when its run keeps its grants
+  (`extension.WithOwnGrants`, `grantUnder`), activated again by
+  `childPolicy` when the engine dropped it (`ownGrantsHeld`: under
+  skill grants agentkit ends child scopes at each person's message).
+  `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's
+  prompts as slash commands and its resources as `@server:uri`
+  mentions, sent marked as the server's, untrusted.
+  `agent/images.go`: a read's image shown only to a model that takes
+  images (`Options.TakesImages`), judged per request in the session's
+  BeforeModelCall so the record holds what was sent, the person's
+  `@path.png` (`Image`); sessions keep media as sidecar blobs.
+  `agent/caller.go`: what an A2A caller's requests leave out of what
+  the person's carry (their own AGENTS.md), after the kit's
+  BeforeModelCall and in sub-agents' (`Env.ChildBeforeModelCall`).
+  `agent/afterrun.go`: the extensions' `AfterRun` hooks, the run's
+  calls, open-world reach and output tokens gathered from the main
+  agent's events, each hook in a goroutine the close waits for.
+  `agent/policyhooks.go`: the extensions' `PolicyHooks` for the
+  engine (`WithHooks`, `WithAnsweringHooks`), an answer never an A2A
+  caller's (`notForCallers`).
+  `agent/eval.go`: a session under an evaluation runner (agenteval's
+  `Runner`): `HeaderOf` and `SessionOptionsOf`, the header and recorder
+  options dax would write, and `Build`, the session over
+  `Options.Recorder` as an `agentturn.Config`, a recorder whose header
+  is not dax's refused before the session opens, so nothing is written
+  into it.
+  `agent/reopen.go`: `Reopen`, another session (`/new`, `/resume`)
+  over the live settings, the store handed to it. `agent/names.go`:
+  `SetName` (`/name`, an `info` entry), `Name`, and `Sessions`, this
+  project's sessions for `/resume`.
+  `agent/permissions.go`: `PolicyInfo`, the policy in force read from
+  the engine for `Info` and `/permissions` (`permissionLines` in
+  `commands.go`), and the sub-agents' own grants (`grants.own`) by
+  scope.
   `agent/plane.go`: the human plane, the
   session as `agentturn.Control` over agentkit's `Kit.Control` with
   dax's controller rules on top (`ErrHeld`, the calls an abort left
   answered on the next prompt, the questions no front here can answer
-  not asked, `Answering`), `Permissions`, `Controls`, and `Drive`, the
+  not asked, `Answering`), `Deliver` and `Accept`, `Permissions`,
+  `Controls`, and `Drive`, the
   controller that answers by rule. Nothing asks a front through a hook:
   a new question is an `agentturn.Question` event, answered with
   `Reply`. `agent/peers.go`: an A2A caller's conversation on a host
@@ -168,7 +253,8 @@ before changing the shape.
   questions name the conversation and are asked only of a view
   attached (`Viewing`, `SubscribeView`), waiting `Options.ViewGrace`
   for one to come back.
-- `policy`: generic. Merges one source per extension
+- `policy`: generic. The permission modes (`mode.go`: what each does
+  to the merged rules, an extension's `ModeRules`). Merges one source per extension
   (`extension:<name>`) with the user's and the project's rules, and
   refuses a shipped rule that names another extension's tool, a pattern
   or a carve-out; `dax:box` is `box.confine`'s bare asks, bash, write,
@@ -177,11 +263,53 @@ before changing the shape.
   aliases and bash stamp, the prompt's nudge, and the policy tests:
   `exploit_test.go`, `widen_test.go`, `gitconfig_test.go`.
 - `ext/agents` (dax-agents): explore and task, built from every
-  extension's tools; the delegation guide.
+  extension's tools and `SubagentTools`, the memory block (and task's
+  AGENTS.md) as the kit's parts (`agentkit.ChildParts`), the nested
+  AGENTS.md hook (`Env.ChildBeforeTurn`, `agent/nestedmd.go`); the
+  delegation guide.
 - `ext/skills` (dax-skills): skill directories, the screening of the
-  project's, grants under `-trust-skills`.
-- `ext/memory` (dax-memory): the store, the scopes (the project's is
-  its workspace's), the memory tools.
+  project's, grants under `-trust-skills`; `skill_manage` (`manage.go`)
+  over `~/.dax/learned` through an `os.Root`, reloaded at the next turn
+  (`Env.ReloadSkills`, the session's `skillsTurn`), and `Approve`, the
+  approvals by frontmatter digest that `/skills approve` writes;
+  `callerReads`, an A2A caller's `skill` held to the installed skills.
+- `ext/memory` (dax-memory): the store (`personal`: empty to an A2A
+  caller), the scopes (the project's is
+  its workspace's) and their archives, the memory tools,
+  `memory_search` for the sub-agents, and `conversation_search` under
+  `Env.SearchScope` (`agent/search.go`: this project's top-level
+  sessions; an A2A caller none); the background pass (`pass.go`,
+  `WithBackground`): an `AfterRun` hook that runs a child through
+  `Env.Kit`'s `StartChild`/`ContinueChild` (spawn `dax-memory-pass`)
+  with the memory tools over `passStore` (every Put `IfHash` and every
+  Forget compared on the entry's hash as `decide` read it, by call ID,
+  before anything is asked; each rendered scope within the block's
+  bound), its own policy source
+  granted under its grant scope (auto), a token cap (each request's
+  estimated input and its output held to what is left), an entry no pass
+  wrote asked about, and under propose (or after an open-world run) a
+  pass due at the person's next prompt (`BeforePrompt`); `ledger.go`, the passes' ledger
+  (`.dax-passes.jsonl` beside the journal) and `Undo` (`/memory undo`
+  in `commands.go`).
+- `ext/plan` (dax-plan): `exit_plan_mode`, a kit tool asked about in
+  plan mode (its `ModeRules`) and denied bare in every other, the
+  person's own (`PersonOnly`); approved, it moves the session to
+  acceptEdits through `Env.SetMode` ("plan approved"). Plan mode's
+  refusal is `dontAskRefusal`'s, but for the plan's asks
+  (`policy.PlanAsks`); `plan_model`/`act_model` are `agent/mode.go`'s
+  (`modelBeforeRun`, `actModel` in `Resume`, before the run: act_model,
+  else the model plan_model replaced;
+  `leavePlan`, the model `plan_model` replaced put back when plan is
+  left unapproved).
+- `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
+  hooks (config `hooks`, the user's layer only) under Claude Code's
+  protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and
+  arguments, so one call runs each hook once), PostToolUse through
+  `agentkit.WithAfterToolCall`; run on this machine in `Env.Dir` with
+  `Env.HostEnv`, a config line through `/bin/sh -c`, in a process
+  group of its own (`proc_unix.go`); a PreToolUse hook that cannot
+  answer refuses the call. `config.HookCommand.Program` resolves a
+  relative program against the user's config directory.
 - `ext/a2a` (dax-a2a): the user's A2A peers (config `peers`, the user's
   layer only), each agentturn's `tools/a2a` over a client of its card,
   added through the kit (control, as memory's tools are); the card's
@@ -290,6 +418,12 @@ before changing the shape.
   secret of its own, and the instance id, labelled per direction, the
   token never sent). Standard library only; no dax code uses a
   library's `BearerTokens` or `WithBearerToken`.
+- `internal/acp`: ACP's wire, JSON-RPC 2.0 one message per line
+  (`Conn`: requests both ways, notifications, a handler per message so
+  `session/cancel` reaches a running `session/prompt`; a line past 16
+  MiB or not JSON-RPC answered with an error and the next read; the end
+  of input cancels the handlers running), and the v1 messages dax
+  sends and takes. Standard library only.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every
   command dax runs from a line (`-executor`, MCP servers, the key

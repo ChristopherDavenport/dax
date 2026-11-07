@@ -22,7 +22,9 @@ func rulesOf(approve func(*openresponses.FunctionCall, string) bool) Rules {
 		return Rules{}
 	}
 	return Rules{
-		Permit: func(c *openresponses.FunctionCall, reason string) (bool, string) { return approve(c, reason), "" },
+		Permit: func(c *openresponses.FunctionCall, reason string) PermitAnswer {
+			return PermitAnswer{Allow: approve(c, reason)}
+		},
 		Reply: func(q agentturn.Question) agenttool.Answer {
 			if q.Call != nil && approve(askedCall(q), q.Elicitation.Message) {
 				return agenttool.Answer{Action: agenttool.ActionAccept}

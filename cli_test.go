@@ -243,6 +243,8 @@ func TestFronts(t *testing.T) {
 			return "print"
 		case *tuiFront:
 			return "tui"
+		case *acpFront:
+			return "acp"
 		}
 		return "?"
 	}
@@ -272,7 +274,9 @@ func TestFronts(t *testing.T) {
 		{"tui", "", none, "", "needs a terminal"},
 		{"tui", "", frontEnv{stdinTTY: true, recording: true}, "", "needs a terminal"},
 		{"tui", "", frontEnv{stdoutTTY: true, recording: true}, "", "needs a terminal"},
-		{"gui", "", both, "", "want tui or repl"},
+		{"gui", "", both, "", "want tui, repl or acp"},
+		// An editor drives dax over its pipe: no terminal is needed.
+		{"acp", "", none, "acp", ""},
 	} {
 		f, err := selectFront(tc.name, tc.prompt, frontInfo{Prompt: tc.prompt}, tc.env)
 		if tc.wantErr != "" {
@@ -651,5 +655,29 @@ func TestBareDoesNotReadTheUsersConfig(t *testing.T) {
 	}
 	if _, err := loadUserFor("", nil); err == nil {
 		t.Error("a run that is not bare did not read the config")
+	}
+}
+
+// Neither -p nor dax serve runs a background memory pass, auto or
+// propose: the pass is headless there, and only the person's own
+// interactive session (the terminal client, the REPL, an editor) runs
+// one. (#160)
+func TestNoBackgroundPassUnderPOrServe(t *testing.T) {
+	for _, mode := range []string{"auto", "propose"} {
+		m := config.Memory{Background: mode}
+		for _, tc := range []struct {
+			name             string
+			oneShot, serving bool
+			headless         bool
+		}{
+			{"-p", true, false, true},
+			{"serve", false, true, true},
+			{"interactive", false, false, false},
+		} {
+			b := backgroundPass(m, "sub", tc.oneShot, tc.serving)
+			if b.Headless != tc.headless || b.Mode != mode || b.Model != "sub" {
+				t.Errorf("%s %s: %+v, want headless %v", mode, tc.name, b, tc.headless)
+			}
+		}
 	}
 }

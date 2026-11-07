@@ -259,6 +259,13 @@ func TestBoxConfineDecisions(t *testing.T) {
 			// which share the workspace's claim with bash, are not
 			// claimed either.
 			want: with(map[string]agentturn.ToolAction{"ls src": ask, "git status": ask, "explore ls src": ask})},
+		// dontAsk refuses what would ask, and a box's confinement still
+		// answers its own asks: a confined call runs (#145's review, L2).
+		{name: "workspace, dontAsk", box: confineBoxJSON, mode: config.ConfineWorkspace,
+			edit: func(p *policy.Settings) { p.Mode = policy.ModeDontAsk },
+			want: refusingAsks(with(map[string]agentturn.ToolAction{
+				"go test": allow, "rm -rf src": allow, "write src/a.go": allow, "unit files": allow,
+			}))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := confineSession(t, tc.box, tc.mode, tc.edit)
@@ -269,6 +276,16 @@ func TestBoxConfineDecisions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// refusingAsks is want with every ask a refusal, as dontAsk decides.
+func refusingAsks(want map[string]agentturn.ToolAction) map[string]agentturn.ToolAction {
+	for k, v := range want {
+		if v == ask {
+			want[k] = deny
+		}
+	}
+	return want
 }
 
 // A confined call names what confined it in its verdict, and one the

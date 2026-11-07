@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agentturn"
 	fronta2a "github.com/ChristopherDavenport/agentturn/front/a2a"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -40,6 +41,7 @@ import (
 	"github.com/a2aproject/a2a-go/a2asrv"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
 )
@@ -125,6 +127,96 @@ func newA2APeers(sess *agent.Session, o a2aOptions) (*a2aPeers, error) {
 	}
 	p.exec = fronta2a.New(p.cfg, opts...)
 	return p, nil
+}
+
+// checkA2AWorkspace refuses to serve A2A over a workspace, this
+// machine's directory, that holds one of own, the person's own files
+// (dax's user directory with its memory, learned skills and grants, a
+// memory_dir, the session store), or is inside one: a caller's read, grep, glob, ls and
+// bash act anywhere in the workspace, and a search from its root, or
+// a read-only command the policy allows unasked, would read them. A
+// path rule could not hold that (a search of "." walks every
+// directory below), so dax does not start: serve from the project's
+// directory, or keep those directories out of it. A workspace
+// elsewhere (a box, an executor, a served one) is not this machine's
+// directory and holds none of them.
+func checkA2AWorkspace(ws workspace.Descriptor, own ...string) error {
+	if ws.Kind != workspace.KindLocal || ws.Ref != "" || ws.Root == "" {
+		return nil
+	}
+	root := resolved(ws.Root)
+	for _, p := range own {
+		if p == "" {
+			continue
+		}
+		mine := resolved(p)
+		switch {
+		case within(root, mine):
+			return fmt.Errorf("dax serve -a2a: the workspace %s holds %s, which is yours (dax's user directory, memory or sessions): an A2A caller's reads and searches there would reach it; serve from a project directory, or keep it out of the workspace", ws.Root, p)
+		case within(mine, root):
+			return fmt.Errorf("dax serve -a2a: the workspace %s is inside %s, which is yours (dax's user directory, memory or sessions): an A2A caller's reads and searches there would reach it; serve from a project directory", ws.Root, p)
+		}
+	}
+	return nil
+}
+
+// within reports whether p is dir or below it.
+func within(dir, p string) bool {
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// resolved is p absolute, its links resolved as far as it exists.
+func resolved(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return filepath.Clean(p)
+}
+
+// learnedWarning is what dax serve -a2a says at start when the
+// session's skill catalogue lists skills the model wrote
+// (~/.dax/learned): a caller is refused their bodies, but its
+// instructions still carry each one's name and description, since the
+// kit renders one catalogue for every conversation, until agentkit can
+// leave a part out per conversation. "" when it lists none.
+func learnedWarning(sess *agent.Session) string {
+	names := learnedListed(sess)
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("a2a: warning: %d skill(s) the model wrote (%s, in %s) are listed to callers by name and description; their bodies are not served to callers", len(names), strings.Join(names, ", "), skills.LearnedDir(sess.UserDir()))
+}
+
+// learnedListed are the names of the skills under ~/.dax/learned that
+// the session's catalogue lists as those skills (not one of the same
+// name from elsewhere).
+func learnedListed(sess *agent.Session) []string {
+	if sess.Kit == nil || sess.UserDir() == "" {
+		return nil
+	}
+	cat := sess.Kit.Catalog()
+	if cat == nil {
+		return nil
+	}
+	src, err := agentskill.Dir(skills.LearnedDir(sess.UserDir()))
+	if err != nil {
+		return nil
+	}
+	learned, err := agentskill.Discover(src)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range learned.Listed() {
+		if s, ok := cat.Lookup(l.Name); ok && s.Location == l.Location {
+			out = append(out, l.Name)
+		}
+	}
+	return out
 }
 
 // mount serves the JSON-RPC endpoint and the card on mux, both behind

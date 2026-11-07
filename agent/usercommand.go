@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -27,7 +26,7 @@ import (
 const userCommandNS = "dax.user_command"
 
 // userCommandLead opens the message a user's command is sent as, and
-// marks it as output rather than a request (pinPrompts).
+// marks it as output rather than a request.
 const userCommandLead = "I ran this command in the workspace myself:\n$ "
 
 // maxUserCommandBytes is how much of a user's command's output the model
@@ -65,8 +64,12 @@ func (s *Session) RunUserCommand(ctx context.Context, line string) (UserCommand,
 	res, err := s.ws.Exec(ctx, workspace.Command{Args: []string{"bash", "-c", line}, Stream: out, Timeout: userCommandTimeout})
 	c := UserCommand{Command: line}
 	switch {
-	case errors.Is(err, exec.ErrWaitDelay):
-		// It exited 0 and left a job holding its output.
+	case errors.Is(err, workspace.ErrCutShort):
+		// It exited and left a job holding its output: the output so
+		// far and its own status came beside the error.
+		if res != nil {
+			c.ExitCode = res.ExitCode
+		}
 	case err != nil:
 		return UserCommand{}, err
 	default:
@@ -96,7 +99,10 @@ func (s *Session) RunUserCommand(ctx context.Context, line string) (UserCommand,
 	if s.State().Running {
 		mode = agentturn.QueueFollowUp
 	}
-	if err := s.Queue(ctx, mode, openresponses.UserText(b.String())); err != nil {
+	// The person ran the command; its output is not their words, so
+	// it is queued under no trigger whatever the caller's context
+	// claims, and a fold does not keep it as their request.
+	if err := s.Queue(agentturn.ContextWithTrigger(ctx, agentturn.Trigger{}), mode, openresponses.UserText(b.String())); err != nil {
 		return UserCommand{}, err
 	}
 	return c, nil

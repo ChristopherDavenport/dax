@@ -36,7 +36,7 @@ func TestDefaults(t *testing.T) {
 	if s.Provider != "ollama" || s.Model != "" || s.BaseURL != "" || !s.Think || s.MemoryDir != "/mem" {
 		t.Fatalf("defaults: %+v", s)
 	}
-	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Off {
+	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Mode != "default" {
 		t.Fatalf("policy defaults: %+v", s.Policy)
 	}
 	if s.Sources["provider"] != "default" {
@@ -238,8 +238,8 @@ func TestAProjectCanOnlyTighten(t *testing.T) {
 
 func TestNoPolicyFlag(t *testing.T) {
 	s, _ := Resolve(nil, Flags{NoPolicy: true}, "")
-	if !s.Policy.Off {
-		t.Fatal("-no-policy did not turn the policy off")
+	if s.Policy.Mode != "bypassPermissions" {
+		t.Fatal("-no-policy is not -mode bypassPermissions")
 	}
 }
 
@@ -1575,6 +1575,60 @@ func TestOutputCapPrecedence(t *testing.T) {
 	for _, bad := range []string{`{"bash_max_output":100}`, `{"mcp_max_output":-1}`, `{"bash_max_output":99999999}`} {
 		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "max_output") {
 			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
+// #123: servers_workspaces names more servers workspaces, each checked
+// as servers_workspace is, with a token variable of its own; a name is
+// a DNS label and not servers_workspace's; across them no token, hub
+// port or workspace is shared; a project may not name one.
+func TestServersWorkspaces(t *testing.T) {
+	gh := `"github":{"url":"https://gh.example","token_env":"GH_WS_TOKEN"}`
+	slack := `"slack":{"hub":{"listen":"127.0.0.1:7782","name":"slack","token_env":"SLACK_TUNNEL_TOKEN"}}`
+	for _, tc := range []struct{ file, want string }{
+		{`{"servers_workspaces":{"Git_Hub":{"url":"https://gh.example","token_env":"T"}}}`, `servers_workspaces: "Git_Hub" is not a name`},
+		{`{"servers_workspaces":{"servers":{"url":"https://gh.example","token_env":"T"}}}`, "servers_workspaces.servers: the name is servers_workspace's"},
+		{`{"servers_workspaces":{"github":{"url":"https://gh.example"}}}`, "servers_workspaces.github.token_env is required"},
+		{`{"servers_workspaces":{"slack":{"hub":{"listen":"127.0.0.1:7782","name":"slack"}}}}`, "servers_workspaces.slack.hub.token_env is required"},
+		{`{"servers_workspaces":{"github":{"url":"http://gh.example","token_env":"T"}}}`, "servers_workspaces.github.url"},
+		{`{"servers_workspaces":{"github":null}}`, "servers_workspaces.github is empty"},
+	} {
+		if _, err := Parse([]byte(tc.file), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.file, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(`{"servers_workspaces":{`+gh+`}}`), "/work/proj/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "servers_workspaces: a project file may only tighten") {
+		t.Errorf("a project's servers_workspaces: %v", err)
+	}
+	user := parse(t, `{"servers_workspace":{"url":"https://other.example"},"servers_workspaces":{`+gh+`,`+slack+`}}`, false)
+	s, err := Resolve([]Layer{user}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, n := range s.Servers() {
+		got = append(got, n.Label+" "+n.Name()+" "+n.Ref())
+	}
+	if want := []string{
+		"servers servers_workspace https://other.example",
+		"github servers_workspaces.github https://gh.example",
+		"slack servers_workspaces.slack " + TunnelRef("slack"),
+	}; !slices.Equal(got, want) {
+		t.Errorf("servers %q, want %q", got, want)
+	}
+	if f := s.ServersWorkspaces["github"].Flag(); f != "servers_workspaces.github" {
+		t.Errorf("github's flag %q", f)
+	}
+	for _, tc := range []struct{ name, file, want string }{
+		{"a shared token", `{"servers_workspaces":{"a":{"url":"https://a.example","token_env":"SHARED"},"b":{"url":"https://b.example","token_env":"SHARED"}}}`, "servers_workspaces.b.token_env: SHARED is servers_workspaces.a.token_env too"},
+		{"servers_workspace's token", `{"servers_workspace":{"url":"https://s.example","token_env":"SHARED"},"servers_workspaces":{"a":{"url":"https://a.example","token_env":"SHARED"}}}`, "servers_workspaces.a.token_env: SHARED is servers_workspace.token_env too"},
+		{"one hub port", `{"servers_workspaces":{"a":{"hub":{"listen":"127.0.0.1:7781","name":"a","token_env":"A"}},"b":{"hub":{"listen":"127.0.0.1:7781","name":"b","token_env":"B"}}}}`, `servers_workspaces.b.hub.listen "127.0.0.1:7781": port 7781 is servers_workspaces.a.hub's too`},
+		{"one workspace twice", `{"servers_workspaces":{"a":{"url":"https://same.example","token_env":"A"},"b":{"url":"https://SAME.example/","token_env":"B"}}}`, "servers_workspaces.b https://same.example is servers_workspaces.a too"},
+	} {
+		l := parse(t, tc.file, false)
+		if _, err := Resolve([]Layer{l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
 		}
 	}
 }

@@ -74,6 +74,15 @@ or a proxy, is `openresponses`, with its `-base-url`, a `-model`, and
 LITELLM_KEY=... dax -provider openresponses -base-url https://llm.internal/v1 -model qwen3-coder -api-key-env LITELLM_KEY
 ```
 
+A request the key's or account's credit or spend limit cannot cover
+(the code `insufficient_quota`, OpenAI's, and OpenRouter's 402 when a
+key passes its daily limit) is not retried. dax says so in words, with
+the provider's own message and remedy, in place of the provider's raw
+JSON, and the whole error stays in the session's record. A shorter
+prompt may fit what is left, and at the REPL and in the terminal client
+`/compact` (`-p` has none). `dax attach` still shows the error as the
+served session reports it.
+
 `-model` names another model. `-subagent-model` names the one the
 sub-agents run; without it a sub-agent runs the provider's default for
 sub-agents, where it has one, else the main model.
@@ -139,7 +148,7 @@ the header each model call carries its session's ID in, and
 ```
 
 The ID is that of the session the call is recorded in: a sub-agent's
-calls carry the sub-agent's own session, and after `/clear` the new
+calls carry the sub-agent's own session, and after `/new` the new
 session's. A request made outside a run, such as asking the vendor what
 a model supports, carries none. Each must be a header name of letters,
 digits and hyphens, not one the client sets itself (`Authorization`,
@@ -252,8 +261,8 @@ sub-agent model, recorded as a child session:
   and bash) and returns a written answer.
 - `task` carries out a coding task with the file tools and bash, then
   reports what it changed, what it ran and what is left. Its instructions
-  are dax's, your `instructions_file` and the AGENTS.md chain, without
-  skills or memory. The main agent chooses, per call:
+  are dax's, your `instructions_file`, the memory block and the AGENTS.md
+  chain, without skills. The main agent chooses, per call:
   - `context`: `fresh` (the default) sees only the brief, so the brief
     must be complete; `fork` also sees the conversation so far, for a
     task that depends on what was said or decided in it.
@@ -270,6 +279,12 @@ sub-agent model, recorded as a child session:
   cost about a twentieth of a Pro one at the same pass rate, and a Pro
   fork about twice a fresh Pro task.
 
+Both see the memory block as the main agent does, rendered again for
+each of their requests, and can search memory with `memory_search`; they
+cannot save, patch or forget an entry. Their sessions record the block
+as memory parts, each entry with its trust, so a sub-agent's record
+says where that text came from.
+
 Several calls in one turn run at once, so the main agent can hand out
 independent pieces of work in parallel. Writes and edits take a
 workspace lock, so two sub-agents editing one file cannot lose an edit,
@@ -280,6 +295,101 @@ Both are offered by default; `-agents=false` or `"agents": false`
 turns them off. They are the `dax-agents` extension, which ships an
 allow rule for starting one, since what a sub-agent then does is decided
 call by call by the same policy.
+
+## Memory
+
+dax-memory keeps what the model should remember between sessions in
+`memory_dir` (`~/.dax/memory`), in two scopes: `user`, for every
+project, and the project's own, named for the workspace the tools act
+in. The memory block in the system prompt shows both, rendered again
+each turn. The model saves, patches and forgets entries with
+`memory_save`, `memory_patch` and `memory_forget`, each of which asks,
+and finds them with `memory_search`, which runs unasked.
+
+Beside each scope is an archive, `user-archive` and the project's
+`project-…-archive`: passages worth finding again and not worth reading
+every turn. The model adds one with `memory_insert`, which asks as every
+memory write does and names the entry itself, and finds it with
+`memory_search`. The block never shows an archive, however much it
+holds; its usage paragraph names the archives as searchable and not
+shown.
+
+The sub-agents see the block and can search, but not write.
+
+`conversation_search` finds what an earlier session of this project
+said: the messages holding every word of a query, newest sessions
+first, with the session, the time and who wrote each. It reads this
+project's top-level sessions, those recorded in the workspace the
+tools act in (a box at `/work` is not another box at `/work`), never
+the calling session, which the model has in context, and never another
+project's. It runs unasked, as `memory_search` does, and its results
+are marked as untrusted text, since earlier models, tools and pages
+wrote them. It is dax-memory's, so `-memory off` and `-bare` leave it
+out; an A2A caller cannot use it, nor any memory tool, and its
+requests carry no memory block (see Serving peers).
+
+### The background pass
+
+With `"memory": {"background": "auto"}` in your config (or
+`-memory-background auto`), a pass runs after a run that called a tool
+or wrote 500 output tokens or more (`background_trivial_tokens`): a
+child agent with the memory tools alone, on the sub-agent model, reads
+the conversation since the last pass and keeps the memory current. It
+is recorded as a subsession of the conversation (`dax-memory-pass`),
+writes the `user` scope, the project's and their archives, and no other
+project's, unasked, through a policy source of its own that the user's
+denies and ask rules still hold over, and tells you `memory updated:
+saved user/errors (/memory undo reverts it)`. Its limits are not the
+model's or a project's to change: it changes only an entry a pass wrote
+last (one you or the conversation's model wrote is asked about first),
+each write, a forget too, lands only if the entry is still what the
+pass read when it decided the write, before it asked you (one changed
+since is left, and you are told), a scope may not grow past the
+memory block's bound, and a pass stops at 8,000 tokens, each request
+held to what is left of them
+(`background_max_tokens`). `background_every` runs a pass every N such
+runs. A run that reached an open world (an MCP server's tool, a remote
+agent) gets `propose` instead of `auto`, since what it read may be an
+injection meant to become a memory.
+
+With `propose` the pass waits for you: it runs at the start of your
+next prompt, before the prompt is sent, and each write is asked as a
+sub-agent's call is (`? allow memory_save {...} (the memory pass
+sub-agent asks: ...)`); in the REPL `a` allows that rule to the passes
+for the rest of the session, and to the passes alone: the model you talk
+to still asks before its own `memory_save` (the terminal client's
+question panel offers y and n). A write you do not answer, or that
+nobody is there to answer, is not made. Under `-p` and `dax serve` no
+pass runs at all, `auto` or `propose`: memory is updated in the
+background only from your own interactive sessions (the terminal
+client, the REPL, an editor over ACP), and you are told once. `/memory undo` reverts the latest
+pass of this project's, entry by entry, leaving any entry changed
+since; again, the pass before. `off` is the default, since a pass
+spends your tokens. The `memory` block is your file's alone.
+
+## Skills the model writes
+
+dax-skills offers the model `skill_manage`, which creates, updates or
+deletes a skill of its own in `~/.dax/learned`, on this machine, never
+in the repository's `.dax/skills` or your `~/.dax/skills`; a name either
+of those (or `skills_dirs`) holds is refused. Every call asks, and an
+A2A caller is refused it outright (see Serving peers). The skill
+is checked before it is written (its name, its frontmatter, its
+`allowed-tools`), written whole and moved into place, and the catalogue
+lists it from the model's next turn, in the run that wrote it, so "save
+how you did that as a skill" can be followed and used in one session,
+and found in the next. An A2A caller's conversation runs beside yours
+on the same catalogue, and nothing orders its calls against your turns,
+so a call of its can be decided before a reload and served after it;
+it reads only installed skills, so what it can see change is a learned
+skill's line in its catalogue, or an installed skill you edited since.
+
+A skill the model wrote grants nothing, even under `-trust-skills`,
+until you approve it: `/skills approve <name>` records its
+frontmatter's digest in `~/.dax/skill-approvals.json`, and its
+`allowed-tools` then grant at its next read under `-trust-skills`, as a
+skill you installed does. A change to its frontmatter needs approving
+again. The model has no route to the approvals.
 
 ## Peers: other agents over A2A
 
@@ -366,11 +476,13 @@ Settings come from three layers, each overriding the one before:
   "pricing_file": "~/.config/dax/prices.json",
   "mcp_servers": {
     "fs": { "command": "mcp-server-filesystem /home/me/notes", "in": "host" },
-    "gh": { "url": "https://api.githubcopilot.com/mcp/", "token_env": "GITHUB_TOKEN" }
+    "gh": { "url": "https://api.githubcopilot.com/mcp/", "token_env": "GITHUB_TOKEN" },
+    "linear": { "url": "https://mcp.linear.app/mcp", "oauth": {} }
   },
   "policy": {
     "builtin": true,
     "fallback": "ask",
+    "default_mode": "default",
     "allow": ["bash(make:*)", "write(docs/**)"],
     "ask": ["bash(go test -race:*)"],
     "deny": ["bash(git push --force:*)"]
@@ -392,6 +504,7 @@ names the file and the field.
 | field | meaning |
 |---|---|
 | `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
+| `plan_model`, `act_model` | the model plan mode moves to, and the one your approval of a plan moves to (see [Permission modes](#permission-modes)); empty leaves the model as it is. Like `model`, each is the provider's it was set beside |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `api_key_command` | a program and its arguments, `["program", "arg", ...]`, that prints the provider's key; run again as the key ages or is refused (see above) |
@@ -403,9 +516,11 @@ names the file and the field.
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
+| `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. Not in a project file: a repository cannot turn on writes to your memory |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
-| `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, and `token_env` names the variable whose token is sent to its origin alone and which no child process gets. A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
+| `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, or an older HTTP+SSE one (a server that answers the first `initialize` with a 4xx other than 401, 403, 408 or 429, and then a GET with an SSE stream whose first event is `endpoint`, is reached over SSE from then on, and you are told once), and `token_env` names the variable whose token is sent to its origin alone and which no child process gets; `oauth` signs in instead (below). A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.description` | what the server is for, shown where servers are listed (`dax workspace -servers` says it at start, and a served workspace lists it with the name); at most 1024 bytes, no control characters |
+| `mcp_servers.<name>.oauth` | `{}`, or `{"client_id": "dax", "client_secret_env": "CORP_MCP_SECRET", "callback_port": 8765}`: sign in to a `url`'s server with OAuth when it answers 401 naming its metadata (RFC 9728, RFC 8414), in place of `token_env`. `{}` registers dax with the authorization server the metadata names (RFC 7591); `client_id` is a client registered for you there, with its secret's variable (which no child gets, read each time it is needed and never written to the tokens file) and the loopback port its registered redirect names. As the session starts dax prints the URL to sign in at, and waits up to five minutes for the browser's redirect to `http://127.0.0.1:<port>/callback` (the port bound as the session starts and held until it has opened; only the redirect carrying the sign-in's `state` is taken, any other request to the port turned away); the grant is kept in `~/.dax/mcp-tokens.json` (private, by the server's URL and your user, saved under a lock on `mcp-tokens.json.lock` so two dax processes signing in at once keep both grants) and refreshed from there by later sessions, so you sign in once. The access token goes to the server's origin alone; discovery, registration and the token exchange go only to the server's origin and the authorization servers its metadata names, with no redirect off them, and to an authorization server on this machine's loopback only when the server is on loopback too, so a hosted server cannot point the sign-in at a local service. A sign-in needed after the session started (a server started again whose grant cannot be refreshed, `/new`, `/resume`) fails and says to start dax again. Your file only; not with `token_env` |
 | `mcp_servers.<name>.secret_env` | `["GH_TOKEN"]`: variables a command's server is given from the environment of the process that starts it (dax for your config's, `dax workspace` for the servers it offers), while every other child loses them (bash, the other servers, the key command, the box host's launcher), and whose values are redacted (`[REDACTED GH_TOKEN]`, in every JSON spelling) from what it writes, standard output and standard error, standard error cleaned of terminal controls first, before the session, the model or the record sees any of it. **A secret stays on the machine whose environment holds it**: in your config a server with `secret_env` must say `"in": "host"`, and runs on this machine whatever the workspace, executor or box; one that would run in a workspace (this directory's included, where bash runs beside it as its user) is refused. To use a secret another machine holds, have that machine offer the server with `dax workspace -servers`. A value not set, or shorter than 8 bytes (too short to redact without breaking the server's own messages), fails the start. Your file only (a repository must not name your secrets), not for a `url` (its token is `token_env`'s), and none may be the model's key's variable, a `token_env`, an extension's secret, `DAX_WORKSPACE_TOKEN`, `DAX_TUNNEL_TOKEN`, `DAX_SERVERS_WORKSPACE_TOKEN`, `DAX_SERVERS_TUNNEL_TOKEN`, a `token_env` of `workspace` or `servers_workspace`, or one `pass_env` names. The redaction is a backstop: a value the server encodes otherwise (base64, split across messages) passes |
 | `context_window` | the window, in tokens, a model is served at, by model: `{"qwen3.5:9b": 65536}`, for a server that cannot say or says the wrong one; it sizes the default `-compact` budget (three quarters of it). A project's file may only lower one, and to no less than 4096 |
 | `bash_max_output`, `mcp_max_output` | the most bytes of a `bash` call's result (default 30000), and of a result of a tool that is not dax's own (an MCP server's, a sub-agent's, a peer's; default 100000), the model is sent: a longer one is sent as its first and last halves, with how much was left out between them, so the end of a log, where the error is, arrives. The whole is kept with the session, never in the workspace, named in the result by an output id (`out_…`; the session's record maps it to the blob in a `dax.output_kept` entry), and the model reads it with `read_output`. 2048 to 1048576; a project's file may only lower them |
@@ -416,21 +531,24 @@ names the file and the field.
 | `box` | `{"host": "local", "profile": "go", "tighten": {"memory": "2g", "internet": "off"}}`, each optional: run the tools in this project's box, which a box host (`dax box serve`, here or over ssh) makes from its own config, `~/.config/dax/box-host.json` on its machine, and relays the session to (see below); `{}` is a local box host's default profile. `host` is `local` or `ssh://[user@]host[:port]`; `profile` names one of the box host's; `mcp` which of its MCP units (each an MCP server the box host runs in a container of its own, with its own files, internet and secrets, its output redacted of those secrets' values; empty is all); `tighten` (`memory`, `cpus`, `pids`, `internet`, `allow`) only narrows its workspace unit. With `local`, `host_config` names another box host config; with ssh, `project` (the path there) or `checkout` (`{"url", "ref"}`: a repository the box host clones and keeps, within its config's `checkouts.allow`; no credentials in the URL), `remote_dax` (dax there) and `ssh` (more ssh arguments). The image, runtime and internet's ceiling are the box host's. `confine` (`off`, `units`, `workspace`) has the policy take the box's tools as confined where their envelope allows, so a bare ask for them does not ask; `workspace` also has the box host hold the repository's `.git` read-only in the box, the git guard (git that writes then fails there; commit outside it), and claims nothing for the workspace without it (docs/sandbox.md, "Fewer questions in a box"). Not with `executor` (its `pass_env` alone may stay, for the box host's launcher) |
 | `workspace` | `{"url": "https://box.example:7779", "token_env": "DAX_WORKSPACE_TOKEN", "tls_ca": "ca.pem"}`: run the tools here, in a workspace `dax workspace` serves there (see [A served workspace](#a-served-workspace-dax-workspace)). `url` is https, or http to a loopback host, with no user, password, query or fragment; `token_env` names the variable holding its token (default `DAX_WORKSPACE_TOKEN`), which only the workspace is sent and `pass_env` may not name; `tls_ca`, for https, a CA certificate to verify its certificate against in place of the system's. Your file only; not with `executor` or `box` |
 | `workspace.hub` | `{"listen": ":7780", "name": "build", "token_env": "DAX_TUNNEL_TOKEN", "tls_cert": "hub.pem", "tls_key": "hub-key.pem", "wait": "60s"}`, in place of `workspace.url`: host a hub for a workspace that dials in (`dax workspace -connect`, see [A workspace that dials in](#a-workspace-that-dials-in-dax-workspace--connect)), and act in it once it does. `listen` is a loopback address unless `tls_cert` and `tls_key` are given; the upgrade path is `/tunnel`. `name` is the workspace's name and identity, a DNS label; `token_env` the variable holding the one token that enrolls it (default `DAX_TUNNEL_TOKEN`, at least 32 bytes, taken out of the environment before any process starts, and no other credential's variable); `wait` how long to wait for it (default `60s`). Your file only; not with `url`, `executor` or `box` |
+| `servers_workspaces` | `{"github": {"url": "https://gh.example:7781", "token_env": "GH_WS_TOKEN"}}`: more servers workspaces, by name (a DNS label, not `servers`), each as `servers_workspace` with a `token_env` of its own required (a hub's `hub.token_env`); no token, variable, server name, workspace or hub port shared between any two (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). Your file only |
 | `servers_workspace` | `{"url": "http://127.0.0.1:7781", "token_env": "DAX_SERVERS_WORKSPACE_TOKEN"}`, or `{"hub": {...}}` as `workspace.hub`: a second served workspace, beside wherever the tools act (this directory, `workspace`, an executor or a box), whose offered MCP servers the session connects and nothing else (see [A secret another machine holds](#a-secret-another-machine-holds-servers_workspace)). The same fields as `workspace`, checked the same way, with their own default variables, `DAX_SERVERS_WORKSPACE_TOKEN` and, for a hub, `DAX_SERVERS_TUNNEL_TOKEN` (no other connection's, nor any other credential's). The session refuses one whose grant is more than `servers`: with `read`, `write` or `exec` its servers' secrets are not safe there. Not the session's own workspace, and two hubs need two ports. Your file only |
 | `peers` | remote A2A agents offered as tools, by tool name: `{"reviewer": {"url": "https://…", "relation": "subsession", "token_env": "REVIEWER_TOKEN"}}`; see [Peers](#peers-other-agents-over-a2a). Your file only; a token's variable may not be in `pass_env` |
 | `executor.url` | the `http://` or `https://` URL where `dax execute -listen` serves, in place of `command`; no user, password, query or fragment. Nothing authenticates the session to it yet, so keep it on loopback and tunnel to it. It takes no `pass_env` |
 | `executor.pass_env` | variables, credentials included, that only the command starting the executor is given, by name: `SSH_AUTH_SOCK` for ssh's agent, the token a kubectl credential plugin reads. bash and MCP servers never get them, here or in the sandbox; the model's key may not be one. It may be set without `command`, for a `-executor` given each time |
-| `policy` | see below |
+| `status` | the terminal client's status line: `{"position": "bottom", "style": "powerline", "segments": ["user", "dir", "git", "model", "context", "cost"], "colors": {"git": "cyan", "context": {"50": "yellow", "80": "red"}}}`; see [The status line](#the-status-line). Your file only |
+| `hooks` | your own PreToolUse and PostToolUse hooks, in Claude Code's settings shape: `{"PreToolUse": [{"matcher": "bash", "hooks": [{"type": "command", "command": "~/bin/no-force-push", "timeout": 10}]}]}`; see [Hooks](#hooks). `matcher` is a regular expression over dax's whole tool name (`bash`, `write|edit`, `mcp__github__.*`; empty or `*` is every tool); `command` a shell command line, run by `/bin/sh -c` as Claude Code runs it (pipes, `&&`, `~` and `$CLAUDE_PROJECT_DIR` work), or an array, the program and its arguments with no shell; a program named by a relative path (`./guard`, `hooks/check`) is the one beside your config file, never the repository's; `timeout` seconds, 60 by default. Other events (`Stop`, `UserPromptSubmit`) are refused by name. Not in a project file: a repository does not add code that runs |
+| `policy` | see below; `policy.default_mode` is the [permission mode](#permission-modes) a session starts in |
 
 A project's `.dax/config.json` comes from a repository, not from you, so
 it can only **tighten**. It may add `ask` and `deny` rules to `policy`
 (no `allow`, and no `!` carve-out of any rule), set `"builtin": false` to
 drop the shipped allow rules (their asks and denies stay), and set
-`"fallback"` to `ask` or `deny` when
+`"fallback"` to `ask` or `deny`, and `"default_mode"` to `dontAsk`, when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `think`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace` or `peers`: dax
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `plan_model`, `act_model`, `think`, `effort`, `agents`,
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -471,8 +589,9 @@ no other account could have written it.
 | `-box-internet off\|allow\|on` | with `-box`, narrow the profile's internet for this run; `allow` keeps the profile's hosts (or `box.tighten`'s). It is the box's, so it applies to every session in it |
 | `-pricing-file path` | JSON file of model prices for the terminal client's session cost, and for `-max-cost` |
 | `-max-turns N` | overrides `max_turns`; `0` turns it off |
-| `-max-tokens N`, `-max-cost USD` | stop a run before its next model call once the session's model calls have used `N` tokens (input and output) or cost `USD` by the pricing file: stopped, cause `guard`, exit 3 under `-p`. A sub-agent's calls count, and its next call is refused once the limit is reached. A server's compaction counts too, and a resumed session goes on from what its record says it spent. Under `-max-cost` the pricing file must price the model and the sub-agents' model, or dax does not start; a call to a model it does not price (after `/model`, say) stops the run too |
-| `-no-policy` | run every tool call without asking; ignores the config's policy |
+| `-max-tokens N`, `-max-cost USD` | stop a run before its next model call once the session's model calls have used `N` tokens (input and output) or cost `USD` by the pricing file: stopped, cause `guard`, exit 3 under `-p`. A sub-agent's calls count, and its next call is refused once the limit is reached. A server's compaction counts too, and a resumed session goes on from what its record says it spent. The limits are each session's: `/new` starts from nothing and `/resume` from what that session's record says, as `-resume` does, since a fresh `dax` would too. Under `-max-cost` the pricing file must price the model and the sub-agents' model, or dax does not start; a call to a model it does not price (after `/model`, say) stops the run too |
+| `-mode NAME` | the permission mode to start in: `default`, `acceptEdits`, `dontAsk` or `bypassPermissions` (see [Permission modes](#permission-modes)); over `policy.default_mode` |
+| `-no-policy` | the old name of `-mode bypassPermissions`: every call no deny rule refuses runs without asking. The deny rules hold, and `/mode` can leave it |
 | `-front tui\|repl` | the front end; default `tui` when standard input and output are both terminals and a session is recorded, `repl` otherwise (so `-sessions ""` gives the REPL); `-front tui` without a terminal or a session store is refused; `-p` always prints |
 | `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
 | `-trajectory PATH` | with `-p`, write the session as an ATIF trajectory to `PATH` once the run ends (agentsession's export, the RFC 0001 projection), each sub-agent's session embedded and priced by the pricing file when there is one; needs a session store |
@@ -480,9 +599,9 @@ no other account could have written it.
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. Your config is not even parsed unless `-config` brings it back, and `~/.dax/mcp-trust.json` is neither read nor written: a project's MCP servers start only with `-trust-mcp`, for that run. The session's header records the run as bare and what it left out (`dax.profile`) |
-| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain; an `AGENTS.md` below where the session starts reaches the model the turn after a file tool touches a path in its directory, once, as a message the record holds as composed from that file, never as your words), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
+| `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain; an `AGENTS.md` below where the session starts reaches the model, and a sub-agent, the turn after a file tool touches a path in its directory or a `bash` line reads or writes one (`cat svc/main.go`, a redirect), once, as a message the record holds as composed from that file, never as your words), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
 | `-context-window N` | the main model's window for this run, over `context_window` and what the vendor says |
-| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message you wrote (a prompt, a steer, a note with an answer) up to 8 KiB is kept verbatim through every fold, after the summary, so the task's exact words outlive it; the compaction entry records what it kept. A longer one, a pasted log, is folded like the rest |
+| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message the record holds as yours (a prompt, a steer, a note with an answer you typed; see [Sessions](#sessions)) up to 8 KiB is kept verbatim through every fold, after the summary, the newest of them up to a quarter of N in all, so the task's exact words outlive it; so is `-p`'s prompt, which claims nobody, and the request a prompt template or an MCP prompt sent, which is composed but is what you chose to send, after `-resume` or a head move too. The compaction entry records what it kept. A longer one, a pasted log, and any other message dax composed are folded like the rest |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
@@ -492,13 +611,13 @@ no other account could have written it.
 
 | tool | what it does |
 |---|---|
-| `read` | numbered lines of a file, with `offset` and `limit` |
+| `read` | numbered lines of a file, with `offset` and `limit`; a PNG, JPEG, GIF or WebP file (by its name and its first bytes, up to 5 MiB) is returned as the image, shown to a model whose vendor says it takes images (Anthropic's `image_input`, OpenRouter's input modalities, Ollama's `vision`) and otherwise said not to be shown; a sub-agent's read is judged by the sub-agent's model, and after `/model` or a resume to a model that takes none, images already in the conversation are said, not sent |
 | `write` | create or replace a file, making parent directories |
 | `edit` | replace one exact occurrence of a string |
 | `glob` | paths matching a doublestar pattern (`**/*.go`, `cmd/*/main.go`, `*.{md,txt}`), sorted |
 | `grep` | a regular expression over files: `path`, `include` (a glob), `ignore_case`, `max_results`; prints `path:line:text` |
 | `ls` | one directory, sorted, directories with `/`, files with their size |
-| `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs |
+| `bash` | a command in the working directory with a timeout; runs one at a time, its output reported as progress while it runs. A command that exits while a job it started still holds its output ends the call with the command's own exit status and a note that the job runs on; a workspace with no bash says so as the call's output, on this machine and over a served workspace alike |
 | `read_output` | the whole of a result that was cut to `bash_max_output` or `mcp_max_output`, by the output id (`out_…`) it names: numbered lines from an offset, or the lines matching a pattern. It reads only an output this session kept, never a blob by its hash or another session's, where the session runs |
 | `background` | a long-lived command (a dev server, a watcher) started in the background (`start`), listed (`list`), its new output read (`output`, the last 16 KiB of what came since the last read) and stopped (`stop`); at most 8 running, each ended with the session. A start is decided as `bash`'s call of its line (the same rules, the same stamp), so `git status` starts unasked and `npm run dev` asks; `list`, `output` and `stop` of the session's own processes run. In a workspace that cannot start a process, run the command with `bash` |
 
@@ -636,6 +755,7 @@ closed. A signal stops it, and every session's processes with it.
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
 | `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod. With `-kind` and `-root` it is the project's identity for `-list` and memory, so give one that outlives a recreated container |
+| `-project` | the ref | the project's identity, for `-list`, memory, the MCP trust, saved grants and the header's `dax.workspace`, when `-ref` is not it: the box host passes a box's name here and the image's digest as `-ref`, so a rebuilt image is on the record and the project stays one |
 | `-host`, `-instance` | none | the machine the workspace is on and its file system's instance (a container's ID), which the session's env entry records beside kind and ref (`workspace.host`, `workspace.instance`), so a restart into a new file system is on the record; not part of the project's identity |
 | `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
 | `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |
@@ -943,6 +1063,29 @@ project's config and `AGENTS.md` are not the session's.
 - **Through a hub,** the session prints what to run on the servers'
   host, with the grant it needs: `DAX_TUNNEL_TOKEN=... dax workspace
   -connect <url> -scopes servers -servers FILE`.
+- **Several.** `dax workspace` offers a secret holder alone, so two
+  servers that each hold a secret need two `dax workspace` processes.
+  `servers_workspaces` names more, by name, each as `servers_workspace`
+  is and checked the same way:
+
+  ```json
+  "servers_workspaces": {
+    "github": {"url": "https://gh.example:7781", "token_env": "GH_WS_TOKEN"},
+    "slack":  {"hub": {"listen": "127.0.0.1:7782", "name": "slack", "token_env": "SLACK_TUNNEL_TOKEN"}}
+  }
+  ```
+
+  A name is a DNS label, the one the record, `-list` and messages give
+  it (`servers_workspace` goes by `servers` beside them). Each names its
+  own `token_env` (a hub's `hub.token_env`): no default variable is
+  shared, and no two connections may hold one token or one variable. No
+  server name may be offered by two, no workspace given twice, and no
+  two hubs take one port. The header records them under
+  `dax.servers_workspaces` as an object by name, and
+  `servers_workspace` beside them keeps its own form under
+  `dax.servers_workspace`, which an older dax reads; `-list` ends a line with `servers
+  <name>=<identity>` for each, and the start line names each.
+  `-servers-workspace` replaces `servers_workspace` alone.
 
 ### A workspace that dials in: `dax workspace -connect`
 
@@ -1052,8 +1195,9 @@ the one whose rule decided it: `extension:dax-coding`, say):
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
   bash commands listed below (dax-coding's), `explore` and `task`
-  (dax-agents'), `skill` (dax-skills') and `memory_search` (dax-memory's);
-- **asks**: `write`, `edit`, every other command, memory writes, every
+  (dax-agents'), `skill` (dax-skills') and `memory_search` and
+  `conversation_search` (dax-memory's);
+- **asks**: `write`, `edit`, every other command, memory writes (`memory_insert` too), every
   peer (dax-a2a's) and every MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile
   repository would run code as you on the model's say-so.
@@ -1203,6 +1347,119 @@ Path rules (`read(.env)`, `write(docs/**)`, `Read(secrets/**)`) are written rela
 An asked call prints `? allow bash {"command":"..."} (reason) [y/N]`.
 Your answer is recorded in the session as a person's.
 
+### Permission modes
+
+A mode is the same rules made stricter or looser as a whole, which you
+pick at start (`-mode`, or `policy.default_mode` in your config) and
+change in the session with `/mode NAME`, or Shift-Tab in the terminal
+client, which moves to the next of `default`, `acceptEdits`, `plan` and
+`dontAsk` (`bypassPermissions` is reached only by its name, with
+`/mode`, `-mode` or `-no-policy`, and Shift-Tab from it goes to
+`default`):
+
+| mode | what it does |
+|---|---|
+| `default` | the rules as they are: what no rule allows asks |
+| `acceptEdits` | `write` and `edit` run without asking, but for a path that changes what runs or is trusted (`.git`, `.dax`, `.github`, `.circleci`, `.husky`, `.vscode`, `.idea`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, at any depth) or looks like a secret (the paths a read asks about, `.env*` among them); commands and other tools still ask |
+| `plan` | for reading and planning: what would ask is refused without asking, in plan's words, as in `dontAsk`, and `write` and `edit` are denied even where your own rules allow them, so only reads and the read-only commands run. The one call that asks is `exit_plan_mode`, with which the model puts its plan to you: the plan is shown whole (in the terminal client above the permission panel, in the REPL before the question). Approve it and the session moves to `acceptEdits` from the model's next turn and to `act_model` when you set one (with `plan_model` set and no `act_model`, back to the model you had before plan mode, unless you chose another in it), the switch recorded as `plan approved`, and the model carries the plan out; refuse it with a reason and it stays in plan mode and is told why. `plan_model` is the model plan mode moves to; leave plan mode another way (Shift-Tab, `/mode`) and the model you had before it comes back, unless you chose another meanwhile. `exit_plan_mode` is refused bare in every other mode, and an A2A caller is refused it in any |
+| `dontAsk` | what would ask is refused without asking, and the model is told not to work around it: only what a rule allows runs. The rules are `default`'s, so a carve-out lifts no more than it does there, and in a box under `box.confine` a confined call still runs. It is what `-p` does with every question once its input ends |
+| `bypassPermissions` | nothing asks: what no deny rule refuses runs. The asks become allows and the fallback is set aside, so under `"fallback": "deny"` (yours or a project's) a call no rule names runs too, as it did under `-no-policy` before modes |
+
+A mode never loosens what an A2A caller of `dax serve -a2a` may do: it
+is held to the stricter of `default` and your mode (see [Serving
+peers](#serving-peers-dax-serve--a2a)).
+A deny rule, an extension's or yours, holds in every mode, and a grant
+for the session (a skill's) survives a switch. A project's
+`default_mode` may only be stricter than yours (`plan` or `dontAsk`), and
+`-mode` is over both. The policy changes for the next call decided: a
+switch typed during a run waits for the run's next turn, so no batch of
+calls is decided under two policies. Each switch is on the record, as
+agentpolicy's replacement of the policy (`replaced the policy: mode
+acceptEdits (/mode)`) and a `dax.mode` entry, which a session started in
+a mode other than `default` also holds from its start, and the model is
+told of it at the next turn, whatever starts it (a prompt, a steer, an
+answer). `/mode` alone says the mode in force,
+and the one waiting for the run's next turn; the status line's `mode`
+segment shows both. `dax attach` switches the served session's mode the
+same way.
+
+### Yes, always
+
+A permission can be approved for more than the call. Where dax offers a
+rule beside the question, `a` approves the call and grants the rule for
+the rest of the session, and `A` keeps it for the project, in
+`~/.dax/grants.json` (private, by the project's identity, as `-list`
+has it), for every later session there too. For a command line dax's
+analyzer reads, the rule is a prefix only for `ls`, `wc`, `du` and
+`df`, listing tools no flag makes run a command: when every command
+of the line, `cd` aside, is one of them, `bash(ls:*)` and the like is
+offered. Any other line of one command is offered exactly as written
+(`go test ./...` offers `bash(go test ./...)`, `docker run alpine`
+offers `bash(docker run alpine)`; each allows that line and no
+other), and a line with quoting, a `*` or more than one command is
+offered nothing. A prefix of a build or test tool would allow a flag
+that runs a program (`go test -exec`, `-toolexec`, `go vet -vettool`,
+`make --eval`, `-f`, `SHELL=`, `CC=`), and one of a shell, an
+interpreter, a launcher or a wrapper (`sh -c`, `env`, `uv run`,
+`docker exec`, `git rebase --exec`) any code; write such a rule in
+your config if you want it. The tool's name for an MCP server's tool, and nothing for
+`write` or `edit` (a [mode](#permission-modes) is the way to let edits
+run). A grant ranks below every other source, so it answers only what
+asks for want of a rule: never a rule's ask (dax-coding's secret paths,
+your config's, the project's), never a deny, and dax offers none for a
+call such a rule asked about. A session's grant is agentpolicy's grant
+set under the conversation's scope, on the record with that scope; it
+holds across a mode switch, reaches the session's sub-agents (a
+sub-agent's call it covers runs unasked, its verdict naming the grant;
+an A2A caller's conversation is not the session's and asks), and ends
+with the session (a resumed session asks again). A kept one is the
+source `dax:saved`; delete it from the file to take it back. `dax
+attach` offers once only.
+
+### Hooks
+
+Your config's `hooks` (dax-hooks) run your own commands around each
+tool call, under Claude Code's hook protocol, so a hook written for
+Claude Code runs here: the call as JSON on standard input
+(`hook_event_name`, `cwd`, the workspace's root, `tool_name`,
+`tool_input`, `tool_use_id`, and for PostToolUse `tool_response`,
+`{"output", "error"}`), its exit status and output read back. A
+`command` line runs through `/bin/sh -c`, as Claude Code's does, with
+`CLAUDE_PROJECT_DIR` set to the directory dax started in; the call
+reaches it on standard input alone, never in its command line.
+
+- **PreToolUse** takes part in the policy's decision of each call it
+  matches, a sub-agent's included. Exit 2 refuses the call with the
+  hook's stderr as the reason the model reads; so does `"permissionDecision":
+  "deny"` in `hookSpecificOutput`, with its `permissionDecisionReason`.
+  `"ask"` asks about the call. `"allow"` answers the policy's own ask
+  as your yes would, but only where that ask is the project's rules'
+  or the fallback's: never your own ask rules, an extension's (dax-coding's
+  secret paths), a deny, or an [A2A caller's](#serving-peers-dax-serve--a2a)
+  call. `additionalContext` is said to the model beside the call's
+  result. Several hooks fold deny over ask over allow.
+- **PostToolUse** runs after each call of the main agent it matches.
+  Exit 2 (its stderr), `"decision": "block"` (its `reason`) and
+  `additionalContext` are said to the model after the result.
+- A PreToolUse hook that cannot answer refuses the call, with the
+  reason: one that does not start, whose program the shell cannot find
+  or run (exit 126 or 127), that a signal kills, that runs past its
+  `timeout`, or a call whose arguments are not JSON. A guard fails
+  closed, so a broken hook stops calls rather than letting them by.
+- Any other exit status (1, say) is Claude Code's non-blocking error:
+  you are told, and the call is decided as if the hook said nothing. A
+  PostToolUse hook that fails leaves the result as it was.
+- Esc or Ctrl-C during a hook kills it and every process it started.
+
+A hook is yours: dax reads `hooks` from your config alone, `-bare`
+leaves them out with it, and it runs on this machine whatever the
+workspace, in the directory dax started in, with the environment every
+child gets, less every secret (see
+[Environment of commands and servers](#environment-of-commands-and-servers)).
+A hook is asked once per call however often the policy decides it
+(a held call, a sibling's reading, dontAsk's probe), its answer kept
+by call ID and arguments.
+
 ## Security model
 
 dax gives a model the ability to read your files, change them and run
@@ -1289,7 +1546,9 @@ machine matters.
 - **`-trust-skills` trusts the skills in directories you named**
   (`~/.dax/skills` and your config's `skills_dirs`) and never the
   repository's: a skill in `.dax/skills` is text from the repository, and
-  its `allowed-tools` are withheld, so it cannot run anything unasked.
+  its `allowed-tools` are withheld, so it cannot run anything unasked. A
+  skill the model wrote (`~/.dax/learned`) is trusted only as you
+  approved it, by its frontmatter's digest (`/skills approve`).
 - **The provider sees what the model reads.** Files and command output go
   to the model's provider (OpenAI, OpenRouter and whichever upstream it
   routes to, Anthropic, Google, your Ollama host, or the `openresponses`
@@ -1330,6 +1589,49 @@ the terminal when it exits. With `-v` dax also prints its start lines
 client exits it prints what it noted during the run (skill grants,
 compactions, denied calls) above the resume command.
 
+### The status line
+
+Without a `status` block the client keeps its own line on top: time,
+tokens, cost, model, retry, turn, session. Your config can make it up:
+
+```json
+"status": {
+  "position": "bottom",
+  "style": "powerline",
+  "segments": ["user", "dir", "git", "executor", "model", "context", "cost"],
+  "colors": { "git": "cyan", "context": { "50": "yellow", "80": "red" } }
+}
+```
+
+- `position`: `top` (the default) or `bottom`, under the input.
+- `style`: `plain` (the default) or `powerline`, which needs a font
+  with the powerline glyphs.
+- `segments`, in order: the client's own (`time`, `tokens`, `cost`,
+  `model`, `context`, `retry`, `turn`, `session`, `verified`,
+  `stopped`) and dax's: `user` (you@host, on black), `dir` (the
+  workspace's root on blue, your home as `~` when the tools act here),
+  `git` (the branch, with ± when the tree is dirty, green when clean and
+  yellow when dirty; read
+  where the tools act, at start and after each tool run, and not read
+  at all, saying so, when the repository's own config names a program
+  git status would run) and `executor` (where the tools act: the
+  executor's or the served workspace's line, or `here`; shown there,
+  it is no longer printed before the client takes the screen) and
+  `mode` (the permission mode, with the one waiting for the run's next
+  turn, `default → acceptEdits`). `model`
+  names the model dax runs next, and `context` divides by the window
+  dax believes that model has.
+- `colors`, by segment: a color (`black`, `red`, `green`, `yellow`,
+  `blue`, `magenta`, `cyan`, `white`, `gray`, the `bright-` ones, a
+  number from 0 to 255, or `#rrggbb`), or for `context`, `tokens`,
+  `cost`, `time`, `turn` and `retry` thresholds, the color from each
+  value up. A color you give one of dax's segments replaces its own.
+  The key is spelled `colors`, as the client's API spells it; `colours`
+  is an unknown field and stops dax at start, as any is.
+
+A segment or color dax does not know stops it at start, naming the
+config file. `dax attach` keeps the client's default line.
+
 Each of dax's tool calls is drawn as what it does, on one line, with a
 short body under it:
 
@@ -1351,7 +1653,8 @@ drawn as the client draws any call, its name and arguments.
 |---|---|
 | Enter | send a prompt, or steer the run in flight |
 | Ctrl-C | copy the selection when one is drawn; otherwise abort the run, quit when idle (a second one quits at once) |
-| `y` / `n` | approve / refuse the permission asked; `n` then takes an optional reason and Enter. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
+| `a` / `A` | approve the permission asked and grant the rule dax offers beside it for the session / keep it for the project, which asks you to confirm with Enter (see [Yes, always](#yes-always)) |
+| `y` / `n` / `s` | approve / refuse the permission asked and let the run go on / refuse it and stop the run; `n` and `s` then take an optional reason and Enter. A refusal is told to the model in the REPL's words, not to get the same result another way and to say so if it is still needed, with your reason after. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
 | Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
@@ -1359,6 +1662,7 @@ drawn as the client draws any call, its name and arguments.
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
 | drag | select text anywhere on the screen; it stays drawn until the next key or press |
+| Shift-Tab | the next permission mode: default, acceptEdits, plan, dontAsk, never bypassPermissions (see [Permission modes](#permission-modes)) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
 A call the policy asks about is a permission: the panel shows the call and
@@ -1420,8 +1724,50 @@ the input until the next line, and an error gives the line back to edit.
   that prompt (`instructions_part`, source `dax.mcp_prompt`) and marked
   untrusted: a third party's text, never words you wrote. `/help` lists
   the servers' prompts as they offer them now. `dax attach` offers none.
+- `@path.png` (a PNG, JPEG, GIF or WebP, up to 5 MiB) in a line you
+  type attaches that image file of the workspace to your message, once,
+  for a model whose vendor says it takes images; one it does not, or a
+  file that is not the image its name says, sends nothing and says why.
+  The path is the workspace's, as `read`'s is: relative to its root
+  (the box's, the executor's or the served workspace's when the tools
+  act there), and a path that leaves it, by name, `~/` or a link, is
+  refused. `dax attach` sends the line as typed.
+- `@<server>:<uri>` in a line you type attaches that MCP server's
+  resource (`resources/read`) after your message, once however often
+  the line names it, cut at 100 KiB (on a character's boundary) and at
+  256 KiB for all a line attaches, recorded as composed from the
+  resource (source `dax.mcp_resource`) and untrusted, while the line
+  stays your words; content that is not text is said to be left out.
+  A name no server has is plain text; one a server has is that
+  server's mention even when it ends as an image's name does
+  (`@docs:shot.png` is not a path). A resource that cannot be read
+  sends nothing and says why. dax does not check the URI against the
+  server's list: the server alone decides what it reads, so a
+  host-placed server (`"in": "host"`, a `secret_env` one) may read
+  this machine's files. Naming one is your own act, as running a
+  command is, and what it reads reaches only the model. In the
+  terminal client `@` completes the servers' resources. `dax attach`
+  sends the line as typed.
 - `/model name`, `/think on|off`: the model and reasoning from the next
   request.
+- `/memory undo` reverts the latest background memory pass of this
+  project's (see [The background pass](#the-background-pass)), each
+  entry back to what it held unless changed since; again, the pass
+  before. It acts on this machine's memory, so not over `dax attach`.
+- `/permissions` lists the policy in force: the mode, what a call no
+  rule names gets, each source in turn with the file it came from (your
+  config, the project's `.dax/config.json`, `~/.dax/grants.json` for the
+  rules kept with `A`) and its rules, deny, ask and allow, as the engine
+  holds them (an alias such as `Read` expanded), the box's confinement
+  claim, and the grant sets in force with their scope (a skill's, yours
+  for the session, and the memory pass's own `a` under the pass's
+  scope). `git push` ran unasked? This shows the `allow
+  bash(git push:*)` in your config. It works during a run, and over
+  `dax attach`.
+- `/mode [name]`: the permission mode, or a switch to `default`,
+  `acceptEdits`, `dontAsk` or `bypassPermissions` (see [Permission
+  modes](#permission-modes)); during a run it takes effect at the run's
+  next turn. `dax attach` sends it to the served session.
 - `/port N` reaches port `N` on the loopback of wherever the tools act
   (this machine, an executor, a box, a served or tunnelled workspace)
   from this machine's loopback, and prints the URL, `port 5173:
@@ -1438,7 +1784,10 @@ the input until the next line, and an error gives the line back to edit.
 - `/mcp` (or `/mcp list`) lists the session's MCP servers, one a line:
   the name, where it runs (on this machine, in the workspace, at a URL's
   origin, offered by the workspace, or offered by the servers
-  workspace), whether this session gives it secrets (`secret_env`), the
+  workspace), where its session is (`live`; `ended`, a process that
+  exited or a connection that dropped, which the next call to one of
+  its tools starts again; `restarting`; `failed to start again`, with
+  why; `closed`), whether this session gives it secrets (`secret_env`), the
   label `/mcp remove` takes for one `/mcp add` started, and its
   description. The listing looks the same whatever the placement. A URL
   is shown by its scheme and host alone, since a hosted server's key is
@@ -1453,6 +1802,19 @@ the input until the next line, and an error gives the line back to edit.
 - `/mcp add <name> <command>` (tools are `mcp__<name>__<tool>`; a name has
   letters, digits, `-` and `_`, and no `__`), `/mcp remove <label>`.
 - `/tools`, `/session`, `/help`.
+- `/name <text>` names the session; `/resume` lists this project's
+  sessions and `/resume <n|ID|name>` continues one here (see
+  [Sessions](#sessions)).
+- `/new` (or `/clear`) starts a new session in place, in this
+  project: a new conversation recorded as one of its own, which `-list`
+  shows beside this one. It keeps what you changed during this
+  session, the model (`/model`), reasoning (`/think`), the permission
+  mode (`/mode`, Shift-Tab) and the servers `/mcp add` started, which
+  start again with labels of their own; it does not keep this session's
+  grants (`a`), its `/port` forwards, or calls left waiting, which stay
+  with this session's record for a `-resume`. It waits for the run to
+  end, and `dax attach` refuses it: every attached view acts on the one
+  conversation the host serves.
 - `/follow text` queues a follow-up that runs once the model would have
   stopped; `/abort` aborts the run; `/quit` leaves.
 - `!command` runs a command yourself, with bash in the session's
@@ -1467,8 +1829,9 @@ the input until the next line, and an error gives the line back to edit.
   session's machine.
 
 Any other line typed while a run is in flight steers it and lands before
-the next model call. `/model`, `/think`, `/compact`, `/mcp add` and
-`/mcp remove` wait for the run to end; the rest, the `/mcp` listing among them, work
+the next model call. `/model`, `/think`, `/compact`, `/new`, `/name
+<text>`, `/resume <session>`, `/mcp add` and `/mcp remove` wait for the
+run to end; the rest, the `/mcp` listing among them, work
 during one. An unknown command is an error, not a
 prompt.
 
@@ -1483,6 +1846,43 @@ eighth of the budget is left as it is, as it would be over budget. With
 compaction off (`-compact 0`, or a model
 whose window is not known) it says so. `dax attach` sends it to the
 served session.
+
+## In an editor: `-front acp`
+
+`dax -front acp` speaks the Agent Client Protocol (v1) on standard
+input and output, so an editor that runs external agents drives it. In
+Zed, add to `settings.json`:
+
+```json
+"agent_servers": {
+  "dax": { "command": "dax", "args": ["-front", "acp"] }
+}
+```
+
+Each of the editor's sessions is a dax session, recorded as any other,
+under your config, the project's and the flags, as the terminal client
+is: the editor shows the messages and the calls as they stream, asks
+you about each call the policy asks about (allow once, reject, or,
+when dax offers a rule, allow it for the rest of the session; never
+kept for the project, which needs the terminal's confirm), and cancels
+a run. Its mode picker has the modes Shift-Tab cycles (`default`,
+`acceptEdits`, `plan`, `dontAsk`), never `bypassPermissions`; its slash
+commands are your prompt templates and the MCP servers' prompts, since
+dax's other commands act on a terminal. Loading a session takes one of
+this project's top-level sessions and shows it again from the record,
+a failed call marked failed; one already open in this dax is refused,
+since two sessions would then record one conversation. The editor's working directory must be
+given, and be the one dax started in or below it: start dax there (the
+editor does).
+The editor's MCP servers start only under `-trust-mcp` (`"args":
+["-front", "acp", "-trust-mcp"]`), stdio ones alone, on this machine
+whatever the workspace, with the `env` the editor gives handed to that
+server alone and redacted from its output, as `secret_env` is (a value
+under 8 bytes is refused, as there); a name your config gives is
+refused. The editor's files and terminals are not used: the tools act
+in the session's workspace, here, in a box or on a served workspace, as
+in any front. Nothing but the protocol goes to standard output; dax's
+notes go to standard error, which the editor keeps in its log.
 
 ## Serving a session: `dax serve` and `dax attach`
 
@@ -1525,19 +1925,27 @@ dax attach -token-file ~/.dax/serve/01a112e5-....token http://127.0.0.1:41753
   set; otherwise dax serve makes one and writes it to a file under
   `~/.dax/serve` that only you can read, removed when it stops. The
   token is never printed; attach reads it from `-token-file` or
-  `$DAX_SERVE_TOKEN`.
+  `$DAX_SERVE_TOKEN`. Its holder is you: what you type in an attached
+  view, and your answers, are recorded as your words (kind `human`,
+  source `terminal`, naming the token's principal `attach`), as at the
+  session's own terminal. Nothing else may claim that: an A2A caller
+  has a token of its own and never reaches the control.
 - **One conversation.** Every view attached to a session drives the same
   conversation: what one asks, the others show, and a permission or a
   question is answered from whichever view answers first. Questions and
-  held calls wait for whoever attaches. For independent work, fork the
-  session instead.
+  held calls wait for whoever attaches. A line typed while a run goes
+  is taken as a steer as soon as it is sent, even while a quiet tool
+  runs, and one that misses the run's last look starts a run of its
+  own. For independent work, fork the session instead.
 - **Leaving is not stopping.** `/quit` in an attached view leaves the
   session's run going; ctrl+c in a view aborts it. dax serve stops on
   ctrl+c or SIGTERM, aborting a run still going, and prints the command
   that resumes the session.
 - **Commands.** The slash commands run against the served session:
   `/model`, `/think`, `/mcp` and `/session` act there, through the
-  server's commands.
+  server's commands. `/new`, `/resume` and `/name` are refused there: a
+  view cannot move the host, and every view with it, to another
+  conversation.
 - **The tree.** Continuing from an entry (Ctrl-B on a row, `c` in the
   tree) moves the served session's head, as it does locally: the next
   prompt, from any view, continues from there. A move the session
@@ -1596,13 +2004,75 @@ dax serve -a2a -listen 127.0.0.1:7878
   new message in the same context.
 - **The same agent, the same workspace.** A conversation runs under the
   served session's model and reasoning as they stood when serve
-  started, and its extensions, policy and MCP servers as they are: an
+  started, and its extensions, rules and MCP servers as they are: an
   MCP server added or removed in an attached view is added or removed
   for the conversations too. Its tools act in the same workspace. The
   conversations and the served session run at the same time, on the
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in
   flight is refused, and the caller sends it again.
+- **Never looser than `default`.** A conversation's calls, and its
+  sub-agents', are decided by the stricter of the `default`
+  [permission mode](#permission-modes) and yours: under `acceptEdits`,
+  `bypassPermissions` or `-no-policy` a caller's `write` or `bash`
+  still asks an attached view, and is refused with none; under
+  `dontAsk` (yours, or a project's `default_mode`) it is refused
+  without asking anyone. Your
+  rules, the rules you kept with `A` and a box's confinement hold for
+  it as for you; a grant you made for your own session (`a`) does not
+  reach it. A switch never reaches a caller's run, so a batch of its
+  calls is decided under one policy. Under a looser mode a skill's
+  grant does not let a caller's call run unasked, since it is held to
+  the rules alone; under `default` it does, as before.
+- **Not your conversations.** A caller's `conversation_search`, or its
+  sub-agents', fails before anything is searched: the store holds every
+  session you had, and a caller reads none of them.
+- **Not your files under `~/.dax`.** `dax serve -a2a` does not start
+  when the workspace is this machine's directory and holds dax's user
+  directory (`~/.dax`: memory, learned skills, grants), a `memory_dir`
+  or the session store, as serving from your home directory would, or
+  is inside one of them (`~/.dax/memory`, say): a
+  caller's `read`, `grep`, `glob`, `ls` and allowed `bash` reads act
+  anywhere in the workspace, and a search from its root walks every
+  directory below, which no path rule holds. Serve from the project's
+  directory, or keep those directories out of it. Symbolic links are
+  followed for the check, and a link inside the workspace that leaves
+  it is refused when a tool reads it. What the check does not see,
+  and you keep out yourself: a bind mount or hard links of `~/.dax`'s
+  files inside the project, which look like the project's own
+  directories and files; and a workspace that is not this machine's
+  directory by kind but is this machine's home all the same, a
+  `dax execute -root ~` executor, a `dax workspace` served on loopback
+  from `~`, or a box whose project is your home directory. Other files
+  of yours, `~/.config/dax` and your `skills_dirs`, are not checked;
+  serving from your home directory is refused anyway, since `~/.dax`
+  is there.
+- **Not your own instructions.** `~/.dax/AGENTS.md` and the
+  `agents_md_global` files are in your requests alone: a caller's
+  requests, and its sub-agents', carry the project's AGENTS.md chain
+  without them, and its conversation's record holds neither. A file of
+  the project's chain that `agents_md_global` also names is the
+  project's, and a caller's requests keep it. An extension reading the
+  chain (`extension.Env.AgentsMD`) is given it without your files on a
+  caller's context.
+- **Not your memory or your learned skills.** Your memory (its `user`
+  scope holds what you told dax across every project) is yours alone: a
+  caller's requests, and its sub-agents', carry no memory block, and its
+  conversation's record holds none of it. `memory_search`,
+  `memory_save`, `memory_patch`, `memory_forget`, `memory_insert` and
+  `skill_manage` are refused to a caller and its sub-agents outright,
+  whatever your rules and mode, and no view is asked, since one
+  approval would let a caller read or write what every later session of
+  yours reads. Nor is a caller offered them: its requests and its
+  sub-agents' leave out their definitions, and the agent card does not
+  name them. The `skill` tool serves a caller only the skills you
+  installed (the project's, `~/.dax/skills`, `skills_dirs`), never one
+  the model wrote for you under `~/.dax/learned`. The catalogue in a
+  caller's instructions still lists a learned skill's name and
+  description, since the kit renders one catalogue for every
+  conversation; leaving it out per conversation needs agentkit.
+  `dax serve -a2a` says so at start, naming those skills, when
+  `~/.dax/learned` holds any the catalogue lists.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the
@@ -1655,7 +2125,9 @@ note, `n not that file` refuses with a reason and the run goes on, and
 `s not that file` refuses and ends the run there. Any other line refuses,
 the whole line its reason. A refusal tells the model not to get the same
 result another way (another tool, a script, another path) and to say so
-if it is still needed. `-p` reads its answers the same way; a question
+if it is still needed; so does a sub-agent's call you decline, and a
+call denied because no rule allows it under `"fallback": "deny"`. `-p`
+reads its answers the same way; a question
 asked while a call runs has no run to end, so `s` declines it as `n`
 does. Only a line typed after a question is shown answers it: one typed
 ahead (a steer such as "yes, also fix the tests" that crossed a
@@ -1664,7 +2136,12 @@ is shown again. When `-p`'s input has ended, or `-timeout` ends the
 wait, nobody answered: the call is refused, or the question declined,
 by dax's rule, and the record names the rule (`policy`), not you, as
 the decider. The model is told nobody was there to approve the call,
-not that you denied it.
+not that you denied it, and, as with every refusal, not to get the same
+result another way. Where dax offers a grant (see [Yes,
+always](#yes-always)) the question says which rule, `[y/a/A/N] (a:
+allow bash(go test ./...) for this session, A: always in this project)`:
+`a` approves and grants it for the session, `A` keeps it for the
+project; `-p` takes them too.
 
 ## Exit status
 
@@ -1718,7 +2195,7 @@ Every run is recorded in one content-addressed store,
 `~/.dax/sessions`, for every project. Admin commands:
 
 ```sh
-dax -list                          # sessions of this project: this directory, or the executor's (docs/sandbox.md)
+dax -list                          # sessions of this project, with their names: this directory, or the executor's (docs/sandbox.md)
 dax -resume <id>                   # continue one, answering any call an abort cut off
 dax -verify <id>                   # rebuild every request and check its hash
 dax -project <id> -out dir         # write one as a JSONL file (RFC 0001)
@@ -1730,8 +2207,47 @@ dax -repair <id>                   # rewrite a damaged log from what still reads
 `-list`, `-verify` and `-project` open the store read-only, so they work
 beside a running dax. `-sessions ""` disables recording.
 
+A session keeps its media apart from its log (agentsession's sidecar
+media, the header's `"media": "sidecar"`): an image a `read` returned
+or you attached is stored once as a blob in the store, and the log
+names it by its hash (`sidecar:sha256:...`); a resume reads it back
+into the request. A fold weighs an image by its pixels, not its
+encoded size (agentturn's default estimate).
+
+Inside a session, `/name <text>` names it (an `info` entry on its
+record; a later one replaces it), and `-list`, `/resume` and the start
+line of a resume show the name. `/resume` lists this project's
+sessions, newest first and numbered, the one you are in marked `*`;
+`/resume <n|ID|name>` continues one in place: its number in that list,
+its ID or at least its first four characters, its name, or a part of
+one session's name alone (`/resume auth` for "auth refactor"). Like
+`/new`, it keeps the model, reasoning, mode and `/mcp add` servers you
+set, and leaves this session's record as it is. `dax attach` refuses
+both: an attached view cannot move the served host to another session.
+An A2A caller's conversation (`dax serve -a2a`) is in the same store,
+its header marked `"dax.origin": "a2a"`, and `/resume` neither lists
+nor continues it: its words are the caller's, not yours to carry on
+under your mode. One recorded before that mark is listed; `-resume ID`
+still opens any session by its ID.
+
+The record says whose words each message is. What you type at the
+REPL or in the terminal client, a prompt, a steer or a note with an
+answer, is recorded as yours (a trigger of kind `human`, source
+`terminal`), and so is what you type in `dax attach` (see
+[Serving a session](#serving-a-session-dax-serve-and-dax-attach)). A
+message dax composes (a prompt template's, an MCP prompt's, an
+`AGENTS.md` below the start) is recorded as composed, never as your
+words; the output of a `!` command claims nobody. `-p`'s prompt claims
+nobody either, since a script may have given it, though a compaction
+keeps it as it keeps yours. A session recorded before this release
+claims no line as yours; after `-resume` (or a head move) a compaction
+keeps such an unclaimed prompt, and `-p`'s, as it keeps yours, within
+the same 8 KiB and quarter of the budget, but never a `!` command's
+output or a message dax composed.
+
 Other state lives in `~/.dax`: `AGENTS.md` (read before the project's),
-`skills/`, `memory/`. A project's `.dax/skills` and its `AGENTS.md` files
+`skills/`, `memory/`, `learned/` (the skills the model wrote) and
+`skill-approvals.json`. A project's `.dax/skills` and its `AGENTS.md` files
 are read too, through the workspace. The `AGENTS.md` chain follows the
 convention (https://agents.md): from the repository's root, the nearest
 directory at or above the start that holds a `.git`, down to where dax
@@ -1767,9 +2283,9 @@ dax's own extensions are built the same way, from the same fields:
 | Extension | Package | What it offers |
 |---|---|---|
 | `dax-coding` | `ext/coding` | read, write, edit, glob, grep, ls and bash; the allow list, the secret-path asks, the matchers and the aliases (`Bash`, `Read`, `Edit`, `Write`) for them; the stamp that holds an auto-allowed bash call to the plan and the facts the policy approved |
-| `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`) |
-| `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills` |
-| `dax-memory` | `ext/memory` | the memory tools and block |
+| `dax-agents` | `ext/agents` | the `explore` and `task` sub-agents, given every extension's tools (the read-only ones for `explore`), its sub-agent tools, and the memory block as the kit's parts |
+| `dax-skills` | `ext/skills` | the `skill` tool and catalogue; grants under `-trust-skills`; `skill_manage` over `~/.dax/learned` |
+| `dax-memory` | `ext/memory` | the memory tools and block; `memory_search` for the sub-agents; `conversation_search`, scoped by `Env.SearchScope` |
 | `dax-a2a` | `ext/a2a` | a tool per configured peer, added through its kit as memory's are; their renderers; no rules |
 
 `dax-coding` and `dax-a2a` are always on (`dax-a2a` offers nothing
@@ -1784,6 +2300,7 @@ whatever the settings say (any other name is an error), and
 | `Tools` | tools (`agenttool.Tool`), in order, for the main agent and for `task` |
 | `ReadOnly` | the names of its tools that only look, which `explore` gets too; one annotated destructive is refused |
 | `Owns` | names of tools it adds through `Kit` (`skill`, `memory_save`), so its rules may name them |
+| `SubagentTools` | tools among those it owns that the sub-agents take too (`Env.SubagentTools`), built before any `Kit`: read-only control tools, such as dax-memory's `memory_search`; one it does not own, or one not annotated read-only, is refused |
 | `Matchers` | how a rule's specifier reads a call of one of its tools: `deploy(staging)` above. Built over the session's `ToolEnv`, so one that looks at files looks at the session's workspace; `extension.FixedMatchers` wraps ones that read only the arguments |
 | `Aliases` | names a rule may use for several of its tools: `Read` for read, grep, glob and ls |
 | `Policy` | the allow, ask and deny rules it ships for its tools |
@@ -1861,7 +2378,10 @@ For a front of your own, build the session with `agent.New` and
 follow-up, answer the permissions a run stops on (`Session.Permissions`,
 `Resume`), reply to the questions asked while a call runs (the
 `agentturn.Question` events, `Reply`, after `Session.Answering`), and
-subscribe to the agent's events. Name who answered on `Reply`'s
+subscribe to the agent's events. Claim what the person typed as
+theirs on the context of `Prompt`, `Queue` and `Resume` with
+`agentturn.ContextWithTrigger(ctx, agent.AtTerminal)`, and never for a
+message the front composed. Name who answered on `Reply`'s
 context with `agentturn.ContextWithAnswerer` (`agent.AtTerminal` for
 the person at the terminal), and only for a reply that person gave:
 the record writes it beside the answer, and a reply that names nobody

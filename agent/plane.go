@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -96,11 +97,15 @@ func (s *Session) RunContext(ctx context.Context) context.Context { return s.ctl
 // a restart left unanswered first and refusing with ErrHeld while held
 // calls wait.
 func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*agentturn.RunEnd, error) {
-	pending := s.ag.State().Pending
-	if slices.ContainsFunc(pending, held) {
+	if slices.ContainsFunc(s.ag.State().Pending, held) {
 		return nil, ErrHeld
 	}
-	outs := make([]openresponses.Item, 0, len(pending)+len(items))
+	// The model a mode switch asked for (plan_model), then the
+	// extensions' BeforePrompt hooks, the person being here.
+	s.modelBeforeRun()
+	s.promptHooks(ctx)
+	pending := s.ag.State().Pending
+	outs := make([]openresponses.Item, 0, len(pending)+len(items)+1)
 	for _, p := range pending {
 		outs = append(outs, answerOf(p))
 	}
@@ -116,6 +121,8 @@ func (s *Session) Resume(ctx context.Context, answers ...agentturn.Answer) (*age
 	for _, a := range answers {
 		given[a.CallID] = true
 	}
+	s.modelBeforeRun()
+	s.actModel(answers)
 	for _, p := range s.ag.State().Pending {
 		if !held(p) && !given[p.Call.CallID] {
 			answers = append(answers, agentturn.Output(answerOf(p)))
@@ -154,6 +161,31 @@ func (s *Session) Queue(ctx context.Context, mode agentturn.QueueMode, items ...
 	return s.ctl.Queue(ctx, mode, items...)
 }
 
+// Deliver implements agentturn.Deliverer: the items join the run in
+// flight, or start the run that takes them, each on the record as a
+// queued entry first (agentkit's Control.Deliver). While calls wait on
+// a person it starts none (agentturn.ErrInputRequired), and the Resume
+// that answers them takes the items, so a delivery never settles what
+// the policy held. A view steers through it without waiting for the
+// next prompt.
+func (s *Session) Deliver(ctx context.Context, items ...openresponses.Item) (bool, *agentturn.RunEnd, error) {
+	return s.ctl.Deliver(ctx, items...)
+}
+
+// Accept implements agentturn.Accepter: Deliver in two steps, returning
+// once the items are queued, so an attached view's steer is taken while
+// a quiet tool runs rather than held behind it (agentconsole's
+// client.Direct sends a steer through it). The run it may start goes on
+// ctx's values without its cancellation, and only Abort ends it.
+func (s *Session) Accept(ctx context.Context, items ...openresponses.Item) (*agentturn.Delivery, error) {
+	return s.ctl.Accept(ctx, items...)
+}
+
+var (
+	_ agentturn.Deliverer = (*Session)(nil)
+	_ agentturn.Accepter  = (*Session)(nil)
+)
+
 // Abort implements agentturn.Control.
 func (s *Session) Abort() { s.ctl.Abort() }
 
@@ -185,9 +217,15 @@ var AtTerminal = agentturn.Trigger{Kind: "human", Source: "terminal"}
 
 // ContinueFrom moves the session's head to the entry: the next prompt
 // continues the conversation from there, on a branch of the session,
-// with the skill grants of that branch (agentkit.Control.ContinueFrom).
+// with the skill grants of that branch (agentkit.Control.ContinueFrom),
+// and the branch's unclaimed prompts kept through a fold, as a resume
+// keeps them.
 func (s *Session) ContinueFrom(ctx context.Context, entryID string) error {
-	return s.ctl.ContinueFrom(ctx, entryID)
+	if err := s.ctl.ContinueFrom(ctx, entryID); err != nil {
+		return err
+	}
+	s.claimUnclaimed()
+	return nil
 }
 
 // Answering says a front answers the questions asked while a call
@@ -311,6 +349,8 @@ type Info struct {
 	// is kept of (no store), whose ID names nothing after it closes.
 	ID       string
 	Recorded bool
+	// Name is its name (/name), empty for none.
+	Name string `json:",omitempty"`
 	// Path is its directory in a local store; empty otherwise.
 	Path    string
 	Tools   []agentkit.ToolOrigin
@@ -321,22 +361,27 @@ type Info struct {
 	// MCP are its MCP servers, each with where it runs and what it is
 	// for, listed the same wherever it runs.
 	MCP []MCPServerInfo
+	// Policy is the policy in force, nil for a session with none.
+	Policy *PolicyInfo
 }
 
 var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each
 // question a run asks, in place of a person.
 type Rules struct {
 	// Permit decides a call the policy asked about: allow, or refuse,
-	// with a note the model is told either way. reason is the policy's
-	// question. Nil refuses every call.
-	Permit func(call *openresponses.FunctionCall, reason string) (allow bool, note string)
+	// with a note the model is told either way, whether a refusal ends
+	// the run, who decided, and how far an approval reaches (a grant
+	// for the session or kept for the project, of the rule the session
+	// offers, Session.GrantOffer). reason is the policy's question. Nil
+	// refuses every call.
+	Permit func(call *openresponses.FunctionCall, reason string) PermitAnswer
 	// Reply answers a question asked while a call runs: a sub-agent's
 	// call the policy asks about (q.Call), a tool's own question. What
 	// it says with the answer is its Note, which the model is told of an
@@ -346,10 +391,6 @@ type Rules struct {
 	Reply func(q agentturn.Question) agenttool.Answer
 	// Refused, when set, is told of each call Permit refused.
 	Refused func(call *openresponses.FunctionCall)
-	// Stops, when set, says of a call Permit refused whether the
-	// refusal ends the run (Refusal with stop) rather than going on to
-	// the model; nil goes on.
-	Stops func(call *openresponses.FunctionCall) bool
 	// By, when set, names who gave the reply Reply has just given to q,
 	// written beside the answer (agentturn.ContextWithAnswerer):
 	// AtTerminal for a person's answer, a trigger of the controller's
@@ -358,14 +399,32 @@ type Rules struct {
 	// of the input) name the person only for what the person said. The
 	// zero Trigger, or a nil By, leaves the reply unattributed.
 	By func(q agentturn.Question) agentturn.Trigger
-	// PermitBy, when set, names who decided the permit Permit has just
-	// given for call, the decider the record writes: agentpolicy.ByHuman
-	// for a person's answer, ByPolicy for the controller's own rule,
-	// such as a refusal because nobody was left to ask (the end of -p's
-	// input, its -timeout). A rule's refusal tells the model nobody
-	// answered, not that the user denied the call. Nil or "" is
-	// ByHuman.
-	PermitBy func(call *openresponses.FunctionCall) string
+}
+
+// PermitAnswer is a controller's answer to a call the policy asked
+// about.
+type PermitAnswer struct {
+	// Allow runs the call; Note is what the model is told with the
+	// answer, either way.
+	Allow bool
+	Note  string
+	// Stop, for a refusal, ends the run (Refusal with stop) rather than
+	// going on to the model.
+	Stop bool
+	// By names who decided, the decider the record writes:
+	// agentpolicy.ByHuman ("") for a person's answer, ByPolicy for the
+	// controller's own rule, such as a refusal because nobody was left
+	// to ask (the end of -p's input, its -timeout). A rule's refusal
+	// tells the model nobody answered, not that the user denied the
+	// call.
+	By string
+	// Grant, for an approval, is how far it reaches, and Rule the rule
+	// the session offered for the call (Session.GrantOffer). Drive makes
+	// the grant through the control when it is a Session, before the
+	// Resume that answers the call, and only for a person's answer (By
+	// ByHuman): a rule's approval is once.
+	Grant GrantKind
+	Rule  string
 }
 
 // Drive is the human or autonomous plane as a controller that answers
@@ -405,17 +464,31 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		})()
 	}
 	permit := func(call *openresponses.FunctionCall, reason string) agentturn.Answer {
-		allow, note := false, ""
+		var pa PermitAnswer
 		if r.Permit != nil {
-			allow, note = r.Permit(call, reason)
+			pa = r.Permit(call, reason)
 		}
-		by := agentpolicy.ByHuman
-		if r.PermitBy != nil {
-			if b := r.PermitBy(call); b != "" {
-				by = b
+		note, by := pa.Note, pa.By
+		if by == "" {
+			by = agentpolicy.ByHuman
+		}
+		if pa.Allow {
+			// A grant is a person's to make: a rule's approval is once.
+			if pa.Grant != GrantOnce && by != agentpolicy.ByHuman {
+				fmt.Fprintf(warnings{}, "dax: %s approved once: a grant is a person's, and %s decided\n", call.Name, by)
+			} else if pa.Grant != GrantOnce {
+				g, ok := c.(interface {
+					Grant(context.Context, string, GrantKind, string) error
+				})
+				switch {
+				case !ok:
+					fmt.Fprintf(warnings{}, "dax: %s approved once: this session cannot grant %s\n", call.Name, pa.Rule)
+				default:
+					if err := g.Grant(ctx, call.CallID, pa.Grant, pa.Rule); err != nil {
+						fmt.Fprintf(warnings{}, "dax: %s approved once: %v\n", call.Name, err)
+					}
+				}
 			}
-		}
-		if allow {
 			a := agentturn.Approve(call.CallID).WithBy(by)
 			if note != "" {
 				a = a.WithNote(note)
@@ -425,7 +498,7 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		if r.Refused != nil {
 			r.Refused(call)
 		}
-		stop := r.Stops != nil && r.Stops(call)
+		stop := pa.Stop
 		if by != agentpolicy.ByHuman {
 			o := openresponses.NewFunctionCallOutput(call.CallID, unansweredOutput)
 			if stop {
@@ -435,6 +508,9 @@ func Drive(ctx context.Context, c agentturn.Control, r Rules, items ...openrespo
 		}
 		return Refusal(call.CallID, note, stop)
 	}
+	// Drive's items are the run's task: a fold keeps them verbatim,
+	// though they claim no person.
+	pinTasks(c, items)
 	var end *agentturn.RunEnd
 	var err error
 	if pending := c.State().Pending; slices.ContainsFunc(pending, held) {
@@ -474,10 +550,17 @@ func Refusal(callID, note string, stop bool) agentturn.Answer {
 		out += " Reason: " + note
 	}
 	o := openresponses.NewFunctionCallOutput(callID, out)
+	a := agentturn.Output(o)
 	if stop {
-		return agentturn.Refuse(o).WithBy(agentpolicy.ByHuman)
+		a = agentturn.Refuse(o)
 	}
-	return agentturn.Output(o).WithBy(agentpolicy.ByHuman)
+	a = a.WithBy(agentpolicy.ByHuman)
+	if note != "" {
+		// The person's reason is the answer's too, as the record
+		// keeps it.
+		a = a.WithReason(note)
+	}
+	return a
 }
 
 // HeldPermissions are the calls a stopped session left held for
@@ -542,7 +625,12 @@ func PermissionsOf(c agentturn.Control, end *agentturn.RunEnd) []Permission {
 // unstamped is args without dax's stamp (dax_stamp), the rewrite a
 // file tool's or bash's facts claim adds for the call to run with; args
 // as they are when they hold none or are not an object.
-func unstamped(args json.RawMessage) json.RawMessage {
+func unstamped(args json.RawMessage) json.RawMessage { return Unstamped(args) }
+
+// Unstamped is a call's arguments as the model made them: without the
+// stamp a tool's facts claim added for the run (dax's, not the call's),
+// for a front that shows the call (ACP's tool_call).
+func Unstamped(args json.RawMessage) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(args, &m) != nil {
 		return args

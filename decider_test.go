@@ -7,6 +7,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -45,5 +46,10 @@ func TestNobodyAnsweringIsNotThePersonsRefusal(t *testing.T) {
 	}
 	if strings.Contains(told, "user denied") || !strings.Contains(told, "nobody") {
 		t.Errorf("the model was told %q, want that nobody was there to answer", told)
+	}
+	// Told not to work around it in the one wording every refusal has
+	// (#150).
+	if !strings.Contains(told, policy.NoWorkAround) {
+		t.Errorf("the model was told %q, want %q", told, policy.NoWorkAround)
 	}
 }

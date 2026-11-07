@@ -1,0 +1,405 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentsession/cas"
+	workspace "github.com/ChristopherDavenport/agentworkspace"
+	"github.com/ChristopherDavenport/agentworkspace/remote"
+	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dax/tool"
+)
+
+// pngBytes is a small PNG.
+func pngBytes(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
+	img.Set(1, 1, color.RGBA{R: 255, A: 255})
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// imageSeen is scripted, keeping each request's input as JSON.
+type imageSeen struct {
+	scripted
+	mu   sync.Mutex
+	reqs []string
+}
+
+func (m *imageSeen) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	var b strings.Builder
+	for _, it := range req.Input {
+		data, _ := json.Marshal(it)
+		b.Write(data)
+		b.WriteString("\n")
+	}
+	m.mu.Lock()
+	m.reqs = append(m.reqs, b.String())
+	m.mu.Unlock()
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+func (m *imageSeen) last() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reqs[len(m.reqs)-1]
+}
+
+// #166: a PNG read on a served workspace reaches a model that takes
+// images as an image; the store keeps it as a blob and the log names it
+// by a sidecar: reference; the resumed session's request carries the
+// image again; a model that does not take images is told so instead.
+func TestAReadImageIsKeptAsABlobAndResumed(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	data := pngBytes(t)
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	local, err := workspace.NewLocal(dir, servedEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { local.Close() })
+	ws := serveWS(t, local, remote.ScopeRead, remote.ScopeWrite, remote.ScopeExec)
+	url := "data:image/png;base64,"
+
+	m := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
+	o := options(t, m)
+	o.Workspace = ws
+	o.TakesImages = func(_ context.Context, model string) bool { return model == "echo" }
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "what is wrong in the screenshot?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); !strings.Contains(got, url) || !strings.Contains(got, `"input_image"`) {
+		t.Fatalf("the model was not sent the image:\n%s", got)
+	}
+	// The person's @shot.png is the served workspace's file.
+	if img, err := s.Image(ctx, "shot.png"); err != nil || !strings.HasPrefix(img.ImageURL, url) {
+		t.Errorf("@shot.png on a served workspace: %v, %v", img, err)
+	}
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := cas.Open(o.Root, cas.WithReadOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := st.Blob(ctx, agentsession.HashBytes(data))
+	st.Close()
+	if err != nil || !bytes.Equal(blob, data) {
+		t.Fatalf("the store's blob: %d bytes, %v", len(blob), err)
+	}
+	if n, failed, err := Verify(ctx, o.Root, id); err != nil || len(failed) != 0 || n == 0 {
+		t.Errorf("verify: %d, %v, %v", n, failed, err)
+	}
+	path, err := Project(ctx, o.Root, id, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, _ := os.ReadFile(path)
+	if !strings.Contains(string(log), "sidecar:") || strings.Contains(string(log), url) || !strings.Contains(string(log), `"media":"sidecar"`) {
+		t.Errorf("the log holds the image inline, or no sidecar reference:\n%s", log)
+	}
+
+	m.scripted.calls = nil
+	r, err := Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, r, "and now?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); !strings.Contains(got, url) || strings.Contains(got, "sidecar:") {
+		t.Errorf("the resumed request does not carry the image:\n%s", got)
+	}
+	r.Close()
+
+	// A model that does not take images is told so; the read still runs.
+	n := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
+	o2 := options(t, n)
+	o2.Workspace = ws
+	s2, err := New(ctx, o2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, err := promptOn(ctx, s2, "look", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.last(); strings.Contains(got, url) || !strings.Contains(got, "does not take images") {
+		t.Errorf("a model that takes no images was sent:\n%s", got)
+	}
+	if _, err := s2.Image(ctx, filepath.Join(dir, "shot.png")); err == nil {
+		t.Error("an attachment for a model that takes no images was made")
+	}
+}
+
+// The person's @path.png is the workspace's file, read as read reads
+// one: relative to the workspace's root, refused when it leaves it by
+// name, by ~/ or by a link, and unless it is the image its name says,
+// within the size.
+func TestAnAttachedImage(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.TakesImages = func(context.Context, string) bool { return true }
+	outside := t.TempDir()
+	put := func(p string, data []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(filepath.Join(o.Dir, "docs", "a.PNG"), pngBytes(t))
+	put(filepath.Join(o.Dir, "b.png"), []byte("not a png"))
+	put(filepath.Join(outside, "secret.png"), pngBytes(t))
+	if err := os.Symlink(filepath.Join(outside, "secret.png"), filepath.Join(o.Dir, "out.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("docs/a.PNG", filepath.Join(o.Dir, "in.png")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, p := range []string{"docs/a.PNG", filepath.Join(o.Dir, "docs", "a.PNG"), "in.png"} {
+		img, err := s.Image(ctx, p)
+		if err != nil || !strings.HasPrefix(img.ImageURL, "data:image/png;base64,") {
+			t.Errorf("%s: image %v, %v", p, img, err)
+		}
+	}
+	for _, p := range []string{filepath.Join(outside, "secret.png"), "../secret.png", "out.png", "~/secret.png"} {
+		if _, err := s.Image(ctx, p); !errors.Is(err, tool.ErrOutside) {
+			t.Errorf("%s: %v, want the workspace's refusal", p, err)
+		}
+	}
+	for _, p := range []string{"b.png", "missing.png", "notes.txt", "docs/"} {
+		if _, err := s.Image(ctx, p); err == nil {
+			t.Errorf("%s was attached", p)
+		}
+	}
+}
+
+// An image read in an executor reaches the session as the image too,
+// through the executor's MCP.
+func TestAnImageReadInAnExecutor(t *testing.T) {
+	ctx := context.Background()
+	box := newRemoteBox(t)
+	if err := os.WriteFile(filepath.Join(box.dir, "shot.png"), pngBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ex, _ := box.dial(t)
+	m := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
+	o := remoteOptions(t, m, ex)
+	o.TakesImages = func(context.Context, string) bool { return true }
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := promptOn(ctx, s, "look", func(*openresponses.FunctionCall, string) bool { return true }); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); !strings.Contains(got, "data:image/png;base64,") {
+		t.Errorf("the model was not sent the executor's image:\n%s", got)
+	}
+	// The person's @shot.png is the executor's file too: nothing by that
+	// name is in this machine's directory.
+	if _, err := os.Stat(filepath.Join(o.Dir, "shot.png")); err == nil {
+		t.Fatal("the session's own directory holds shot.png")
+	}
+	if img, err := s.Image(ctx, "shot.png"); err != nil || !strings.HasPrefix(img.ImageURL, "data:image/png;base64,") {
+		t.Errorf("@shot.png in an executor's session: %v, %v", img, err)
+	}
+}
+
+// bySub is scripted for the main agent and for explore, keeping each of
+// explore's requests as JSON.
+type bySub struct {
+	main scripted
+	sub  imageSeen
+}
+
+func (m *bySub) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	if !strings.HasPrefix(req.Instructions, "You are a read-only explorer") {
+		return m.main.CreateStream(ctx, req, sink)
+	}
+	return m.sub.CreateStream(ctx, req, sink)
+}
+
+// #166: a sub-agent's read is judged by the sub-agent's own model: a
+// main model that takes images does not let an image reach a sub-agent
+// model that does not.
+func TestASubagentsReadImageIsJudgedByItsOwnModel(t *testing.T) {
+	ctx := context.Background()
+	m := &bySub{main: scripted{calls: [][2]string{{"explore", `{"input":"what is in shot.png?"}`}}}}
+	m.sub.scripted = scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}
+	o := withAgents(options(t, m), "flash")
+	o.TakesImages = func(_ context.Context, model string) bool { return model != "flash" }
+	if err := os.WriteFile(filepath.Join(o.Dir, "shot.png"), pngBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := promptOn(ctx, s, "look at the screenshot", nil); err != nil {
+		t.Fatal(err)
+	}
+	got := m.sub.last()
+	if strings.Contains(got, `"input_image"`) || !strings.Contains(got, "model flash does not take images") {
+		t.Errorf("the sub-agent's text-only model was sent:\n%s", got)
+	}
+	// The sub-agent's record says what its model was sent.
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var children int
+	for _, child := range childSessions(t, o.Root, id) {
+		children++
+		rec := lastRecorded(t, o.Root, child)
+		if strings.Contains(rec, `"input_image"`) || !strings.Contains(rec, "model flash does not take images") {
+			t.Errorf("the sub-agent's record says its model was sent:\n%s", rec)
+		}
+	}
+	if children == 0 {
+		t.Fatal("no sub-agent session recorded")
+	}
+}
+
+// lastRecorded is the input of the last request recorded in session id,
+// as the record rebuilds it, one item of JSON to a line; the session
+// verifies and its requests are all hashed.
+func lastRecorded(t *testing.T, root, id string) string {
+	t.Helper()
+	ctx := context.Background()
+	if n, failed, err := Verify(ctx, root, id); err != nil || len(failed) != 0 || n == 0 {
+		t.Fatalf("verify %s: %d, %v, %v", id, n, failed, err)
+	}
+	if causes, err := Unhashed(ctx, root, id); err != nil || len(causes) != 0 {
+		t.Fatalf("%s has unhashed requests: %v, %v", id, causes, err)
+	}
+	st, err := readOnly(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess, err := st.Open(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for _, e := range sess.Entries() {
+		if _, ok := e.(*agentsession.ResponseEntry); ok {
+			last = e.Base().ID
+		}
+	}
+	c, err := sess.RequestContext(last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := c.Request()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, it := range req.Input {
+		data, _ := json.Marshal(it)
+		b.Write(data)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// childSessions are the sessions spawned in session id.
+func childSessions(t *testing.T, root, id string) []string {
+	t.Helper()
+	st, err := readOnly(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var out []string
+	for sum, err := range st.List(context.Background(), agentsession.ListFilter{ParentSession: id}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, sum.Header.ID)
+	}
+	return out
+}
+
+// #166: the images a conversation holds are not sent to a text-only
+// model it moves to: after /model, a read's image and the person's own
+// are said in the request, and the record says so too, the images kept
+// as the items' own.
+func TestImagesHeldAreNotSentToATextOnlyModel(t *testing.T) {
+	ctx := context.Background()
+	m := &imageSeen{scripted: scripted{calls: [][2]string{{"read", `{"path":"shot.png"}`}}}}
+	o := options(t, m)
+	o.TakesImages = func(_ context.Context, model string) bool { return model == "echo" }
+	if err := os.WriteFile(filepath.Join(o.Dir, "shot.png"), pngBytes(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	img, err := s.Image(ctx, filepath.Join(o.Dir, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Drive(ctx, s, Rules{}, openresponses.UserMessage(&openresponses.InputText{Text: "look, and at this"}, img)); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); strings.Count(got, `"input_image"`) != 2 {
+		t.Fatalf("the model that takes images was not sent both:\n%s", got)
+	}
+	m.scripted.calls = nil
+	if err := s.SetModel("text"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "and now?", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.last(); strings.Contains(got, `"input_image"`) || strings.Count(got, "model text does not take images") != 2 {
+		t.Errorf("the text-only model was sent:\n%s", got)
+	}
+	// The record says what the model was sent, and verifies.
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := lastRecorded(t, o.Root, id); strings.Contains(rec, `"input_image"`) || strings.Count(rec, "model text does not take images") != 2 {
+		t.Errorf("the record says the text-only model was sent:\n%s", rec)
+	}
+}

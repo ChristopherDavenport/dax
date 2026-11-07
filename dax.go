@@ -45,9 +45,12 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/a2a"
 	"github.com/ChristopherDavenport/dax/ext/agents"
 	"github.com/ChristopherDavenport/dax/ext/coding"
+	"github.com/ChristopherDavenport/dax/ext/hooks"
 	"github.com/ChristopherDavenport/dax/ext/memory"
+	"github.com/ChristopherDavenport/dax/ext/plan"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // Option configures Main.
@@ -108,7 +111,13 @@ func Main(ctx context.Context, args []string, opts ...Option) int {
 		if errors.As(err, &ended) {
 			return ended.status
 		}
-		fmt.Fprintf(os.Stderr, "%s: %v\n", p.name, err)
+		// The program has ended, so no /compact is offered.
+		if s, ok := render.Explain(err, false); ok {
+			// The provider's raw JSON is the record's, not the user's.
+			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, s)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", p.name, err)
+		}
 		if h := hint(err); h != "" {
 			fmt.Fprintf(os.Stderr, "%s: %s\n", p.name, h)
 		}
@@ -150,11 +159,15 @@ type choice struct {
 	Skills      bool
 	SkillsDirs  []string
 	TrustSkills bool
-	// MemoryDir builds dax-memory over it when not empty.
-	MemoryDir string
+	// MemoryDir builds dax-memory over it when not empty, with
+	// MemoryBackground's pass after a run.
+	MemoryDir        string
+	MemoryBackground memory.Background
 	// Peers are dax-a2a's remote agents. dax-a2a is always built, and
 	// offers nothing without them.
 	Peers []a2a.Remote
+	// Hooks are the user's hooks: dax-hooks is built when there is one.
+	Hooks hooks.Options
 }
 
 // selected are dax's extensions as c chooses them, less those the
@@ -169,9 +182,12 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 		defaults = append(defaults, skills.New(skills.Options{Dirs: c.SkillsDirs, Trust: c.TrustSkills}))
 	}
 	if c.MemoryDir != "" {
-		defaults = append(defaults, memory.New(c.MemoryDir))
+		defaults = append(defaults, memory.New(c.MemoryDir, memory.WithBackground(c.MemoryBackground)))
 	}
-	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}))
+	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}), plan.New())
+	if len(c.Hooks.PreToolUse) > 0 || len(c.Hooks.PostToolUse) > 0 {
+		defaults = append(defaults, hooks.New(c.Hooks))
+	}
 	return p.extensions(defaults)
 }
 

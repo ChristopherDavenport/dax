@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -64,10 +66,10 @@ const Version = "0.1.0-dev"
 // about is one nobody can account for.
 const (
 	abortedOutput    = "Error: this call was cut off while it was running; it may have taken effect."
-	deniedOutput     = "Error: the user denied this call. Do not get the same result another way (another tool, a script, another path); if it is still needed, say so and let the user decide."
+	deniedOutput     = "Error: the user denied this call. " + policy.NoWorkAround
 	unknownOutput    = "Error: an earlier run left this call unanswered; whether it ran is not recorded."
 	neverRanOutput   = "Error: this call was cut off before it reached its tool; it did not run."
-	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. Do not get the same result another way; if it is still needed, say so."
+	unansweredOutput = "Error: this call needed approval and nobody was there to give it, so it did not run. " + policy.NoWorkAround
 	heldOutput       = "Error: this call was waiting for approval when the session stopped, and may have run before it was held; it will not run again."
 )
 
@@ -118,8 +120,13 @@ type Options struct {
 	// as configured. It is applied where each configuration is built,
 	// never to a request on its way out, so the session records the
 	// request that was sent.
-	Fit   func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
-	Think bool
+	Fit func(ctx context.Context, model string, want openresponses.ReasoningEffort) openresponses.ReasoningEffort
+	// TakesImages reports whether model takes images as input, as its
+	// vendor says (internal/modelinfo). An image a file read returns,
+	// or one the person attaches, is sent only to a model it says yes
+	// for; nil is never.
+	TakesImages func(ctx context.Context, model string) bool
+	Think       bool
 	// Effort is the reasoning effort Think asks for; empty is low.
 	Effort openresponses.ReasoningEffort
 	// Dir is the directory on this machine the session started in.
@@ -150,6 +157,12 @@ type Options struct {
 	// running server's environment, or write, which changes its code)
 	// fails the session. It is the caller's to close, after the session.
 	ServersWorkspace workspace.Workspace
+	// ServersWorkspaces are more servers workspaces, by name (config's
+	// servers_workspaces), each held to ServersWorkspace's rules, which
+	// is named ServersName beside them: and across them, no two are one
+	// workspace and no server name is offered by two. A name is a DNS
+	// label. Each is the caller's to close, after the session.
+	ServersWorkspaces map[string]workspace.Workspace
 	// Executor runs the extensions' tools elsewhere, in `dax execute`
 	// (DialExecutor), in place of building them in this process over a
 	// workspace: their calls, facts and stamps are the executor's, and
@@ -178,6 +191,14 @@ type Options struct {
 	// holding every project's sessions, used when Store is nil; both
 	// empty disables recording.
 	Root string
+	// Recorder is a recorder the caller opened, which the session
+	// records into in place of a store of its own: an evaluation
+	// runner's (agenteval's Runner.Build), whose run's header is
+	// HeaderOf's and whose options are SessionOptionsOf's. It is
+	// exclusive with Store and Root, and with Resume; the session
+	// attaches nothing, since the recorder's owner attaches it to the
+	// agent it runs (Build).
+	Recorder *session.Recorder
 	// Sync is when an append to the store at Root is durable before it
 	// returns: every append (the default), a response or a call's
 	// output and what came before it, or at Close.
@@ -185,6 +206,14 @@ type Options struct {
 	// UserDir is the user's dax directory, ~/.dax: its AGENTS.md is
 	// read before the project's.
 	UserDir string
+	// PlanModel is the model plan mode moves the session to, before
+	// the next run once the mode is entered; ActModel the one the
+	// person's approval of the plan moves it to, before the Resume that
+	// answers it. "" leaves the model as it is.
+	PlanModel, ActModel string
+	// MemoryDir is where dax-memory keeps the person's memory, which
+	// /memory undo acts on; "" with memory off.
+	MemoryDir string
 	// Instructions is text of the user's own, from the config's
 	// instructions_file, added to dax's part of the system prompt.
 	Instructions string
@@ -289,6 +318,10 @@ type Options struct {
 	// DefaultViewGrace.
 	ViewGrace time.Duration
 
+	// noConsent says no one is at the terminal to sign in to a URL
+	// server (a session Reopen opens while a front has the screen).
+	noConsent bool
+
 	// executor runs the extensions' tools in place of the session's
 	// in-process one, which builds them over the workspace; the session
 	// closes it. It is the seam the tests use to stand in for an
@@ -313,6 +346,9 @@ type MCPServer struct {
 	// sent to its origin alone, and which every child's environment
 	// loses.
 	URL, TokenEnv string
+	// OAuth signs in to the URL's server with OAuth, in place of
+	// TokenEnv (mcpoauth.go); nil sends no token or TokenEnv's.
+	OAuth *OAuth
 	// Project says the project's config named the server: it starts only
 	// when the user trusts the project's set (Options.TrustMCP).
 	Project bool
@@ -341,6 +377,10 @@ type MCPServer struct {
 	// KeyEnv, a TokenEnv, an extension's secret, a pass list's or a
 	// served workspace's token variable.
 	SecretEnv []string
+	// secretValues are SecretEnv's values when a front gave them (an
+	// editor's MCP server over ACP), in place of this process's
+	// environment.
+	secretValues map[string]string
 }
 
 // Placement is where one of a session's MCP servers runs, as Info.MCP
@@ -396,6 +436,14 @@ type MCPServerInfo struct {
 	// Added is the label RemoveMCP takes, for a server AddMCP started;
 	// empty for one the session opened with.
 	Added string
+	// State is where the server's session is when Info is read
+	// (mcpclient's Remote.State): live, ended (its process exited or its
+	// connection dropped; the next call to one of its tools starts it
+	// again), restarting, failed (its last restart, with Failure, the
+	// error; the next call tries again) or closed. Empty from a dax
+	// that did not say.
+	State   string `json:",omitempty"`
+	Failure string `json:",omitempty"`
 }
 
 // DefaultUserDir is ~/.dax.
@@ -420,31 +468,45 @@ type Session struct {
 	outs keptOutputs
 	// templates are the prompt templates it offers (Templates).
 	templates []PromptTemplate
+	// tasks are what a fold keeps beside the person's own messages.
+	tasks tasks
 	// forwards are the ports Forward put on this machine's loopback, by
 	// the workspace's port; each ends with the session.
 	fwdMu    sync.Mutex
 	forwards map[int]net.Listener
 
-	opts    Options
-	live    live
-	env     []string // what an MCP server outside the workspace starts with
-	offered []string // the MCP servers the workspace offers, connected at open
-	// served are the MCP servers the servers workspace offers,
-	// connected at open, and sw that workspace's descriptor.
-	served []string
-	sw     *workspace.Descriptor
+	opts Options
+	// base is the Options the session was opened with, as the caller
+	// gave them, which Reopen opens another over.
+	base   Options
+	live   live
+	modes  modes
+	grants grants
+	// grantRules are the extensions' GrantRule by tool (GrantOffer).
+	grantRules map[string]func(context.Context, string, json.RawMessage) string
+	// personOnly are the tools an A2A caller is refused
+	// (personOnlyRefusal).
+	personOnly map[string]bool
+	env        []string // what an MCP server outside the workspace starts with
+	offered    []string // the MCP servers the workspace offers, connected at open
+	// beside are the servers workspaces, by name, each with its
+	// descriptor and the MCP servers it offered, connected at open.
+	beside []ServersBeside
 	// reserved are the names no other server may take: the offered
 	// servers' and a box host's units'.
 	reserved []string
-	mcpNames []string            // the configured servers connected at open
-	refused  []agentkit.Omission // repository files screened out before the kit
-	ws       workspace.Workspace
-	ownWS    bool // the session opened ws, and closes it
-	files    *tool.Files
-	x        executor.Executor // runs the extensions' tools; the session closes it
-	set      *executor.Set     // x's tools as the kit has them
-	store    agentsession.Store
-	own      bool // the session opened store, and closes it
+	mcpNames []string // the configured servers connected at open
+	// added are the servers AddMCP started, by label, in the order they
+	// were, which Reopen starts again.
+	added   []addedMCP
+	refused []agentkit.Omission // repository files screened out before the kit
+	ws      workspace.Workspace
+	ownWS   bool // the session opened ws, and closes it
+	files   *tool.Files
+	x       executor.Executor // runs the extensions' tools; the session closes it
+	set     *executor.Set     // x's tools as the kit has them
+	store   agentsession.Store
+	own     bool // the session opened store, and closes it
 	// recorded is false when the store is one the session made in
 	// memory because nothing was to be kept.
 	recorded bool
@@ -454,6 +516,9 @@ type Session struct {
 	detach func()
 	// answering counts the fronts answering questions (Answering).
 	answering atomic.Int32
+	// skillsStale is set when an extension asked for its skills to be
+	// discovered again (skillsTurn).
+	skillsStale atomic.Bool
 	// views counts the views attached to it (Viewing), which an A2A
 	// caller's conversation's questions need.
 	views views
@@ -466,6 +531,30 @@ type Session struct {
 	// as Info.MCP lists them.
 	servers   []MCPServerInfo
 	serversMu sync.Mutex
+	// nestedMD gives the model the AGENTS.md files below the start
+	// that the work reaches (nestedmd.go), main agent and sub-agents
+	// alike; nil with AGENTS.md off.
+	nestedMD func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error)
+	// callerMD is the AGENTS.md part without the person's own files, as
+	// an A2A caller's requests carry it (caller.go).
+	callerMD callerMD
+	// opened is set once open has returned the session: a URL server's
+	// sign-in is asked for only before (consent).
+	opened atomic.Bool
+	// callbacks are the OAuth redirects' loopback listeners, held from
+	// their handler's making until the session has opened.
+	cbMu      sync.Mutex
+	callbacks []net.Listener
+	// after are the extensions' AfterRun hooks (afterrun.go), and
+	// beforePrompt their BeforePrompt hooks.
+	after        afterRuns
+	beforePrompt []func(context.Context)
+	// childAsked are the sub-agents' calls asked about for want of a
+	// rule (QuestionOffer).
+	childAsked childAsked
+	// closing makes Close once, and closeErr is its error.
+	closing  sync.Once
+	closeErr error
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -513,6 +602,40 @@ func (s *Session) withPinnedFacts(cfg agentturn.Config) agentturn.Config {
 		return inner(ctx, info)
 	}
 	return cfg
+}
+
+// withModeTurn is cfg with the session's skillsTurn and modeTurn after
+// its BeforeTurn.
+func (s *Session) withModeTurn(cfg agentturn.Config) agentturn.Config {
+	cfg.BeforeTurn = agentturn.ChainBeforeTurn(cfg.BeforeTurn, s.skillsTurn, s.modeTurn)
+	return cfg
+}
+
+// skillsTurn reloads the kit's skills before the turn's model call when
+// an extension asked for it (extension.Env.ReloadSkills): at a turn's
+// start no call of the agent is being decided, the last batch done, so
+// no call is decided on one catalogue's claim and served from the
+// other's, which a reload in the middle of a batch would allow
+// (agentkit's Kit.ReloadSkills). A failed reload keeps the catalogue
+// in force, with a warning.
+//
+// The gap it leaves: an A2A caller's conversation (PeerConfig) runs on
+// the same kit at the same time as the main agent, and nothing here
+// orders its batches against the main agent's turns, so a caller's
+// batch can be decided on one catalogue and served from the next. A
+// reload follows only the person's own write (skill_manage is refused
+// to a caller, extension.Extension.PersonOnly), and a caller reads
+// only installed skills (dax-skills' callerReads); what can
+// straddle it is a learned skill's listing, never its body, and an
+// installed skill as its directory stood when the reload read it.
+func (s *Session) skillsTurn(ctx context.Context, _ agentturn.TurnStartInfo) (openresponses.Items, error) {
+	if !s.skillsStale.Swap(false) {
+		return nil, nil
+	}
+	if err := s.Kit.ReloadSkills(ctx); err != nil {
+		fmt.Fprintf(warnings{}, "dax: skills: %v\n", err)
+	}
+	return nil, nil
 }
 
 // PartOneShot is the id of the instructions part a one-shot run
@@ -604,6 +727,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if o.Streamer == nil {
 		return nil, errors.New("no model")
 	}
+	base := o
 	ws, ownWS := o.Workspace, false
 	if o.Executor != nil {
 		if ws != nil {
@@ -628,15 +752,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		ws, ownWS = local, true
 	}
-	switch {
-	case o.Name == "":
-		o.Name, o.Version = "dax", Version
-		if o.Description == "" {
-			o.Description = "A coding agent that reads, writes and edits files and runs shell commands in a project."
-		}
-	case o.Description == "":
-		o.Description = "An agent built on dax."
-	}
+	o = o.named()
 	if o.MaxTurns < 0 || o.MaxTokens < 0 || o.MaxCost < 0 {
 		return nil, errors.New("a limit on turns, tokens or cost is zero or more")
 	}
@@ -651,7 +767,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		m.seed(ctx, r, resume, o.Model)
 	}
 	o.Streamer, o.SubagentStreamer = m.wrap(o.Streamer), m.wrap(o.SubagentStreamer)
-	s := &Session{opts: o, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
+	// A read's and the person's images reach only a model that takes
+	// them, each request judged by the model it names: the session's
+	// requests in its BeforeModelCall, so the record holds what was
+	// sent; a fold's summary and a server's compaction, which no hook
+	// sees, here (images.go).
+	o.Streamer, o.SubagentStreamer = textOnly(o.TakesImages, o.Streamer), textOnly(o.TakesImages, o.SubagentStreamer)
+	s := &Session{opts: o, base: base, store: store, own: own, ws: ws, ownWS: ownWS, files: tool.NewFiles(ws)}
 	// A servers-only workspace's project config was not read either
 	// (the program reading it leaves it out the same way); say so, as
 	// for its AGENTS.md.
@@ -673,6 +795,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	ok := false
 	defer func() {
 		if !ok {
+			s.releaseCallbacks()
 			s.closeTools()
 			s.closeHost()
 			if ownWS {
@@ -709,6 +832,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	s.set = a.set
+	s.grantRules = a.grantRules
+	s.personOnly = a.personOnly
 
 	// agentsText is the AGENTS.md part as the kit renders it, for a
 	// sub-agent whose configuration is fixed before the kit is built.
@@ -732,7 +857,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.NoUserAgentsMD {
 			userDir = ""
 		}
-		mdOpts, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
+		mdOpts, personal, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
 		s.refused = append(s.refused, refused...)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
@@ -740,19 +865,44 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
 		agentsText = agentsmd.Render(res.Files)
+		// The person's own files are not an A2A caller's (caller.go).
+		s.callerMD = newCallerMD(res.Files, personal)
 		// The files below the start directory reach the model as the
 		// work reaches their directories (nestedmd.go).
 		var start []string
 		for _, f := range res.Files {
 			start = append(start, f.Path)
 		}
-		kopts = append(kopts, agentkit.WithBeforeTurn(nestedAgentsMD(s.files, mdOpts, start)))
+		// One hook for the main agent and its sub-agents (ChildBeforeTurn),
+		// which shares what it read of each bash line.
+		s.nestedMD = nestedAgentsMD(s.files, mdOpts, start, tool.BashSubjects(s.files, o.MaxReadBytes))
+		kopts = append(kopts, agentkit.WithBeforeTurn(s.nestedMD))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))
+	// An A2A caller's request leaves out what is the person's own
+	// (caller.go); the person's go as the kit makes them. A request's
+	// images are said to a model that does not take them here, before
+	// the recorder takes it (images.go).
+	kopts = append(kopts, agentkit.WithBeforeModelCall(s.beforeModelCall))
 	// Every tool's result is cut to its cap, an MCP server's and a
 	// child agent's among them, in every placement (outputcap.go).
-	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(t) }))
+	// A read's image is shown only to a model that takes images (images.go).
+	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(s.imageGate(t)) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
+	if err := xenv.buildSubagentTools(o.Extensions); err != nil {
+		return nil, err
+	}
+	// The extensions' hooks in the policy's decision (policyhooks.go).
+	decide, answer, err := policyHooks(o.Extensions, xenv)
+	if err != nil {
+		return nil, err
+	}
+	if s.after.hooks, err = afterRunHooks(o.Extensions, xenv); err != nil {
+		return nil, err
+	}
+	if s.beforePrompt, err = beforePromptHooks(o.Extensions, xenv); err != nil {
+		return nil, err
+	}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
 			continue
@@ -815,29 +965,60 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// the workspace offers, or a box host's unit, is refused, since the
 	// two servers' tools would be one name and box.confine claims a
 	// unit's by its name.
-	if sw := o.ServersWorkspace; sw != nil {
-		sp, err := checkServersWorkspace(sw, ws)
+	besides, err := serversWorkspaces(o)
+	if err != nil {
+		return nil, err
+	}
+	// Who offered each reserved name, for a collision's message.
+	by := map[string]string{}
+	for _, r := range s.reserved {
+		by[r] = "the workspace"
+	}
+	for _, b := range besides {
+		sp, err := checkServersWorkspace(b.ws, ws)
 		if err != nil {
 			return nil, err
 		}
-		d := sw.Descriptor()
-		s.sw = &d
-		list, err := offeredServers(ctx, sp, "the servers workspace "+where(d), PlacedServersWorkspace, where(d))
-		if err != nil {
-			return nil, err
+		d := b.ws.Descriptor()
+		this := "the servers workspace " + where(d)
+		if b.name != config.ServersName || len(besides) > 1 {
+			this = "the servers workspace " + b.name + " (" + where(d) + ")"
 		}
-		for _, m := range list {
-			if slices.ContainsFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }) {
-				return nil, fmt.Errorf("mcp %s: the workspace and the servers workspace %s both offer a server by that name; offer it from one", m.Name, where(d))
+		for _, o := range s.beside {
+			if o.Workspace.Kind == d.Kind && o.Workspace.Ref == d.Ref {
+				return nil, fmt.Errorf("%s is the servers workspace %s too; name each once", this, o.Name)
 			}
-			s.served = append(s.served, m.Name)
 		}
-		s.reserved = append(s.reserved, s.served...)
+		list, err := offeredServers(ctx, sp, this, PlacedServersWorkspace, where(d))
+		if err != nil {
+			return nil, err
+		}
+		rec := ServersBeside{Name: b.name, Workspace: workspace.Descriptor{Kind: d.Kind, Ref: d.Ref, Root: d.Root}, Servers: []string{}}
+		for _, m := range list {
+			if i := slices.IndexFunc(s.reserved, func(r string) bool { return config.MCPNamesCollide(r, m.Name) }); i >= 0 {
+				return nil, fmt.Errorf("mcp %s: %s and %s both offer a server by that name; offer it from one", m.Name, by[s.reserved[i]], this)
+			}
+			rec.Servers = append(rec.Servers, m.Name)
+		}
+		for _, n := range rec.Servers {
+			s.reserved = append(s.reserved, n)
+			by[n] = this
+		}
+		s.beside = append(s.beside, rec)
 		offered = append(offered, list...)
 	}
 	if o.Policy != nil {
 		settings := *o.Policy
 		settings.Shipped = append(slices.Clone(settings.Shipped), a.shipped...)
+		// The rules the user kept for this project ("yes, always").
+		if f := o.grantsFile(); f != "" {
+			settings.SavedPath = f
+			saved, err := readGrants(f, ws.Descriptor())
+			if err != nil {
+				fmt.Fprintf(warnings{}, "dax: %v\n", err)
+			}
+			settings.Saved = append(slices.Clone(settings.Saved), saved...)
+		}
 		// box.confine: the box's tools the policy takes as confined, and
 		// the rules that make that matter (confine.go).
 		confine, err := confineBox(o, a.set, &settings, a.matchers, a.aliases, s.offered)
@@ -848,8 +1029,44 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if err != nil {
 			return nil, err
 		}
-		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases)}, confine...)...))
+		// The settings stay with the session, so a mode switch
+		// rebuilds the same rules (SetMode).
+		s.modes.settings, s.modes.mode = &settings, settings.Mode
+		if s.modes.mode == "" {
+			s.modes.mode = policy.ModeDefault
+		}
+		s.modes.planAsks = policy.PlanAsks(settings.Shipped)
+		if s.modes.mode == policy.ModePlan && o.PlanModel != "" {
+			// Started in plan mode: its model before the first run.
+			s.modes.model = o.PlanModel
+		}
+		s.modes.inForce.Store(s.modes.mode)
+		// The A2A callers' floor: the same rules in the default mode,
+		// which a call of theirs is held to (peerFloor).
+		pp, err := peerPolicy(settings)
+		if err != nil {
+			return nil, err
+		}
+		lookup := agentpolicy.WithToolsFor(func(ctx context.Context, name string) (agenttool.Tool, bool) { return s.Kit.LookupToolFor(ctx, name) })
+		if s.modes.peers, err = agentpolicy.Build(pp, a.matchers, append([]agentpolicy.Option{agentpolicy.WithAliases(a.aliases), lookup}, confine...)...); err != nil {
+			return nil, err
+		}
+		hooks := append([]agentpolicy.Option{
+			agentpolicy.WithAliases(a.aliases),
+			agentpolicy.WithHooks(s.peerFloor, s.personOnlyRefusal, s.dontAskRefusal),
+			agentpolicy.WithHooks(decide...),
+			agentpolicy.WithAnsweringHooks(notForCallers(answer)...),
+		}, confine...)
+		kopts = append(kopts, agentkit.WithPolicy(p, a.matchers, hooks...))
 		if h := a.hook(); h != nil {
+			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
+		}
+	} else {
+		// With the policy off nothing is asked, and a caller is still
+		// refused what is the person's own; the extensions' policy
+		// hooks still refuse or ask (Decide), with nothing to answer.
+		kopts = append(kopts, agentkit.WithBeforeToolCall(s.personOnlyRefusal))
+		for _, h := range decide {
 			kopts = append(kopts, agentkit.WithBeforeToolCall(h))
 		}
 	}
@@ -923,7 +1140,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			if !ok {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
-			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(pinPrompts)), fold)
+			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(s.tasks.pin)), fold)
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
 			// under -think is effort low. qwen3.5 then spends most of
@@ -936,12 +1153,19 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			none := compact.WithRequest(func(r *openresponses.Request) {
 				r.Reasoning = o.fit(context.Background(), r.Model, openresponses.ReasoningConfig{Effort: openresponses.ReasoningEffortNone})
 			})
-			// The user's own words are kept through every fold
-			// (pinPrompts), recorded in the compaction entry.
-			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(pinPrompts)), fold)
+			// The person's own messages are kept through every fold
+			// (agentturn's compact default), and an autonomous run's
+			// task beside them (tasks), each recorded in the compaction
+			// entry.
+			kopts = append(kopts, agentkit.WithCompaction(o.Compact, none, compact.WithPin(s.tasks.pin)), fold)
 		}
 	}
-	if store != nil {
+	switch {
+	case o.Recorder != nil && resume != "":
+		return nil, errors.New("a session resumes from a store, not a Recorder")
+	case o.Recorder != nil:
+		kopts = append(kopts, agentkit.WithRecorder(o.Recorder))
+	case store != nil:
 		if resume != "" {
 			kopts = append(kopts, agentkit.WithResumedSession(store, resume, s.envOption()))
 		} else {
@@ -976,11 +1200,28 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		kit.Close()
 		return nil, err
 	}
-	s.ag = agentturn.New(s.withPinnedFacts(kit.Config()), seed...)
+	s.ag = agentturn.New(s.withModeTurn(s.withPinnedFacts(kit.Config())), seed...)
+	// A fold keeps the record's unclaimed prompts too: an older
+	// record's typed lines, -p's prompt.
+	s.claimUnclaimed()
 	// The kit's recorder subscribes first, so an entry is in the store
 	// before any front sees the event that wrote it.
 	s.detach = kit.Attach(s.ag)
 	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
+	// A mode asked for during a run starts at its next turn.
+	s.ag.Subscribe(s.modeAtTurn)
+	// The extensions' AfterRun hooks, once a run is on the record.
+	if len(s.after.hooks) > 0 {
+		actx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		// A hook's question goes to the fronts answering, as a
+		// sub-agent's asked call does (elicit).
+		s.after.ctx, s.after.cancel = agenttool.ContextWithElicitor(actx, s.elicit), cancel
+		s.after.lookup = kit.LookupTool
+		s.ag.Subscribe(s.after.handle)
+	}
+	if s.modes.settings != nil && s.modes.mode != policy.ModeDefault {
+		s.annotateMode(ctx, modeEntry{Mode: s.modes.mode, Reason: "start"})
+	}
 	// The kit's control hands the agent the inputs a stopped session
 	// accepted and no run took, which it takes after the next prompt.
 	// The session's elicitor is the kit's own, so the control leaves
@@ -989,7 +1230,24 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	ok = true
+	s.opened.Store(true)
+	s.releaseCallbacks()
 	return s, nil
+}
+
+// named is o with the agent's name, version and description filled:
+// dax's when it names none.
+func (o Options) named() Options {
+	switch {
+	case o.Name == "":
+		o.Name, o.Version = "dax", Version
+		if o.Description == "" {
+			o.Description = "A coding agent that reads, writes and edits files and runs shell commands in a project."
+		}
+	case o.Description == "":
+		o.Description = "An agent built on dax."
+	}
+	return o
 }
 
 // header names the harness and the cwd: the workspace's root, the
@@ -997,10 +1255,19 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 // own members, the workspace whole and the executor's address, hashed
 // (extras), which say which machine.
 func (s *Session) header() agentsession.Header {
+	return newHeader(s.opts, s.ws.Root(), s.extras())
+}
+
+// newHeader is the header of a session under o, its options named
+// (named), whose workspace is rooted at root, with dax's members extra.
+func newHeader(o Options, root string, extra map[string]json.RawMessage) agentsession.Header {
 	return agentsession.Header{
-		CWD:     s.ws.Root(),
-		Harness: &agentsession.Harness{Name: s.opts.Name, Version: s.opts.Version},
-		Extra:   s.extras(),
+		// Media, an image a read returned or the person attached, is
+		// kept as the store's blobs beside the log (images.go).
+		Media:   agentsession.MediaSidecar,
+		CWD:     root,
+		Harness: &agentsession.Harness{Name: o.Name, Version: o.Version},
+		Extra:   extra,
 	}
 }
 
@@ -1010,9 +1277,11 @@ func (s *Session) header() agentsession.Header {
 // remote runtime). The recorder writes it only when it differs from the
 // last one on the path, so a session that stays in one workspace holds
 // one entry and a resume in another says so.
-func (s *Session) envOption() session.Option {
-	x := s.x
-	return session.WithEnv(func(context.Context) (*agentsession.EnvEntry, error) {
+func (s *Session) envOption() session.Option { return session.WithEnv(envOf(s.x)) }
+
+// envOf is the environment entry of the workspace x's tools act in.
+func envOf(x executor.Executor) func(context.Context) (*agentsession.EnvEntry, error) {
+	return func(context.Context) (*agentsession.EnvEntry, error) {
 		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
 		// The machine and the file system's instance too, which the
@@ -1020,7 +1289,7 @@ func (s *Session) envOption() session.Option {
 		w := e.SetWorkspace(d.Kind, d.Ref)
 		w.Host, w.Instance = d.Host, d.Instance
 		return e, nil
-	})
+	}
 }
 
 // New starts a fresh session.
@@ -1050,6 +1319,10 @@ func New(ctx context.Context, o Options) (*Session, error) {
 // the one at Root, which the session owns; nil when neither is set.
 func (o Options) openStore() (store agentsession.Store, own bool, err error) {
 	switch {
+	case o.Recorder != nil && (o.Store != nil || o.Root != ""):
+		return nil, false, errors.New("a session records into its Recorder or a store, not both")
+	case o.Recorder != nil:
+		return o.Recorder.Store(), false, nil
 	case o.Store != nil:
 		return o.Store, false, nil
 	case o.Root != "":
@@ -1088,6 +1361,17 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 		}
 		return nil, err
 	}
+	if err := s.resumed(id); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// resumed checks a session open has just resumed as id, and warns of
+// what changed since it was recorded: a session that cannot be
+// continued is an error, and the caller closes it.
+func (s *Session) resumed(id string) error {
 	sess := s.Kit.Session()
 	if t := sess.Truncated(); t != nil {
 		fmt.Fprintf(warnings{}, "dax: session %s: %v (dropped)\n", id, t)
@@ -1097,8 +1381,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// can be appended to it: it is refused here, rather than by the
 	// first prompt's append.
 	if err := sess.RaiseRefused(agentsession.Format); err != nil {
-		s.Close()
-		return nil, fmt.Errorf("session %s cannot be continued: %w", id, err)
+		return fmt.Errorf("session %s cannot be continued: %w", id, err)
 	}
 	if f := sess.DeclaredFormat(); f != agentsession.Format {
 		// The recorder raises the header before its first append, after
@@ -1110,7 +1393,7 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	// here, or the other way, is said to, even when the two roots are
 	// the same path. One recorded before dax wrote its workspace says
 	// only its cwd, which is compared with the root as before.
-	now := s.x.Descriptor()
+	now := s.identity()
 	if was, ok := recordedIn(sess.Header()); ok && !sameWorkspace(was, now) {
 		// Named by host and instance only when they are the change.
 		name := where
@@ -1123,28 +1406,81 @@ func Resume(ctx context.Context, o Options, id string) (*Session, error) {
 	}
 	// So is the servers workspace: the header keeps the one the session
 	// started with, which -list names.
-	if w := serversResumed(sess.Header(), s.sw); w != "" {
+	if w := serversResumed(sess.Header(), s.beside); w != "" {
 		fmt.Fprintf(warnings{}, "dax: %s\n", w)
 	}
-	return s, nil
+	return nil
 }
 
 // serversResumed is what to say when a session whose header h records
-// one servers workspace, or none, continues with another, or none (now,
-// nil for none); "" when they are one.
-func serversResumed(h agentsession.Header, now *workspace.Descriptor) string {
+// its servers workspaces (none, one, or several by name) continues
+// with others (now); "" when they are the same.
+func serversResumed(h agentsession.Header, now []ServersBeside) string {
 	name := func(d workspace.Descriptor) string { return d.Kind + " " + d.Ref }
-	was, _, had := ServersWorkspaceOf(h)
-	switch {
-	case had && now == nil:
-		return "session's servers were recorded from servers workspace " + name(was) + ", continuing without one"
-	case !had && now != nil:
-		return "session was recorded without a servers workspace, continuing with " + name(*now)
-	case had && (was.Kind != now.Kind || was.Ref != now.Ref):
-		return "session's servers were recorded from servers workspace " + name(was) + ", continuing with " + name(*now)
+	was := ServersWorkspacesOf(h)
+	single := func(l []ServersBeside) bool {
+		return len(l) == 0 || len(l) == 1 && l[0].Name == config.ServersName
 	}
-	return ""
+	if single(was) && single(now) {
+		// One servers workspace, or none, either side: said as before.
+		switch {
+		case len(was) == 1 && len(now) == 0:
+			return "session's servers were recorded from servers workspace " + name(was[0].Workspace) + ", continuing without one"
+		case len(was) == 0 && len(now) == 1:
+			return "session was recorded without a servers workspace, continuing with " + name(now[0].Workspace)
+		case len(was) == 1 && len(now) == 1 && (was[0].Workspace.Kind != now[0].Workspace.Kind || was[0].Workspace.Ref != now[0].Workspace.Ref):
+			return "session's servers were recorded from servers workspace " + name(was[0].Workspace) + ", continuing with " + name(now[0].Workspace)
+		}
+		return ""
+	}
+	list := func(l []ServersBeside) string {
+		if len(l) == 0 {
+			return "none"
+		}
+		var parts []string
+		for _, b := range l {
+			parts = append(parts, b.Name+" "+name(b.Workspace))
+		}
+		return strings.Join(parts, ", ")
+	}
+	if list(was) == list(now) {
+		return ""
+	}
+	return "session's servers were recorded from servers workspaces " + list(was) + ", continuing with " + list(now)
 }
+
+// namedWorkspace is a servers workspace the session connects and its
+// name.
+type namedWorkspace struct {
+	name string
+	ws   workspace.Workspace
+}
+
+// serversWorkspaces are o's servers workspaces, by name: ServersWorkspace
+// as config.ServersName, then ServersWorkspaces in the order of their
+// names, each name a DNS label.
+func serversWorkspaces(o Options) ([]namedWorkspace, error) {
+	var out []namedWorkspace
+	if o.ServersWorkspace != nil {
+		out = append(out, namedWorkspace{config.ServersName, o.ServersWorkspace})
+	}
+	names := slices.Sorted(maps.Keys(o.ServersWorkspaces))
+	for _, n := range names {
+		switch {
+		case !serversName.MatchString(n):
+			return nil, fmt.Errorf("servers workspace %q: a name is a DNS label of lower-case letters, digits and hyphens", n)
+		case n == config.ServersName && o.ServersWorkspace != nil:
+			return nil, fmt.Errorf("servers workspace %s: the name is ServersWorkspace's", n)
+		case o.ServersWorkspaces[n] == nil:
+			continue
+		}
+		out = append(out, namedWorkspace{n, o.ServersWorkspaces[n]})
+	}
+	return out, nil
+}
+
+// serversName is a servers workspace's name: a DNS label.
+var serversName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // ID is the session ID, empty when not recording.
 func (s *Session) ID() string { return s.Kit.SessionID() }
@@ -1220,6 +1556,17 @@ func (s *Session) SetModel(name string) error {
 	return nil
 }
 
+// Model is the model name later runs go to, as /model last set it: the
+// name the requests carry, which a status line names.
+func (s *Session) Model() string {
+	_, m := s.now()
+	return m
+}
+
+// Git reads the workspace's repository for a status line: its branch
+// and whether the tree is dirty (tool.GitHead), wherever the tools act.
+func (s *Session) Git(ctx context.Context) (tool.Git, error) { return tool.GitHead(ctx, s.files) }
+
 // mcpPrefix is the prefix of a server's tools, mcp__<name>__<tool>
 // once the client adds its separator; the policy's mcp__* rules and
 // aliases name servers this way, whether the server came from the
@@ -1259,6 +1606,7 @@ func (s *Session) AddMCP(ctx context.Context, name, command string) (string, err
 	info.Added = label
 	s.serversMu.Lock()
 	s.servers = append(s.servers, info)
+	s.added = append(s.added, addedMCP{label: label, server: MCPServer{Name: name, Command: command}})
 	s.serversMu.Unlock()
 	return label, nil
 }
@@ -1271,6 +1619,7 @@ func (s *Session) RemoveMCP(label string) error {
 	err := s.Kit.RemoveMCP(label)
 	s.serversMu.Lock()
 	s.servers = slices.DeleteFunc(s.servers, func(m MCPServerInfo) bool { return m.Added == label })
+	s.added = slices.DeleteFunc(s.added, func(a addedMCP) bool { return a.label == label })
 	s.serversMu.Unlock()
 	return err
 }
@@ -1280,9 +1629,44 @@ func (s *Session) RemoveMCP(label string) error {
 // served info), where a nil list is a session that does not list them.
 func (s *Session) mcpServers() []MCPServerInfo {
 	s.serversMu.Lock()
-	defer s.serversMu.Unlock()
-	return append([]MCPServerInfo{}, s.servers...)
+	out := append([]MCPServerInfo{}, s.servers...)
+	s.serversMu.Unlock()
+	if s.Kit == nil {
+		return out
+	}
+	// Each server's remote is the kit's, found by the prefix it names
+	// its tools under, which no two servers share.
+	remotes := map[string]*mcpclient.Remote{}
+	for _, m := range s.Kit.MCPServers() {
+		remotes[m.Remote.Name("")] = m.Remote
+	}
+	for i := range out {
+		r, ok := remotes["mcp__"+out[i].Name+"__"]
+		if !ok {
+			continue
+		}
+		st, err := r.State()
+		out[i].State = st.String()
+		if err != nil {
+			out[i].Failure = err.Error()
+		}
+	}
+	return out
 }
+
+// UserDir is the user's directory the session reads its own sources
+// from (Options.UserDir), ~/.dax, empty for none: a front's commands
+// that change what the user keeps there, such as approving a skill the
+// model wrote, act on it.
+func (s *Session) UserDir() string { return s.opts.UserDir }
+
+// MemoryDir is Options.MemoryDir: the person's memory, for /memory
+// undo, which acts on this machine.
+func (s *Session) MemoryDir() string { return s.opts.MemoryDir }
+
+// Dir is Options.Dir, the directory on this machine the session
+// started in.
+func (s *Session) Dir() string { return s.opts.Dir }
 
 // SetThink turns reasoning on or off for later runs, fitted to the
 // model in force, and keeps the setting for a later SetModel. The
@@ -1348,8 +1732,18 @@ func (s *Session) Forward(ctx context.Context, port int) (string, error) {
 }
 
 // Close detaches the recorder and releases the MCP server and the
-// store.
+// store. A second Close returns the first's error and does nothing: a
+// front that moved to another session (Reopen) has closed this one.
 func (s *Session) Close() error {
+	s.closing.Do(func() { s.closeErr = s.close() })
+	return s.closeErr
+}
+
+func (s *Session) close() error {
+	s.releaseCallbacks()
+	// The extensions' AfterRun hooks end first, while the kit and the
+	// recorder they write through are open.
+	s.after.stop()
 	if s.detach != nil {
 		s.detach()
 	}
@@ -1682,7 +2076,7 @@ func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
 	case m.offeredBy != nil:
 		return placed(m.offeredAs, m.offeredAt, mcpOffered(m.offeredBy, m.Name), nil)
 	case m.URL != "":
-		dial, err := mcpURL(m.URL, m.TokenEnv)
+		dial, err := s.mcpURL(context.Background(), m)
 		return placed(PlacedURL, urlPlace(m.URL), dial, err)
 	case len(m.SecretEnv) > 0:
 		dial, err := s.mcpHolding(m)
@@ -1726,7 +2120,11 @@ const heldServer = "server"
 // anything starts.
 func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
 	for _, v := range m.SecretEnv {
-		switch value := os.Getenv(v); {
+		value := os.Getenv(v)
+		if m.secretValues != nil {
+			value = m.secretValues[v]
+		}
+		switch {
 		case value == "":
 			return nil, fmt.Errorf("secret_env %s is not set; the server is not started without it", v)
 		case len(value) < offer.MinSecretBytes:
@@ -1737,7 +2135,11 @@ func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
 	if err != nil {
 		return nil, err
 	}
-	o, err := offer.Offer(h, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, os.LookupEnv)
+	lookup := os.LookupEnv
+	if m.secretValues != nil {
+		lookup = func(k string) (string, bool) { v, ok := m.secretValues[k]; return v, ok }
+	}
+	o, err := offer.Offer(h, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -1840,7 +2242,20 @@ func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial) (mc
 		mcpclient.WithPrefix(prefix),
 		mcpclient.WithReconnect(dial),
 		mcpclient.WithReconnected(s.mcpRestarted(name)),
+		mcpclient.WithEnded(s.mcpEnded(name)),
 	}, nil
+}
+
+// mcpEnded is the hook of the server called name for the end of each of
+// its sessions (mcpclient.WithEnded), seen when it ends, not when a
+// call next finds it so: one of dax's warnings, so the user knows the
+// server is down, and whatever it held gone, before any call. Info
+// lists it ended until the next call to one of its tools starts it
+// again, which the restart's warning and record entry then say.
+func (s *Session) mcpEnded(name string) func(error) {
+	return func(err error) {
+		fmt.Fprintf(warnings{}, "dax: MCP server %s's session ended (%v); the next call to one of its tools starts it again\n", name, err)
+	}
 }
 
 // mcpRestartNS is the namespace of the entry the session's record gets
@@ -1984,6 +2399,9 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if e == nil {
 			return nil, nil
 		}
+		// A sub-agent's own grants for the session, which a new message
+		// of the person's may have ended, are in force again.
+		s.ownGrantsHeld(ctx)
 		// A sub-agent's call is decided without box.confine's own claim
 		// (confine.go): only what the policy allows anyway runs unasked.
 		ctx = childDecision(ctx, name)
@@ -1993,6 +2411,7 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if err != nil {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the policy could not decide this call: " + err.Error()}, nil
 		}
+		v = s.sessionGrantFor(bctx, e, info, v)
 		s.recordVerdict(ctx, v)
 		var h *agentturn.ToolDecision
 		if hook != nil {
@@ -2017,11 +2436,31 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 				args = h.Args
 			}
 			set.Release(bctx)
+			if _, peer := ctx.Value(peerKey{}).(string); !peer && v.Action == agentturn.Defer && v.Rule == nil && (h == nil || h.Action != agentturn.Defer) {
+				// Asked for want of a rule: "yes, always" may be
+				// offered for it (QuestionOffer), granted to the
+				// conversation, or to the sub-agent alone when it
+				// keeps its grants (never to the conversation for
+				// want of a scope of its own). Never for an A2A
+				// caller's sub-agent, whose conversation is not the
+				// session's, though an escalation asks the person.
+				a := askedFor{name: info.Call.Name, args: json.RawMessage(info.Call.Arguments)}
+				if extension.OwnGrants(ctx) {
+					a.scope = agentpolicy.GrantScopeFromContext(ctx)
+				}
+				if a.scope != "" || !extension.OwnGrants(ctx) {
+					s.childAsked.add(info.Call.CallID, a)
+				}
+			}
 			// The deferral stands, and tools/agent's WithAskParent puts
 			// it to the task call's elicitor with agentturn.Ask: the
 			// question the fronts show is this reason (elicit), and
 			// with nobody to ask the sub-agent ends input-required.
-			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy}, nil
+			// A decline is told in dax's words, as a person's refusal
+			// of the main agent's call is (Refusal), and what the
+			// answerer said follows them (agentturn.Ask, #304).
+			return &agentturn.ToolDecision{Action: agentturn.Defer, Reason: childAsks(name, why), Subject: subject, Args: args, By: agentpolicy.ByPolicy,
+				DeclineText: childDeclined(why)}, nil
 		}
 		// The verdict is returned rather than left implicit, so the
 		// sub-agent's session records a decision for each call, as the
@@ -2032,6 +2471,36 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		}
 		return d, nil
 	}
+}
+
+// sessionGrantFor is v, a sub-agent's verdict under its own grant
+// scope, or the verdict under its session's scope when a grant the
+// person made for the session ("a", policy.SourceSession) allows the
+// call there: the person's grant reaches the session's sub-agents,
+// where a skill its parent read does not. It applies only where v
+// asks for want of a rule, or is dontAsk's refusal of such a call, and
+// never to an A2A caller's sub-agent, whose conversation is not the
+// session's.
+func (s *Session) sessionGrantFor(ctx context.Context, e *agentpolicy.Engine, info agentturn.ToolCallInfo, v agentpolicy.Verdict) agentpolicy.Verdict {
+	if _, peer := ctx.Value(peerKey{}).(string); peer || s.Kit == nil {
+		return v
+	}
+	asks := v.Action == agentturn.Defer && v.Rule == nil
+	refused := v.Action == agentturn.Block && (v.Reason == policy.DontAskNote || v.Reason == policy.PlanNote)
+	if !asks && !refused {
+		return v
+	}
+	s.grants.mu.Lock()
+	none := len(s.grants.session) == 0
+	s.grants.mu.Unlock()
+	if none {
+		return v
+	}
+	g, err := e.Would(agentpolicy.ContextWithGrantScope(ctx, s.Kit.GrantScope(context.Background())), info)
+	if err != nil || g.Action != agentturn.Allow || g.Rule == nil || g.Rule.Source.Name != policy.SourceSession {
+		return v
+	}
+	return g
 }
 
 // recordVerdict writes a sub-agent's verdict to its run's session under
@@ -2058,6 +2527,16 @@ func (s *Session) recordVerdict(ctx context.Context, v agentpolicy.Verdict) {
 // the policy's reason.
 func childAsks(name, why string) string { return "the " + name + " sub-agent asks: " + why }
 
+// childDeclined is what a sub-agent's model reads for a call of its own
+// declined when asked, the policy's reason why it asked in brackets:
+// policy.NoWorkAround's rule, but with no user of its own to let
+// decide, it says so in the result its caller reads. agentturn adds
+// what the answerer said after it.
+func childDeclined(why string) string {
+	rule, _, _ := strings.Cut(policy.NoWorkAround, ";")
+	return "declined when asked about this call (" + why + "). " + rule + "; if it is still needed, say so in your result"
+}
+
 // isChildAsk reports whether reason is a sub-agent's question
 // (childAsks).
 func isChildAsk(reason string) bool {
@@ -2081,6 +2560,9 @@ func Secrets(exts []extension.Extension, keyEnv string, servers []MCPServer) []s
 		out = append(out, keyEnv)
 	}
 	for _, m := range servers {
+		if m.OAuth != nil && m.OAuth.ClientSecretEnv != "" {
+			out = append(out, m.OAuth.ClientSecretEnv)
+		}
 		if m.TokenEnv != "" {
 			out = append(out, m.TokenEnv)
 		}

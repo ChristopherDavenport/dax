@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentsession"
@@ -43,13 +44,26 @@ const (
 	// headerServers is the header member holding, for a session with a
 	// servers workspace beside its own (Options.ServersWorkspace), that
 	// workspace as its servers were offered by: {"kind", "ref",
-	// "servers"}, its identity (a served workspace's URL as
+	// "servers"}, the form every dax reads; its identity (a served workspace's URL as
 	// config.WorkspaceRef writes it, a hub's workspace's
 	// config.TunnelRef of its name) and the names of the servers it
 	// offered, which the session connected. Its root is not kept: a
 	// servers-only grant is told the served directory's last name
 	// alone, and nothing of the session acts there.
 	headerServers = "dax.servers_workspace"
+	// headerOrigin marks a session that is not the person's own
+	// conversation: "a2a" for an A2A caller's (OpenPeer), which
+	// /resume neither lists nor continues (Sessions).
+	headerOrigin = "dax.origin"
+	// originPeer is headerOrigin's value for an A2A caller's
+	// conversation.
+	originPeer = "a2a"
+	// headerServersNamed holds the servers workspaces by name
+	// (servers_workspaces, Options.ServersWorkspaces): an object of
+	// headerServers' form by name. It is a member of its own so a dax
+	// that knows only headerServers still reads servers_workspace's
+	// beside them.
+	headerServersNamed = "dax.servers_workspaces"
 	// headerProfile is a bare run's: {"bare": true, "left_out": [...]}.
 	headerProfile = "dax.profile"
 	// headerContext is the context strategy the session started with:
@@ -145,58 +159,117 @@ type recordedProfile struct {
 // extras are the header members dax records of a new session: its
 // workspace, and the address of the executor its tools run through.
 func (s *Session) extras() map[string]json.RawMessage {
-	d := s.x.Descriptor()
+	return extrasOf(s.opts, s.identity(), s.beside)
+}
+
+// extrasOf are the header members of a session under o whose project
+// is d, with the servers workspaces beside it.
+func extrasOf(o Options, d workspace.Descriptor, beside []ServersBeside) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	if ws, err := json.Marshal(recordedWorkspace{Kind: d.Kind, Ref: d.Ref, Root: d.Root, Host: d.Host, Instance: d.Instance}); err == nil {
 		out[headerWorkspace] = ws
 	}
-	if ex := s.opts.Executor; ex != nil && ex.addr != "" {
+	if ex := o.Executor; ex != nil && ex.addr != "" {
 		if mark, err := json.Marshal(executorMark{SHA256: ex.addr}); err == nil {
 			out[headerExecutor] = mark
 		}
 	}
-	if ex := s.opts.Executor; ex != nil {
+	if ex := o.Executor; ex != nil {
 		if raw := ex.r.Box(); len(raw) > 0 && json.Valid(raw) {
 			out[headerBox] = raw
 		}
 	}
-	from := s.opts.CompactFrom
-	if s.opts.Compact <= 0 {
+	from := o.CompactFrom
+	if o.Compact <= 0 {
 		from = "off"
 	}
-	if raw, err := json.Marshal(recordedContext{Budget: max(s.opts.Compact, 0), BudgetFrom: from, Window: s.opts.Window, WindowFrom: s.opts.WindowFrom}); err == nil {
+	if raw, err := json.Marshal(recordedContext{Budget: max(o.Compact, 0), BudgetFrom: from, Window: o.Window, WindowFrom: o.WindowFrom}); err == nil {
 		out[headerContext] = raw
 	}
-	if s.opts.Bare != nil {
-		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: s.opts.Bare}); err == nil {
+	if o.Bare != nil {
+		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: o.Bare}); err == nil {
 			out[headerProfile] = raw
 		}
 	}
-	if sw := s.sw; sw != nil {
-		servers := s.served
+	one, named := recordServers(beside)
+	if one != nil {
+		out[headerServers] = one
+	}
+	if named != nil {
+		out[headerServersNamed] = named
+	}
+	return out
+}
+
+// ServersBeside is a servers workspace as a session's header records
+// it: its name (config.ServersName for servers_workspace), its identity
+// (kind and ref; the root is not kept) and the servers it offered.
+type ServersBeside struct {
+	Name      string
+	Workspace workspace.Descriptor
+	Servers   []string
+}
+
+// recordServers is the header members of the servers workspaces l:
+// servers_workspace's (named config.ServersName) as {"kind", "ref",
+// "servers"} for headerServers, and the named ones as an object of
+// those by name for headerServersNamed; nil for none.
+func recordServers(l []ServersBeside) (one, named json.RawMessage) {
+	rec := func(b ServersBeside) recordedServers {
+		servers := b.Servers
 		if servers == nil {
 			servers = []string{}
 		}
-		if raw, err := json.Marshal(recordedServers{Kind: sw.Kind, Ref: sw.Ref, Servers: servers}); err == nil {
-			out[headerServers] = raw
+		return recordedServers{Kind: b.Workspace.Kind, Ref: b.Workspace.Ref, Servers: servers}
+	}
+	m := map[string]recordedServers{}
+	for _, b := range l {
+		if b.Name == config.ServersName {
+			one, _ = json.Marshal(rec(b))
+			continue
+		}
+		m[b.Name] = rec(b)
+	}
+	if len(m) > 0 {
+		named, _ = json.Marshal(m)
+	}
+	return one, named
+}
+
+// ServersWorkspacesOf is the servers workspaces a session's header
+// records, in the order of their names, servers_workspace's (named
+// config.ServersName) among them; none for a session that had none.
+func ServersWorkspacesOf(h agentsession.Header) []ServersBeside {
+	var out []ServersBeside
+	var one recordedServers
+	if raw, ok := h.Extra[headerServers]; ok && json.Unmarshal(raw, &one) == nil && one.Kind != "" {
+		out = append(out, ServersBeside{Name: config.ServersName, Workspace: workspace.Descriptor{Kind: one.Kind, Ref: one.Ref}, Servers: one.Servers})
+	}
+	var many map[string]recordedServers
+	if raw, ok := h.Extra[headerServersNamed]; ok && json.Unmarshal(raw, &many) == nil {
+		for n, r := range many {
+			if r.Kind == "" || n == config.ServersName {
+				continue
+			}
+			out = append(out, ServersBeside{Name: n, Workspace: workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, Servers: r.Servers})
 		}
 	}
+	slices.SortFunc(out, func(a, b ServersBeside) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 
 // ServersWorkspaceOf is the servers workspace a session's header
 // records (Options.ServersWorkspace), by its kind and ref, and the
 // servers it offered; false for a session that had none.
+//
+// With several (servers_workspaces) it is the first by name; see
+// ServersWorkspacesOf.
 func ServersWorkspaceOf(h agentsession.Header) (workspace.Descriptor, []string, bool) {
-	raw, ok := h.Extra[headerServers]
-	if !ok {
+	l := ServersWorkspacesOf(h)
+	if len(l) == 0 {
 		return workspace.Descriptor{}, nil, false
 	}
-	var r recordedServers
-	if err := json.Unmarshal(raw, &r); err != nil || r.Kind == "" {
-		return workspace.Descriptor{}, nil, false
-	}
-	return workspace.Descriptor{Kind: r.Kind, Ref: r.Ref}, r.Servers, true
+	return l[0].Workspace, l[0].Servers, true
 }
 
 // recordedIn is the workspace a header records, and whether it records
@@ -229,6 +302,13 @@ func workspaceOf(h agentsession.Header) workspace.Descriptor {
 func sameProject(a, b workspace.Descriptor) bool {
 	return a.Kind == b.Kind && a.Ref == b.Ref && a.Root == b.Root
 }
+
+// identity is the workspace the session's project is known by: the
+// header's dax.workspace, -list, memory, the MCP trust and the saved
+// grants go by it. It is the workspace's descriptor, but for an
+// executor that names its project beside its ref (a box's name beside
+// the image digest the env entry records, `dax execute -project`).
+func (s *Session) identity() workspace.Descriptor { return s.ws.Descriptor() }
 
 // sameWorkspace says whether a and b are one file system: one project,
 // on one machine and one instance where both name them. A header from
@@ -406,6 +486,8 @@ func list(ctx context.Context, root string, f agentsession.ListFilter, in *works
 func listIn(ctx context.Context, store agentsession.Store, f agentsession.ListFilter, in *workspace.Descriptor) ([]agentsession.Summary, error) {
 	var all []agentsession.Summary
 	var err error
+	// The listing shows each session's name (/name).
+	f.WithNames = true
 	for sum, e := range store.List(ctx, f) {
 		if e != nil {
 			err = e

@@ -73,7 +73,8 @@ func (s *Session) MCPPrompts(ctx context.Context) []MCPPrompt {
 // prompts/get with args split on white space into the declared
 // arguments in order, the last taking the rest. Each text message is
 // marked with the prompt as its instructions layer and as untrusted;
-// content that is not text is left out.
+// content that is not text is left out. Its user messages are still the
+// request you chose to send, so a fold keeps them verbatim (#173).
 func (s *Session) MCPPrompt(ctx context.Context, command, args string) (openresponses.Items, error) {
 	i := slices.IndexFunc(s.MCPPrompts(ctx), func(p MCPPrompt) bool { return p.Command == command })
 	if i < 0 {
@@ -124,5 +125,8 @@ func (s *Session) MCPPrompt(ctx context.Context, command, args string) (openresp
 	if len(out) == 0 {
 		return nil, fmt.Errorf("/%s: the server's prompt has no text to send", command)
 	}
+	// The request the person chose to send: a fold keeps its user
+	// messages verbatim, though they are composed (tasks).
+	s.tasks.add(out)
 	return out, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -42,6 +43,13 @@ type assembly struct {
 	// owned are the names the extensions own: whose each is, and
 	// whether its matcher gives subjects of its own (bind).
 	owned map[string]ownedName
+	// grantRules are the extensions' GrantRule, by tool: the rule "yes,
+	// always" grants for a call of it. An extension's tool with none is
+	// offered its bare name.
+	grantRules map[string]func(context.Context, string, json.RawMessage) string
+	// personOnly are the extensions' PersonOnly tools, which an A2A
+	// caller is refused (Session.personOnlyRefusal).
+	personOnly map[string]bool
 }
 
 // ownedName is a name an extension owns: whose it is, and whether its
@@ -91,7 +99,7 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 	if err != nil {
 		return nil, err
 	}
-	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}}
+	a := &assembly{set: set, matchers: map[string]agentpolicy.ToolMatcher{}, aliases: map[string][]string{}, owned: map[string]ownedName{}, grantRules: map[string]func(context.Context, string, json.RawMessage) string{}, personOnly: map[string]bool{}}
 	extNames := map[string]bool{}
 	claimed := map[string]string{} // lower-case name -> the extension that has it
 	claim := func(ext, name, what string) error {
@@ -130,6 +138,16 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 				return nil, err
 			}
 			own[t.Name()] = true
+		}
+		if e.GrantRule != nil {
+			if fn := e.GrantRule(env); fn != nil {
+				for _, t := range tools {
+					a.grantRules[t.Name()] = fn
+				}
+				for _, n := range e.Owns {
+					a.grantRules[n] = fn
+				}
+			}
 		}
 		listed := map[string]bool{}
 		readOnly := func(t executor.Bound) error {
@@ -231,9 +249,15 @@ func buildFrom(ctx context.Context, exts []extension.Extension, env extension.To
 				return nil, fmt.Errorf("extension %s: lifts %q, which is not one of its tools", e.Name, n)
 			}
 		}
-		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts) > 0 {
+		for _, n := range e.PersonOnly {
+			if !own[n] {
+				return nil, fmt.Errorf("extension %s: keeps %q to the person, which is not one of its tools", e.Name, n)
+			}
+			a.personOnly[n] = true
+		}
+		if p := e.Policy; len(p.Allow)+len(p.Ask)+len(p.Deny)+len(e.Lifts)+len(e.ModeRules) > 0 {
 			slices.Sort(ruleNames)
-			a.shipped = append(a.shipped, policy.Shipped{Name: e.Name, Rules: p, Owns: ruleNames, Lifts: e.Lifts})
+			a.shipped = append(a.shipped, policy.Shipped{Name: e.Name, Rules: p, Owns: ruleNames, Lifts: e.Lifts, Modes: e.ModeRules})
 		}
 		if e.BeforeToolCall != nil {
 			if h := e.BeforeToolCall(env); h != nil {
@@ -329,6 +353,41 @@ type sessionEnv struct {
 	te       extension.ToolEnv
 	agentsMD string
 	eng      *atomic.Pointer[agentpolicy.Engine]
+	// sub are the extensions' SubagentTools, built before their kit
+	// options (buildSubagentTools).
+	sub []agenttool.Tool
+}
+
+// buildSubagentTools builds every extension's SubagentTools over e,
+// and checks each: one of the names its extension owns, given once,
+// and annotated read-only and not destructive, since a sub-agent is
+// given it beside the tools that only look.
+func (e *sessionEnv) buildSubagentTools(exts []extension.Extension) error {
+	seen := map[string]bool{}
+	for _, x := range exts {
+		if x.SubagentTools == nil {
+			continue
+		}
+		ts, err := x.SubagentTools(e)
+		if err != nil {
+			return fmt.Errorf("extension %s: %w", x.Name, err)
+		}
+		for _, t := range ts {
+			name := t.Name()
+			an := agenttool.AnnotationsOf(t)
+			switch {
+			case !slices.Contains(x.Owns, name):
+				return fmt.Errorf("extension %s: sub-agent tool %q is not one of the names it owns", x.Name, name)
+			case seen[name]:
+				return fmt.Errorf("extension %s: sub-agent tool %q is given twice", x.Name, name)
+			case !an.ReadOnly || an.Destructive:
+				return fmt.Errorf("extension %s: sub-agent tool %q is not annotated read-only", x.Name, name)
+			}
+			seen[name] = true
+			e.sub = append(e.sub, t)
+		}
+	}
+	return nil
 }
 
 var _ extension.Env = (*sessionEnv)(nil)
@@ -348,17 +407,53 @@ func (e *sessionEnv) ToolOutput(ctx context.Context, ref string) ([]byte, error)
 	return e.s.ToolOutput(ctx, ref)
 }
 
-func (e *sessionEnv) ToolEnv() extension.ToolEnv           { return e.te }
-func (e *sessionEnv) Name() string                         { return e.s.opts.Name }
-func (e *sessionEnv) Dir() string                          { return e.s.opts.Dir }
-func (e *sessionEnv) UserDir() string                      { return e.s.opts.UserDir }
-func (e *sessionEnv) Tools() []agenttool.Tool              { return e.capped(e.a.tools) }
-func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool      { return e.capped(e.a.readOnly) }
-func (e *sessionEnv) AgentsMD() string                     { return e.agentsMD }
-func (e *sessionEnv) Model() openresponses.Streamer        { return e.s.opts.Streamer }
-func (e *sessionEnv) Omit(o agentkit.Omission)             { e.s.refused = append(e.s.refused, o) }
-func (e *sessionEnv) Log(format string, args ...any)       { e.s.opts.log("%s", logText(format, args...)) }
-func (e *sessionEnv) SystemPrompt(except ...string) string { return e.s.systemPrompt(except...) }
+func (e *sessionEnv) ToolEnv() extension.ToolEnv      { return e.te }
+func (e *sessionEnv) Name() string                    { return e.s.opts.Name }
+func (e *sessionEnv) HostEnv() []string               { return slices.Clone(e.s.env) }
+func (e *sessionEnv) Dir() string                     { return e.s.opts.Dir }
+func (e *sessionEnv) UserDir() string                 { return e.s.opts.UserDir }
+func (e *sessionEnv) Tools() []agenttool.Tool         { return e.capped(e.a.tools) }
+func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool { return e.capped(e.a.readOnly) }
+func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
+
+func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
+
+// SetMode implements extension.Env.
+func (e *sessionEnv) SetMode(ctx context.Context, mode, reason string) error {
+	_, err := e.s.setMode(ctx, mode, reason)
+	return err
+}
+
+// Kit implements extension.Env: nil until open has built it.
+func (e *sessionEnv) Kit() *agentkit.Kit { return e.s.Kit }
+
+func (e *sessionEnv) ChildBeforeTurn() func(context.Context, agentturn.TurnStartInfo) (openresponses.Items, error) {
+	return e.s.nestedMD
+}
+
+func (e *sessionEnv) ChildBeforeModelCall() func(context.Context, *openresponses.Request) error {
+	return e.s.beforeModelCall
+}
+
+func (e *sessionEnv) SearchScope(ctx context.Context, q *agentsession.Query) error {
+	return e.s.SearchScope(ctx, q)
+}
+
+func (e *sessionEnv) Caller(ctx context.Context) (string, bool) { return callerOf(ctx) }
+func (e *sessionEnv) Model() openresponses.Streamer             { return e.s.opts.Streamer }
+func (e *sessionEnv) Omit(o agentkit.Omission)                  { e.s.refused = append(e.s.refused, o) }
+func (e *sessionEnv) Log(format string, args ...any)            { e.s.opts.log("%s", logText(format, args...)) }
+func (e *sessionEnv) SystemPrompt(except ...string) string      { return e.s.systemPrompt(except...) }
+
+// AgentsMD implements extension.Env: on an A2A caller's context, the
+// chain without the person's own files, as the caller's requests carry
+// it (caller.go).
+func (e *sessionEnv) AgentsMD(ctx context.Context) string {
+	if _, peer := callerOf(ctx); peer {
+		return e.s.callerMD.caller
+	}
+	return e.agentsMD
+}
 
 func (e *sessionEnv) SubagentModel() openresponses.Streamer {
 	if s := e.s.opts.SubagentStreamer; s != nil {

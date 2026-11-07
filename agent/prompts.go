@@ -123,6 +123,8 @@ func (s *Session) Templates() []PromptTemplate { return slices.Clone(s.templates
 // $ARGUMENTS the whole of args and $1 to $9 its words, marked with the
 // file it was composed from (and, for the project's, as untrusted), so
 // the record holds it as the template's and not as words you wrote.
+// It is still the request you chose to send, so a fold keeps it
+// verbatim, as it keeps your own messages (#173).
 func (s *Session) Template(name, args string) (openresponses.Item, error) {
 	i := slices.IndexFunc(s.templates, func(t PromptTemplate) bool { return t.Name == name })
 	if i < 0 {
@@ -143,8 +145,15 @@ func (s *Session) Template(name, args string) (openresponses.Item, error) {
 	if t.Project {
 		trust.Reads = []agenttool.Label{agenttool.LabelUntrusted}
 	}
-	return agentturn.WithProvenance(openresponses.UserText(text), agentturn.Provenance{
+	item, err := agentturn.WithProvenance(openresponses.UserText(text), agentturn.Provenance{
 		Layers: []agentturn.Layer{{ID: t.Path, Source: templateSource}},
 		Trust:  trust,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// The request the person chose to send: a fold keeps it verbatim,
+	// though it is composed (tasks).
+	s.tasks.add([]openresponses.Item{item})
+	return item, nil
 }

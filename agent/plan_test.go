@@ -1,0 +1,229 @@
+package agent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/ChristopherDavenport/openresponses"
+
+	"github.com/ChristopherDavenport/dax/ext/plan"
+	"github.com/ChristopherDavenport/dax/policy"
+)
+
+// In plan mode write is denied, even over the user's own allow, and a
+// command that would ask is refused unasked in plan's words, while
+// exit_plan_mode asks; approving it moves the session to acceptEdits,
+// recorded as the plan's approval, and to act_model, before the Resume,
+// and the next call runs. (#147)
+func TestPlanModeHandsOverToActingOnApproval(t *testing.T) {
+	ctx := context.Background()
+	const planText = "1. add retries to client.go\n2. go test ./..."
+	o := options(t, &scripted{calls: [][2]string{
+		{"write", `{"path":"a.go","content":"x"}`},
+		{"bash", `{"command":"touch b"}`},
+		{"exit_plan_mode", `{"plan":"` + strings.ReplaceAll(planText, "\n", `\n`) + `"}`},
+		{"write", `{"path":"c.go","content":"x"}`},
+	}})
+	o.Policy = confirmPolicy(t)
+	o.Policy.User.Allow = []string{"write"}
+	o.Policy.Mode = policy.ModePlan
+	o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+	o.ActModel = "act-model"
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var asked []string
+	if _, err := promptOn(ctx, s, "add retries", func(c *openresponses.FunctionCall, _ string) bool {
+		asked = append(asked, c.Name)
+		return c.Name == plan.Tool
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []string{plan.Tool}) {
+		t.Errorf("asked about %v, want exit_plan_mode alone", asked)
+	}
+	outs := outputs(s)
+	if len(outs) != 4 || !strings.Contains(outs[0], "denied") || !strings.Contains(outs[1], "plan mode") || !strings.Contains(outs[1], policy.NoWorkAround) {
+		t.Fatalf("the outputs: %q; want write denied, bash refused in plan's words", outs)
+	}
+	for _, f := range []string{"a.go", "b"} {
+		if _, err := os.Stat(filepath.Join(o.Dir, f)); err == nil {
+			t.Errorf("%s was made in plan mode", f)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(o.Dir, "c.go")); err != nil {
+		t.Errorf("the write after the approval did not run: %v; outputs %q", err, outs)
+	}
+	if mode, _ := s.Mode(); mode != policy.ModeAcceptEdits {
+		t.Errorf("mode %q after the approval, want acceptEdits", mode)
+	}
+	if m := s.Model(); m != "act-model" {
+		t.Errorf("model %q after the approval, want act_model", m)
+	}
+	if !strings.Contains(string(projected(t, o, s)), `"reason":"plan approved`) {
+		t.Error("the dax.mode entry does not say the plan was approved")
+	}
+}
+
+// Outside plan mode exit_plan_mode is denied bare, asking no one; and
+// Shift-Tab's cycle passes through plan. (#147)
+func TestExitPlanModeIsDeniedOutsidePlanMode(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []string{policy.ModeDefault, policy.ModeAcceptEdits, policy.ModeDontAsk, policy.ModeBypass} {
+		o := options(t, &scripted{calls: [][2]string{{"exit_plan_mode", `{"plan":"x"}`}}})
+		o.Policy = confirmPolicy(t)
+		o.Policy.Mode = mode
+		o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+		s, err := New(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var asked []string
+		if _, err := promptOn(ctx, s, "go", asker(&asked)); err != nil {
+			t.Fatal(err)
+		}
+		if outs := outputs(s); len(asked) != 0 || len(outs) != 1 || !strings.Contains(outs[0], "denied") {
+			t.Errorf("%s: asked %v, outputs %q; want it denied bare", mode, asked, outs)
+		}
+		if m, _ := s.Mode(); m != mode {
+			t.Errorf("%s: the mode moved to %s", mode, m)
+		}
+		s.Close()
+	}
+	if policy.NextMode(policy.ModeAcceptEdits) != policy.ModePlan {
+		t.Error("Shift-Tab skips plan")
+	}
+}
+
+// Leaving plan mode any way but an approved exit_plan_mode (Shift-Tab
+// on past it, /mode) puts back the model the session had before plan
+// mode moved it to plan_model; a model the person chose while in plan
+// mode stays. (#147)
+func TestLeavingPlanModeRestoresTheModel(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &scripted{})
+	o.Policy = confirmPolicy(t)
+	o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+	o.PlanModel = "plan-model"
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	main := s.Model()
+	for _, want := range []struct{ mode, model string }{
+		{policy.ModeAcceptEdits, main},
+		{policy.ModePlan, "plan-model"},
+		{policy.ModeDontAsk, main},
+		{policy.ModeDefault, main},
+	} {
+		mode, err := s.NextMode(ctx)
+		if err != nil || mode != want.mode {
+			t.Fatalf("Shift-Tab: %q, %v; want %s", mode, err, want.mode)
+		}
+		if m := s.Model(); m != want.model {
+			t.Errorf("in %s: model %q, want %q", mode, m, want.model)
+		}
+	}
+	if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetMode(ctx, policy.ModeDefault); err != nil {
+		t.Fatal(err)
+	}
+	if m := s.Model(); m != main {
+		t.Errorf("/mode plan, then default: model %q, want %q", m, main)
+	}
+	// A model chosen in plan mode is the person's: leaving keeps it.
+	if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetModel("chosen"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetMode(ctx, policy.ModeDefault); err != nil {
+		t.Fatal(err)
+	}
+	if m := s.Model(); m != "chosen" {
+		t.Errorf("a model chosen in plan mode: %q after leaving, want chosen", m)
+	}
+}
+
+// modelsSeen is scripted, keeping the model each request named.
+type modelsSeen struct {
+	scripted
+	mu     sync.Mutex
+	models []string
+}
+
+func (m *modelsSeen) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	m.models = append(m.models, req.Model)
+	m.mu.Unlock()
+	return m.scripted.CreateStream(ctx, req, sink)
+}
+
+// An approved plan with plan_model set and no act_model is carried out
+// on the model the session had before plan mode, from the request after
+// the approval; a model the person chose in plan mode stays. (#147)
+func TestAnApprovedPlanWithoutActModelGoesBackToTheEarlierModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, chosen string
+	}{
+		{"back to the earlier model", ""},
+		{"the person's choice stays", "chosen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			model := &modelsSeen{scripted: scripted{calls: [][2]string{
+				{"exit_plan_mode", `{"plan":"1. add retries"}`},
+				{"write", `{"path":"c.go","content":"x"}`},
+			}}}
+			o := options(t, model)
+			o.Policy = confirmPolicy(t)
+			o.Extensions = append(slices.Clone(o.Extensions), plan.New())
+			o.PlanModel = "plan-model"
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			main := s.Model()
+			if _, err := s.SetMode(ctx, policy.ModePlan); err != nil {
+				t.Fatal(err)
+			}
+			if m := s.Model(); m != "plan-model" {
+				t.Fatalf("in plan mode: %q, want plan-model", m)
+			}
+			want := main
+			if tc.chosen != "" {
+				if err := s.SetModel(tc.chosen); err != nil {
+					t.Fatal(err)
+				}
+				want = tc.chosen
+			}
+			if _, err := promptOn(ctx, s, "add retries", func(*openresponses.FunctionCall, string) bool { return true }); err != nil {
+				t.Fatal(err)
+			}
+			if mode, _ := s.Mode(); mode != policy.ModeAcceptEdits {
+				t.Errorf("mode %q after the approval, want acceptEdits", mode)
+			}
+			if _, err := os.Stat(filepath.Join(o.Dir, "c.go")); err != nil {
+				t.Errorf("the write after the approval did not run: %v", err)
+			}
+			model.mu.Lock()
+			seen := slices.Clone(model.models)
+			model.mu.Unlock()
+			if len(seen) < 3 || seen[1] != want || seen[len(seen)-1] != want || s.Model() != want {
+				t.Errorf("requests went to %q, the session's model is %q; want %q from the approval on", seen, s.Model(), want)
+			}
+		})
+	}
+}
