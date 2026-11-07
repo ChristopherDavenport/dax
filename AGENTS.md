@@ -277,8 +277,10 @@ before changing the shape.
   sessions; an A2A caller none); the background pass (`pass.go`,
   `WithBackground`): an `AfterRun` hook that runs a child through
   `Env.Kit`'s `StartChild`/`ContinueChild` (spawn `dax-memory-pass`)
-  with the memory tools over `passStore` (every Put `IfHash`, each
-  rendered scope within the block's bound), its own policy source
+  with the memory tools over `passStore` (every Put `IfHash` and every
+  Forget compared on the entry's hash as `decide` read it, by call ID,
+  before anything is asked; each rendered scope within the block's
+  bound), its own policy source
   granted under its grant scope (auto), a token cap, an entry no pass
   wrote asked about, and under propose (or after an open-world run) a
   pass due at the person's next prompt (`BeforePrompt`); `ledger.go`, the passes' ledger

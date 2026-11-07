@@ -894,7 +894,10 @@ own, where under `auto` its own source (`dax:memory-pass`, at
 the user and the extensions have. It asks, through the question path a
 sub-agent's asked call takes, before it changes an entry no pass wrote
 (the journal's `Change.Session` against the passes' ledger), and
-every write it makes is conditional on what it read (`IfHash`). Under
+every write it makes is conditional on the entry as it read it when it
+decided the call, before any question (`IfHash` on that hash, kept by
+call ID; a forget compares the entry again just before it, the store
+having no conditional forget). Under
 `propose`, and after a run that reached an open world, the pass waits
 for the person: an extension's `BeforePrompt` runs at the start of the
 person's prompt (`Session.Prompt`), before it is sent, and the prompt

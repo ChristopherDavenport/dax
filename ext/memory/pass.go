@@ -245,7 +245,8 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 			eng.Revoke(cctx, passSource)
 		}
 	}
-	store := &passStore{Store: mem, rendered: scopes, conflict: func(scope agentmemory.Scope, name string) {
+	seen := &seenHashes{}
+	store := &passStore{Store: mem, rendered: scopes, seen: seen, conflict: func(scope agentmemory.Scope, name string) {
 		p.env.Log("memory pass: %s/%s changed since the pass read it; it was left as it is", scope, name)
 	}}
 	tools := agentmemory.Tools(store, append(slices.Clone(scopes), arch...), agentmemory.WithInsert(arch...))
@@ -266,7 +267,7 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 		Reasoning:       p.env.Reasoning(ctx, model, think),
 		MaxTurns:        8,
 		Retry:           agentturn.Retry{MaxAttempts: 2},
-		BeforeToolCall:  p.decide(el, mem, passID, auto, p.env.ChildPolicy(passName)),
+		BeforeToolCall:  p.decide(el, mem, seen, passID, auto, p.env.ChildPolicy(passName)),
 		BeforeModelCall: budget.check,
 	}
 	if cfg, err = kit.ChildConfig(cfg, agentkit.PartMemory); err != nil {
@@ -299,18 +300,30 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 // writers are the memory tools that change an entry.
 var writers = []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.InsertTool}
 
+// heldWriters are the writers that name an entry, each held to the
+// entry as the pass read it when the call was decided (seenHashes);
+// memory_insert names a new entry of its own and overwrites none.
+var heldWriters = []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool}
+
 // decide is the pass's BeforeToolCall: the memory tools alone; the
+// entry a writer names read now, before anything is asked, its hash
+// kept in seen for the write (passStore holds the write to it); the
 // session's policy for the pass (Env.ChildPolicy), its denies holding;
 // an entry no pass wrote asked about even under auto; and a call that
 // asks put to the fronts answering through el, the question path a
 // sub-agent's asked call takes, with nobody to ask left deferred, so
 // the pass ends without it.
-func (p *passer) decide(el agenttool.Elicitor, mem agentmemory.Store, passID string, auto bool, pol func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
+func (p *passer) decide(el agenttool.Elicitor, mem agentmemory.Store, seen *seenHashes, passID string, auto bool, pol func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		name := info.Call.Name
 		write := slices.Contains(writers, name)
 		if !write && name != agentmemory.SearchTool {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the memory pass has the memory tools alone"}, nil
+		}
+		if slices.Contains(heldWriters, name) {
+			if err := seen.read(ctx, mem, info.Call.CallID, info.Call.Arguments); err != nil {
+				return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the memory pass could not read the entry: " + err.Error()}, nil
+			}
 		}
 		var d *agentturn.ToolDecision
 		if pol != nil {
@@ -486,13 +499,69 @@ func (t *tokenBudget) check(context.Context, *openresponses.Request) error {
 	return nil
 }
 
-// passStore is the store as the pass writes it: every Put conditional
-// on what the write was built on (IfHash), so a write the conversation
-// made since the pass read an entry is never overwritten, and each
-// rendered scope held to the memory block's bound.
+// seenHashes are the entries the pass's writer calls name as the pass
+// read them when each call was decided, by call ID: the entry's hash, or
+// "" for none.
+type seenHashes struct {
+	mu    sync.Mutex
+	calls map[string]string
+}
+
+// read reads the entry args names and keeps its hash for callID.
+// Arguments that name no entry keep nothing; the tool refuses them.
+func (h *seenHashes) read(ctx context.Context, mem agentmemory.Store, callID, args string) error {
+	var a struct {
+		Scope string `json:"scope"`
+		Name  string `json:"name"`
+	}
+	if json.Unmarshal([]byte(args), &a) != nil || a.Scope == "" || a.Name == "" {
+		return nil
+	}
+	hash := ""
+	e, err := mem.Get(ctx, agentmemory.Scope(a.Scope), a.Name)
+	switch {
+	case err == nil:
+		hash = e.Hash
+	case !errors.Is(err, agentmemory.ErrNotFound):
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.calls == nil {
+		h.calls = map[string]string{}
+	}
+	h.calls[callID] = hash
+	return nil
+}
+
+func (h *seenHashes) get(callID string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	hash, ok := h.calls[callID]
+	return hash, ok
+}
+
+// of is the hash kept for the call a memory tool runs on ctx
+// (agenttool.CallFrom), if decide read its entry.
+func (h *seenHashes) of(ctx context.Context) (string, bool) {
+	call, ok := agenttool.CallFrom(ctx)
+	if !ok || h == nil {
+		return "", false
+	}
+	return h.get(call.ID)
+}
+
+// passStore is the store as the pass writes it: every Put and Forget
+// conditional on the entry as the pass read it when the call was
+// decided (seen, by the call on the context), or for a Put without one on what the write was
+// built on (IfHash), so a write the conversation made since the pass
+// read an entry, while the person was asked say, is never overwritten
+// nor forgotten; and each rendered scope held to the memory block's
+// bound.
 type passStore struct {
 	agentmemory.Store
 	rendered []agentmemory.Scope
+	seen     *seenHashes
 	conflict func(agentmemory.Scope, string)
 }
 
@@ -502,7 +571,11 @@ func (s *passStore) Put(ctx context.Context, e agentmemory.Entry, opts ...agentm
 	if err != nil && !errors.Is(err, agentmemory.ErrNotFound) {
 		return nil, err
 	}
-	if !o.Conditional {
+	if seen, ok := s.seen.of(ctx); ok {
+		// The last option wins: the write lands only on what the pass
+		// read when it decided the call, whatever its tool read since.
+		opts = append(slices.Clone(opts), agentmemory.IfHash(seen))
+	} else if !o.Conditional {
 		base := ""
 		switch {
 		case o.HasBase:
@@ -532,4 +605,30 @@ func (s *passStore) Put(ctx context.Context, e agentmemory.Entry, opts ...agentm
 		s.conflict(e.Scope, e.Name)
 	}
 	return c, err
+}
+
+// Forget forgets the entry only when it is still what the pass read
+// when it decided the call. The store has no conditional forget, so
+// the entry is read again and compared just before it is forgotten,
+// as /memory undo does.
+func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Change, error) {
+	seen, ok := s.seen.of(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: the memory pass forgets only an entry it read when it decided the call", agentmemory.ErrConflict)
+	}
+	have := ""
+	cur, err := s.Get(ctx, scope, name)
+	switch {
+	case err == nil:
+		have = cur.Hash
+	case !errors.Is(err, agentmemory.ErrNotFound):
+		return nil, err
+	}
+	if have != seen {
+		if s.conflict != nil {
+			s.conflict(scope, name)
+		}
+		return nil, fmt.Errorf("%w: %s/%s changed since the pass read it", agentmemory.ErrConflict, scope, name)
+	}
+	return s.Store.Forget(ctx, scope, name)
 }

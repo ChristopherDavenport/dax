@@ -41,8 +41,9 @@ versions may break flags and the config file.
   (off by default; a project file cannot set it): a child agent with
   the memory tools alone, recorded as a subsession of the conversation,
   writes unasked through a policy source of its own, changes only
-  entries a pass wrote (it asks about yours), lands a write only if the
-  entry is unchanged since it read it, keeps each scope within the
+  entries a pass wrote (it asks about yours), lands a write or a forget
+  only if the entry is unchanged since it read it to decide the call
+  (before asking you), keeps each scope within the
   memory block's bound, stops at 8,000 tokens, skips a run with no tool
   call and under 500 output tokens, and tells you `memory updated: …`;
   a run that reached an MCP server or a remote agent gets propose

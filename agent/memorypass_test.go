@@ -246,3 +246,91 @@ func TestAProposingPassAsksAtTheNextPrompt(t *testing.T) {
 		t.Errorf("the main agent's memory_save ran unasked after the pass's yes, always (asked about %q)", permitted)
 	}
 }
+
+// A write the pass asks about lands only on the entry it read when it
+// asked: one the main model changed while the question waited is left
+// as it is, the person is told, and a forget is held to the same rule.
+// Unchanged, the approved write lands, a forget among them. (#160 b)
+func TestAPassWriteLandsOnlyOnWhatItReadWhenItAsked(t *testing.T) {
+	for _, tc := range []struct {
+		name, call, args string
+		change           bool
+		want             string // "" for gone
+	}{
+		{"save changed", "memory_save", `{"scope":"user","name":"style","content":"tabs"}`, true, "two spaces"},
+		{"patch changed", "memory_patch", `{"scope":"user","name":"style","old_text":"spaces","new_text":"tabs"}`, true, "two spaces"},
+		{"forget changed", "memory_forget", `{"scope":"user","name":"style"}`, true, "two spaces"},
+		{"save", "memory_save", `{"scope":"user","name":"style","content":"tabs"}`, false, "tabs"},
+		{"forget", "memory_forget", `{"scope":"user","name":"style"}`, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			o := options(t, &scripted{calls: [][2]string{{"ls", `{}`}}})
+			o.Policy = confirmPolicy(t)
+			var logs logLines
+			o.Log = logs.log
+			o, dir := withPass(t, o, memory.Background{Mode: memory.BackgroundAuto},
+				&scripted{calls: [][2]string{{tc.call, tc.args}}})
+			mem, err := filestore.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The person's entry, which the pass asks about before it
+			// changes it.
+			if _, err := mem.Put(ctx, agentmemory.Entry{Scope: "user", Name: "style", Content: "spaces"}); err != nil {
+				t.Fatal(err)
+			}
+			s, err := New(ctx, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var mu sync.Mutex
+			asked := 0
+			done := s.Answering()
+			unsub := s.Subscribe(func(_ context.Context, ev agentturn.Event) error {
+				q, ok := ev.(*agentturn.Question)
+				if !ok {
+					return nil
+				}
+				id := q.ID
+				go func() {
+					mu.Lock()
+					asked++
+					mu.Unlock()
+					if tc.change {
+						// The conversation's model changes the entry
+						// while the question waits.
+						if _, err := mem.Put(ctx, agentmemory.Entry{Scope: "user", Name: "style", Content: "two spaces"}); err != nil {
+							t.Error(err)
+						}
+					}
+					s.Reply(ctx, id, agenttool.Answer{Action: agenttool.ActionAccept})
+				}()
+				return nil
+			})
+			if _, err := s.Prompt(ctx, openresponses.UserText("list the files")); err != nil {
+				t.Fatal(err)
+			}
+			settled(s)
+			unsub()
+			done()
+			mu.Lock()
+			n := asked
+			mu.Unlock()
+			if n != 1 {
+				t.Fatalf("asked %d times, want once; logs:\n%s", n, logs.all())
+			}
+			e, err := mem.Get(ctx, "user", "style")
+			switch {
+			case tc.want == "" && err == nil:
+				t.Errorf("the entry is still there: %+v", e)
+			case tc.want != "" && (err != nil || e.Content != tc.want):
+				t.Errorf("the entry: %+v, %v; want %q\n%s", e, err, tc.want, logs.all())
+			}
+			if tc.change && !strings.Contains(logs.all(), "user/style changed since the pass read it") {
+				t.Errorf("the person was not told the write was left:\n%s", logs.all())
+			}
+		})
+	}
+}

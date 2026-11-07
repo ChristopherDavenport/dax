@@ -342,8 +342,9 @@ denies and ask rules still hold over, and tells you `memory updated:
 saved user/errors (/memory undo reverts it)`. Its limits are not the
 model's or a project's to change: it changes only an entry a pass wrote
 last (one you or the conversation's model wrote is asked about first),
-each write lands only if the entry is still what the pass read (one
-changed since is left, and you are told), a scope may not grow past the
+each write, a forget too, lands only if the entry is still what the
+pass read when it decided the write, before it asked you (one changed
+since is left, and you are told), a scope may not grow past the
 memory block's bound, and a pass stops at 8,000 tokens
 (`background_max_tokens`). `background_every` runs a pass every N such
 runs. A run that reached an open world (an MCP server's tool, a remote
