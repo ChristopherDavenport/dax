@@ -207,7 +207,9 @@ before changing the shape.
   rule (`childAsked`, filled by `childPolicy`; never an A2A caller's
   sub-agent's call), made under the
   sub-agent's own grant scope when its run keeps its grants
-  (`extension.WithOwnGrants`, `grantUnder`).
+  (`extension.WithOwnGrants`, `grantUnder`), activated again by
+  `childPolicy` when the engine dropped it (`ownGrantsHeld`: under
+  skill grants agentkit ends child scopes at each person's message).
   `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's
   prompts as slash commands and its resources as `@server:uri`
   mentions, sent marked as the server's, untrusted.

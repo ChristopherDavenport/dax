@@ -23,6 +23,7 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
+	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -194,6 +195,39 @@ func (s *Session) grantUnder(ctx context.Context, scope, rule string) error {
 	}
 	s.grants.own[scope] = rules
 	return nil
+}
+
+// ownGrantsHeld activates again the grants of the sub-agent's own scope
+// on ctx (extension.WithOwnGrants) when the engine no longer holds them:
+// under skill grants (-trust-skills) agentkit ends every child scope at
+// each new message of the person's, while the person's "yes, always"
+// to the sub-agent lasts the session. The child's policy calls it
+// before each decision.
+func (s *Session) ownGrantsHeld(ctx context.Context) {
+	if !extension.OwnGrants(ctx) || s.Kit == nil || s.Kit.Engine() == nil {
+		return
+	}
+	scope := agentpolicy.GrantScopeFromContext(ctx)
+	if scope == "" {
+		return
+	}
+	s.grants.mu.Lock()
+	rules := s.grants.own[scope]
+	s.grants.mu.Unlock()
+	if len(rules) == 0 {
+		return
+	}
+	eng := s.Kit.Engine()
+	unscoped := len(eng.GrantsFor(context.Background()))
+	sets := eng.GrantsFor(agentpolicy.ContextWithGrantScope(ctx, scope))
+	for _, set := range sets[min(unscoped, len(sets)):] {
+		if set.Source.Name == policy.SourceSession {
+			return
+		}
+	}
+	if err := s.grantUnder(ctx, scope, rules[len(rules)-1]); err != nil {
+		fmt.Fprintf(warnings{}, "dax: a sub-agent's grant for the session was not made again: %v\n", err)
+	}
 }
 
 // childAsked are the sub-agents' calls the policy asked about for want

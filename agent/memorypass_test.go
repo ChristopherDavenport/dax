@@ -334,3 +334,65 @@ func TestAPassWriteLandsOnlyOnWhatItReadWhenItAsked(t *testing.T) {
 		})
 	}
 }
+
+// Under -trust-skills agentkit ends every child grant scope at each new
+// message of the person's, the pass's among them; the pass's "yes,
+// always" lasts the session all the same: the pass after the next
+// prompt still writes unasked. (#160)
+func TestAPassesAlwaysOutlivesTheNextPromptUnderSkillTrust(t *testing.T) {
+	ctx := context.Background()
+	o := trustSkills(options(t, &scripted{calls: [][2]string{{"ls", `{}`}}}))
+	o.Policy = confirmPolicy(t)
+	var logs logLines
+	o.Log = logs.log
+	o, dir := withPass(t, o, memory.Background{Mode: memory.BackgroundPropose},
+		&scripted{calls: [][2]string{{"memory_save", `{"scope":"user","name":"errors","content":"Wrap errors with %w."}`}}})
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	mem, err := filestore.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var asked []string
+	rules := Rules{
+		Reply: func(q agentturn.Question) agenttool.Answer {
+			mu.Lock()
+			asked = append(asked, q.Elicitation.Message)
+			mu.Unlock()
+			if o := s.QuestionOffer(ctx, q); o.Rule != "" {
+				if err := s.GrantQuestion(ctx, q, o.Rule); err != nil {
+					t.Error(err)
+				}
+			}
+			return agenttool.Answer{Action: agenttool.ActionAccept}
+		},
+		Permit: func(*openresponses.FunctionCall, string) PermitAnswer { return PermitAnswer{Allow: true} },
+	}
+	for _, p := range []string{"list the files", "once more"} {
+		if _, err := Drive(ctx, s, rules, openresponses.UserText(p)); err != nil {
+			t.Fatal(err)
+		}
+		settled(s)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("asked %q, want the pass's write once", asked)
+	}
+	if _, err := mem.Forget(ctx, "user", "errors"); err != nil {
+		t.Fatalf("the approved write: %v\n%s", err, logs.all())
+	}
+	asked = nil
+	if _, err := Drive(ctx, s, rules, openresponses.UserText("and again")); err != nil {
+		t.Fatal(err)
+	}
+	settled(s)
+	if len(asked) != 0 {
+		t.Errorf("asked %q after yes, always and a new prompt", asked)
+	}
+	if _, err := mem.Get(ctx, "user", "errors"); err != nil {
+		t.Errorf("the pass under the grant did not write: %v\n%s", err, logs.all())
+	}
+}

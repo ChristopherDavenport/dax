@@ -2399,6 +2399,9 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 		if e == nil {
 			return nil, nil
 		}
+		// A sub-agent's own grants for the session, which a new message
+		// of the person's may have ended, are in force again.
+		s.ownGrantsHeld(ctx)
 		// A sub-agent's call is decided without box.confine's own claim
 		// (confine.go): only what the policy allows anyway runs unasked.
 		ctx = childDecision(ctx, name)

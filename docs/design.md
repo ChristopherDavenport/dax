@@ -914,7 +914,9 @@ waits for it, so each write it asks about is answered by the front
 there, as a sub-agent's asked call is. "Yes, always" to such a
 question is a grant of the offered rule (`QuestionOffer`,
 `GrantQuestion`) for the rest of the session, made under the pass's own
-grant scope: the pass runs on `extension.WithOwnGrants`, so the grant
+grant scope and made again by the child's policy whenever the engine no
+longer holds it (agentkit ends child scopes at each new message of the
+person's under `-trust-skills`): the pass runs on `extension.WithOwnGrants`, so the grant
 answers the passes' writes alone, never the main agent's (whose
 `memory_save` still asks) nor another sub-agent's. An A2A caller's
 sub-agent's question, which an escalation may put to the person, is
