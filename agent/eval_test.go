@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agenteval"
@@ -11,6 +12,8 @@ import (
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/session"
 	"github.com/ChristopherDavenport/openresponses/echo"
+
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // runnerOf is an agenteval.Runner that runs the dax configuration o in
@@ -119,5 +122,49 @@ func TestBuildRefusesAHeaderThatIsNotDaxs(t *testing.T) {
 	}
 	if report.Results[0].Err == nil {
 		t.Fatal("Build took a header dax does not write")
+	}
+}
+
+// A recorder Build refuses is left as the runner wrote it: the header
+// is checked before the session opens, so not even a non-default
+// mode's dax.mode entry is written into it, and the recorder's binding
+// is dropped (#144, review M4).
+func TestBuildWritesNothingIntoARecorderItRefuses(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &echo.Adapter{})
+	o.Root = ""
+	o.Policy = confirmPolicy(t)
+	o.Policy.Mode = policy.ModeAcceptEdits
+	store := agentsession.NewMemoryStore()
+	r := runnerOf(store, o)
+	r.Header = func(agenteval.Task) agentsession.Header {
+		h := HeaderOf(o)
+		h.CWD = filepath.Join(o.Dir, "elsewhere")
+		return h
+	}
+	bound := func() (n int) {
+		evalBound.Range(func(any, any) bool { n++; return true })
+		return n
+	}
+	before := bound()
+	report, err := r.Run(ctx, &agenteval.Suite{Name: "dax", Tasks: []agenteval.Task{{ID: "x", Instruction: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := report.Results[0]
+	if res.Err == nil {
+		t.Fatal("Build took a header dax does not write")
+	}
+	s, err := store.Open(ctx, res.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range s.Entries() {
+		if b, _ := json.Marshal(e); strings.Contains(string(b), modeNS) {
+			t.Errorf("the refused recorder was written to: %s", b)
+		}
+	}
+	if n := bound(); n != before {
+		t.Errorf("%d recorders bound after the refusal, %d before", n, before)
 	}
 }

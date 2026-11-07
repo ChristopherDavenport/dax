@@ -204,7 +204,8 @@ before changing the shape.
   `Runner`): `HeaderOf` and `SessionOptionsOf`, the header and recorder
   options dax would write, and `Build`, the session over
   `Options.Recorder` as an `agentturn.Config`, a recorder whose header
-  is not dax's refused.
+  is not dax's refused before the session opens, so nothing is written
+  into it.
   `agent/reopen.go`: `Reopen`, another session (`/new`, `/resume`)
   over the live settings, the store handed to it. `agent/names.go`:
   `SetName` (`/name`, an `info` entry), `Name`, and `Sessions`, this

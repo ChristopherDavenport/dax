@@ -37,7 +37,8 @@ versions may break flags and the config file.
   dax configuration under agenteval's `Runner`: the run's session has
   the header, environment entries and instruction parts a session of
   dax's own has, its sub-agents link to it, and `Build` refuses a
-  recorder whose header is not dax's (#144).
+  recorder whose header is not dax's before it writes anything into
+  it (#144).
 - Fixed: an A2A caller is no longer offered the tools the person keeps
   to themselves (`memory_*`, `skill_manage`, any extension's
   `PersonOnly`): its requests and its sub-agents' leave out their

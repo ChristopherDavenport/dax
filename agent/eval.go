@@ -50,6 +50,11 @@ const listTimeout = 30 * time.Second
 // open, an evaluation runner's; Build refuses a recorder whose header
 // is not this one.
 func HeaderOf(o Options) agentsession.Header {
+	return headerUnder(context.Background(), o)
+}
+
+// headerUnder is HeaderOf, its listing of servers workspaces under ctx.
+func headerUnder(ctx context.Context, o Options) agentsession.Header {
 	o = o.named()
 	ws, done, err := sessionWorkspace(o)
 	if err != nil {
@@ -58,7 +63,7 @@ func HeaderOf(o Options) agentsession.Header {
 		return newHeader(o, o.Dir, nil)
 	}
 	defer done()
-	ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
+	ctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	beside, _ := besideOf(ctx, o, ws)
 	return newHeader(o, ws.Root(), extrasOf(o, ws.Descriptor(), beside))
@@ -155,7 +160,8 @@ func SessionOptionsOf(Options) []session.Option {
 // agent itself (agenteval's Runner.Build), and the session's close. The
 // recorder's header must be HeaderOf's: one whose cwd or dax members
 // differ is refused, so a run is never recorded as another
-// configuration's. A recorder SessionOptionsOf's options opened is
+// configuration's, and refused before the session opens, so nothing is
+// written into it. A recorder SessionOptionsOf's options opened is
 // bound to the session, so its environment entries and instructions'
 // parts are the session's.
 //
@@ -166,32 +172,33 @@ func Build(ctx context.Context, o Options) (agentturn.Config, func() error, erro
 	if o.Recorder == nil {
 		return agentturn.Config{}, nil, errors.New("build: no Recorder; use New for a session with a store")
 	}
+	// The binding is dropped on every way out; the session is set in it
+	// once it opens.
+	v, bound := evalBound.LoadAndDelete(o.Recorder)
+	if err := sameHeader(ctx, o.Recorder, headerUnder(ctx, o)); err != nil {
+		return agentturn.Config{}, nil, err
+	}
 	s, err := New(ctx, o)
 	if err != nil {
 		return agentturn.Config{}, nil, err
 	}
-	if v, ok := evalBound.LoadAndDelete(o.Recorder); ok {
+	if bound {
 		slot := v.(*evalSlot)
 		slot.mu.Lock()
 		slot.s = s
 		slot.mu.Unlock()
 	}
-	if err := s.sameHeader(ctx); err != nil {
-		s.Close()
-		return agentturn.Config{}, nil, err
-	}
 	return s.withModeTurn(s.withPinnedFacts(s.Kit.Config())), s.Close, nil
 }
 
-// sameHeader says whether the recorder's session has the header dax
-// writes for s: its cwd, harness and every member of dax's own.
-func (s *Session) sameHeader(ctx context.Context) error {
-	rec := s.opts.Recorder
+// sameHeader says whether rec's session has want, the header dax writes:
+// its cwd, harness and every member of dax's own.
+func sameHeader(ctx context.Context, rec *session.Recorder, want agentsession.Header) error {
 	got, err := rec.Store().Open(ctx, rec.SessionID())
 	if err != nil {
 		return fmt.Errorf("build: the recorder's session: %w", err)
 	}
-	h, want := got.Header(), s.header()
+	h := got.Header()
 	var diff []string
 	if h.CWD != want.CWD {
 		diff = append(diff, fmt.Sprintf("cwd %q, not %q", h.CWD, want.CWD))
