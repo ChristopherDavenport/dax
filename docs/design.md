@@ -873,7 +873,15 @@ own, where under `auto` its own source (`dax:memory-pass`, at
 the user and the extensions have. It asks, through the question path a
 sub-agent's asked call takes, before it changes an entry no pass wrote
 (the journal's `Change.Session` against the passes' ledger), and
-every write it makes is conditional on what it read (`IfHash`). `extension.Renderers` merges the extensions' renderers for the
+every write it makes is conditional on what it read (`IfHash`). Under
+`propose`, and after a run that reached an open world, the pass waits
+for the person: an extension's `BeforePrompt` runs at the start of the
+person's prompt (`Session.Prompt`), before it is sent, and the prompt
+waits for it, so each write it asks about is answered by the front
+there, as a sub-agent's asked call is. "Yes, always" to such a
+question is a session grant of the offered rule (`QuestionOffer`,
+`GrantQuestion`), which reaches every sub-agent through
+`sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
 recorded.

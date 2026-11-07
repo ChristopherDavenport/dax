@@ -536,8 +536,13 @@ type Session struct {
 	// their handler's making until the session has opened.
 	cbMu      sync.Mutex
 	callbacks []net.Listener
-	// after are the extensions' AfterRun hooks (afterrun.go).
-	after afterRuns
+	// after are the extensions' AfterRun hooks (afterrun.go), and
+	// beforePrompt their BeforePrompt hooks.
+	after        afterRuns
+	beforePrompt []func(context.Context)
+	// childAsked are the sub-agents' calls asked about for want of a
+	// rule (QuestionOffer).
+	childAsked childAsked
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
@@ -884,6 +889,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		return nil, err
 	}
 	if s.after.hooks, err = afterRunHooks(o.Extensions, xenv); err != nil {
+		return nil, err
+	}
+	if s.beforePrompt, err = beforePromptHooks(o.Extensions, xenv); err != nil {
 		return nil, err
 	}
 	for _, e := range o.Extensions {
@@ -2403,6 +2411,11 @@ func (s *Session) childPolicy(name string, eng *atomic.Pointer[agentpolicy.Engin
 				args = h.Args
 			}
 			set.Release(bctx)
+			if v.Action == agentturn.Defer && v.Rule == nil && (h == nil || h.Action != agentturn.Defer) {
+				// Asked for want of a rule: "yes, always" may be
+				// offered for it (QuestionOffer).
+				s.childAsked.add(info.Call.CallID, info.Call.Name, json.RawMessage(info.Call.Arguments))
+			}
 			// The deferral stands, and tools/agent's WithAskParent puts
 			// it to the task call's elicitor with agentturn.Ask: the
 			// question the fronts show is this reason (elicit), and

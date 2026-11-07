@@ -97,6 +97,8 @@ type passer struct {
 	openWorld bool
 	running   bool
 	noted     bool
+	// due says a pass that proposes waits for the person's next prompt.
+	due bool
 }
 
 // maxPassItems bounds the conversation kept for the next pass.
@@ -141,7 +143,11 @@ func (p *passer) after(ctx context.Context, run extension.Run) {
 		mode = BackgroundPropose
 	}
 	if mode != BackgroundAuto {
-		if p.b.Headless && !p.noted {
+		switch {
+		case !p.b.Headless:
+			// It runs when the person is back, at their next prompt.
+			p.due = true
+		case !p.noted:
 			p.noted = true
 			p.env.Log("memory: no background pass here; a pass that proposes needs someone to answer it, and nobody is asked under -p or dax serve")
 		}
@@ -153,6 +159,25 @@ func (p *passer) after(ctx context.Context, run extension.Run) {
 	p.mu.Unlock()
 	defer p.done()
 	if err := p.pass(ctx, items, true); err != nil && ctx.Err() == nil {
+		p.env.Log("memory pass: %v", err)
+	}
+}
+
+// beforePrompt is the BeforePrompt hook: a pass that proposes, due
+// since a run ended, runs now, the person being here, each write asked
+// through the session's elicitor on ctx; the prompt waits for it.
+func (p *passer) beforePrompt(ctx context.Context) {
+	p.mu.Lock()
+	if !p.due || p.running {
+		p.mu.Unlock()
+		return
+	}
+	p.due = false
+	items := p.take()
+	p.running = true
+	p.mu.Unlock()
+	defer p.done()
+	if err := p.pass(ctx, items, false); err != nil && ctx.Err() == nil {
 		p.env.Log("memory pass: %v", err)
 	}
 }

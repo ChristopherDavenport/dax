@@ -19,6 +19,14 @@ versions may break flags and the config file.
   a run that reached an MCP server or a remote agent gets propose
   instead. `/memory undo` reverts the latest pass, entry by entry
   (#160).
+- Added: `"background": "propose"`: the pass runs at the start of your
+  next prompt and asks about each write as a sub-agent's call is asked;
+  the REPL's `a` allows the offered rule for the session, which reaches
+  the passes and every sub-agent's asked call. Under `-p` and `dax
+  serve` it does not run, and says so once (#160).
+- Changed: `extension.Extension.BeforePrompt`;
+  `agent.Session.QuestionOffer` and `GrantQuestion`, "yes, always" for a
+  sub-agent's asked call (#160).
 - Changed: `memory.New` takes options (`WithBackground`, `Background`),
   `memory.Undo`; `extension.Env.Kit`; `agent.Options.MemoryDir`,
   `Session.MemoryDir` and `Session.Dir` (#160).

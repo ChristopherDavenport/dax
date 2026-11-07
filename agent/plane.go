@@ -97,10 +97,12 @@ func (s *Session) RunContext(ctx context.Context) context.Context { return s.ctl
 // a restart left unanswered first and refusing with ErrHeld while held
 // calls wait.
 func (s *Session) Prompt(ctx context.Context, items ...openresponses.Item) (*agentturn.RunEnd, error) {
-	pending := s.ag.State().Pending
-	if slices.ContainsFunc(pending, held) {
+	if slices.ContainsFunc(s.ag.State().Pending, held) {
 		return nil, ErrHeld
 	}
+	// The extensions' BeforePrompt hooks, the person being here.
+	s.promptHooks(ctx)
+	pending := s.ag.State().Pending
 	outs := make([]openresponses.Item, 0, len(pending)+len(items)+1)
 	for _, p := range pending {
 		outs = append(outs, answerOf(p))

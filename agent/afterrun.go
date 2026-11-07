@@ -52,6 +52,37 @@ func afterRunHooks(exts []extension.Extension, env extension.Env) ([]func(contex
 	return out, nil
 }
 
+// beforePromptHooks builds the extensions' BeforePrompt hooks over env.
+func beforePromptHooks(exts []extension.Extension, env extension.Env) ([]func(context.Context), error) {
+	var out []func(context.Context)
+	for _, e := range exts {
+		if e.BeforePrompt == nil {
+			continue
+		}
+		h, err := e.BeforePrompt(env)
+		if err != nil {
+			return nil, fmt.Errorf("extension %s: before prompt: %w", e.Name, err)
+		}
+		if h != nil {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+// promptHooks runs the extensions' BeforePrompt hooks, in order, on ctx
+// with the session's elicitor, so a question they ask goes to the
+// fronts answering.
+func (s *Session) promptHooks(ctx context.Context) {
+	if len(s.beforePrompt) == 0 {
+		return
+	}
+	ctx = agenttool.ContextWithElicitor(ctx, s.elicit)
+	for _, h := range s.beforePrompt {
+		h(ctx)
+	}
+}
+
 // openWorld reports whether a call of the tool name reaches past the
 // workspace and the session: an MCP server's, or one annotated so.
 func (r *afterRuns) openWorld(name string) bool {

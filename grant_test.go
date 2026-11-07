@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -97,5 +99,20 @@ func TestTheREPLGrantsForTheSession(t *testing.T) {
 	pw.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A sub-agent's asked call, a background memory pass's write among
+// them, offers a, for the session alone, when the session offers a
+// rule: never A, which a question has no confirm for. (#160)
+func TestAnAskedCallsQuestionOffersASessionGrant(t *testing.T) {
+	q := agentturn.Question{Elicitation: agenttool.Elicitation{Message: "the memory pass sub-agent asks: a write"},
+		Call: &agentturn.AskedCall{CallID: "c1", Name: "memory_save", Args: []byte(`{}`)}}
+	got := questionTextOffer(q, agent.GrantOffer{Rule: "memory_save", Saved: true})
+	if !strings.Contains(got, "[y/a/N] (a: allow memory_save for this session)") || strings.Contains(got, "A:") {
+		t.Errorf("the question: %q", got)
+	}
+	if got := questionText(q); !strings.Contains(got, "[y/N]") {
+		t.Errorf("with no offer: %q", got)
 	}
 }

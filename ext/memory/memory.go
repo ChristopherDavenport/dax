@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentmemory"
@@ -51,17 +52,36 @@ func New(dir string, opts ...Option) extension.Extension {
 		opt(&o)
 	}
 	var after func(extension.Env) (func(context.Context, extension.Run), error)
+	var before func(extension.Env) (func(context.Context), error)
 	if m := o.background.Mode; m == BackgroundAuto || m == BackgroundPropose {
+		// One pass per session, which both hooks share: the session
+		// builds AfterRun, then BeforePrompt, over the same Env.
+		var mu sync.Mutex
+		built := map[extension.Env]*passer{}
 		after = func(env extension.Env) (func(context.Context, extension.Run), error) {
 			p := &passer{dir: dir, env: env, b: o.background}
+			mu.Lock()
+			built[env] = p
+			mu.Unlock()
 			return p.after, nil
+		}
+		before = func(env extension.Env) (func(context.Context), error) {
+			mu.Lock()
+			p := built[env]
+			delete(built, env)
+			mu.Unlock()
+			if p == nil {
+				return nil, nil
+			}
+			return p.beforePrompt, nil
 		}
 	}
 	return extension.Extension{
-		AfterRun: after,
-		Name:     Name,
-		Owns:     []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
-		Policy:   policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
+		AfterRun:     after,
+		BeforePrompt: before,
+		Name:         Name,
+		Owns:         []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
+		Policy:       policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
 		// The memory is the person's: an A2A caller is refused every
 		// memory tool outright (conversation_search refuses it through
 		// Env.SearchScope), and the store reads empty on its context.

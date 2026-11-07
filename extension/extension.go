@@ -184,6 +184,14 @@ type Extension struct {
 	// conversation, or a sub-agent's, calls none. dax-memory's
 	// background pass starts here.
 	AfterRun func(Env) (func(ctx context.Context, run Run), error)
+	// BeforePrompt is called at the start of each of the person's
+	// prompts (agent.Session.Prompt), before the prompt is sent, and
+	// the prompt waits for it: the person is there, so a question it
+	// asks through the session's elicitor on its context
+	// (agenttool.ElicitorFrom) is answered meanwhile, as a sub-agent's
+	// asked call is. A steer, a resume and an A2A caller's prompt call
+	// none. dax-memory's proposing pass runs here.
+	BeforePrompt func(Env) (func(ctx context.Context), error)
 
 	// Instructions are added to the main agent's system prompt, after
 	// dax's role line and in the order the extensions are given, before

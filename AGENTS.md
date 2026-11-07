@@ -128,7 +128,8 @@ before changing the shape.
   `cmd/dax/main.go`: `dax.Main`, nothing else.
 - `extension`: the `Extension` type (its `PersonOnly` tools, refused
   to an A2A caller; its `PolicyHooks`, inside the engine's decision;
-  its `AfterRun`, told what each of the main agent's runs did, `Run`),
+  its `AfterRun`, told what each of the main agent's runs did, `Run`;
+  its `BeforePrompt`, run at the person's prompt before it is sent),
   `ToolEnv` (what tools are built over), `Env` (the
   session as kit options see it; `Caller` names an A2A caller's
   context, on which `AgentsMD` leaves out the person's own files), `Renderers`,
@@ -188,7 +189,10 @@ before changing the shape.
   deferred verdict names none; the extension's `GrantRule` or the
   tool's name) and `Grant` (a session grant set under the kit's grant
   scope, or a rule kept in `~/.dax/grants.json` by the project's
-  identity, loaded as `dax:saved`), both at `policy.RankGrant`.
+  identity, loaded as `dax:saved`), both at `policy.RankGrant`;
+  `QuestionOffer` and `GrantQuestion`, a session grant offered with a
+  sub-agent's asked call's question when the policy asked for want of a
+  rule (`childAsked`, filled by `childPolicy`).
   `agent/mcpprompt.go` and `agent/mcpresource.go`: an MCP server's
   prompts as slash commands and its resources as `@server:uri`
   mentions, sent marked as the server's, untrusted.
@@ -262,7 +266,8 @@ before changing the shape.
   with the memory tools over `passStore` (every Put `IfHash`, each
   rendered scope within the block's bound), its own policy source
   granted under its grant scope (auto), a token cap, an entry no pass
-  wrote asked about; `ledger.go`, the passes' ledger
+  wrote asked about, and under propose (or after an open-world run) a
+  pass due at the person's next prompt (`BeforePrompt`); `ledger.go`, the passes' ledger
   (`.dax-passes.jsonl` beside the journal) and `Undo` (`/memory undo`
   in `commands.go`).
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse

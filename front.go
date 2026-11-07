@@ -326,8 +326,10 @@ type waiting struct {
 	// shown is how many lines had been read when the question was last
 	// shown: only a line read after it answers it.
 	shown uint64
-	// offer is the grant dax offers with a permission.
+	// offer is the grant dax offers with a permission, or with a
+	// sub-agent's asked call's question (asked is that question).
 	offer agent.GrantOffer
+	asked agentturn.Question
 }
 
 // typedLine is a line of the REPL's input and when it was read: its
@@ -484,7 +486,8 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		for _, ev := range evs {
 			switch e := ev.(type) {
 			case *agentturn.Question:
-				asks = append(asks, waiting{q: questionText(*e), question: e.ID, ask: e.Elicitation})
+				o := questionOfferOf(ctx, ctl, *e)
+				asks = append(asks, waiting{q: questionTextOffer(*e, o), question: e.ID, ask: e.Elicitation, offer: o, asked: *e})
 				if len(asks) == 1 {
 					next()
 				}
@@ -602,6 +605,18 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				a := asks[0]
 				asks = asks[1:]
 				allow, stop, note := answerLine(line)
+				if kind, gnote, ok := grantLine(line, a.offer); ok && a.question != "" && kind == agent.GrantSession {
+					// "Yes, always" to a sub-agent's asked call: the
+					// session grant first, then the yes.
+					if g, ok := ctl.(questionGranter); ok {
+						if err := g.GrantQuestion(ctx, a.asked, a.offer.Rule); err != nil {
+							fmt.Fprintln(os.Stderr, "error:", err)
+						} else {
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+							line = "y " + gnote
+						}
+					}
+				}
 				if kind, gnote, ok := grantLine(line, a.offer); ok && a.call != nil {
 					allow, stop, note = true, false, gnote
 					if g, ok := ctl.(granter); ok {
@@ -777,15 +792,36 @@ func grantLine(line string, o agent.GrantOffer) (kind agent.GrantKind, note stri
 	return "", "", false
 }
 
+// questionGranter is "yes, always" to a sub-agent's asked call: the
+// session's own (agent.Session.QuestionOffer and GrantQuestion).
+type questionGranter interface {
+	QuestionOffer(ctx context.Context, q agentturn.Question) agent.GrantOffer
+	GrantQuestion(ctx context.Context, q agentturn.Question, rule string) error
+}
+
+// questionOfferOf is the grant the session offers with q, none when it
+// grants nothing.
+func questionOfferOf(ctx context.Context, ctl any, q agentturn.Question) agent.GrantOffer {
+	if g, ok := ctl.(questionGranter); ok {
+		return g.QuestionOffer(ctx, q)
+	}
+	return agent.GrantOffer{}
+}
+
 // questionText is what the user is asked of a question a running call
 // asked: a sub-agent's call the policy asks about, or a tool's own.
-func questionText(q agentturn.Question) string {
+func questionText(q agentturn.Question) string { return questionTextOffer(q, agent.GrantOffer{}) }
+
+// questionTextOffer is questionText with the grant dax offers for a
+// sub-agent's asked call: a, for the session.
+func questionTextOffer(q agentturn.Question, o agent.GrantOffer) string {
 	if c := q.Call; c != nil {
 		msg := q.Elicitation.Message
 		if d := c.Decision; d != nil && d.Subject != "" && !strings.Contains(msg, d.Subject) {
 			msg += "; about: " + d.Subject
 		}
-		return question(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg)
+		o.Saved = false
+		return questionOffer(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg, o)
 	}
 	if extension.IsTextQuestion(q.Elicitation) {
 		return "? " + render.Clean(q.Elicitation.Message) + " [your answer, or n] "

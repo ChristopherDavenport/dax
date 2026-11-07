@@ -348,7 +348,17 @@ memory block's bound, and a pass stops at 8,000 tokens
 (`background_max_tokens`). `background_every` runs a pass every N such
 runs. A run that reached an open world (an MCP server's tool, a remote
 agent) gets `propose` instead of `auto`, since what it read may be an
-injection meant to become a memory. `/memory undo` reverts the latest
+injection meant to become a memory.
+
+With `propose` the pass waits for you: it runs at the start of your
+next prompt, before the prompt is sent, and each write is asked as a
+sub-agent's call is (`? allow memory_save {...} (the memory pass
+sub-agent asks: ...)`); in the REPL `a` allows that rule for the rest of
+the session, the passes' later writes included (the terminal client's
+question panel offers y and n). A write you do not answer, or that
+nobody is there to answer, is not made. Under `-p` and `dax serve`
+nobody is shown a proposal, so a pass that would propose does not run,
+and you are told once. `/memory undo` reverts the latest
 pass of this project's, entry by entry, leaving any entry changed
 since; again, the pass before. `off` is the default, since a pass
 spends your tokens. The `memory` block is your file's alone.
