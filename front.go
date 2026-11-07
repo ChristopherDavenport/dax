@@ -124,6 +124,16 @@ type front interface {
 // is in use.
 type frontEnv struct {
 	stdinTTY, stdoutTTY, recording bool
+	// trustMCP is -trust-mcp, under which the ACP front starts the
+	// editor's MCP servers.
+	trustMCP bool
+}
+
+// frontEnvOf is processEnv with -trust-mcp.
+func frontEnvOf(recording, trustMCP bool) frontEnv {
+	e := processEnv(recording)
+	e.trustMCP = trustMCP
+	return e
 }
 
 // processEnv reads it. recording is false when -sessions is empty.
@@ -153,6 +163,9 @@ func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, erro
 	switch name {
 	case "repl":
 		return &replFront{info: info, in: in}, nil
+	case "acp":
+		// An editor drives the session over standard input and output.
+		return &acpFront{info: info, trustMCP: env.trustMCP}, nil
 	case "tui":
 		if !env.recording {
 			return nil, errors.New("the terminal client needs a session store; drop -sessions \"\" or use -front repl")
@@ -162,7 +175,7 @@ func selectFront(name, prompt string, info frontInfo, env frontEnv) (front, erro
 		}
 		return &tuiFront{info: info, pause: true}, nil
 	}
-	return nil, fmt.Errorf("-front %q: want tui or repl", name)
+	return nil, fmt.Errorf("-front %q: want tui, repl or acp", name)
 }
 
 // isTerminal reports whether f is a terminal, by asking the system:

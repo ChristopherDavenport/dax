@@ -112,7 +112,7 @@ func run(ctx context.Context, args []string, p program) error {
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
 	noPolicy := fs.Bool("no-policy", false, "the old name of -mode bypassPermissions: run every call no deny rule refuses, without asking")
 	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, plan, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
-	frontName := fs.String("front", "", "front end: tui or repl; default tui on a terminal, repl otherwise")
+	frontName := fs.String("front", "", "front end: tui, repl or acp (an editor over the Agent Client Protocol on standard input and output); default tui on a terminal, repl otherwise")
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
 	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
@@ -699,7 +699,7 @@ func run(ctx context.Context, args []string, p program) error {
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
 		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: *root, hostDir: dir, memoryDir: settings.MemoryDir}
-	} else if f, err = selectFront(*frontName, *once, fi, processEnv(*root != "")); err != nil {
+	} else if f, err = selectFront(*frontName, *once, fi, frontEnvOf(*root != "", *trustMCP)); err != nil {
 		return err
 	}
 	// The terminal client owns the screen, so a key command run while

@@ -625,7 +625,12 @@ func PermissionsOf(c agentturn.Control, end *agentturn.RunEnd) []Permission {
 // unstamped is args without dax's stamp (dax_stamp), the rewrite a
 // file tool's or bash's facts claim adds for the call to run with; args
 // as they are when they hold none or are not an object.
-func unstamped(args json.RawMessage) json.RawMessage {
+func unstamped(args json.RawMessage) json.RawMessage { return Unstamped(args) }
+
+// Unstamped is a call's arguments as the model made them: without the
+// stamp a tool's facts claim added for the run (dax's, not the call's),
+// for a front that shows the call (ACP's tool_call).
+func Unstamped(args json.RawMessage) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(args, &m) != nil {
 		return args

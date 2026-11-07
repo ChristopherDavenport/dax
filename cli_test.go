@@ -243,6 +243,8 @@ func TestFronts(t *testing.T) {
 			return "print"
 		case *tuiFront:
 			return "tui"
+		case *acpFront:
+			return "acp"
 		}
 		return "?"
 	}
@@ -272,7 +274,9 @@ func TestFronts(t *testing.T) {
 		{"tui", "", none, "", "needs a terminal"},
 		{"tui", "", frontEnv{stdinTTY: true, recording: true}, "", "needs a terminal"},
 		{"tui", "", frontEnv{stdoutTTY: true, recording: true}, "", "needs a terminal"},
-		{"gui", "", both, "", "want tui or repl"},
+		{"gui", "", both, "", "want tui, repl or acp"},
+		// An editor drives dax over its pipe: no terminal is needed.
+		{"acp", "", none, "acp", ""},
 	} {
 		f, err := selectFront(tc.name, tc.prompt, frontInfo{Prompt: tc.prompt}, tc.env)
 		if tc.wantErr != "" {

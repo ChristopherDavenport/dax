@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `-front acp`, dax in an editor (Zed and others) over the Agent
+  Client Protocol v1 on standard input and output: sessions (each a dax
+  session under the same settings, policy and record), prompts with
+  text and embedded resources, streamed messages and tool calls, the
+  editor's permission prompts (allow once, reject, allow always for the
+  session when dax offers a rule), cancel, the modes Shift-Tab cycles,
+  prompt templates and MCP prompts as commands, `session/load` of this
+  project's sessions replayed from the record, and the editor's stdio
+  MCP servers on this machine under `-trust-mcp`, their `env` given to
+  that server alone and redacted from its output. The `cwd` must be the
+  directory dax started in or below it (#167).
+- Changed: `agent.Session.AddEditorMCP`, `Conversation`, `Recorded`,
+  `agent.Unstamped` (#167).
 - Added: plan mode (`/mode plan`, `-mode plan`, Shift-Tab between
   acceptEdits and dontAsk; a project's `default_mode` may pick it):
   reads and read-only commands run, `write` and `edit` are denied over

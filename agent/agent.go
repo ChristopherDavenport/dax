@@ -377,6 +377,10 @@ type MCPServer struct {
 	// KeyEnv, a TokenEnv, an extension's secret, a pass list's or a
 	// served workspace's token variable.
 	SecretEnv []string
+	// secretValues are SecretEnv's values when a front gave them (an
+	// editor's MCP server over ACP), in place of this process's
+	// environment.
+	secretValues map[string]string
 }
 
 // Placement is where one of a session's MCP servers runs, as Info.MCP
@@ -2116,7 +2120,11 @@ const heldServer = "server"
 // anything starts.
 func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
 	for _, v := range m.SecretEnv {
-		switch value := os.Getenv(v); {
+		value := os.Getenv(v)
+		if m.secretValues != nil {
+			value = m.secretValues[v]
+		}
+		switch {
 		case value == "":
 			return nil, fmt.Errorf("secret_env %s is not set; the server is not started without it", v)
 		case len(value) < offer.MinSecretBytes:
@@ -2127,7 +2135,11 @@ func (s *Session) mcpHolding(m MCPServer) (mcpDial, error) {
 	if err != nil {
 		return nil, err
 	}
-	o, err := offer.Offer(h, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, os.LookupEnv)
+	lookup := os.LookupEnv
+	if m.secretValues != nil {
+		lookup = func(k string) (string, bool) { v, ok := m.secretValues[k]; return v, ok }
+	}
+	o, err := offer.Offer(h, []offer.Server{{Name: heldServer, Command: m.Command, SecretEnv: m.SecretEnv}}, lookup)
 	if err != nil {
 		return nil, err
 	}

@@ -441,7 +441,16 @@ events and answers permissions and questions on standard input; print
 (`-p`) is `agent.Drive`, a controller whose rules ask on standard input;
 the terminal client, agentconsole, is a view of the record and the
 session's events that sends the session intents (`client.Direct` over
-the session). `dax serve` is in place of a front: it serves the session
+the session); `-front acp` is an editor over the Agent Client Protocol
+(`acp.go` over `internal/acp`'s JSON-RPC), each ACP session a dax
+session, the first the one the command line opened and each later one
+`Session.Reopen` over the live settings, `session/load` one of this
+project's top-level sessions replayed from the record (a failed call
+marked failed), the editor's permissions answering the session's
+(allow once, reject, allow always as a session grant when dax offers
+a rule), its stdio MCP servers started on this machine under
+`-trust-mcp` alone with their `env` as `secret_env` values, and its
+`cwd` the start directory or below it. `dax serve` is in place of a front: it serves the session
 (`front/control` with `agent.Controls` as its commands, the record
 through agentsession's `remote`) behind one bearer token (each 401
 naming `Bearer realm="dax"`, `internal/authn`'s challenge), holding
@@ -632,8 +641,12 @@ What is not equal yet, and why:
   interface; the rest waits for `agentsession/remote`. `Session.Path`
   and the store's admin functions (`-list`, `-verify`, `-gc`) are the
   local store's.
-- A front driving a session elsewhere over ACP is not built; over
-  agentturn's own wire it is `dax attach`.
+- An editor drives a session over ACP (`-front acp`, `acp.go`) on this
+  machine, through the pipe that started dax: v1 takes the editor's
+  prompts, permissions and stdio MCP servers, and none of its files or
+  terminals (ACP v2 drops those methods), so the tools act in the
+  session's workspace as anywhere else. A session elsewhere is driven
+  over agentturn's own wire, `dax attach`.
 
 ## Extending
 
@@ -914,7 +927,7 @@ move to openresponses.
 
 Compaction beyond what `agentturn/compact` does (a local summary or a
 server's endpoint, above a token budget); branch summaries and a session
-tree to navigate; an RPC mode and ACP for editors; a container or
+tree to navigate; an RPC mode; a container or
 remote workspace (agentworkspace has the interface and `Local`, not
 those); a model catalogue with context windows; extension points
 for slash commands, the REPL's renderer, or the config's schema. Each

@@ -87,6 +87,16 @@ before changing the shape.
   `Options.Workspace` as `-workspace`'s is, recorded by
   `config.TunnelRef`; `closeSession`, the session's close and the
   hub's within one deadline.
+  `acp.go`: `-front acp`, an editor over the Agent Client Protocol v1
+  on standard input and output (`internal/acp`): the first
+  `session/new` takes the opened session, later ones `Reopen`;
+  `session/load` (this project's top-level sessions, `Sessions`)
+  replays `Session.Conversation`; permissions and sub-agents' asked
+  calls go to `session/request_permission` (allow always = a session
+  grant); the editor's stdio MCP servers start on the host under
+  `-trust-mcp` (`Session.AddEditorMCP`, their env as secret values,
+  redacted); the modes are Shift-Tab's; slash commands are prompt
+  templates and MCP prompts alone.
   `front.go`: the `front` interface,
   `selectFront`, the REPL and print fronts, which drive the session as
   agentturn's control contract. `tui.go`: the terminal client,
@@ -394,6 +404,10 @@ before changing the shape.
   secret of its own, and the instance id, labelled per direction, the
   token never sent). Standard library only; no dax code uses a
   library's `BearerTokens` or `WithBearerToken`.
+- `internal/acp`: ACP's wire, JSON-RPC 2.0 one message per line
+  (`Conn`: requests both ways, notifications, a handler per message so
+  `session/cancel` reaches a running `session/prompt`), and the v1
+  messages dax sends and takes. Standard library only.
 - `internal/cmdline`: `Split`, a command line as a program and its
   arguments, as a shell splits words with nothing expanded; every
   command dax runs from a line (`-executor`, MCP servers, the key

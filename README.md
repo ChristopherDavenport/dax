@@ -1842,6 +1842,41 @@ compaction off (`-compact 0`, or a model
 whose window is not known) it says so. `dax attach` sends it to the
 served session.
 
+## In an editor: `-front acp`
+
+`dax -front acp` speaks the Agent Client Protocol (v1) on standard
+input and output, so an editor that runs external agents drives it. In
+Zed, add to `settings.json`:
+
+```json
+"agent_servers": {
+  "dax": { "command": "dax", "args": ["-front", "acp"] }
+}
+```
+
+Each of the editor's sessions is a dax session, recorded as any other,
+under your config, the project's and the flags, as the terminal client
+is: the editor shows the messages and the calls as they stream, asks
+you about each call the policy asks about (allow once, reject, or,
+when dax offers a rule, allow it for the rest of the session; never
+kept for the project, which needs the terminal's confirm), and cancels
+a run. Its mode picker has the modes Shift-Tab cycles (`default`,
+`acceptEdits`, `plan`, `dontAsk`), never `bypassPermissions`; its slash
+commands are your prompt templates and the MCP servers' prompts, since
+dax's other commands act on a terminal. Loading a session takes one of
+this project's top-level sessions and shows it again from the record,
+a failed call marked failed. The editor's working directory must be
+the one dax started in, or below it: start dax there (the editor does).
+The editor's MCP servers start only under `-trust-mcp` (`"args":
+["-front", "acp", "-trust-mcp"]`), stdio ones alone, on this machine
+whatever the workspace, with the `env` the editor gives handed to that
+server alone and redacted from its output, as `secret_env` is (a value
+under 8 bytes is refused, as there); a name your config gives is
+refused. The editor's files and terminals are not used: the tools act
+in the session's workspace, here, in a box or on a served workspace, as
+in any front. Nothing but the protocol goes to standard output; dax's
+notes go to standard error, which the editor keeps in its log.
+
 ## Serving a session: `dax serve` and `dax attach`
 
 `dax serve` runs a session with no front of its own and serves it, so a
