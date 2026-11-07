@@ -758,14 +758,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 }
 
-// question is what the user is asked about a call the policy asked
-// about.
-func question(c *openresponses.FunctionCall, reason string) string {
-	return questionOffer(c, reason, agent.GrantOffer{})
-}
-
-// questionOffer is question with the grant dax offers for the call: a
-// for the session, A kept for the project.
+// questionOffer is what the user is asked about a call the policy asked
+// about, with the grant dax offers for it: a for the session, A kept
+// for the project.
 func questionOffer(c *openresponses.FunctionCall, reason string, o agent.GrantOffer) string {
 	if reason != "" {
 		reason = " (" + reason + ")"
