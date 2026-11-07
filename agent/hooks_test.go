@@ -147,3 +147,38 @@ echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"
 		t.Errorf("the output: %q, want ls's listing and the hook's word after it", outs)
 	}
 }
+
+// A hook's allow answers the project's ask, which only tightens what
+// the user allows, but never the user's own ask rule (rank 2): what the
+// user asked to be asked about is still asked (#148, review 13).
+func TestAHooksAllowLiftsTheProjectsAskButNotTheUsers(t *testing.T) {
+	ctx := context.Background()
+	hook := hookScript(t, `cat > /dev/null
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"my hook says yes"}}'
+`)
+	o := withHooks(options(t, &scripted{}), "bash", hook, nil)
+	o.Policy = confirmPolicy(t)
+	o.Policy.User = policy.Rules{Ask: []string{"bash(touch mine*)"}}
+	o.Policy.Project = policy.Rules{Ask: []string{"bash(touch theirs*)"}}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	bash, ok := s.Kit.LookupTool("bash")
+	if !ok {
+		t.Fatal("no bash")
+	}
+	info := func(id, cmd string) agentturn.ToolCallInfo {
+		args := `{"command":"` + cmd + `"}`
+		call := &openresponses.FunctionCall{Name: "bash", Arguments: args, CallID: id}
+		return agentturn.ToolCallInfo{Call: call, Tool: bash, Args: json.RawMessage(args), Batch: []*openresponses.FunctionCall{call}}
+	}
+	eng := s.Kit.Engine()
+	if v, err := eng.Would(ctx, info("c1", "touch theirs")); err != nil || v.Action != agentturn.Allow || v.Reason != "my hook says yes" {
+		t.Errorf("the project's ask: %v %q (%v), want lifted by the hook", v.Action, v.Reason, err)
+	}
+	if v, err := eng.Would(ctx, info("c2", "touch mine")); err != nil || v.Action != agentturn.Defer {
+		t.Errorf("the user's own ask: %v %q (%v), want still asked", v.Action, v.Reason, err)
+	}
+}
