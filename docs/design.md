@@ -670,8 +670,9 @@ own are built from the same fields a program's are:
 | dax-memory | `ext/memory` | the memory tools and block; the background pass after a run |
 | dax-a2a | `ext/a2a` | a tool per peer in the user's config; renderers; no rules |
 | dax-plan | `ext/plan` | `exit_plan_mode`, plan mode's one ask; its renderer |
+| dax-toolsearch | `ext/toolsearch` | agentkit's `WithToolSearch` over `Env.DeferMCP`: a large MCP server's tools listed by name and loaded with `tool_search`, which its one rule allows |
 
-`dax.Main` builds dax-coding and dax-a2a always (dax-a2a offers nothing
+`dax.Main` builds dax-coding, dax-a2a, dax-plan and dax-toolsearch always (dax-a2a offers nothing
 without peers) and the others as the settings say, less those
 `WithoutExtension` names, then the program's from `WithExtension`.
 

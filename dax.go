@@ -9,7 +9,8 @@
 // extension.Extension, and dax's own are extensions like any other:
 // dax-coding (package ext/coding) has the file tools and bash,
 // dax-agents the explore and task sub-agents, dax-skills skills,
-// dax-memory memory, dax-a2a the user's A2A peers. A program built on dax adds its own with
+// dax-memory memory, dax-a2a the user's A2A peers, dax-toolsearch the
+// large MCP servers' tools held back until the model loads them. A program built on dax adds its own with
 // WithExtension, on the same terms, and may leave one of dax's out with
 // WithoutExtension; it keeps the flags, the config files, the
 // providers, the session store and the fronts.
@@ -49,6 +50,7 @@ import (
 	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/ext/plan"
 	"github.com/ChristopherDavenport/dax/ext/skills"
+	"github.com/ChristopherDavenport/dax/ext/toolsearch"
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/internal/render"
 )
@@ -184,7 +186,7 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 	if c.MemoryDir != "" {
 		defaults = append(defaults, memory.New(c.MemoryDir, memory.WithBackground(c.MemoryBackground)))
 	}
-	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}), plan.New())
+	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}), plan.New(), toolsearch.New())
 	if len(c.Hooks.PreToolUse) > 0 || len(c.Hooks.PostToolUse) > 0 {
 		defaults = append(defaults, hooks.New(c.Hooks))
 	}

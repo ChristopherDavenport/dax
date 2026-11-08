@@ -5,6 +5,29 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: an MCP server's tools can be held back until the model asks
+  for them (#189). `mcp_servers.<name>.defer` is `true` or `false`;
+  left out, a server whose tool definitions pass 8 KiB
+  (`agent.MCPDeferBytes`) is held back, decided once per session. A held
+  tool is listed in the instructions by name and summary and loaded with
+  `tool_search`, then sent from the next request on, after the tools
+  already sent, for the rest of the session; the record has it as
+  `tools_added`, and `/resume` keeps it loaded. Its calls are decided by
+  its rules as before. A project's file may set `defer` to `true` alone,
+  and `dax workspace -servers` refuses it. `/mcp` shows each server's
+  deferred and loaded counts, `/tools` marks each held tool.
+- Added: dax-toolsearch (`ext/toolsearch`), the extension that does it
+  (agentkit's `WithToolSearch`), with the one rule allowing
+  `tool_search`; `dax.WithoutExtension("dax-toolsearch")` sends every
+  definition as before.
+- Changed: `extension.Env.DeferMCP`; `agent.MCPServer.Defer`,
+  `agent.MCPServerInfo.Deferred` and `Loaded`, `agent.Info.Loaded`,
+  `agent.MCPDeferBytes`.
+- Changed: requires the agentkit release with `WithToolSearch`
+  (agentkit#130); go.mod names it once it is tagged.
+
 ## v0.0.34 - 2026-11-06
 
 - Changed: `extension.WithOwnGrants` and `OwnGrants`: a sub-agent's run

@@ -210,6 +210,8 @@ func TestTheMCPListing(t *testing.T) {
 		{Name: "vault", Placement: agent.PlacedServersWorkspace, Where: "remote https://vault.example:/", Description: strings.Repeat("long ", 50)},
 		{Name: "scratch", Placement: agent.PlacedWorkspace, Where: "/src/p", Added: "mcp:#6 x"},
 		{Name: "next", Placement: "elsewhere", Where: "a place"},
+		{Name: "browser", Placement: agent.PlacedHost, State: "live", Deferred: 17, Loaded: 2, Description: "A browser"},
+		{Name: "one", Placement: agent.PlacedHost, Deferred: 1},
 	}}
 	r, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp", false)
 	if err != nil {
@@ -226,12 +228,33 @@ func TestTheMCPListing(t *testing.T) {
 		"  vault: offered by the servers workspace remote https://vault.example:/ — " + strings.TrimSpace(strings.Repeat("long ", 32)) + "…",
 		"  scratch: in the workspace /src/p, added as mcp:#6 x",
 		"  next: elsewhere a place",
+		// Held back until the model loads them (dax-toolsearch).
+		"  browser: on this machine, live, 17 tools deferred, 2 loaded — A browser",
+		"  one: on this machine, 1 tool deferred, 0 loaded",
 	}
 	if got := strings.Split(r.out, "\n"); !slices.Equal(got, want) {
 		t.Errorf("/mcp:\n%s\nwant:\n%s", r.out, strings.Join(want, "\n"))
 	}
 	if len(ctl.did) != 0 {
 		t.Errorf("listing asked the controls %v", ctl.did)
+	}
+}
+
+// /tools marks a held-back tool deferred until the conversation loads
+// it, and loaded after.
+func TestToolsMarksTheDeferredTools(t *testing.T) {
+	info := agent.Info{
+		Tools: []agentkit.ToolOrigin{
+			{Name: "read", Source: "WithTools"},
+			{Name: "mcp__web__search", Source: "mcp:#1 web", Deferred: true},
+			{Name: "mcp__web__fetch", Source: "mcp:#1 web", Deferred: true},
+			{Name: agentkit.ToolSearchTool, Source: "WithToolSearch"},
+		},
+		Loaded: []string{"mcp__web__fetch"},
+	}
+	want := "tools: read, mcp__web__search [mcp:#1 web, deferred], mcp__web__fetch [mcp:#1 web, loaded], tool_search [WithToolSearch]"
+	if got := assemblyLines(info)[0]; got != want {
+		t.Errorf("/tools = %q\nwant %q", got, want)
 	}
 }
 

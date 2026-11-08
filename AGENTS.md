@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`, `ext/toolsearch`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -301,6 +301,12 @@ before changing the shape.
   else the model plan_model replaced;
   `leavePlan`, the model `plan_model` replaced put back when plan is
   left unapproved).
+- `ext/toolsearch` (dax-toolsearch): agentkit's `WithToolSearch` over
+  `Env.DeferMCP` (`agent/mcpdefer.go`: a server's `defer`, else its
+  tool definitions past `agent.MCPDeferBytes`, decided once per
+  server), and the one rule allowing `tool_search`; `/mcp` and
+  `/tools` show what is deferred and loaded (`MCPServerInfo.Deferred`,
+  `Loaded`, `Info.Loaded`).
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse
   hooks (config `hooks`, the user's layer only) under Claude Code's
   protocol: PreToolUse as `PolicyHooks` (its word kept by call ID and
