@@ -32,8 +32,8 @@ github.com/ChristopherDavenport/agentsession v0.0.38 h1:F9QK5eIoxDzk55TPh57gBXN3
 github.com/ChristopherDavenport/agentsession v0.0.38/go.mod h1:SEJEvLEVVKBGUyML5Kr6SMmoU2v1dBPzbQPPTkAN2T4=
 github.com/ChristopherDavenport/agentskill v0.0.12 h1:8rAmdk+CC5TNnbGjKjfEObAZM9ZzsXd0iyz5kp3wAsE=
 github.com/ChristopherDavenport/agentskill v0.0.12/go.mod h1:T69z4M/C/M1lqSVnI94h4DWVDed64OtS7zrsk4Y9w7g=
-github.com/ChristopherDavenport/agentsmd v0.0.4 h1:mesauCJ08Z8bxzc7B2wiFPikcdyL8EYefAtmUIcUeTY=
-github.com/ChristopherDavenport/agentsmd v0.0.4/go.mod h1:8rJe3f3gD51Fy6EQsf0gFXo8wf0qsSdDZnjo0r8W9Yk=
+github.com/ChristopherDavenport/agentsmd v0.0.5 h1:7+eRYnp09hPtT7ht7xMprENNygrIaSj4QoNi10GESYs=
+github.com/ChristopherDavenport/agentsmd v0.0.5/go.mod h1:8rJe3f3gD51Fy6EQsf0gFXo8wf0qsSdDZnjo0r8W9Yk=
 github.com/ChristopherDavenport/agenttool v0.0.30 h1:MwzrKC2PD+stEmrlSbkiV+hjoyLiRay1V2rpLK9V+2g=
 github.com/ChristopherDavenport/agenttool v0.0.30/go.mod h1:cpphK2z4/YK+VIJ0hl90Sq6Ac03QG6tGLnnFGN90kwU=
 github.com/ChristopherDavenport/agenttool/mcpclient v0.0.30 h1:OHP8oeq/kHvBQDkMYmWWz6OcEn7c0NJrR9QiwoGD20Y=
