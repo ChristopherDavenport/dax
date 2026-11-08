@@ -23,9 +23,9 @@ import (
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
-// gitIn runs git in dir with the user's own config left out, and
+// snapGit runs git in dir with the user's own config left out, and
 // returns its standard output.
-func gitIn(t *testing.T, dir string, args ...string) string {
+func snapGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -44,15 +44,15 @@ func snapshotRepo(t *testing.T, dir string) string {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
 	}
-	gitIn(t, dir, "init", "-q")
+	snapGit(t, dir, "init", "-q")
 	for name, body := range map[string]string{"keep": "a\n", "gone": "b\n", "mod": "c\n", ".gitignore": "ignored\n"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	gitIn(t, dir, "add", ".")
-	gitIn(t, dir, "-c", "user.name=n", "-c", "user.email=e@x", "commit", "-qm", "base")
-	return gitIn(t, dir, "rev-parse", "HEAD")
+	snapGit(t, dir, "add", ".")
+	snapGit(t, dir, "-c", "user.name=n", "-c", "user.email=e@x", "commit", "-qm", "base")
+	return snapGit(t, dir, "rev-parse", "HEAD")
 }
 
 // snapshotSession is a recorded session for -p in dir over streamer,
@@ -221,13 +221,13 @@ func TestPrintSnapshotReproducesTheTree(t *testing.T) {
 
 	// The patch applied to the commit gives the tree.
 	clone := t.TempDir()
-	gitIn(t, clone, "clone", "-q", dir, ".")
-	gitIn(t, clone, "checkout", "-q", base)
+	snapGit(t, clone, "clone", "-q", dir, ".")
+	snapGit(t, clone, "checkout", "-q", base)
 	patch := filepath.Join(t.TempDir(), "final.diff")
 	if err := os.WriteFile(patch, r.Data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gitIn(t, clone, "apply", "--binary", patch)
+	snapGit(t, clone, "apply", "--binary", patch)
 	want := treeOf(t, dir, "ignored")
 	if _, ok := want["sub/new.txt"]; !ok || want["untracked"] != "u\n" {
 		t.Fatalf("the run left %v", want)
@@ -279,7 +279,7 @@ func TestPrintSnapshotLeavesTheRepositoryAlone(t *testing.T) {
 	// A staged change, an unstaged one, an untracked file and an
 	// ignored one.
 	os.WriteFile(filepath.Join(dir, "keep"), []byte("a2\n"), 0o644)
-	gitIn(t, dir, "add", "keep")
+	snapGit(t, dir, "add", "keep")
 	os.WriteFile(filepath.Join(dir, "mod"), []byte("c3\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "untracked"), []byte("u\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ignored"), []byte("i\n"), 0o644)
@@ -288,7 +288,7 @@ func TestPrintSnapshotLeavesTheRepositoryAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	tree := treeOf(t, dir)
-	status := gitIn(t, dir, "status", "--porcelain")
+	status := snapGit(t, dir, "status", "--porcelain")
 
 	sess := snapshotSession(t, dir, &steps{})
 	got, stderr := runSnapshot(t, sess, true, 0)
@@ -301,7 +301,7 @@ func TestPrintSnapshotLeavesTheRepositoryAlone(t *testing.T) {
 	if after := treeOf(t, dir); !equalTrees(after, tree) {
 		t.Errorf("the snapshot changed the work tree: %v, was %v", after, tree)
 	}
-	if after := gitIn(t, dir, "status", "--porcelain"); after != status {
+	if after := snapGit(t, dir, "status", "--porcelain"); after != status {
 		t.Errorf("git status after: %q, was %q", after, status)
 	}
 	if got.StartSnapshot == nil || got.StartSnapshot.Base != agent.StartBase+base || got.StartSnapshot.Error != "" {
