@@ -112,6 +112,13 @@ type Config struct {
 	// machine after ~/.dax/AGENTS.md and before the repository's
 	// AGENTS.md chain, in order, a missing one skipped.
 	AgentsMDGlobal []string `json:"agents_md_global,omitempty"`
+	// AgentsMDBudget is the most bytes the AGENTS.md files together may
+	// take, your own first: the first file that would take the total
+	// past it, and every file after it, is left out whole, and the
+	// session says so as it starts. 0 is DefaultAgentsMDBudget. A
+	// project's file bounds only the repository's files with it, and
+	// only below what your config leaves them.
+	AgentsMDBudget int64 `json:"agents_md_budget,omitempty"`
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
 	MemoryDir *string `json:"memory_dir,omitempty"`
@@ -687,6 +694,14 @@ func SecretInWorkspace(name string) error {
 // context_window may set.
 const MinProjectContextWindow = 4096
 
+// The bound on the AGENTS.md files' bytes (agents_md_budget): the
+// default, and the range a setting must be in.
+const (
+	DefaultAgentsMDBudget = 64 << 10
+	MinAgentsMDBudget     = 1 << 10
+	MaxAgentsMDBudget     = 1 << 20
+)
+
 // MaxDescriptionBytes bounds an MCP server's description.
 const MaxDescriptionBytes = 1024
 
@@ -894,6 +909,9 @@ func (l *Layer) validate() error {
 	}
 	if c.MaxReadBytes < 0 {
 		return errors.New("max_read_bytes: want a positive number of bytes")
+	}
+	if n := c.AgentsMDBudget; n != 0 && (n < MinAgentsMDBudget || n > MaxAgentsMDBudget) {
+		return fmt.Errorf("agents_md_budget: want a number of bytes from %d to %d", MinAgentsMDBudget, MaxAgentsMDBudget)
 	}
 	if c.MaxTurns < 0 {
 		return errors.New("max_turns: want a number of turns, 0 for no limit")
@@ -2133,6 +2151,11 @@ type Settings struct {
 	// and another tool's result send the model, in bytes, the defaults
 	// when no layer set one.
 	BashMaxOutput, ToolMaxOutput int
+	// AgentsMDBudget is the bound on the AGENTS.md files' bytes, the
+	// user's or the default, and ProjectAgentsMDBudget the project's
+	// bound on its own files where it is lower, 0 for none: a project
+	// never raises the total, nor spends the user's own files' share.
+	AgentsMDBudget, ProjectAgentsMDBudget int64
 	// ContextWindow is the user's context_window by model, and
 	// ProjectContextWindow the project's where it is lower than the
 	// user's or the user set none: the session takes the project's only
@@ -2179,7 +2202,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	s := Settings{
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		Memory:        Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500},
-		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput,
+		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput, AgentsMDBudget: DefaultAgentsMDBudget,
 		Policy:  PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
 		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
@@ -2312,6 +2335,16 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if n := l.ToolMaxOutput; n != 0 && (!l.Project || n < s.ToolMaxOutput) {
 			s.ToolMaxOutput = n
+		}
+		// Tighten only: a project's bound stands where it is lower than
+		// the total in force, and bounds the repository's files alone.
+		if n := l.AgentsMDBudget; n != 0 {
+			switch {
+			case !l.Project:
+				s.AgentsMDBudget = n
+			case n < s.AgentsMDBudget:
+				s.ProjectAgentsMDBudget = n
+			}
 		}
 		if l.MaxTurns != 0 {
 			// Tighten only: a project's limit stands where it is lower

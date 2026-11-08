@@ -233,6 +233,15 @@ type Options struct {
 	// NoUserAgentsMD leaves UserDir/AGENTS.md out of the chain under
 	// AgentsMD (dax -bare); the repository's files are still read.
 	NoUserAgentsMD bool
+	// AgentsMDBudget bounds the bytes of the files AgentsMD reads, the
+	// user's own first: the first file that would take the total past
+	// it, and every file after it, is left out whole and listed in
+	// Omitted (agentsmd's Options.Budget). 0 is
+	// config.DefaultAgentsMDBudget. AgentsMDProjectBudget, when more
+	// than 0, bounds the files after the user's own (the project's
+	// agents_md_budget), within AgentsMDBudget: a repository may make
+	// its files cost less, never leave the user's own out.
+	AgentsMDBudget, AgentsMDProjectBudget int64
 	// BashMaxOutput and ToolMaxOutput cap what a bash call's result, and
 	// a result of a tool that is not dax's own, send the model, in bytes
 	// (bash_max_output, mcp_max_output); 0 is config's default. What is
@@ -510,6 +519,10 @@ type Session struct {
 	// recorded is false when the store is one the session made in
 	// memory because nothing was to be kept.
 	recorded bool
+	// agentsMDBudget is the bound the AGENTS.md chain was read under,
+	// and agentsMDProject the project's bound on its own files when it
+	// was the tighter one, 0 otherwise (Info).
+	agentsMDBudget, agentsMDProject int64
 
 	ag     *agentturn.Agent  // the one agent
 	ctl    *agentkit.Control // the kit's control of it, which the session's own delegates to
@@ -857,13 +870,29 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.NoUserAgentsMD {
 			userDir = ""
 		}
-		mdOpts, personal, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal)
+		mdOpts, personal, refused := agentsMDOptions(ws, dir, userDir, o.AgentsMDGlobal, agentsMDBudget(o.AgentsMDBudget))
 		s.refused = append(s.refused, refused...)
-		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		res, err := agentsmd.Chain(agentsMDPath, mdOpts)
 		if err != nil {
 			return nil, fmt.Errorf("AGENTS.md: %w", err)
 		}
+		// The project's bound is on its own files: what the user's own
+		// took is theirs, and the rest is held to the project's bound.
+		// A file of the user's own left out leaves out every file after
+		// it, so the project's bound has nothing left to bound.
+		nestedOpts := mdOpts
+		if p := o.AgentsMDProjectBudget; p > 0 && !ownOmitted(res.Omitted, personal) {
+			nestedOpts.Budget = min(mdOpts.Budget, p)
+			if b := ownBytes(res.Files, personal) + p; b < mdOpts.Budget {
+				mdOpts.Budget = b
+				s.agentsMDProject = p
+				if res, err = agentsmd.Chain(agentsMDPath, mdOpts); err != nil {
+					return nil, fmt.Errorf("AGENTS.md: %w", err)
+				}
+			}
+		}
+		s.agentsMDBudget = mdOpts.Budget
+		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		agentsText = agentsmd.Render(res.Files)
 		// The person's own files are not an A2A caller's (caller.go).
 		s.callerMD = newCallerMD(res.Files, personal)
@@ -875,7 +904,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		}
 		// One hook for the main agent and its sub-agents (ChildBeforeTurn),
 		// which shares what it read of each bash line.
-		s.nestedMD = nestedAgentsMD(s.files, mdOpts, start, tool.BashSubjects(s.files, o.MaxReadBytes))
+		s.nestedMD = nestedAgentsMD(s.files, nestedOpts, start, tool.BashSubjects(s.files, o.MaxReadBytes))
 		kopts = append(kopts, agentkit.WithBeforeTurn(s.nestedMD))
 	}
 	kopts = append(kopts, agentkit.WithTools(a.tools...))

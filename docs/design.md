@@ -243,7 +243,14 @@ rendered without them in its place, and refuse a request that still
 names one (a guard rewrote the part), so the caller's record holds what
 it was sent.
 What a layer left out, a file over the budget or a skill that
-would not load, is printed at start as `omitted:`.
+would not load, is printed at start as `omitted:`. The AGENTS.md
+chain's budget is the user's `agents_md_budget` (64 KiB by default),
+spent on the person's own files first; a project's lower one bounds the
+repository's files alone, after those, so it never pushes the person's
+out (`Options.AgentsMDProjectBudget`). A file it leaves out is the one
+omission every front says without `-v` (`agentsMDNotice` in
+`front.go`): the model was not given instructions the person may count
+on, and the nearest file, the most specific, is the one to go.
 
 When dax-agents is on, the main agent's prompt carries its guide to the
 sub-agents: its context lasts the session, so broad reading goes to

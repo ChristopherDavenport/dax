@@ -5,6 +5,28 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: the AGENTS.md files' budget is 64 KiB, up from 32 KiB, so
+  dax's own AGENTS.md (33 KB) reaches the model in a session started in
+  this repository (#190).
+- Added: `agents_md_budget`, the most bytes the AGENTS.md files may
+  take together, yours first; 1024 to 1048576, default 65536. A
+  project's file may set it only lower, and then it bounds the
+  repository's files alone, after yours, so a repository can make its
+  own instructions cost less but never raise the total or push yours
+  out (#190).
+- Added: a file left out for the budget is said as the session starts,
+  without `-v`: one line in the terminal client (which waits for Enter
+  on a terminal, as for a warning), in the REPL, on `-p`'s standard
+  error, and to an editor (`-front acp`), which has no start line, as an
+  agent message ahead of the first prompt's reply and on standard
+  error; it names the file, its size, how many files after it went too,
+  the budget and the setting that raises it (#190, #194).
+- Changed: `agent.Options.AgentsMDBudget` and `AgentsMDProjectBudget`,
+  and `agent.Info.AgentsMDBudget` and `AgentsMDProject`, the bound the
+  chain was read under (#190).
+
 ## v0.0.34 - 2026-11-06
 
 - Changed: `extension.WithOwnGrants` and `OwnGrants`: a sub-agent's run

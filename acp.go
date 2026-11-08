@@ -88,6 +88,9 @@ type acpSession struct {
 	cancel context.CancelFunc
 	mode   string
 	done   []func()
+	// notice is the AGENTS.md over-budget line (agentsMDNotice), sent
+	// once, ahead of the first prompt's reply; "" for none.
+	notice string
 }
 
 func (f *acpFront) Run(ctx context.Context, sess *agent.Session) error {
@@ -289,6 +292,13 @@ func (s *acpServer) open(ctx context.Context, id string) (*agent.Session, error)
 func (s *acpServer) add(sess *agent.Session) *acpSession {
 	a := &acpSession{srv: s, sess: sess}
 	a.mode, _ = sess.Mode()
+	// ACP has no start line: the notice goes to standard error, which
+	// an editor keeps in its log, and to the person ahead of the first
+	// prompt's reply, as an agent message (run), the one update ACP
+	// shows that is not a call's.
+	if a.notice = agentsMDNotice(sess.Info(), s.f.info.UserConfig); a.notice != "" {
+		fmt.Fprintln(s.f.stderr(), "dax: "+render.Clean(a.notice))
+	}
 	a.done = append(a.done, sess.Answering(), sess.Subscribe(a.event))
 	s.mu.Lock()
 	s.sessions[sess.ID()] = a
@@ -527,6 +537,11 @@ func (a *acpSession) run(ctx context.Context, blocks []acp.ContentBlock) (acp.Pr
 		a.cancel = nil
 		a.cmu.Unlock()
 	}()
+	if a.notice != "" {
+		c := acp.Text("[dax] " + a.notice + "\n\n")
+		a.update(acp.SessionUpdate{SessionUpdate: acp.UpdateAgentMessage, Content: &c})
+		a.notice = ""
+	}
 	items, reply, err := a.items(ctx, blocks)
 	if err != nil {
 		return acp.PromptResponse{}, err
