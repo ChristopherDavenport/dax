@@ -142,7 +142,7 @@ func SessionOptionsOf(Options) []session.Option {
 			if s == nil {
 				return nil, nil
 			}
-			return envOf(s.x)(ctx)
+			return envOf(s.x, nil)(ctx)
 		}),
 		session.WithInstructionsParts(func(ctx context.Context, req openresponses.Request) ([]agentsession.InstructionPart, []agentsession.OmittedPart) {
 			s := slot.session()

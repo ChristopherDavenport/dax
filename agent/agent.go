@@ -588,6 +588,9 @@ type Session struct {
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
+	// snap is where the workspace started, as StartSnapshot read it
+	// (snapshot.go).
+	snap snapshots
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -1326,11 +1329,14 @@ func newHeader(o Options, root string, extra map[string]json.RawMessage) agentse
 // is in, from the workspace's descriptor (this machine, a container, a
 // remote runtime). The recorder writes it only when it differs from the
 // last one on the path, so a session that stays in one workspace holds
-// one entry and a resume in another says so.
-func (s *Session) envOption() session.Option { return session.WithEnv(envOf(s.x)) }
+// one entry and a resume in another says so. Once StartSnapshot has
+// read the commit the workspace's git tree is on, the entry's vcs says
+// it, and whether the tree was dirty.
+func (s *Session) envOption() session.Option { return session.WithEnv(envOf(s.x, s.snap.vcs)) }
 
-// envOf is the environment entry of the workspace x's tools act in.
-func envOf(x executor.Executor) func(context.Context) (*agentsession.EnvEntry, error) {
+// envOf is the environment entry of the workspace x's tools act in,
+// with vcs's answer as its vcs when vcs is set.
+func envOf(x executor.Executor, vcs func() *agentsession.VCS) func(context.Context) (*agentsession.EnvEntry, error) {
 	return func(context.Context) (*agentsession.EnvEntry, error) {
 		d := x.Descriptor()
 		e := agentsession.NewEnvEntry(d.Root)
@@ -1338,6 +1344,9 @@ func envOf(x executor.Executor) func(context.Context) (*agentsession.EnvEntry, e
 		// substitution rule compares (agentworkspace RFC 0001 §12).
 		w := e.SetWorkspace(d.Kind, d.Ref)
 		w.Host, w.Instance = d.Host, d.Instance
+		if vcs != nil {
+			e.VCS = vcs()
+		}
 		return e, nil
 	}
 }

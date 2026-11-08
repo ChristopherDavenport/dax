@@ -119,6 +119,12 @@ type Config struct {
 	// project's file bounds only the repository's files with it, and
 	// only below what your config leaves them.
 	AgentsMDBudget int64 `json:"agents_md_budget,omitempty"`
+	// SnapshotMaxBytes is the most bytes of a snapshot's patch -p's
+	// run-end snapshot keeps (-snapshot): a patch past it is recorded
+	// with its size and no data. 0 is DefaultSnapshotMaxBytes. The user
+	// sets it; a project cannot, since a raised bound puts more of the
+	// tree into every session.
+	SnapshotMaxBytes int64 `json:"snapshot_max_bytes,omitempty"`
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
 	MemoryDir *string `json:"memory_dir,omitempty"`
@@ -710,6 +716,16 @@ const (
 	MaxAgentsMDBudget     = 1 << 20
 )
 
+// The bound on a run-end snapshot's patch (snapshot_max_bytes): the
+// default, and the range a setting must be in. The patch is kept
+// inline in the session, base64 in a JSON line, so the most is far
+// below what a store could hold.
+const (
+	DefaultSnapshotMaxBytes = 8 << 20
+	MinSnapshotMaxBytes     = 1 << 10
+	MaxSnapshotMaxBytes     = 256 << 20
+)
+
 // MaxDescriptionBytes bounds an MCP server's description.
 const MaxDescriptionBytes = 1024
 
@@ -921,6 +937,9 @@ func (l *Layer) validate() error {
 	if n := c.AgentsMDBudget; n != 0 && (n < MinAgentsMDBudget || n > MaxAgentsMDBudget) {
 		return fmt.Errorf("agents_md_budget: want a number of bytes from %d to %d", MinAgentsMDBudget, MaxAgentsMDBudget)
 	}
+	if n := c.SnapshotMaxBytes; n != 0 && (n < MinSnapshotMaxBytes || n > MaxSnapshotMaxBytes) {
+		return fmt.Errorf("snapshot_max_bytes: want a number of bytes from %d to %d", MinSnapshotMaxBytes, MaxSnapshotMaxBytes)
+	}
 	if c.MaxTurns < 0 {
 		return errors.New("max_turns: want a number of turns, 0 for no limit")
 	}
@@ -976,7 +995,7 @@ func (l *Layer) validate() error {
 			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
 			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
-			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0},
+			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0}, {"snapshot_max_bytes", c.SnapshotMaxBytes != 0},
 			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil}, {"memory", c.Memory != nil},
 		} {
 			if f.set {
@@ -2169,6 +2188,9 @@ type Settings struct {
 	// bound on its own files where it is lower, 0 for none: a project
 	// never raises the total, nor spends the user's own files' share.
 	AgentsMDBudget, ProjectAgentsMDBudget int64
+	// SnapshotMaxBytes bounds a run-end snapshot's patch: the user's,
+	// or DefaultSnapshotMaxBytes.
+	SnapshotMaxBytes int64
 	// ContextWindow is the user's context_window by model, and
 	// ProjectContextWindow the project's where it is lower than the
 	// user's or the user set none: the session takes the project's only
@@ -2218,8 +2240,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		Provider: "ollama", Think: true, Effort: "low", Agents: true, MemoryDir: defaultMemory,
 		Memory:        Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500},
 		BashMaxOutput: DefaultBashMaxOutput, ToolMaxOutput: DefaultToolMaxOutput, AgentsMDBudget: DefaultAgentsMDBudget,
-		Policy:  PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
-		Sources: map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
+		SnapshotMaxBytes: DefaultSnapshotMaxBytes,
+		Policy:           PolicySettings{Builtin: true, Fallback: "ask", Mode: policy.ModeDefault},
+		Sources:          map[string]string{"provider": "default", "model": "default", "subagent_model": "default", "base_url": "default", "api_key_env": "default", "api_key_command": "default", "api_key_login": "default", "session_header": "default", "client_header": "default", "cache_ttl": "default", "subagent_cache_ttl": "default"},
 	}
 	servers := map[string]MCP{}
 	peers := map[string]a2a.Remote{}
@@ -2328,6 +2351,10 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.MaxReadBytes != 0 {
 			s.MaxReadBytes = l.MaxReadBytes
+		}
+		if n := l.SnapshotMaxBytes; n != 0 && !l.Project {
+			// Refused in a project's file when it was read.
+			s.SnapshotMaxBytes = n
 		}
 		for m, n := range l.ContextWindow {
 			switch {

@@ -88,7 +88,12 @@ type frontInfo struct {
 	// Trajectory (-trajectory) is where -p writes the session as an
 	// ATIF document once its run ends; Price prices it, nil for none.
 	Trajectory string
-	Price      agent.Price
+	// Snapshot (-snapshot) has -p record the workspace's change when
+	// its run ends, in a git tree (agent.Session's StartSnapshot and
+	// EndSnapshot); SnapshotMax bounds the bytes kept, 0 the default.
+	Snapshot    bool
+	SnapshotMax int64
+	Price       agent.Price
 	// Policy is a line saying what policy is in force.
 	Policy string
 	// Status is the terminal client's status line from the user's
@@ -295,6 +300,14 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			return agentturn.Trigger{}
 		},
 	}
+	snap, snapping := t.(snapshotter)
+	if snapping = snapping && f.info.Snapshot; snapping {
+		// Before the run, so its env entry names the commit it starts
+		// from.
+		if serr := snap.StartSnapshot(ctx, f.info.SnapshotMax); serr != nil {
+			fmt.Fprintf(stderr, "dax: %s\n", render.Clean(serr.Error()))
+		}
+	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
 	if end != nil && f.info.Trajectory != "" {
 		w, ok := t.(interface {
@@ -309,8 +322,19 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			return errors.Join(err, werr)
 		}
 	}
+	var snaps *agent.Snapshots
+	if end != nil && snapping {
+		// After the trajectory, which is the run's alone, and under the
+		// caller's context: -timeout's deadline has passed by now for a
+		// run it ended. A snapshot not recorded is said, and is not the
+		// run's failure.
+		var serr error
+		if snaps, serr = snap.EndSnapshot(context.WithoutCancel(ctx)); serr != nil {
+			fmt.Fprintf(stderr, "dax: %s\n", render.Clean(serr.Error()))
+		}
+	}
 	if end != nil && f.info.Result != "" {
-		if werr := writeResult(f.info.Result, sessionIDOf(t), end, usage.total()); werr != nil {
+		if werr := writeResult(f.info.Result, sessionIDOf(t), end, usage.total(), snaps); werr != nil {
 			return errors.Join(err, werr)
 		}
 	}
@@ -322,6 +346,13 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		return &runEnded{status: status, reason: end.Reason}
 	}
 	return nil
+}
+
+// snapshotter is a session that records the workspace a run left
+// (agent.Session).
+type snapshotter interface {
+	StartSnapshot(context.Context, int64) error
+	EndSnapshot(context.Context) (*agent.Snapshots, error)
 }
 
 // replFront reads lines from stdin: one goroutine reads, so a line

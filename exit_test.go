@@ -167,11 +167,12 @@ func TestPrintResultMatchesTheRecord(t *testing.T) {
 	}
 }
 
-// -timeout and -result are -p's.
+// -timeout, -result, -trajectory and -snapshot are -p's.
 func TestTimeoutAndResultGoWithPrint(t *testing.T) {
-	for _, flag := range [][]string{{"-timeout", "1m"}, {"-result", "r.json"}, {"-trajectory", "t.json"}} {
+	for _, flag := range [][]string{{"-timeout", "1m"}, {"-result", "r.json"}, {"-trajectory", "t.json"}, {"-snapshot=false"}} {
 		err := run(t.Context(), append(flag, "-sessions", ""), program{name: "dax", version: "test"})
-		if err == nil || !strings.Contains(err.Error(), flag[0]+" goes with -p") {
+		name, _, _ := strings.Cut(flag[0], "=")
+		if err == nil || !strings.Contains(err.Error(), name+" goes with -p") {
 			t.Errorf("%v without -p: %v", flag, err)
 		}
 	}

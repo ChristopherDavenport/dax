@@ -1,7 +1,8 @@
 package dax
 
 // This file is how -p tells its caller the way its run ended: an exit
-// status per end reason, -timeout, and -result's JSON.
+// status per end reason, -timeout, and -result's JSON, which names the
+// snapshot entries -snapshot recorded.
 
 import (
 	"context"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentturn"
+
+	"github.com/ChristopherDavenport/dax/agent"
 )
 
 // Exit statuses of -p by how its run ended. 0 is done and 1 an error,
@@ -92,6 +95,30 @@ type runResult struct {
 	Pending []resultCall `json:"pending"`
 	Exit    int          `json:"exit"`
 	Usage   resultUsage  `json:"usage"`
+	// Snapshot names the entry that records the workspace's change
+	// when the run ended (-snapshot), and StartSnapshot the one that
+	// records the change already there when it started, for a tree
+	// that was dirty; absent when none was recorded.
+	Snapshot      *resultSnapshot `json:"snapshot,omitempty"`
+	StartSnapshot *resultSnapshot `json:"start_snapshot,omitempty"`
+}
+
+// resultSnapshot is a snapshot entry as -result names it: its ID in the
+// session, the base its patch applies to, the patch's digest and size,
+// or why it holds no patch.
+type resultSnapshot struct {
+	Entry  string `json:"entry"`
+	Base   string `json:"base,omitempty"`
+	Digest string `json:"digest,omitempty"`
+	Size   int64  `json:"size"`
+	Error  string `json:"error,omitempty"`
+}
+
+func resultSnapshotOf(w *agent.SnapshotWritten) *resultSnapshot {
+	if w == nil {
+		return nil
+	}
+	return &resultSnapshot{Entry: w.Entry, Base: w.Base, Digest: w.Digest, Size: w.Size, Error: w.Error}
 }
 
 type resultCall struct {
@@ -110,8 +137,11 @@ type resultUsage struct {
 
 // writeResult writes -result's file, private to the user, as the rest
 // of what dax writes about a session is.
-func writeResult(path, session string, end *agentturn.RunEnd, usage resultUsage) error {
+func writeResult(path, session string, end *agentturn.RunEnd, usage resultUsage, snaps *agent.Snapshots) error {
 	r := runResult{Session: session, Reason: string(end.Reason), Cause: string(end.Cause), Pending: []resultCall{}, Exit: exitStatus(end), Usage: usage}
+	if snaps != nil {
+		r.Snapshot, r.StartSnapshot = resultSnapshotOf(snaps.Final), resultSnapshotOf(snaps.Start)
+	}
 	if end.Err != nil {
 		r.Error = end.Err.Error()
 	}
