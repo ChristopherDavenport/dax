@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.35 - 2026-11-08
 
 - Changed: an AGENTS.md file over `agents_md_budget` is cut at the last
   line that fits and sent, followed by agentsmd's line
