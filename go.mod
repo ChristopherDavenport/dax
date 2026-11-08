@@ -6,14 +6,14 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
 	github.com/ChristopherDavenport/agentconsole v0.0.16
 	github.com/ChristopherDavenport/agenteval v0.0.13
-	github.com/ChristopherDavenport/agentkit v0.0.17
+	github.com/ChristopherDavenport/agentkit v0.0.18
 	github.com/ChristopherDavenport/agentmemory v0.0.12
 	github.com/ChristopherDavenport/agentpolicy v0.0.20
 	github.com/ChristopherDavenport/agentredact v0.0.4
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.4
 	github.com/ChristopherDavenport/agentsession v0.0.38
 	github.com/ChristopherDavenport/agentskill v0.0.12
-	github.com/ChristopherDavenport/agentsmd v0.0.4
+	github.com/ChristopherDavenport/agentsmd v0.0.5
 	github.com/ChristopherDavenport/agenttool v0.0.30
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.30
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.30

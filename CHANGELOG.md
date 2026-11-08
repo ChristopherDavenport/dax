@@ -38,8 +38,10 @@ versions may break flags and the config file.
   tool is listed in the instructions by name and summary and loaded with
   `tool_search`, then sent from the next request on, after the tools
   already sent, for the rest of the session; the record has it as
-  `tools_added`, and `/resume` keeps it loaded. Its calls are decided by
-  its rules as before. A project's file may set `defer` to `true` alone,
+  `tools_added`, and `/resume` keeps it loaded, even when the run
+  stopped before the request that would have carried it. Its calls are decided by
+  its rules as before, and a held server's own instructions wait for
+  its first load. A project's file may set `defer` to `true` alone,
   and `dax workspace -servers` refuses it. `/mcp` shows each server's
   deferred and loaded counts, `/tools` marks each held tool.
 - Added: dax-toolsearch (`ext/toolsearch`), the extension that does it
@@ -54,7 +56,8 @@ versions may break flags and the config file.
   `tool_search` outputs (agentkit#132), a held server's MCP
   instructions sent only once one of its tools is loaded (agentkit#133),
   and `Config().Instructions` equal to the first request's
-  (agentkit#134).
+  (agentkit#134); and agentsmd v0.0.5, which agentkit v0.0.18 requires
+  (`Options.Truncate`, which dax does not set).
 
 ## v0.0.34 - 2026-11-06
 

@@ -147,3 +147,72 @@ func TestADeferredServersToolIsLoadedAndStillAsks(t *testing.T) {
 		t.Errorf("the served info lacks the deferred count: %s %v", data, err)
 	}
 }
+
+// A tool loaded by a run that stopped before its next request is still
+// loaded in the resumed session (agentkit#132): /mcp and /tools say so
+// before the first prompt, and the first request carries it after
+// tool_search.
+func TestALoadBeforeAStopIsKeptOnResume(t *testing.T) {
+	t.Setenv("DAX_TEST_MCP_SERVER", "1")
+	ctx := context.Background()
+	yes := true
+	model := &requestLog{scripted: &scripted{calls: [][2]string{
+		{agentkit.ToolSearchTool, `{"query":"select:mcp__held__where"}`},
+	}}}
+	o := options(t, model)
+	o.Extensions = append(o.Extensions, toolsearch.New())
+	o.Policy = confirmPolicy(t)
+	o.MCP = []MCPServer{{Name: "sent", Command: os.Args[0]}, {Name: "held", Command: os.Args[0], Defer: &yes}}
+	o.MaxTurns = 1
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := s.Prompt(ctx, openresponses.UserText("where does it run?"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.Reason != agentturn.ReasonStopped {
+		t.Fatalf("end = %q, want stopped at the turn limit", end.Reason)
+	}
+	model.mu.Lock()
+	sent := len(model.tools)
+	model.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("%d requests before the stop, want 1: no request may carry the load", sent)
+	}
+	id := s.ID()
+	s.Close()
+
+	again := &requestLog{scripted: &scripted{}}
+	o.Streamer = again
+	o.MaxTurns = 0
+	r, err := Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	info := r.Info()
+	if !slices.Equal(info.Loaded, []string{"mcp__held__where"}) {
+		t.Errorf("resumed Info.Loaded = %v, want the tool the stopped run loaded", info.Loaded)
+	}
+	for _, m := range info.MCP {
+		if m.Name == "held" && (m.Deferred == 0 || m.Loaded != 1) {
+			t.Errorf("held listed as %+v after the resume, want deferred with one loaded", m)
+		}
+	}
+	if _, err := r.Prompt(ctx, openresponses.UserText("and now?")); err != nil {
+		t.Fatal(err)
+	}
+	again.mu.Lock()
+	reqs := slices.Clone(again.tools)
+	again.mu.Unlock()
+	if len(reqs) == 0 {
+		t.Fatal("no request after the resume")
+	}
+	first := reqs[0]
+	i := slices.Index(first, agentkit.ToolSearchTool)
+	if i < 0 || !slices.Equal(first[i+1:], []string{"mcp__held__where"}) {
+		t.Errorf("resumed first request tools = %v, want tool_search then the loaded tool", first)
+	}
+}
