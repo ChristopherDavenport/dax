@@ -989,48 +989,71 @@ func assemblyLines(info agent.Info) []string {
 	}
 	lines := []string{"tools: " + strings.Join(names, ", ")}
 	for _, o := range info.Omitted {
+		if o.Part == agentsmd.PartID && o.Reason == agentsmd.Truncated.String() {
+			// A cut file is in the instructions, its first part sent.
+			lines = append(lines, fmt.Sprintf("omitted: %s: its first %d bytes sent, %d bytes left out", o, info.AgentsMDKept, o.Size))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("omitted: %s", o))
 	}
 	return lines
 }
 
 // agentsMDNotice is the start line every front prints, -v or not, when
-// the AGENTS.md chain left a file out for its budget: the first such
-// file, which the rest followed out, its size, the bound and what
-// sets it, so the person learns the model was not given the files.
-// "" when nothing was left out over budget.
+// the AGENTS.md chain did not give the model a file whole for its
+// budget: the file it cut, where and how much went, or the first file
+// it left out whole and its size; how many files after it were left
+// out; the bound and what sets it, so the person learns the model was
+// not given all the files. "" when the chain sent every file whole.
 func agentsMDNotice(si agent.Info, userConfig string) string {
 	var first *agentkit.Omission
+	cut := false
 	later := 0
 	for i, o := range si.Omitted {
-		if o.Part != agentsmd.PartID || o.Reason != agentsmd.OverBudget.String() {
+		if o.Part != agentsmd.PartID {
 			continue
 		}
-		if first == nil {
+		switch {
+		case first == nil && o.Reason == agentsmd.Truncated.String():
+			first, cut = &si.Omitted[i], true
+		case o.Reason != agentsmd.OverBudget.String():
+		case first == nil:
 			first = &si.Omitted[i]
-		} else {
+		default:
 			later++
 		}
 	}
 	if first == nil {
 		return ""
 	}
-	what := fmt.Sprintf("%s (%d bytes)", first.What, first.Size)
-	switch later {
-	case 0:
-	case 1:
-		what += " and 1 file after it"
-	default:
-		what += fmt.Sprintf(" and %d files after it", later)
+	var what string
+	if cut {
+		what = fmt.Sprintf("cut %s at %d bytes, %d bytes left out", first.What, si.AgentsMDKept, first.Size)
+		switch later {
+		case 0:
+		case 1:
+			what += ", and left out 1 file after it"
+		default:
+			what += fmt.Sprintf(", and left out %d files after it", later)
+		}
+	} else {
+		what = fmt.Sprintf("left out %s (%d bytes)", first.What, first.Size)
+		switch later {
+		case 0:
+		case 1:
+			what += " and 1 file after it"
+		default:
+			what += fmt.Sprintf(" and %d files after it", later)
+		}
 	}
 	if si.AgentsMDProject > 0 {
-		return fmt.Sprintf("AGENTS.md: left out %s, past the %d bytes the project's .dax/config.json allows its files (agents_md_budget)", what, si.AgentsMDProject)
+		return fmt.Sprintf("AGENTS.md: %s, past the %d bytes the project's .dax/config.json allows its files (agents_md_budget)", what, si.AgentsMDProject)
 	}
 	where := "your config"
 	if userConfig != "" {
 		where += " (" + userConfig + ")"
 	}
-	return fmt.Sprintf("AGENTS.md: left out %s, past the chain's budget of %d bytes; agents_md_budget in %s raises it", what, si.AgentsMDBudget, where)
+	return fmt.Sprintf("AGENTS.md: %s, past the chain's budget of %d bytes; agents_md_budget in %s raises it", what, si.AgentsMDBudget, where)
 }
 
 // mcpLines list the session's MCP servers, one a line: its name, where
