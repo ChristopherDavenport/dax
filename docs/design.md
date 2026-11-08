@@ -247,10 +247,15 @@ would not load, is printed at start as `omitted:`. The AGENTS.md
 chain's budget is the user's `agents_md_budget` (64 KiB by default),
 spent on the person's own files first; a project's lower one bounds the
 repository's files alone, after those, so it never pushes the person's
-out (`Options.AgentsMDProjectBudget`). A file it leaves out is the one
-omission every front says without `-v` (`agentsMDNotice` in
-`front.go`): the model was not given instructions the person may count
-on, and the nearest file, the most specific, is the one to go.
+out (`Options.AgentsMDProjectBudget`). The chain is read under
+agentsmd's `Truncate`: the first file over the budget is cut at a line,
+with agentsmd's marker, and sent, and the files after it are left out
+whole (`agentsMDOptions` in `agent/trust.go`, which the start chain, the
+kit's part and the nested hook share; `Info.AgentsMDKept` is the bytes
+of it sent). A file cut or left out is the one omission every front
+says without `-v` (`agentsMDNotice` in `front.go`): the model was not
+given instructions the person may count on, and the nearest file, the
+most specific, is the one to go.
 
 When dax-agents is on, the main agent's prompt carries its guide to the
 sub-agents: its context lasts the session, so broad reading goes to

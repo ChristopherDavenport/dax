@@ -7,6 +7,19 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: an AGENTS.md file over `agents_md_budget` is cut at the last
+  line that fits and sent, followed by agentsmd's line
+  `[agentsmd: N bytes of PATH left out over the budget]`, instead of
+  being left out whole; the files after it are still left out whole.
+  The start notice says so in the terminal client, the REPL, on `-p`'s
+  standard error and to an editor (`-front acp`): `AGENTS.md: cut PATH
+  at N bytes, M bytes left out[, and left out K files after it], past
+  ...`. `/tools` and `-v` list the cut file as `truncated`, with the
+  bytes sent and the bytes left out (#197).
+- Dependencies: agentsmd v0.0.5, up from v0.0.4, for
+  `Options.Truncate` (#197).
+- Changed: `agent.Info.AgentsMDKept`, the bytes of a cut AGENTS.md file
+  the model was given, ahead of the marker (#197).
 - Changed: the AGENTS.md files' budget is 64 KiB, up from 32 KiB, so
   dax's own AGENTS.md (33 KB) reaches the model in a session started in
   this repository (#190).
@@ -56,8 +69,7 @@ versions may break flags and the config file.
   `tool_search` outputs (agentkit#132), a held server's MCP
   instructions sent only once one of its tools is loaded (agentkit#133),
   and `Config().Instructions` equal to the first request's
-  (agentkit#134); and agentsmd v0.0.5, which agentkit v0.0.18 requires
-  (`Options.Truncate`, which dax does not set).
+  (agentkit#134).
 
 ## v0.0.34 - 2026-11-06
 

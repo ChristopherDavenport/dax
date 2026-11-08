@@ -361,6 +361,11 @@ type Info struct {
 	// so a file Omitted over budget was the project's to leave out.
 	AgentsMDBudget  int64 `json:",omitempty"`
 	AgentsMDProject int64 `json:",omitempty"`
+	// AgentsMDKept is the bytes of the file the chain cut at the budget
+	// that reached the model, ahead of agentsmd's marker: the file
+	// Omitted holds as truncated. 0 when none was cut, or when the
+	// marker alone was kept.
+	AgentsMDKept int64 `json:",omitempty"`
 	// Workspace says where its tools act: the kind, the ref and the
 	// root.
 	Workspace workspace.Descriptor
@@ -380,7 +385,7 @@ var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), AgentsMDBudget: s.agentsMDBudget, AgentsMDProject: s.agentsMDProject, Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Loaded: s.loadedTools(), Policy: s.policyInfo()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), AgentsMDBudget: s.agentsMDBudget, AgentsMDProject: s.agentsMDProject, AgentsMDKept: s.agentsMDKept, Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Loaded: s.loadedTools(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

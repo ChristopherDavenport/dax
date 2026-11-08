@@ -58,6 +58,9 @@ func TestTheAGENTSmdNotice(t *testing.T) {
 	over := func(what string, size int64) agentkit.Omission {
 		return agentkit.Omission{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: what, Reason: agentsmd.OverBudget.String(), Size: size}
 	}
+	cut := func(what string, size int64) agentkit.Omission {
+		return agentkit.Omission{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: what, Reason: agentsmd.Truncated.String(), Size: size}
+	}
 	for _, tc := range []struct {
 		name       string
 		info       agent.Info
@@ -75,6 +78,16 @@ func TestTheAGENTSmdNotice(t *testing.T) {
 			"AGENTS.md: left out /w/AGENTS.md (70000 bytes) and 2 files after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
 		{"the project's bound", agent.Info{AgentsMDBudget: 6144, AgentsMDProject: 4096, Omitted: []agentkit.Omission{over("/w/AGENTS.md", 5000), over("/w/a/AGENTS.md", 10)}}, "/u/config.json",
 			"AGENTS.md: left out /w/AGENTS.md (5000 bytes) and 1 file after it, past the 4096 bytes the project's .dax/config.json allows its files (agents_md_budget)"},
+		{"a cut", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488)}}, "/u/config.json",
+			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it"},
+		{"a cut and a file after it", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488), over("/w/a/AGENTS.md", 10)}}, "",
+			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, and left out 1 file after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
+		{"a cut and files after it", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488), over("/w/a/AGENTS.md", 10), over("/w/a/b/AGENTS.md", 10)}}, "",
+			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, and left out 2 files after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
+		{"a cut at the project's bound", agent.Info{AgentsMDBudget: 6144, AgentsMDProject: 4096, AgentsMDKept: 3000, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 2000), over("/w/a/AGENTS.md", 10)}}, "/u/config.json",
+			"AGENTS.md: cut /w/AGENTS.md at 3000 bytes, 2000 bytes left out, and left out 1 file after it, past the 4096 bytes the project's .dax/config.json allows its files (agents_md_budget)"},
+		{"a cut to the marker alone", agent.Info{AgentsMDBudget: 1024, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 70000)}}, "",
+			"AGENTS.md: cut /w/AGENTS.md at 0 bytes, 70000 bytes left out, past the chain's budget of 1024 bytes; agents_md_budget in your config raises it"},
 	} {
 		if got := agentsMDNotice(tc.info, tc.userConfig); got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
@@ -83,24 +96,26 @@ func TestTheAGENTSmdNotice(t *testing.T) {
 }
 
 // overBudget writes an AGENTS.md past the default budget in o's
-// directory, and turns the chain on.
+// directory, 65 lines of 1 KiB, and turns the chain on. The chain cuts
+// it after 63 lines (64512 bytes), the most that fit 65536 with
+// agentsmd's marker, and 2048 bytes are left out.
 func overBudget(t *testing.T, o *agent.Options) {
 	t.Helper()
 	if err := os.MkdirAll(o.Dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(o.Dir, "AGENTS.md"), []byte(strings.Repeat("x", 65<<10)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(o.Dir, "AGENTS.md"), []byte(strings.Repeat(strings.Repeat("x", 1023)+"\n", 65)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	o.AgentsMD = true
 }
 
-// The terminal client says, without -v, that an AGENTS.md was left out
-// for the budget, before it takes the screen.
+// The terminal client says, without -v, that an AGENTS.md was cut for
+// the budget, before it takes the screen.
 func TestTheTUISaysAnAGENTSmdOverBudgetWithoutVerbose(t *testing.T) {
 	r := startRig(t, &steps{}, policy.Rules{}, func(o *agent.Options) { overBudget(t, o) }, func(f *tuiFront) { f.info.UserConfig = "/u/config.json" }, true)
 	r.quit()
-	notice := "AGENTS.md: left out " + filepath.Join(r.dir, "AGENTS.md") + " (66560 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it\n"
+	notice := "AGENTS.md: cut " + filepath.Join(r.dir, "AGENTS.md") + " at 64512 bytes, 2048 bytes left out, past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it\n"
 	if want, pre := notice+"To resume this session: dax -resume "+r.sess.ID()+"\n", r.pre.String(); pre != want {
 		t.Errorf("the output is %q, want %q", pre, want)
 	}
@@ -126,7 +141,7 @@ func TestPrintSaysAnAGENTSmdOverBudgetOnStderr(t *testing.T) {
 	if err := f.run(t.Context(), sess, sess); err != nil {
 		t.Fatal(err)
 	}
-	want := "AGENTS.md: left out " + filepath.Join(o.Dir, "AGENTS.md") + " (66560 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config raises it\n"
+	want := "AGENTS.md: cut " + filepath.Join(o.Dir, "AGENTS.md") + " at 64512 bytes, 2048 bytes left out, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it\n"
 	if !strings.Contains(stderr.String(), want) {
 		t.Errorf("standard error %q lacks %q", stderr.String(), want)
 	}
@@ -134,7 +149,8 @@ func TestPrintSaysAnAGENTSmdOverBudgetOnStderr(t *testing.T) {
 
 // An editor (-front acp) has no start line: the notice goes to standard
 // error, and to the person as an agent message ahead of the first
-// prompt's reply, once (#194).
+// prompt's reply, once (#194), with the same words for a cut file
+// (#197).
 func TestAnEditorIsToldOfAnAGENTSmdOverBudget(t *testing.T) {
 	base := t.TempDir()
 	o := agent.Options{
@@ -155,7 +171,7 @@ func TestAnEditorIsToldOfAnAGENTSmdOverBudget(t *testing.T) {
 	e.call(acp.MethodInitialize, acp.InitializeRequest{ProtocolVersion: 1})
 	var created acp.NewSessionResponse
 	json.Unmarshal(e.call(acp.MethodSessionNew, acp.NewSessionRequest{CWD: o.Dir}).Result, &created)
-	notice := "AGENTS.md: left out " + filepath.Join(o.Dir, "AGENTS.md") + " (66560 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it"
+	notice := "AGENTS.md: cut " + filepath.Join(o.Dir, "AGENTS.md") + " at 64512 bytes, 2048 bytes left out, past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it"
 	if got := stderr.String(); got != "dax: "+notice+"\n" {
 		t.Errorf("standard error %q, want the notice", got)
 	}
@@ -171,5 +187,23 @@ func TestAnEditorIsToldOfAnAGENTSmdOverBudget(t *testing.T) {
 		if told != want || strings.Count(strings.Join(texts, ""), notice) != map[bool]int{true: 1, false: 0}[want] {
 			t.Errorf("prompt %d: agent messages %q; want the notice first: %v", i+1, texts, want)
 		}
+	}
+}
+
+// /tools and -v list a cut file among what was left out, with the
+// bytes sent and the bytes left out, since its first part is in the
+// instructions; a file left out whole is listed as before.
+func TestTheAssemblyListsACutAGENTSmd(t *testing.T) {
+	info := agent.Info{AgentsMDKept: 64512, Omitted: []agentkit.Omission{
+		{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: "/w/AGENTS.md", Reason: agentsmd.Truncated.String(), Size: 2048},
+		{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: "/w/a/AGENTS.md", Reason: agentsmd.OverBudget.String(), Size: 10},
+	}}
+	got := assemblyLines(info)[1:]
+	want := []string{
+		"omitted: agentsmd: /w/AGENTS.md (truncated): its first 64512 bytes sent, 2048 bytes left out",
+		"omitted: agentsmd: /w/a/AGENTS.md (over budget)",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

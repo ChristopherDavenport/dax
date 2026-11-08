@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"path"
 	"syscall"
 
+	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -635,9 +637,10 @@ func TestAContainersInstructionsComeFromItsFiles(t *testing.T) {
 	}
 }
 
-// The kit names a file of the chain it leaves out by its name in the
-// workspace's file system; the session reports it by its path in the
-// workspace's root, as the start lines show it.
+// The kit names a file of the chain it leaves out or cuts by its name
+// in the workspace's file system; the session reports it by its path in
+// the workspace's root, as the start lines show it. A file of one line
+// over the budget is cut to agentsmd's marker alone.
 func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
 	o := options(t, &echo.Adapter{})
 	write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat("x", 65<<10))
@@ -652,7 +655,7 @@ func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
 			got = append(got, om.What+" "+om.Reason)
 		}
 	}
-	if want := filepath.Join(o.Dir, "AGENTS.md") + " over budget"; len(got) != 1 || got[0] != want {
+	if want := filepath.Join(o.Dir, "AGENTS.md") + " truncated"; len(got) != 1 || got[0] != want {
 		t.Errorf("omitted %q, want %q", got, want)
 	}
 }
@@ -660,8 +663,9 @@ func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
 // The chain's budget (#190): 64 KiB by default, which a 33 KB file
 // fits; the user's agents_md_budget raises or lowers it; the project's
 // bounds the repository's files alone, after the user's own, and never
-// raises the total. A file over its bound is left out whole and Info
-// says which bound it was.
+// raises the total. A file over its bound is cut there (a file of one
+// line, as here, to agentsmd's marker alone) and Info says which bound
+// it was.
 func TestTheAGENTSmdBudget(t *testing.T) {
 	const own = 2 << 10
 	for _, tc := range []struct {
@@ -693,7 +697,7 @@ func TestTheAGENTSmdBudget(t *testing.T) {
 			defer s.Close()
 			var got []string
 			for _, om := range s.Omitted() {
-				if om.Part == agentsmd.PartID && om.Reason == "over budget" {
+				if om.Part == agentsmd.PartID && (om.Reason == "truncated" || om.Reason == "over budget") {
 					got = append(got, filepath.Base(filepath.Dir(om.What)))
 				}
 			}
@@ -782,4 +786,89 @@ func TestTheGlobalAGENTSmdFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A file over the budget is cut at a line and still sent (#197): the
+// session's instructions hold its first part and agentsmd's marker,
+// the file is reported once, truncated, with the bytes cut off, Info
+// holds the bytes sent. A resumed session reads the same chain and
+// sends the same instructions.
+func TestAnAGENTSmdOverTheBudgetIsCutAndSent(t *testing.T) {
+	line := strings.Repeat("x", 1023) + "\n"
+	m := &requests{}
+	o := options(t, m)
+	o.AgentsMDBudget = 4 << 10
+	write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat(line, 5)+"past the budget\n")
+
+	s, err := New(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(o.Dir, "AGENTS.md")
+	whole := int64(5*len(line) + len("past the budget\n"))
+	// Three lines and the marker fit 4 KiB; a fourth line does not.
+	kept := int64(3 * len(line))
+	// The chain is read through the workspace's file system, so the
+	// marker names the file as that reads it.
+	marker := fmt.Sprintf("[agentsmd: %d bytes of %s left out over the budget]\n", whole-kept, "AGENTS.md")
+	instr := s.ag.Config().Instructions
+	if !strings.Contains(instr, strings.Repeat(line, 3)+marker) || strings.Contains(instr, "past the budget\n") {
+		t.Fatalf("the instructions do not hold the file's first %d bytes and the marker %q", kept, marker)
+	}
+	var cut []agentkit.Omission
+	for _, om := range s.Omitted() {
+		if om.Part == agentsmd.PartID {
+			cut = append(cut, om)
+		}
+	}
+	if len(cut) != 1 || cut[0].What != path || cut[0].Reason != "truncated" || cut[0].Size != whole-kept {
+		t.Fatalf("omitted %+v, want %s truncated with %d bytes cut off", cut, path, whole-kept)
+	}
+	if info := s.Info(); info.AgentsMDKept != kept {
+		t.Errorf("Info's AgentsMDKept = %d, want %d", info.AgentsMDKept, kept)
+	}
+	if _, err := promptOn(t.Context(), s, "hi", nil); err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := len(m.instructions())
+
+	r, err := Resume(t.Context(), o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := promptOn(t.Context(), r, "again", nil); err != nil {
+		t.Fatal(err)
+	}
+	sent := m.instructions()
+	if before == 0 || len(sent) <= before {
+		t.Fatalf("%d requests before the resume, %d in all", before, len(sent))
+	}
+	if sent[0] != sent[before] || !strings.Contains(sent[0], marker) {
+		t.Errorf("the first request's instructions and the resumed session's differ, or lack the marker:\n%s\n---\n%s", sent[0], sent[before])
+	}
+}
+
+// requests is the echo model, keeping each request's instructions.
+type requests struct {
+	echo.Adapter
+	mu    sync.Mutex
+	instr []string
+}
+
+func (m *requests) CreateStream(ctx context.Context, req openresponses.Request, sink openresponses.EventSink) error {
+	m.mu.Lock()
+	m.instr = append(m.instr, req.Instructions)
+	m.mu.Unlock()
+	return m.Adapter.CreateStream(ctx, req, sink)
+}
+
+func (m *requests) instructions() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.instr)
 }

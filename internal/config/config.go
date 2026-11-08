@@ -114,8 +114,8 @@ type Config struct {
 	AgentsMDGlobal []string `json:"agents_md_global,omitempty"`
 	// AgentsMDBudget is the most bytes the AGENTS.md files together may
 	// take, your own first: the first file that would take the total
-	// past it, and every file after it, is left out whole, and the
-	// session says so as it starts. 0 is DefaultAgentsMDBudget. A
+	// past it is cut at a line, every file after it is left out whole,
+	// and the session says so as it starts. 0 is DefaultAgentsMDBudget. A
 	// project's file bounds only the repository's files with it, and
 	// only below what your config leaves them.
 	AgentsMDBudget int64 `json:"agents_md_budget,omitempty"`

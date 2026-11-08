@@ -235,8 +235,9 @@ type Options struct {
 	NoUserAgentsMD bool
 	// AgentsMDBudget bounds the bytes of the files AgentsMD reads, the
 	// user's own first: the first file that would take the total past
-	// it, and every file after it, is left out whole and listed in
-	// Omitted (agentsmd's Options.Budget). 0 is
+	// it is cut at a line, with agentsmd's marker, and every file after
+	// it is left out whole, each listed in Omitted (agentsmd's
+	// Options.Budget and Truncate). 0 is
 	// config.DefaultAgentsMDBudget. AgentsMDProjectBudget, when more
 	// than 0, bounds the files after the user's own (the project's
 	// agents_md_budget), within AgentsMDBudget: a repository may make
@@ -536,8 +537,9 @@ type Session struct {
 	recorded bool
 	// agentsMDBudget is the bound the AGENTS.md chain was read under,
 	// and agentsMDProject the project's bound on its own files when it
-	// was the tighter one, 0 otherwise (Info).
-	agentsMDBudget, agentsMDProject int64
+	// was the tighter one, 0 otherwise; agentsMDKept the bytes of a file
+	// the chain cut at the budget that reach the model (Info).
+	agentsMDBudget, agentsMDProject, agentsMDKept int64
 
 	ag     *agentturn.Agent  // the one agent
 	ctl    *agentkit.Control // the kit's control of it, which the session's own delegates to
@@ -910,6 +912,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			}
 		}
 		s.agentsMDBudget = mdOpts.Budget
+		s.agentsMDKept, _ = cutKept(res)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		agentsText = agentsmd.Render(res.Files)
 		// The person's own files are not an A2A caller's (caller.go).
