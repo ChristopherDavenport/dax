@@ -7,6 +7,30 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Changed: the AGENTS.md files' budget is 64 KiB, up from 32 KiB, so
+  dax's own AGENTS.md (33 KB) reaches the model in a session started in
+  this repository (#190).
+- Added: `agents_md_budget`, the most bytes the AGENTS.md files may
+  take together, yours first; 1024 to 1048576, default 65536. A
+  project's file may set it only lower, and then it bounds the
+  repository's files alone, after yours, so a repository can make its
+  own instructions cost less but never raise the total or push yours
+  out (#190).
+- Added: a file left out for the budget is said as the session starts,
+  without `-v`: one line in the terminal client (which waits for Enter
+  on a terminal, as for a warning), in the REPL, on `-p`'s standard
+  error, and to an editor (`-front acp`), which has no start line, as an
+  agent message ahead of the first prompt's reply and on standard
+  error; it names the file, its size, how many files after it went too,
+  the budget and the setting that raises it (#190, #194).
+- Changed: dax's own AGENTS.md is 11 KB, down from 33 KB. Its layout is
+  a map of packages, one line each, with `docs/design.md` for the
+  detail. The changelog, commit, pull request and release procedure is
+  the repository's `release` skill (`.dax/skills/release`), which a
+  session loads when it does that work (#193).
+- Changed: `agent.Options.AgentsMDBudget` and `AgentsMDProjectBudget`,
+  and `agent.Info.AgentsMDBudget` and `AgentsMDProject`, the bound the
+  chain was read under (#190).
 - Added: an MCP server's tools can be held back until the model asks
   for them (#189). `mcp_servers.<name>.defer` is `true` or `false`;
   left out, a server whose tool definitions pass 8 KiB
@@ -25,8 +49,12 @@ versions may break flags and the config file.
 - Changed: `extension.Env.DeferMCP`; `agent.MCPServer.Defer`,
   `agent.MCPServerInfo.Deferred` and `Loaded`, `agent.Info.Loaded`,
   `agent.MCPDeferBytes`.
-- Changed: requires the agentkit release with `WithToolSearch`
-  (agentkit#130); go.mod names it once it is tagged.
+- Dependencies: agentkit v0.0.18, which brings `WithToolSearch`
+  (agentkit#130): a held tool's load read back from the record's
+  `tool_search` outputs (agentkit#132), a held server's MCP
+  instructions sent only once one of its tools is loaded (agentkit#133),
+  and `Config().Instructions` equal to the first request's
+  (agentkit#134).
 
 ## v0.0.34 - 2026-11-06
 

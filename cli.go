@@ -603,6 +603,7 @@ func run(ctx context.Context, args []string, p program) error {
 		ToolMaxOutput:  settings.ToolMaxOutput,
 		Log:            func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
+	opts.AgentsMDBudget, opts.AgentsMDProjectBudget = settings.AgentsMDBudget, settings.ProjectAgentsMDBudget
 	if p.named {
 		opts.Name, opts.Version = p.name, p.version
 	}
@@ -684,6 +685,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
+		UserConfig: user.Path,
 	}
 	// The session to close at the end: the one opened here, or the one
 	// a front moved to (/new, /resume).

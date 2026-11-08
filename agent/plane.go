@@ -355,6 +355,12 @@ type Info struct {
 	Path    string
 	Tools   []agentkit.ToolOrigin
 	Omitted []agentkit.Omission
+	// AgentsMDBudget is the bound in bytes the AGENTS.md chain was read
+	// under, 0 when it was not read; AgentsMDProject is the project's
+	// own bound (its agents_md_budget) when that was the tighter one,
+	// so a file Omitted over budget was the project's to leave out.
+	AgentsMDBudget  int64 `json:",omitempty"`
+	AgentsMDProject int64 `json:",omitempty"`
 	// Workspace says where its tools act: the kind, the ref and the
 	// root.
 	Workspace workspace.Descriptor
@@ -374,7 +380,7 @@ var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Loaded: s.loadedTools(), Policy: s.policyInfo()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), AgentsMDBudget: s.agentsMDBudget, AgentsMDProject: s.agentsMDProject, Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Loaded: s.loadedTools(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

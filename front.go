@@ -37,7 +37,9 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/toolview"
+	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -92,6 +94,9 @@ type frontInfo struct {
 	// Status is the terminal client's status line from the user's
 	// config, nil for the client's default line.
 	Status *config.Status
+	// UserConfig is the user's config file, which agents_md_budget is
+	// raised in; empty when none is read (-bare).
+	UserConfig string
 	// Windows are the context windows dax believes, by model name, for
 	// the status line's context segment.
 	Windows map[string]int64
@@ -211,15 +216,20 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		defer cancel()
 	}
 	info := ctl.Info()
+	stderr := f.stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	if info.Recorded {
 		// On standard error, so standard output stays the run's, and
 		// before the run, so a run killed at its deadline still said
 		// which session it is.
-		stderr := f.stderr
-		if stderr == nil {
-			stderr = os.Stderr
-		}
 		fmt.Fprintf(stderr, "session: %s\n", info.ID)
+	}
+	if l := agentsMDNotice(info, f.info.UserConfig); l != "" {
+		// On standard error too: the model was not given instructions
+		// the person may count on, which a script's output would hide.
+		fmt.Fprintln(stderr, render.Clean(l))
 	}
 	showAssembly(os.Stdout, info)
 	showPending(os.Stdout, t, "resumed")
@@ -431,6 +441,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	}
 	if info.Recorded {
 		fmt.Fprintln(w, sessionLine(info))
+	}
+	if l := agentsMDNotice(info, f.info.UserConfig); l != "" {
+		fmt.Fprintln(w, render.Clean(l))
 	}
 	showAssembly(w, info)
 	showPending(w, t, "resumed")
@@ -986,6 +999,45 @@ func assemblyLines(info agent.Info) []string {
 		lines = append(lines, fmt.Sprintf("omitted: %s", o))
 	}
 	return lines
+}
+
+// agentsMDNotice is the start line every front prints, -v or not, when
+// the AGENTS.md chain left a file out for its budget: the first such
+// file, which the rest followed out, its size, the bound and what
+// sets it, so the person learns the model was not given the files.
+// "" when nothing was left out over budget.
+func agentsMDNotice(si agent.Info, userConfig string) string {
+	var first *agentkit.Omission
+	later := 0
+	for i, o := range si.Omitted {
+		if o.Part != agentsmd.PartID || o.Reason != agentsmd.OverBudget.String() {
+			continue
+		}
+		if first == nil {
+			first = &si.Omitted[i]
+		} else {
+			later++
+		}
+	}
+	if first == nil {
+		return ""
+	}
+	what := fmt.Sprintf("%s (%d bytes)", first.What, first.Size)
+	switch later {
+	case 0:
+	case 1:
+		what += " and 1 file after it"
+	default:
+		what += fmt.Sprintf(" and %d files after it", later)
+	}
+	if si.AgentsMDProject > 0 {
+		return fmt.Sprintf("AGENTS.md: left out %s, past the %d bytes the project's .dax/config.json allows its files (agents_md_budget)", what, si.AgentsMDProject)
+	}
+	where := "your config"
+	if userConfig != "" {
+		where += " (" + userConfig + ")"
+	}
+	return fmt.Sprintf("AGENTS.md: left out %s, past the chain's budget of %d bytes; agents_md_budget in %s raises it", what, si.AgentsMDBudget, where)
 }
 
 // mcpLines list the session's MCP servers, one a line: its name, where

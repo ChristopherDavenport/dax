@@ -44,13 +44,19 @@ type rpcMsg struct {
 	Error   *acp.Error      `json:"error,omitempty"`
 }
 
-// startACP runs dax's ACP front over sess, its notes in a buffer.
+// startACP runs dax's ACP front over sess, its notes discarded.
 func startACP(t *testing.T, sess *agent.Session, dir string) *editor {
+	t.Helper()
+	return startACPFront(t, sess, &acpFront{info: frontInfo{Dir: dir}, errw: io.Discard})
+}
+
+// startACPFront runs f over sess, on pipes of the editor's.
+func startACPFront(t *testing.T, sess *agent.Session, f *acpFront) *editor {
 	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	e := &editor{t: t, in: inW, wait: map[string]chan rpcMsg{}, done: make(chan error, 1)}
-	f := &acpFront{info: frontInfo{Dir: dir}, in: inR, out: outW, errw: io.Discard}
+	f.in, f.out = inR, outW
 	go func() {
 		err := f.Run(context.Background(), sess)
 		outW.Close()

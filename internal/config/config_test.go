@@ -1583,6 +1583,38 @@ func TestServersWorkspacePrecedence(t *testing.T) {
 
 // bash_max_output and mcp_max_output are the user's or the default, a
 // project's only when lower than what is in force (#172).
+// agents_md_budget (#190) is the user's or the default; a project's
+// lower one is kept apart, as its bound on its own files, and a higher
+// one is no tighter and dropped.
+func TestAgentsMDBudgetPrecedence(t *testing.T) {
+	user := parse(t, `{"agents_md_budget":131072}`, false)
+	lower := parse(t, `{"agents_md_budget":4096}`, true)
+	higher := parse(t, `{"agents_md_budget":1048576}`, true)
+	for _, tc := range []struct {
+		name           string
+		layers         []Layer
+		total, project int64
+	}{
+		{"the default", nil, DefaultAgentsMDBudget, 0},
+		{"the user's raises it", []Layer{user}, 131072, 0},
+		{"a project's lower one bounds its files", []Layer{user, lower}, 131072, 4096},
+		{"a project's higher one raises nothing", []Layer{user, higher}, 131072, 0},
+		{"nor over the default", []Layer{higher}, DefaultAgentsMDBudget, 0},
+	} {
+		s, err := Resolve(tc.layers, Flags{}, "")
+		if err != nil || s.AgentsMDBudget != tc.total || s.ProjectAgentsMDBudget != tc.project {
+			t.Errorf("%s: %d, %d (%v), want %d, %d", tc.name, s.AgentsMDBudget, s.ProjectAgentsMDBudget, err, tc.total, tc.project)
+		}
+	}
+	for _, bad := range []string{`{"agents_md_budget":-1}`, `{"agents_md_budget":100}`, `{"agents_md_budget":2097152}`} {
+		for _, project := range []bool{false, true} {
+			if _, err := Parse([]byte(bad), "/u/c.json", project); err == nil || !strings.Contains(err.Error(), "agents_md_budget") {
+				t.Errorf("%s (project %v): %v", bad, project, err)
+			}
+		}
+	}
+}
+
 func TestOutputCapPrecedence(t *testing.T) {
 	user := parse(t, `{"bash_max_output":50000,"mcp_max_output":200000}`, false)
 	lower := parse(t, `{"bash_max_output":10000,"mcp_max_output":20000}`, true)

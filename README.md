@@ -515,6 +515,7 @@ names the file and the field.
 | `instructions_file` | your own instructions, added to the system prompt after dax's; a relative path is relative to the file that names it |
 | `skills_dirs` | more skill directories, after `.dax/skills` and `~/.dax/skills`; one that does not exist is an error |
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
+| `agents_md_budget` | the most bytes the `AGENTS.md` files may take together, yours first (`~/.dax/AGENTS.md`, `agents_md_global`), then the repository's from its root down; default 65536. The first file that would take the total past it, and every file after it, is left out whole, never cut short, and the session says so as it starts, in the terminal client, the REPL, on `-p`'s standard error, and to an editor (`-front acp`) as a message ahead of the first reply and on standard error, naming the file, its size and the budget. 1024 to 1048576. A project's file may set it only lower, and then it bounds the repository's files alone, after yours: a repository can make its own instructions cost less, never raise the total or push yours out |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
 | `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. Not in a project file: a repository cannot turn on writes to your memory |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
@@ -2258,7 +2259,13 @@ starts, the nearest file last; a directory above the repository is not
 read. With no repository only the start directory's file is read. A
 file you want in every session whatever the repository, such as one in a
 directory above your checkouts, goes in your config's
-`agents_md_global`.
+`agents_md_global`. The files together are held to `agents_md_budget`
+(64 KiB by default): the first that would take them past it, and every
+one after it, is left out whole, and the session says so as it starts:
+
+```
+AGENTS.md: left out /work/repo/svc/AGENTS.md (70144 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config (/home/you/.config/dax/config.json) raises it
+```
 
 ## Building on dax
 

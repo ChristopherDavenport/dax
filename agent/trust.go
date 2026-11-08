@@ -80,14 +80,46 @@ func serversOnly(ws workspace.Workspace) bool {
 // root, where the session starts.
 const agentsMDPath = "."
 
-// agentsMDOptions are the options the chain is read with, over ws's
-// file system, the person's own files among them, and the files the
-// screening left out. userDir's AGENTS.md and the global files are the
+// agentsMDBudget is the chain's budget: n, or the default when n is 0
+// or less.
+func agentsMDBudget(n int64) int64 {
+	if n > 0 {
+		return n
+	}
+	return config.DefaultAgentsMDBudget
+}
+
+// ownBytes are the bytes of the person's own files (personal) among
+// the chain's files: the share a project's bound leaves alone.
+func ownBytes(files []agentsmd.File, personal []string) int64 {
+	var n int64
+	for _, f := range files {
+		if mine(personal, f.Path) {
+			n += int64(len(f.Content))
+		}
+	}
+	return n
+}
+
+// ownOmitted reports whether the chain left out a file of the
+// person's own (personal).
+func ownOmitted(omitted []agentsmd.Omitted, personal []string) bool {
+	for _, o := range omitted {
+		if mine(personal, o.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+// agentsMDOptions are the options the chain is read with, within
+// budget bytes, over ws's file system, the person's own files among
+// them, and the files the screening left out. userDir's AGENTS.md and the global files are the
 // user's, read on this machine and not screened; a global file that is
 // also one of the others is read once, in the other's place, and is
 // that other's: a project's file a global names is the project's, not
 // the person's own (caller.go).
-func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []string) (agentsmd.Options, []string, []agentkit.Omission) {
+func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []string, budget int64) (agentsmd.Options, []string, []agentkit.Omission) {
 	var host []string
 	var omitted []agentkit.Omission
 	start, local := hostDir(ws, dir)
@@ -117,7 +149,7 @@ func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []strin
 		FS:     fsys,
 		Root:   agentsMDPath,
 		Extra:  extra,
-		Budget: 32 << 10,
+		Budget: budget,
 	}, personal, omitted
 }
 

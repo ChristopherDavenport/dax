@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -639,7 +640,7 @@ func TestAContainersInstructionsComeFromItsFiles(t *testing.T) {
 // workspace's root, as the start lines show it.
 func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
 	o := options(t, &echo.Adapter{})
-	write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat("x", 33<<10))
+	write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat("x", 65<<10))
 	s, err := New(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
@@ -653,6 +654,57 @@ func TestAnAGENTSmdOverTheBudgetIsNamedByItsPath(t *testing.T) {
 	}
 	if want := filepath.Join(o.Dir, "AGENTS.md") + " over budget"; len(got) != 1 || got[0] != want {
 		t.Errorf("omitted %q, want %q", got, want)
+	}
+}
+
+// The chain's budget (#190): 64 KiB by default, which a 33 KB file
+// fits; the user's agents_md_budget raises or lowers it; the project's
+// bounds the repository's files alone, after the user's own, and never
+// raises the total. A file over its bound is left out whole and Info
+// says which bound it was.
+func TestTheAGENTSmdBudget(t *testing.T) {
+	const own = 2 << 10
+	for _, tc := range []struct {
+		name             string
+		project          int // the project's AGENTS.md, bytes
+		budget, projectB int64
+		omitted          []string // files left out over budget, by base dir
+		info             [2]int64 // Info's AgentsMDBudget, AgentsMDProject
+	}{
+		{"a 33 KB file fits the default", 33 << 10, 0, 0, nil, [2]int64{64 << 10, 0}},
+		{"a file past the default is left out", 65 << 10, 0, 0, []string{"project"}, [2]int64{64 << 10, 0}},
+		{"the user's budget raises it", 65 << 10, 128 << 10, 0, nil, [2]int64{128 << 10, 0}},
+		{"the user's budget lowers it", 33 << 10, 16 << 10, 0, []string{"project"}, [2]int64{16 << 10, 0}},
+		{"the project's bounds its own files", 4 << 10, 0, 3 << 10, []string{"project"}, [2]int64{own + 3<<10, 3 << 10}},
+		{"the project's bound leaves the user's own file in", 4 << 10, 0, 1 << 10, []string{"project"}, [2]int64{own + 1<<10, 1 << 10}},
+		{"a project's bound its files fit leaves them in", 4 << 10, 0, 8 << 10, nil, [2]int64{own + 8<<10, 8 << 10}},
+		{"a project's bound over the user's share is none", 33 << 10, 0, 63 << 10, nil, [2]int64{64 << 10, 0}},
+		{"the project's bound never raises the user's", 33 << 10, 16 << 10, 100 << 10, []string{"project"}, [2]int64{16 << 10, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := options(t, &echo.Adapter{})
+			write(t, filepath.Join(o.UserDir, "AGENTS.md"), strings.Repeat("u", own))
+			write(t, filepath.Join(o.Dir, "AGENTS.md"), strings.Repeat("x", tc.project))
+			o.AgentsMDBudget, o.AgentsMDProjectBudget = tc.budget, tc.projectB
+			s, err := New(context.Background(), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var got []string
+			for _, om := range s.Omitted() {
+				if om.Part == agentsmd.PartID && om.Reason == "over budget" {
+					got = append(got, filepath.Base(filepath.Dir(om.What)))
+				}
+			}
+			if !slices.Equal(got, tc.omitted) {
+				t.Errorf("omitted %q, want %q", got, tc.omitted)
+			}
+			info := s.Info()
+			if g := [2]int64{info.AgentsMDBudget, info.AgentsMDProject}; g != tc.info {
+				t.Errorf("Info's budget, project bound: %d, want %d", g, tc.info)
+			}
+		})
 	}
 }
 
