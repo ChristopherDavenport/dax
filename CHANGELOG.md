@@ -18,9 +18,11 @@ versions may break flags and the config file.
   out (#190).
 - Added: a file left out for the budget is said as the session starts,
   without `-v`: one line in the terminal client (which waits for Enter
-  on a terminal, as for a warning), in the REPL and on `-p`'s standard
-  error, naming the file, its size, how many files after it went too,
-  the budget and the setting that raises it (#190).
+  on a terminal, as for a warning), in the REPL, on `-p`'s standard
+  error, and to an editor (`-front acp`), which has no start line, as an
+  agent message ahead of the first prompt's reply and on standard
+  error; it names the file, its size, how many files after it went too,
+  the budget and the setting that raises it (#190, #194).
 - Changed: `agent.Options.AgentsMDBudget` and `AgentsMDProjectBudget`,
   and `agent.Info.AgentsMDBudget` and `AgentsMDProject`, the bound the
   chain was read under (#190).

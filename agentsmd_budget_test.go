@@ -2,6 +2,7 @@ package dax
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/coding"
 	"github.com/ChristopherDavenport/dax/extension"
+	"github.com/ChristopherDavenport/dax/internal/acp"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/policy"
 )
@@ -104,5 +106,47 @@ func TestPrintSaysAnAGENTSmdOverBudgetOnStderr(t *testing.T) {
 	want := "AGENTS.md: left out " + filepath.Join(o.Dir, "AGENTS.md") + " (66560 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config raises it\n"
 	if !strings.Contains(stderr.String(), want) {
 		t.Errorf("standard error %q lacks %q", stderr.String(), want)
+	}
+}
+
+// An editor (-front acp) has no start line: the notice goes to standard
+// error, and to the person as an agent message ahead of the first
+// prompt's reply, once (#194).
+func TestAnEditorIsToldOfAnAGENTSmdOverBudget(t *testing.T) {
+	base := t.TempDir()
+	o := agent.Options{
+		Model: "scripted", Streamer: &steps{}, Dir: filepath.Join(base, "project"), Root: filepath.Join(base, "sessions"),
+		UserDir:    filepath.Join(base, "user"),
+		Extensions: []extension.Extension{coding.New(0)},
+		Policy:     &policy.Settings{Builtin: true, Fallback: "ask"},
+	}
+	overBudget(t, &o)
+	sess, err := agent.New(t.Context(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Close() })
+	var stderr syncBuf
+	e := startACPFront(t, sess, &acpFront{info: frontInfo{Dir: o.Dir, UserConfig: "/u/config.json"}, errw: &stderr})
+	defer e.stop()
+	e.call(acp.MethodInitialize, acp.InitializeRequest{ProtocolVersion: 1})
+	var created acp.NewSessionResponse
+	json.Unmarshal(e.call(acp.MethodSessionNew, acp.NewSessionRequest{CWD: o.Dir}).Result, &created)
+	notice := "AGENTS.md: left out " + filepath.Join(o.Dir, "AGENTS.md") + " (66560 bytes), past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it"
+	if got := stderr.String(); got != "dax: "+notice+"\n" {
+		t.Errorf("standard error %q, want the notice", got)
+	}
+	for i, want := range []bool{true, false} {
+		e.call(acp.MethodSessionPrompt, acp.PromptRequest{SessionID: created.SessionID, Prompt: []acp.ContentBlock{acp.Text("hi")}})
+		var texts []string
+		for _, u := range e.updates() {
+			if u.SessionUpdate == acp.UpdateAgentMessage && u.Content != nil {
+				texts = append(texts, u.Content.Text)
+			}
+		}
+		told := len(texts) > 0 && texts[0] == "[dax] "+notice+"\n\n"
+		if told != want || strings.Count(strings.Join(texts, ""), notice) != map[bool]int{true: 1, false: 0}[want] {
+			t.Errorf("prompt %d: agent messages %q; want the notice first: %v", i+1, texts, want)
+		}
 	}
 }
