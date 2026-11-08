@@ -211,8 +211,14 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	if warn != "" {
 		fmt.Fprint(out, warn)
 	}
+	// An AGENTS.md file left out for the budget is said either way: the
+	// model was not given instructions the person may count on.
+	notice := agentsMDNotice(si, f.info.UserConfig)
+	if notice != "" {
+		fmt.Fprintln(out, render.Clean(notice))
+	}
 	omitted := f.info.Verbose && len(si.Omitted) > 0
-	if f.pause && (warn != "" || omitted) {
+	if f.pause && (warn != "" || notice != "" || omitted) {
 		// The client takes the whole screen, and what is above it goes
 		// out of sight: wait until it has been read.
 		fmt.Fprint(out, "press Enter to start the terminal client ")
