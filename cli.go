@@ -116,6 +116,7 @@ func run(ctx context.Context, args []string, p program) error {
 	once := fs.String("p", "", "run one prompt and exit")
 	timeout := fs.Duration("timeout", 0, "with -p, abort the run after this long (12m, 90s), its cause the timeout; 0 is no limit")
 	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
+	snapshot := fs.Bool("snapshot", true, "with -p, in a git work tree, record the workspace's change against the commit it started from when the run ends (git diff --binary, untracked files that are not ignored included), and the change already there at the start for a dirty tree; -result names the entries; -snapshot=false records none")
 	resultPath := fs.String("result", "", "with -p, write how the run ended (reason, cause, error, pending calls, usage) to this file as JSON, and exit 0 however it ended")
 	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
 	resume := fs.String("resume", "", "continue the session with this ID")
@@ -174,7 +175,7 @@ func run(ctx context.Context, args []string, p program) error {
 			return fmt.Errorf("-%s is dax serve's", name)
 		}
 	}
-	for _, name := range []string{"timeout", "result", "trajectory"} {
+	for _, name := range []string{"timeout", "result", "trajectory", "snapshot"} {
 		if given[name] && *once == "" {
 			return fmt.Errorf("-%s goes with -p", name)
 		}
@@ -682,7 +683,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory, Snapshot: *snapshot, SnapshotMax: settings.SnapshotMaxBytes,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
 		UserConfig: user.Path,

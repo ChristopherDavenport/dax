@@ -1615,6 +1615,38 @@ func TestAgentsMDBudgetPrecedence(t *testing.T) {
 	}
 }
 
+// snapshot_max_bytes (#191) is the user's, the last user layer that
+// sets it, or the default; a project's file is refused, since a raised
+// bound puts more of the tree into every session; and it is bounded.
+func TestSnapshotMaxBytesPrecedence(t *testing.T) {
+	user := parse(t, `{"snapshot_max_bytes":1048576}`, false)
+	later := parse(t, `{"snapshot_max_bytes":33554432}`, false)
+	for _, tc := range []struct {
+		name   string
+		layers []Layer
+		want   int64
+	}{
+		{"the default", nil, DefaultSnapshotMaxBytes},
+		{"the user's", []Layer{user}, 1048576},
+		{"the last user layer's", []Layer{user, later}, 33554432},
+		// A layer built some other way than Parse is not taken either.
+		{"a project's is not taken", []Layer{user, {Config: Config{SnapshotMaxBytes: 1 << 28}, Project: true}}, 1048576},
+	} {
+		s, err := Resolve(tc.layers, Flags{}, "")
+		if err != nil || s.SnapshotMaxBytes != tc.want {
+			t.Errorf("%s: %d (%v), want %d", tc.name, s.SnapshotMaxBytes, err, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(`{"snapshot_max_bytes":1048576}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "snapshot_max_bytes: a project file may only tighten") {
+		t.Errorf("a project's snapshot_max_bytes: %v, want it refused", err)
+	}
+	for _, bad := range []string{`{"snapshot_max_bytes":-1}`, `{"snapshot_max_bytes":100}`, `{"snapshot_max_bytes":536870912}`} {
+		if _, err := Parse([]byte(bad), "/u/c.json", false); err == nil || !strings.Contains(err.Error(), "snapshot_max_bytes") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
 func TestOutputCapPrecedence(t *testing.T) {
 	user := parse(t, `{"bash_max_output":50000,"mcp_max_output":200000}`, false)
 	lower := parse(t, `{"bash_max_output":10000,"mcp_max_output":20000}`, true)

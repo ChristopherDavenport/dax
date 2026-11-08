@@ -527,6 +527,7 @@ names the file and the field.
 | `context_window` | the window, in tokens, a model is served at, by model: `{"qwen3.5:9b": 65536}`, for a server that cannot say or says the wrong one; it sizes the default `-compact` budget (three quarters of it). A project's file may only lower one, and to no less than 4096 |
 | `bash_max_output`, `mcp_max_output` | the most bytes of a `bash` call's result (default 30000), and of a result of a tool that is not dax's own (an MCP server's, a sub-agent's, a peer's; default 100000), the model is sent: a longer one is sent as its first and last halves, with how much was left out between them, so the end of a log, where the error is, arrives. The whole is kept with the session, never in the workspace, named in the result by an output id (`out_…`; the session's record maps it to the blob in a `dax.output_kept` entry), and the model reads it with `read_output`. 2048 to 1048576; a project's file may only lower them |
 | `max_turns` | stop each run after this many turns (`[stopped: max_turns]`, exit 3 under `-p`); default none. A project's file may set it only lower than yours |
+| `snapshot_max_bytes` | the most bytes of a run-end snapshot's patch (`-p`'s `-snapshot`) the session keeps; default 8388608 (8 MiB). A patch past it is recorded with its size and no patch, its error `too large`. 1024 to 268435456. Your file only: a repository cannot raise what goes into every session |
 | `max_read_bytes` | the most bytes of a file `read` scans per call and `edit` will rewrite; default 2 MiB (use `grep` to find a line later in a bigger file); with `executor`, at most `dax execute`'s `-max-read-bytes` |
 | `pass_env` | credential-looking variables bash commands and MCP servers may inherit, by name (default none) |
 | `executor` | `{"command": "docker exec -i box dax execute -root /work"}`: run the tools, and the MCP servers, in `dax execute` started by that command (see below), or `{"url": "http://127.0.0.1:7777"}` in `dax execute -listen` already serving there; one or the other. `command` is a command line, split as a shell splits words (`'…'`, `"…"`, `\`) with nothing expanded (no `$VAR`, `~` or globs), or an array, `["docker", "exec", "-i", "box", "dax", "execute", "-root", "/my work"]`, used exactly; no shell runs either |
@@ -598,6 +599,7 @@ no other account could have written it.
 | `-timeout D` | with `-p`, abort the run after `D` (`12m`, `90s`): it ends aborted, its cause the timeout, on the record and in the end line, so a harness can set it below its own kill |
 | `-trajectory PATH` | with `-p`, write the session as an ATIF trajectory to `PATH` once the run ends (agentsession's export, the RFC 0001 projection), each sub-agent's session embedded and priced by the pricing file when there is one; needs a session store |
 | `-result PATH` | with `-p`, write how the run ended to `PATH` as JSON and exit 0 however it ended (see [Exit status](#exit-status)) |
+| `-snapshot` | with `-p`, in a git work tree, record the workspace's change when the run ends, against the commit it started from, as a snapshot entry the session keeps (see [The workspace a run left](#the-workspace-a-run-left)); on by default, `-snapshot=false` records none |
 | `-v` | the terminal client prints its start lines before it takes the screen and what dax noted during the run after it exits; without it, only the executor's line and warnings before, and warnings that came while it had the screen and the resume command after |
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. Your config is not even parsed unless `-config` brings it back, and `~/.dax/mcp-trust.json` is neither read nor written: a project's MCP servers start only with `-trust-mcp`, for that run. The session's header records the run as bare and what it left out (`dax.profile`) |
@@ -2192,6 +2194,65 @@ on standard input for an answer, as no answer:
 `arguments` and `why`) are the run's end as the session records it,
 `exit` the status dax would have exited with, and `usage` the main
 agent's model calls and tokens (a sub-agent's are its own session's).
+In a git work tree, `snapshot` names the entry that records the change
+the run left (below), and `start_snapshot` the change the tree already
+held when the run started, when it held one:
+
+```json
+  "snapshot": { "entry": "01J...", "base": "3f2a...e91c", "digest": "sha256:9b1d...", "size": 4182 }
+```
+
+`entry` is the entry's ID in the session, `base` the commit the patch
+applies to, `digest` the patch's SHA-256 and `size` its length in
+bytes; a snapshot that holds no patch has `error` in place of `base`
+and `digest`.
+
+### The workspace a run left
+
+A session records each tool call's arguments, not the files the run
+left: `write` keeps its content and `edit` its strings, but `bash`
+keeps only the command line, and a `sed -i` or a script changes files
+the record does not show. So when a `-p` run ends in a git work tree,
+dax records the change the run left, so that the run can be judged or
+reviewed again once its working tree is gone (a container's, a
+sandbox's):
+
+- When the run starts, dax reads the commit the tree is on, and the
+  run's `env` entry records it as its `vcs` (`{"system": "git",
+  "revision": "<commit>", "dirty": true|false}`).
+- When the run ends, dax takes `git diff --binary` of the tree against
+  that commit and appends it to the session after the run's last entry,
+  as agenteval's snapshot entry (a `custom` entry in the namespace
+  `agenteval:snapshot`, whose `target` is the run's last entry, `base`
+  the commit and `digest` the patch's SHA-256). `git apply --binary`
+  of the patch, at the repository's top, on a checkout of the commit
+  gives the tree the run left. agenteval's `ResultAt` reads it back as
+  the run's snapshot.
+- A tree that was dirty at the start gets a second entry before that
+  one, written at the same time: the change it held when the run
+  started, its `base` `start:<commit>`. The run's own change is the
+  final patch less that one.
+
+The patch holds the files under the directory dax works in, tracked
+and untracked; a file git ignores is not in it. It is read through the
+workspace the tools act in, so it works the same with `-executor`,
+`-box` and `-workspace`. dax reads it through an index of its own, a
+copy in a temporary directory that the `git add -A -N` it runs goes
+to, so your repository's index, its objects and the work tree are left
+as they were. A
+repository whose own config names a program git would run (a clean
+filter, say) is not read, as the status line does not read it: the
+entry says `withheld` and why. A patch over `snapshot_max_bytes` (8 MiB
+by default) is recorded with its size and no patch. Outside a git work
+tree, or with `-sessions ""`, nothing is recorded, and `-snapshot=false`
+turns it off. A `-box` run's `env` entry already names the image it
+ran, by its digest, as the workspace's `ref`.
+
+The patch is what the run's files hold, so it holds what the run wrote
+into them, a secret among it, as `write`'s and `edit`'s arguments
+already do; and for a tree dirty at the start, your own uncommitted
+changes under the directory dax works in. Redact or keep the session
+as you would the files.
 
 ## Sessions
 
