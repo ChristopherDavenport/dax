@@ -23,6 +23,11 @@ versions may break flags and the config file.
   agent message ahead of the first prompt's reply and on standard
   error; it names the file, its size, how many files after it went too,
   the budget and the setting that raises it (#190, #194).
+- Changed: dax's own AGENTS.md is 11 KB, down from 33 KB. Its layout is
+  a map of packages, one line each, with `docs/design.md` for the
+  detail. The changelog, commit, pull request and release procedure is
+  the repository's `release` skill (`.dax/skills/release`), which a
+  session loads when it does that work (#193).
 - Changed: `agent.Options.AgentsMDBudget` and `AgentsMDProjectBudget`,
   and `agent.Info.AgentsMDBudget` and `AgentsMDProject`, the bound the
   chain was read under (#190).

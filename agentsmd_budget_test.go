@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agentsmd"
 
 	"github.com/ChristopherDavenport/dax/agent"
@@ -20,14 +21,36 @@ import (
 )
 
 // dax's own AGENTS.md reaches the model in a session started here with
-// the default budget (#190), with room for the person's own files.
+// the default budget (#190), and is held to 16 KiB, a quarter of it, so
+// the person's own files and nested ones have room (#193): what a
+// session needs only for some work goes in a skill.
 func TestDaxsOwnAGENTSmdFitsTheDefaultBudget(t *testing.T) {
+	const most = 16 << 10
 	fi, err := os.Stat("AGENTS.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi.Size() > config.DefaultAgentsMDBudget*3/4 {
-		t.Errorf("AGENTS.md is %d bytes, more than three quarters of the default agents_md_budget, %d: trim it, or raise the default", fi.Size(), config.DefaultAgentsMDBudget)
+	if fi.Size() > most || most > config.DefaultAgentsMDBudget/4 {
+		t.Errorf("AGENTS.md is %d bytes, more than %d (the default agents_md_budget is %d): move what only some work needs into a skill under .dax/skills", fi.Size(), most, config.DefaultAgentsMDBudget)
+	}
+}
+
+// The release procedure AGENTS.md points to is a skill the session
+// offers: .dax/skills/release, which loads without problems (#193).
+func TestTheReleaseSkillLoads(t *testing.T) {
+	md, err := os.ReadFile("AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), ".dax/skills/release/SKILL.md") {
+		t.Error("AGENTS.md does not point to .dax/skills/release/SKILL.md")
+	}
+	cat, err := agentskill.DiscoverDirs(".dax/skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Skills) != 1 || cat.Skills[0].Name != "release" || len(cat.Problems) != 0 {
+		t.Errorf("skills %d, problems %v; want release alone, without problems", len(cat.Skills), cat.Problems)
 	}
 }
 
