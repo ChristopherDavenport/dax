@@ -372,6 +372,11 @@ type Info struct {
 	// MCP are its MCP servers, each with where it runs and what it is
 	// for, listed the same wherever it runs.
 	MCP []MCPServerInfo
+	// Loaded are the held-back tools the person's conversation has
+	// loaded with tool_search, in the order it loaded them; a tool in
+	// Tools with Deferred set and not here is listed to the model by
+	// name alone.
+	Loaded []string `json:",omitempty"`
 	// Policy is the policy in force, nil for a session with none.
 	Policy *PolicyInfo
 }
@@ -380,7 +385,7 @@ var _ Controls = (*Session)(nil)
 
 // Info implements Controls.
 func (s *Session) Info() Info {
-	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), AgentsMDBudget: s.agentsMDBudget, AgentsMDProject: s.agentsMDProject, AgentsMDKept: s.agentsMDKept, Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Policy: s.policyInfo()}
+	return Info{ID: s.ID(), Recorded: s.recorded, Name: s.Name(), Path: s.Path(), Tools: s.Tools(), Omitted: s.Omitted(), AgentsMDBudget: s.agentsMDBudget, AgentsMDProject: s.agentsMDProject, AgentsMDKept: s.agentsMDKept, Workspace: s.ws.Descriptor(), MCP: s.mcpServers(), Loaded: s.loadedTools(), Policy: s.policyInfo()}
 }
 
 // Rules are an autonomous controller's answers: what Drive says to each

@@ -940,7 +940,7 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
 			URL: m.URL, TokenEnv: m.TokenEnv, OAuth: oauthOf(m.OAuth), Project: m.Project,
-			Description: m.Description, SecretEnv: m.SecretEnv,
+			Description: m.Description, SecretEnv: m.SecretEnv, Defer: m.Defer,
 		})
 	}
 	if flag != "" {

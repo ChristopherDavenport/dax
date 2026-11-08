@@ -44,6 +44,32 @@ versions may break flags and the config file.
 - Changed: `agent.Options.AgentsMDBudget` and `AgentsMDProjectBudget`,
   and `agent.Info.AgentsMDBudget` and `AgentsMDProject`, the bound the
   chain was read under (#190).
+- Added: an MCP server's tools can be held back until the model asks
+  for them (#189). `mcp_servers.<name>.defer` is `true` or `false`;
+  left out, a server whose tool definitions pass 8 KiB
+  (`agent.MCPDeferBytes`) is held back, decided once per session. A held
+  tool is listed in the instructions by name and summary and loaded with
+  `tool_search`, then sent from the next request on, after the tools
+  already sent, for the rest of the session; the record has it as
+  `tools_added`, and `/resume` keeps it loaded, even when the run
+  stopped before the request that would have carried it. Its calls are decided by
+  its rules as before, and a held server's own instructions wait for
+  its first load. A project's file may set `defer` to `true` alone,
+  and `dax workspace -servers` refuses it. `/mcp` shows each server's
+  deferred and loaded counts, `/tools` marks each held tool.
+- Added: dax-toolsearch (`ext/toolsearch`), the extension that does it
+  (agentkit's `WithToolSearch`), with the one rule allowing
+  `tool_search`; `dax.WithoutExtension("dax-toolsearch")` sends every
+  definition as before.
+- Changed: `extension.Env.DeferMCP`; `agent.MCPServer.Defer`,
+  `agent.MCPServerInfo.Deferred` and `Loaded`, `agent.Info.Loaded`,
+  `agent.MCPDeferBytes`.
+- Dependencies: agentkit v0.0.18, which brings `WithToolSearch`
+  (agentkit#130): a held tool's load read back from the record's
+  `tool_search` outputs (agentkit#132), a held server's MCP
+  instructions sent only once one of its tools is loaded (agentkit#133),
+  and `Config().Instructions` equal to the first request's
+  (agentkit#134).
 
 ## v0.0.34 - 2026-11-06
 

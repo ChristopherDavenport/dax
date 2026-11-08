@@ -981,10 +981,17 @@ func ended(w io.Writer, t agentturn.Control, end *agentturn.RunEnd) {
 func assemblyLines(info agent.Info) []string {
 	var names []string
 	for _, t := range info.Tools {
-		if t.Source == "WithTools" {
+		mark := t.Source
+		switch {
+		case t.Deferred && slices.Contains(info.Loaded, t.Name):
+			mark += ", loaded"
+		case t.Deferred:
+			mark += ", deferred"
+		}
+		if mark == "WithTools" {
 			names = append(names, t.Name)
 		} else {
-			names = append(names, t.Name+" ["+t.Source+"]")
+			names = append(names, t.Name+" ["+mark+"]")
 		}
 	}
 	lines := []string{"tools: " + strings.Join(names, ", ")}
@@ -1086,6 +1093,9 @@ func mcpLines(info agent.Info) []string {
 		if m.Added != "" {
 			l += ", added as " + oneLine(m.Added, maxField)
 		}
+		if t := toolsText(m); t != "" {
+			l += ", " + t
+		}
 		if d := oneLine(m.Description, maxDescription); d != "" {
 			l += " — " + d
 		}
@@ -1100,6 +1110,22 @@ const (
 	maxDescription = 160
 	maxField       = 80
 )
+
+// toolsText says, of a server whose tools are held back until the model
+// loads them (agent.MCPServerInfo.Deferred), how many and how many the
+// conversation has loaded: "17 tools deferred, 2 loaded" (/tools names
+// them). Nothing for a server whose tools are all sent, or a dax that
+// did not say.
+func toolsText(m agent.MCPServerInfo) string {
+	if m.Deferred == 0 {
+		return ""
+	}
+	t := fmt.Sprintf("%d tools deferred", m.Deferred)
+	if m.Deferred == 1 {
+		t = "1 tool deferred"
+	}
+	return fmt.Sprintf("%s, %d loaded", t, m.Loaded)
+}
 
 // stateText says where m's session is (agent.MCPServerInfo.State), or
 // nothing for a dax that did not say.

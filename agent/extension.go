@@ -418,6 +418,11 @@ func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
 
+// DeferMCP implements extension.Env.
+func (e *sessionEnv) DeferMCP(source string, tools []agenttool.Tool) bool {
+	return e.s.deferMCP(source, tools)
+}
+
 // SetMode implements extension.Env.
 func (e *sessionEnv) SetMode(ctx context.Context, mode, reason string) error {
 	_, err := e.s.setMode(ctx, mode, reason)

@@ -387,6 +387,12 @@ type MCPServer struct {
 	// KeyEnv, a TokenEnv, an extension's secret, a pass list's or a
 	// served workspace's token variable.
 	SecretEnv []string
+	// Defer holds the server's tools back until the model loads them
+	// with tool_search (agentkit's WithToolSearch, through dax-toolsearch):
+	// true always, false never, nil when its definitions pass
+	// MCPDeferBytes. A server /mcp add starts, or a workspace offers, is
+	// nil.
+	Defer *bool
 	// secretValues are SecretEnv's values when a front gave them (an
 	// editor's MCP server over ACP), in place of this process's
 	// environment.
@@ -454,6 +460,15 @@ type MCPServerInfo struct {
 	// that did not say.
 	State   string `json:",omitempty"`
 	Failure string `json:",omitempty"`
+	// Deferred is how many of its tools are held back until the model
+	// loads them with tool_search (MCPServer.Defer, else by size), zero
+	// when every one is sent in every request, and Loaded how many of
+	// those the person's conversation has loaded (Info.Loaded names
+	// them).
+	Deferred int `json:",omitempty"`
+	Loaded   int `json:",omitempty"`
+	// deferSet is MCPServer.Defer, which deferMCP reads.
+	deferSet *bool
 }
 
 // DefaultUserDir is ~/.dax.
@@ -546,6 +561,9 @@ type Session struct {
 	// as Info.MCP lists them.
 	servers   []MCPServerInfo
 	serversMu sync.Mutex
+	// deferred is deferMCP's answer for each server by name, decided
+	// once (mcpdefer.go), under serversMu.
+	deferred map[string]bool
 	// nestedMD gives the model the AGENTS.md files below the start
 	// that the work reaches (nestedmd.go), main agent and sub-agents
 	// alike; nil with AGENTS.md off.
@@ -1672,6 +1690,7 @@ func (s *Session) mcpServers() []MCPServerInfo {
 	for _, m := range s.Kit.MCPServers() {
 		remotes[m.Remote.Name("")] = m.Remote
 	}
+	loaded := s.loadedTools()
 	for i := range out {
 		r, ok := remotes["mcp__"+out[i].Name+"__"]
 		if !ok {
@@ -1681,6 +1700,15 @@ func (s *Session) mcpServers() []MCPServerInfo {
 		out[i].State = st.String()
 		if err != nil {
 			out[i].Failure = err.Error()
+		}
+		if s.deferDecided(out[i].Name) {
+			out[i].Deferred = len(r.Tools())
+			prefix := "mcp__" + out[i].Name + "__"
+			for _, n := range loaded {
+				if strings.HasPrefix(n, prefix) {
+					out[i].Loaded++
+				}
+			}
 		}
 	}
 	return out
@@ -2099,7 +2127,7 @@ func mcpTransport(command string, env []string) (mcpDial, error) {
 // machine, as an executor that cannot start one fails it. Your own
 // servers keep the rule that they run here then.
 func (s *Session) mcpDialOf(m MCPServer) (mcpDial, MCPServerInfo, error) {
-	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0, HoldsSecrets: m.offeredSecrets}
+	info := MCPServerInfo{Name: m.Name, Description: m.Description, Secrets: len(m.SecretEnv) > 0, HoldsSecrets: m.offeredSecrets, deferSet: m.Defer}
 	placed := func(p Placement, at string, dial mcpDial, err error) (mcpDial, MCPServerInfo, error) {
 		info.Placement, info.Where = p, at
 		return dial, info, err

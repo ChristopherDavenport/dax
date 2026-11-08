@@ -26,7 +26,7 @@ before changing the shape.
 - Public API: the root package `dax` (`Main`, `Option`, `WithName`,
   `WithExtension`, `WithoutExtension`), `agent`, `extension`, `policy`,
   `tool`, `toolrender`, and `ext/coding`, `ext/agents`, `ext/skills`,
-  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`. Where the tools act is agentworkspace's
+  `ext/memory`, `ext/a2a`, `ext/hooks`, `ext/plan`, `ext/toolsearch`. Where the tools act is agentworkspace's
   `Workspace`, which the public API names directly (imported as
   `workspace`); dax keeps no copy or alias of it. Everything else is in `internal/`. Before v1.0.0 the public API may change in a minor
   version; a change to it gets a `Changed:` line in the changelog. Keep
@@ -66,6 +66,9 @@ package's shape.
 - `ext/plan` (dax-plan): plan mode's `exit_plan_mode`.
 - `ext/hooks` (dax-hooks): the user's PreToolUse and PostToolUse hooks.
 - `ext/a2a` (dax-a2a): the user's A2A peers as tools.
+- `ext/toolsearch` (dax-toolsearch): large MCP servers' tools held
+  back until `tool_search` loads them (agentkit's `WithToolSearch`
+  over `Env.DeferMCP`, `agent/mcpdefer.go`).
 - `tool`: dax-coding's tools, `Files` (the tools' view of a
   workspace) and the analysis their facts claims make.
 - `facts/factspolicy`: a tool's facts claim as the policy's subjects

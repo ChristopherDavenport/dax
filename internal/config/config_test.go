@@ -344,6 +344,8 @@ func TestValidation(t *testing.T) {
 		{"mcp secret_env in the workspace", `{"mcp_servers":{"a":{"command":"x","secret_env":["GH_TOKEN"]}}}`, false, `mcp_servers.a: secret_env: a secret is never sent to a workspace; set "in": "host"`},
 		{"mcp secret_env in the workspace, said", `{"mcp_servers":{"a":{"command":"x","in":"workspace","secret_env":["GH_TOKEN"]}}}`, false, "a secret is never sent to a workspace"},
 		{"mcp description too long", `{"mcp_servers":{"a":{"command":"x","description":"` + strings.Repeat("d", MaxDescriptionBytes+1) + `"}}}`, false, "description: 1025 bytes; at most 1024"},
+		{"project mcp defer false", `{"mcp_servers":{"a":{"command":"x","defer":false}}}`, true, "defer: a project file may hold a server's tools back"},
+		{"mcp defer not a bool", `{"mcp_servers":{"a":{"command":"x","defer":"auto"}}}`, false, "defer"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -375,6 +377,34 @@ func TestMCPDescriptionAndSecretEnvPrecedence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.MCP, want) {
 		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
+	}
+}
+
+// defer is the user's to set either way and a project's to set true
+// alone (TestValidation): each layer's reaches its server's settings,
+// and absent stays nil, which decides by size.
+func TestMCPDeferPrecedence(t *testing.T) {
+	user := parse(t, `{"mcp_servers":{"web":{"command":"web-mcp","defer":false},"browser":{"command":"browser-mcp","defer":true},"fs":{"command":"fs-mcp"}}}`, false)
+	proj := parse(t, `{"mcp_servers":{"lint":{"command":"lint-mcp","defer":true},"docs":{"command":"docs-mcp"}}}`, true)
+	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	yes, no := true, false
+	want := []MCP{
+		{Name: "browser", Command: "browser-mcp", Defer: &yes},
+		{Name: "docs", Command: "docs-mcp", Project: true},
+		{Name: "fs", Command: "fs-mcp"},
+		{Name: "lint", Command: "lint-mcp", Project: true, Defer: &yes},
+		{Name: "web", Command: "web-mcp", Defer: &no},
+	}
+	if !reflect.DeepEqual(s.MCP, want) {
+		t.Errorf("mcp:\n got %+v\nwant %+v", s.MCP, want)
+	}
+	// A layer built other than by Parse is held to it in Resolve too.
+	l := Layer{Project: true, Config: Config{MCPServers: map[string]MCPServer{"lint": {Command: "x", Defer: &no}}}}
+	if _, err := Resolve([]Layer{l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "defer: a project file may hold") {
+		t.Errorf("a project's defer false in Resolve = %v, want refused", err)
 	}
 }
 
@@ -458,6 +488,7 @@ func TestParseOffered(t *testing.T) {
 		{"a server twice", `{"mcp_servers":{"gh":{"command":"x","secret_env":["T"]},"gh":{"command":"y"}}}`, `"gh" is given twice`},
 		{"a field twice", `{"mcp_servers":{"gh":{"command":"x","command":"y"}}}`, `"command" is given twice`},
 		{"mcp_servers twice", `{"mcp_servers":{"gh":{"command":"x"}},"mcp_servers":{}}`, `"mcp_servers" is given twice`},
+		{"defer", `{"mcp_servers":{"gh":{"command":"x","defer":true}}}`, "defer is the session's to choose"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := ParseOffered([]byte(tc.json), "servers.json"); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "servers.json") {

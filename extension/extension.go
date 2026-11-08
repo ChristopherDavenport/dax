@@ -398,6 +398,14 @@ type Env interface {
 	// ChildConfig), recorded as a subsession of the conversation and
 	// decided by the session's engine under a grant scope of its own.
 	Kit() *agentkit.Kit
+	// DeferMCP is agentkit's WithToolSearch function for the session's
+	// MCP servers: whether the server whose label is source, offering
+	// tools, has them held back until the model loads them, from its
+	// config's defer and, where that says nothing, their size
+	// (agent.MCPDeferBytes), decided once per server for the session.
+	// It holds back no other source. dax-toolsearch gives it to the
+	// kit.
+	DeferMCP(source string, tools []agenttool.Tool) bool
 	// ToolOutput is the whole of a tool result the session cut to its
 	// cap, by the output id the cut result names (out_<hex>): only an
 	// output this session kept.

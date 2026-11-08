@@ -653,6 +653,14 @@ type MCPServer struct {
 	// alone, never one sent to a workspace (SecretInWorkspace). Refused
 	// in a project's file, and for a url, whose token is token_env's.
 	SecretEnv []string `json:"secret_env,omitempty"`
+	// Defer holds the server's tools back until the model loads them
+	// (agentkit's WithToolSearch): true lists them by name and summary
+	// and sends a tool's definition once the model asks for it, false
+	// sends every definition in every request, and absent decides by
+	// size (agent.MCPDeferBytes). A project's file may set it true
+	// alone: false would make every request carry what the user's
+	// default holds back.
+	Defer *bool `json:"defer,omitempty"`
 }
 
 // MCPOAuth is a url server's oauth block.
@@ -1305,6 +1313,9 @@ func (s MCPServer) check(name string, project bool) error {
 	if err := checkDescription(s.Description); err != nil {
 		return fmt.Errorf("mcp_servers.%s: description: %w", name, err)
 	}
+	if project && s.Defer != nil && !*s.Defer {
+		return fmt.Errorf(`mcp_servers.%s: defer: a project file may hold a server's tools back ("defer": true), never send them all; leave defer out or put the server in your own config (%s)`, name, Path())
+	}
 	if len(s.SecretEnv) > 0 {
 		switch {
 		case project:
@@ -1419,6 +1430,8 @@ func ParseOffered(data []byte, path string) (map[string]MCPServer, error) {
 			return nil, fmt.Errorf("servers %s: mcp_servers.%s: a server at a url is not the workspace's to offer; the session calls it from where it runs, so put it in the session's config", path, name)
 		case s.In == MCPInHost:
 			return nil, fmt.Errorf(`servers %s: mcp_servers.%s: in "host" places a server on the session's machine; an offered server runs in the served directory, so leave in out`, path, name)
+		case s.Defer != nil:
+			return nil, fmt.Errorf("servers %s: mcp_servers.%s: defer is the session's to choose, which holds an offered server's tools back by their size; leave defer out", path, name)
 		}
 		if err := s.check(name, false); err != nil {
 			return nil, fmt.Errorf("servers %s: %w", path, err)
@@ -2187,6 +2200,8 @@ type MCP struct {
 	Description                      string
 	SecretEnv                        []string
 	Project                          bool
+	// Defer is mcp_servers' defer: nil decides by size.
+	Defer *bool
 }
 
 // PolicySettings is the policy folded across layers; policy.Build
@@ -2366,7 +2381,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					}
 				}
 			}
-			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project, Defer: m.Defer}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer
@@ -2817,6 +2832,10 @@ func checkSecretEnv(s Settings) error {
 		}
 	}
 	for _, m := range s.MCP {
+		if m.Project && m.Defer != nil && !*m.Defer {
+			// Refused when the file was read, as below.
+			return fmt.Errorf("mcp_servers.%s: defer: a project file may hold a server's tools back, never send them all", m.Name)
+		}
 		if len(m.SecretEnv) > 0 {
 			// Refused when the file was read; a layer built some other
 			// way is held to the same rules.
