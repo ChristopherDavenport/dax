@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work
   tree, the run's `env` entry names the commit it started from (`vcs`:
