@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## v0.0.35 - 2026-11-08
+## Unreleased
 
 - Added: `-p` records the workspace a run left (#191). In a git work
   tree, the run's `env` entry names the commit it started from (`vcs`:
@@ -19,13 +19,16 @@ versions may break flags and the config file.
   `-result` names the entries (`snapshot`, `start_snapshot`).
   `-snapshot=false` turns it off. A patch over `snapshot_max_bytes`
   (8 MiB by default, your config only) is recorded with its size and no
-  patch. agenteval's harbor import needs agenteval#78 (unreleased) to
-  score such a run at its end rather than at the snapshot.
+  patch. agenteval v0.0.15's harbor import (agenteval#78) scores such
+  a run at its end rather than at the snapshot.
 - Changed: added `tool.GitDiff`, the workspace's change against a commit read
   through its `Exec`, and `agent.Session`'s `StartSnapshot` and
   `EndSnapshot`, for a front built on dax (#191).
 - Dependencies: agenteval v0.0.14, up from v0.0.13, for its snapshot
   entry (`agenteval.NewSnapshot`) (#191).
+
+## v0.0.35 - 2026-11-08
+
 - Changed: an AGENTS.md file over `agents_md_budget` is cut at the last
   line that fits and sent, followed by agentsmd's line
   `[agentsmd: N bytes of PATH left out over the budget]`, instead of
