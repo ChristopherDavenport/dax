@@ -1,6 +1,8 @@
 package config
 
 import (
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -9,7 +11,7 @@ import (
 // it, -memory-background overrides it, the defaults fill the rest, and a
 // project's file may not turn it on. (#160)
 func TestTheBackgroundMemoryPassIsTheUsersAlone(t *testing.T) {
-	if s, err := Resolve(nil, Flags{}, ""); err != nil || s.Memory != (Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500}) {
+	if s, err := Resolve(nil, Flags{}, ""); err != nil || !reflect.DeepEqual(s.Memory, Memory{Background: "off", BackgroundEvery: 1, BackgroundMaxTokens: 8000, BackgroundTrivialTokens: 500}) {
 		t.Fatalf("the defaults: %+v, %v", s.Memory, err)
 	}
 	l, err := Parse([]byte(`{"memory":{"background":"auto","background_every":3,"background_max_tokens":4000}}`), "/u/config.json", false)
@@ -17,7 +19,7 @@ func TestTheBackgroundMemoryPassIsTheUsersAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, err := Resolve([]Layer{l}, Flags{}, "")
-	if err != nil || s.Memory != (Memory{Background: "auto", BackgroundEvery: 3, BackgroundMaxTokens: 4000, BackgroundTrivialTokens: 500}) {
+	if err != nil || !reflect.DeepEqual(s.Memory, Memory{Background: "auto", BackgroundEvery: 3, BackgroundMaxTokens: 4000, BackgroundTrivialTokens: 500}) {
 		t.Fatalf("the user's setting: %+v, %v", s.Memory, err)
 	}
 	propose := "propose"
@@ -34,6 +36,45 @@ func TestTheBackgroundMemoryPassIsTheUsersAlone(t *testing.T) {
 	for _, j := range []string{`{"memory":{"background":"sometimes"}}`, `{"memory":{"background_every":-1}}`, `{"memory":{"when":"idle"}}`} {
 		if _, err := Parse([]byte(j), "/u/config.json", false); err == nil {
 			t.Errorf("%s parsed", j)
+		}
+	}
+}
+
+// memory.index_scopes is the user's: their config names user, project or
+// both, the last layer that names it holds, the default is none, and a
+// value that is neither, or named twice, is refused (agentmemory#55).
+func TestTheMemoryIndexScopesAreTheUsers(t *testing.T) {
+	if s, err := Resolve(nil, Flags{}, ""); err != nil || s.Memory.IndexScopes != nil {
+		t.Fatalf("the default: %v, %v", s.Memory.IndexScopes, err)
+	}
+	first, err := Parse([]byte(`{"memory":{"index_scopes":["user","project"]}}`), "/u/config.json", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Resolve([]Layer{first}, Flags{}, "")
+	if err != nil || !slices.Equal(s.Memory.IndexScopes, []string{"user", "project"}) {
+		t.Fatalf("the user's setting: %v, %v", s.Memory.IndexScopes, err)
+	}
+	later, err := Parse([]byte(`{"memory":{"index_scopes":["project"]}}`), "/u/other.json", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := Resolve([]Layer{first, later}, Flags{}, ""); !slices.Equal(s.Memory.IndexScopes, []string{"project"}) {
+		t.Errorf("a later layer's index_scopes: %v, want [project]", s.Memory.IndexScopes)
+	}
+	unset, err := Parse([]byte(`{"memory":{"background":"off"}}`), "/u/other.json", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := Resolve([]Layer{first, unset}, Flags{}, ""); !slices.Equal(s.Memory.IndexScopes, []string{"user", "project"}) {
+		t.Errorf("a later layer without index_scopes: %v, want the first's kept", s.Memory.IndexScopes)
+	}
+	if _, err := Parse([]byte(`{"memory":{"index_scopes":["user"]}}`), "/p/.dax/config.json", true); err == nil || !strings.Contains(err.Error(), "memory: a project file may only tighten") {
+		t.Errorf("a project's index_scopes: %v", err)
+	}
+	for _, j := range []string{`{"memory":{"index_scopes":["archive"]}}`, `{"memory":{"index_scopes":["user","user"]}}`} {
+		if _, err := Parse([]byte(j), "/u/config.json", false); err == nil || !strings.Contains(err.Error(), "memory.index_scopes") {
+			t.Errorf("%s: %v", j, err)
 		}
 	}
 }

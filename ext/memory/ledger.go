@@ -87,6 +87,10 @@ func ledgerSessions(dir string) (map[string]bool, error) {
 	return out, nil
 }
 
+// openUndoStore opens the store in dir for Undo; a test stands in a
+// store of its own.
+var openUndoStore = func(dir string) (agentmemory.Store, error) { return filestore.Open(dir) }
+
 // Undo reverts the latest background pass of project (WorkspaceScope)
 // not undone yet, in the store in dir: each entry it changed goes back
 // to what it held before the pass, unless something changed it since,
@@ -118,7 +122,7 @@ func Undo(ctx context.Context, dir string, project agentmemory.Scope) (string, e
 	if pass == nil {
 		return "no memory pass of this project's is left to undo", nil
 	}
-	mem, err := filestore.Open(dir)
+	mem, err := openUndoStore(dir)
 	if err != nil {
 		return "", fmt.Errorf("memory: %w", err)
 	}
@@ -175,7 +179,13 @@ func Undo(ctx context.Context, dir string, project agentmemory.Scope) (string, e
 		switch {
 		case sp.before == "" && have == "":
 		case sp.before == "":
-			if _, err := mem.Forget(ctx, k.scope, k.name); err != nil {
+			// Conditional on what the pass left, so a save landing
+			// after the check above is left, and named.
+			if _, err := mem.Forget(ctx, k.scope, k.name, agentmemory.IfHash(have)); err != nil {
+				if errors.Is(err, agentmemory.ErrConflict) || errors.Is(err, agentmemory.ErrNotFound) {
+					left = append(left, ref)
+					continue
+				}
 				return "", err
 			}
 			did = append(did, "forgot "+ref)

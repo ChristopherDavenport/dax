@@ -165,6 +165,9 @@ type choice struct {
 	// MemoryBackground's pass after a run.
 	MemoryDir        string
 	MemoryBackground memory.Background
+	// MemoryIndex are the memory scopes ("user", "project") the block
+	// renders as an index (memory.index_scopes).
+	MemoryIndex []string
 	// Peers are dax-a2a's remote agents. dax-a2a is always built, and
 	// offers nothing without them.
 	Peers []a2a.Remote
@@ -184,7 +187,7 @@ func (p program) selected(c choice) ([]extension.Extension, error) {
 		defaults = append(defaults, skills.New(skills.Options{Dirs: c.SkillsDirs, Trust: c.TrustSkills}))
 	}
 	if c.MemoryDir != "" {
-		defaults = append(defaults, memory.New(c.MemoryDir, memory.WithBackground(c.MemoryBackground)))
+		defaults = append(defaults, memory.New(c.MemoryDir, memory.WithBackground(c.MemoryBackground), memory.WithIndex(c.MemoryIndex...)))
 	}
 	defaults = append(defaults, a2a.New(a2a.Options{Remotes: c.Peers}), plan.New(), toolsearch.New())
 	if len(c.Hooks.PreToolUse) > 0 || len(c.Hooks.PostToolUse) > 0 {

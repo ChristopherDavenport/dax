@@ -304,7 +304,13 @@ project, and the project's own, named for the workspace the tools act
 in. The memory block in the system prompt shows both, rendered again
 each turn. The model saves, patches and forgets entries with
 `memory_save`, `memory_patch` and `memory_forget`, each of which asks,
-and finds them with `memory_search`, which runs unasked.
+and finds them with `memory_search`, which runs unasked. `memory_read`
+reads one entry whole by its scope and name, unasked too; it is offered
+when the block lists entries without their content: a scope your
+config's `memory.index_scopes` renders as an index (`["user"]`,
+`["project"]` or both), where each entry shows its heading and its
+description or first line alone, and a request whose block the budget
+left out.
 
 Beside each scope is an archive, `user-archive` and the project's
 `project-…-archive`: passages worth finding again and not worth reading
@@ -314,7 +320,7 @@ memory write does and names the entry itself, and finds it with
 holds; its usage paragraph names the archives as searchable and not
 shown.
 
-The sub-agents see the block and can search, but not write.
+The sub-agents see the block and can search and read it, but not write.
 
 `conversation_search` finds what an earlier session of this project
 said: the messages holding every word of a query, newest sessions
@@ -517,7 +523,7 @@ names the file and the field.
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `agents_md_budget` | the most bytes the `AGENTS.md` files may take together, yours first (`~/.dax/AGENTS.md`, `agents_md_global`), then the repository's from its root down; default 65536. The first file that would take the total past it is cut at the last line that fits, with a line saying how many of its bytes were left out, and every file after it is left out whole; the session says so as it starts, in the terminal client, the REPL, on `-p`'s standard error, and to an editor (`-front acp`) as a message ahead of the first reply and on standard error, naming the file, where it was cut and how much went (or, for a file left out whole, its size) and the budget. 1024 to 1048576. A project's file may set it only lower, and then it bounds the repository's files alone, after yours: a repository can make its own instructions cost less, never raise the total or push yours out |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
-| `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. Not in a project file: a repository cannot turn on writes to your memory |
+| `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500, "index_scopes": []}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. `index_scopes` names the scopes, `user` and `project`, the memory block renders as an index, each entry its heading alone, read whole with `memory_read` (see [Memory](#memory)). Not in a project file: a repository cannot turn on writes to your memory |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, or an older HTTP+SSE one (a server that answers the first `initialize` with a 4xx other than 401, 403, 408 or 429, and then a GET with an SSE stream whose first event is `endpoint`, is reached over SSE from then on, and you are told once), and `token_env` names the variable whose token is sent to its origin alone and which no child process gets; `oauth` signs in instead (below). A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
 | `mcp_servers.<name>.defer` | `true` or `false`: whether the server's tools are held back until the model asks for them. Held back, each is listed in the instructions by its name and the first sentence of its description, and the model loads the ones it needs with `tool_search` (`"select:mcp__web__search"` or keywords); a loaded tool is sent from the next request on, after the tools already sent, and stays for the session, so the cached prefix holds, and the session records it as the config entry's `tools_added`, which `/resume` restores, with a load a run made before it stopped. A held server's own instructions are sent from the request that first carries one of its tools. Left out, dax decides by size: a server whose tool definitions pass 8 KiB (about 2,000 tokens; a web search's eight tools are 33 KiB, a browser's seventeen 26 KiB) is held back, a smaller one sent whole, decided once per session. `false` sends every definition in every request. A held tool's calls are decided by its rules as before; `tool_search` itself is allowed (dax-toolsearch's rule; `"builtin": false` drops it). A project's file may set `true` alone. `/mcp` shows how many of a server's tools are deferred and loaded, `/tools` marks each `deferred` or `loaded` |
@@ -1199,8 +1205,8 @@ the one whose rule decided it: `extension:dax-coding`, say):
 
 - **runs without asking**: `read`, `glob`, `grep`, `ls` and the read-only
   bash commands listed below (dax-coding's), `explore` and `task`
-  (dax-agents'), `skill` (dax-skills') and `memory_search` and
-  `conversation_search` (dax-memory's);
+  (dax-agents'), `skill` (dax-skills') and `memory_search`,
+  `memory_read` and `conversation_search` (dax-memory's);
 - **asks**: `write`, `edit`, every other command, memory writes (`memory_insert` too), every
   peer (dax-a2a's) and every MCP tool. `go test`, `go build`, `go vet` and `go list` ask: they run the
   repository's code (a `TestMain`, cgo, a vet tool), so a hostile

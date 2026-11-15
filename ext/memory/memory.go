@@ -15,6 +15,7 @@ import (
 	"iter"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -59,7 +60,7 @@ func New(dir string, opts ...Option) extension.Extension {
 		var mu sync.Mutex
 		built := map[extension.Env]*passer{}
 		after = func(env extension.Env) (func(context.Context, extension.Run), error) {
-			p := &passer{dir: dir, env: env, b: o.background}
+			p := &passer{dir: dir, env: env, b: o.background, index: o}
 			mu.Lock()
 			built[env] = p
 			mu.Unlock()
@@ -80,23 +81,28 @@ func New(dir string, opts ...Option) extension.Extension {
 		AfterRun:     after,
 		BeforePrompt: before,
 		Name:         Name,
-		Owns:         []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
-		Policy:       policy.Rules{Allow: []string{agentmemory.SearchTool, agentkit.ConversationSearchTool}},
+		// memory_read is the kit's to offer: under an index scope
+		// (WithIndex), and in a request whose block the budget dropped.
+		Owns:   []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.ReadTool, agentmemory.InsertTool, agentkit.ConversationSearchTool},
+		Policy: policy.Rules{Allow: []string{agentmemory.SearchTool, agentmemory.ReadTool, agentkit.ConversationSearchTool}},
 		// The memory is the person's: an A2A caller is refused every
 		// memory tool outright (conversation_search refuses it through
 		// Env.SearchScope), and the store reads empty on its context.
-		PersonOnly: []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.InsertTool},
+		PersonOnly: []string{agentmemory.SaveTool, agentmemory.PatchTool, agentmemory.ForgetTool, agentmemory.SearchTool, agentmemory.ReadTool, agentmemory.InsertTool},
 		SubagentTools: func(env extension.Env) ([]agenttool.Tool, error) {
 			mem, scopes, err := open(dir, env)
 			if err != nil {
 				return nil, err
 			}
-			for _, t := range agentmemory.Tools(mem, append(scopes, archives(scopes)...)) {
-				if t.Name() == agentmemory.SearchTool {
-					return []agenttool.Tool{t}, nil
+			// The sub-agents see the block the kit renders, so an
+			// index scope's entries are read whole with memory_read.
+			var out []agenttool.Tool
+			for _, t := range agentmemory.Tools(mem, append(scopes, archives(scopes)...), o.toolOptions(scopes)...) {
+				if t.Name() == agentmemory.SearchTool || t.Name() == agentmemory.ReadTool {
+					out = append(out, t)
 				}
 			}
-			return nil, nil
+			return out, nil
 		},
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			mem, scopes, err := open(dir, env)
@@ -112,6 +118,9 @@ func New(dir string, opts ...Option) extension.Extension {
 				agentkit.WithMemory(mem, scopes...),
 				agentkit.WithMemoryArchive(arch...),
 				agentkit.WithMemoryTools(agentmemory.WithInsert(arch...)),
+				// An index scope's entries render as their headings,
+				// and the kit offers memory_read beside them.
+				agentkit.WithMemoryRender(o.renderOptions(scopes)...),
 			}, nil
 		},
 	}
@@ -120,7 +129,49 @@ func New(dir string, opts ...Option) extension.Extension {
 // Option is a choice New makes beyond the store's directory.
 type Option func(*options)
 
-type options struct{ background Background }
+type options struct {
+	background Background
+	index      []string
+}
+
+// WithIndex renders the named scopes of the memory block, "user" and
+// "project" (the project the tools act in), as an index: each entry's
+// heading and description alone, its content read whole with
+// memory_read (agentmemory's WithScopeIndex): the person's own setting
+// (memory.index_scopes). Another name is ignored.
+func WithIndex(scopes ...string) Option {
+	return func(o *options) { o.index = slices.Clone(scopes) }
+}
+
+// indexScopes are the session's scopes (the user's, then the
+// project's, as open returns them) that render as an index.
+func (o options) indexScopes(scopes []agentmemory.Scope) []agentmemory.Scope {
+	var out []agentmemory.Scope
+	for i, name := range []string{"user", "project"} {
+		if i < len(scopes) && slices.Contains(o.index, name) {
+			out = append(out, scopes[i])
+		}
+	}
+	return out
+}
+
+func (o options) renderOptions(scopes []agentmemory.Scope) []agentmemory.RenderOption {
+	var out []agentmemory.RenderOption
+	for _, sc := range o.indexScopes(scopes) {
+		out = append(out, agentmemory.WithScopeIndex(sc))
+	}
+	return out
+}
+
+// toolOptions are the memory tools' options for a tool set built
+// beside the kit's, the sub-agents' and the pass's: memory_read where a
+// scope renders as an index.
+func (o options) toolOptions(scopes []agentmemory.Scope) []agentmemory.ToolOption {
+	if idx := o.indexScopes(scopes); len(idx) > 0 {
+		return []agentmemory.ToolOption{agentmemory.WithIndexScopes(idx...)}
+	}
+	return nil
+}
 
 // WithBackground runs the background pass b after the person's runs:
 // the person's own setting (memory.background), which a project cannot

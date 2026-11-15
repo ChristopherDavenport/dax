@@ -26,6 +26,20 @@ versions may break flags and the config file.
     assistant turn their provider continues as a prefix
     (openresponses v0.0.20).
 
+- Added: `memory.index_scopes` in your config (`["user"]`,
+  `["project"]` or both; none by default) renders those scopes of the
+  memory block as an index, each entry its heading and its description
+  or first line, and offers `memory_read`, which reads one entry whole
+  and runs unasked, to the main agent, the sub-agents and the
+  background pass (agentmemory#55).
+- Fixed: the background memory pass and `/memory undo` forget an entry
+  only while it holds what they read, in one step in the store
+  (agentmemory's conditional forget), so a save landing between their
+  check and the forget is kept and the entry named as changed
+  (agentmemory#53).
+- Changed: `memory.WithIndex`, the scopes the block renders as an index
+  (agentmemory#55).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work
