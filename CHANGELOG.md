@@ -92,7 +92,10 @@ versions may break flags and the config file.
   error says to pass the container's ID as `-instance` (and a lasting
   name as `-project`), and `-ref`'s help says so. `dax box up` prints
   the executor line the box host runs, with the digest, the container
-  and the box's name (#203).
+  and the box's name, and the box host (`-box`, `dax box up`) refuses
+  at start, naming the box, when docker reports no image digest for
+  it, where it started the box's executor with its name as the ref
+  (#203).
 
 - Fixed: a session's "yes, always" grants (`a`) come back when the
   session is resumed (`-resume`, `/resume`), rebuilt from the
