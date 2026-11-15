@@ -2246,7 +2246,7 @@ as they were. A
 repository whose own config names a program git would run (a clean
 filter, say) is not read, as the status line does not read it: the
 entry says `withheld` and why. A patch over `snapshot_max_bytes` (8 MiB
-by default) is recorded with its size and no patch. Outside a git work
+by default) is recorded with its base, its size and no patch. Outside a git work
 tree, or with `-sessions ""`, nothing is recorded, and `-snapshot=false`
 turns it off. A `-box` run's `env` entry already names the image it
 ran, by its digest, as the workspace's `ref`.

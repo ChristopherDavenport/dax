@@ -51,6 +51,11 @@ versions may break flags and the config file.
   them; `dax serve -a2a` no longer warns at start that it does
   (agentkit#129).
 
+- Fixed: a run-end snapshot whose patch is over `snapshot_max_bytes`
+  records, in its `agenteval:snapshot` entry, the commit it applies to
+  and its size beside the error, which `-result` names too, where the
+  entry kept the error alone (agenteval#79).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work
