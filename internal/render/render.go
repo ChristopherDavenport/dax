@@ -136,11 +136,7 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		case e.Reason == agentturn.ReasonStopped && e.Cause == agentturn.StopContentFilter:
 			// The provider refused: what it said, and why when it
 			// says (Anthropic's category), which no delta printed.
-			fmt.Fprintf(p.w(), "[refused%s]", category(e.Incomplete))
-			if e.Refusal != "" {
-				fmt.Fprintf(p.w(), " %s", e.Refusal)
-			}
-			fmt.Fprintln(p.w())
+			fmt.Fprintln(p.w(), Refused(e))
 			reason = "refused"
 		case e.Reason == agentturn.ReasonStopped && e.Cause == agentturn.StopMaxOutputTokens:
 			fmt.Fprintln(p.w(), "[the answer was cut at the model's output limit (max_output_tokens)]")
@@ -158,6 +154,18 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		}
 	}
 	return nil
+}
+
+// Refused is the line that says what a run the provider's content
+// filter stopped was refused with: "[refused: <category>] <text>",
+// the category when the provider's details give one (Anthropic's), the
+// text the refusal parts held, as every front shows it.
+func Refused(e *agentturn.RunEnd) string {
+	line := "[refused" + category(e.Incomplete) + "]"
+	if e.Refusal != "" {
+		line += " " + e.Refusal
+	}
+	return line
 }
 
 // category is ": " and a refusal's category, as the provider's

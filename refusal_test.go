@@ -153,6 +153,11 @@ func TestACPSaysARefusalAndACut(t *testing.T) {
 			if res.StopReason != tc.want {
 				t.Errorf("stop reason %q, want %q", res.StopReason, tc.want)
 			}
+			// The editor is shown what the provider refused with, and
+			// its category, before the stop (#206's review, L6).
+			if us := e.updates(); tc.reason == openresponses.IncompleteReasonContentFilter && !has(us, acp.UpdateAgentMessage, "[refused: cyber] "+refusalText) {
+				t.Errorf("updates %+v, want the refusal as the agent's message", us)
+			}
 			e.stop()
 		})
 	}

@@ -397,6 +397,13 @@ func (a *acpSession) replay(ctx context.Context) error {
 		switch it := r.Item.(type) {
 		case *openresponses.Message:
 			text := it.Text()
+			// A refusal part is no text (Contents.Text), and is what a
+			// refused turn said.
+			for _, part := range it.Content {
+				if r, ok := part.(*openresponses.Refusal); ok && r.Refusal != "" {
+					text += "[refused] " + r.Refusal
+				}
+			}
 			if text == "" {
 				continue
 			}
@@ -583,6 +590,13 @@ func (a *acpSession) run(ctx context.Context, blocks []acp.ContentBlock) (acp.Pr
 			return acp.PromptResponse{}, errors.New(s)
 		}
 		return acp.PromptResponse{}, err
+	}
+	if end.Reason == agentturn.ReasonStopped && end.Cause == agentturn.StopContentFilter {
+		// The refusal streams as no text, so the editor is told what
+		// the provider refused with, and why, before the stop says it
+		// refused (ACP has no other field for it).
+		c := acp.Text(render.Refused(end))
+		a.update(acp.SessionUpdate{SessionUpdate: acp.UpdateAgentMessage, Content: &c})
 	}
 	switch {
 	case end.Reason == agentturn.ReasonAborted:

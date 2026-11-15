@@ -63,7 +63,9 @@ versions may break flags and the config file.
   with the cause `content_filter`, the refusal and the provider's
   details. A final answer the output limit cut says so and ends
   `[cut · ...]`, `-p` exits 7 and `-result` says reason `cut`. Over ACP the
-  first stops the prompt `refusal` and the second `max_tokens`; the
+  editor is sent the refusal line as the agent's message, and a loaded
+  session's refused turn shows its refusal, and the first stops the
+  prompt `refusal` and the second `max_tokens`; the
   terminal client shows both through agentconsole v0.0.17 (#206).
 
 - Changed: the header members that identify a run are named
