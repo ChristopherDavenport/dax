@@ -86,6 +86,14 @@ versions may break flags and the config file.
   force, defaults included, so two sessions that differ only in one of
   them compare as different configurations (#174).
 
+- Changed: `dax execute -kind container` refuses to start without a
+  `-ref` that is the digest of the image the container runs
+  (`sha256:<64 hex>`), as agentworkspace RFC 0001 §12 requires; the
+  error says to pass the container's ID as `-instance` (and a lasting
+  name as `-project`), and `-ref`'s help says so. `dax box up` prints
+  the executor line the box host runs, with the digest, the container
+  and the box's name (#203).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

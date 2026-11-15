@@ -156,8 +156,10 @@ type Box struct {
 // Command is the program and its arguments that start `dax execute`
 // in b, speaking MCP on its standard input and output. The workspace
 // it serves is kind container, ref the box's name, root the project's
-// directory: the project's identity, the same however often the box is
-// made again.
+// directory. A dax execute from v0.0.37 refuses it, since a
+// container's ref must be its image's digest (agentworkspace RFC 0001
+// §12): HostedCommand is the command, and falls back on this one only
+// when docker did not report the image, which then fails saying so.
 func (b Box) Command() []string {
 	return []string{"docker", "exec", "-i", b.Name, Binary, "execute", "-root", b.Dir, "-kind", "container", "-ref", b.Name}
 }

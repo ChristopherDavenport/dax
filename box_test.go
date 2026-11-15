@@ -119,6 +119,15 @@ func TestBoxCommand(t *testing.T) {
 			rules:   "off",
 		},
 		{
+			// A container's ref is its image's digest, which dax execute
+			// requires, and its ID the instance (#203).
+			name:    "up prints the image's digest and the container",
+			args:    []string{"up"},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {testImage + " " + testInstance + "\n"}},
+			out:     "-ref " + testImage + " -instance " + testInstance + " -project ",
+			rules:   "off",
+		},
+		{
 			name:    "up -profile from the box host config",
 			args:    []string{"up", "-config", hostCfg, "-profile", "open"},
 			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
@@ -654,7 +663,7 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 				fromSession.Close()
 				t.Fatalf("Dial: %v (the box host: %v)", err, <-served)
 			}
-			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != "box" || desc.Root != root {
+			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != testImage || desc.Root != root {
 				t.Errorf("descriptor = %+v, want the in-box executor's", desc)
 			}
 			// What the box host resolved reaches the session, in the

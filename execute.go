@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,10 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/tool"
 )
+
+// imageDigest is an image's digest as a container workspace's ref
+// names it (agentworkspace RFC 0001 §12).
+var imageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // executeKinds are the workspace kinds -kind takes.
 var executeKinds = []string{workspace.KindLocal, workspace.KindContainer, workspace.KindRemote}
@@ -63,7 +68,7 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	maxRead := fs.Int64("max-read-bytes", 0, fmt.Sprintf("the most a session's max_read_bytes may be (the most bytes of a file the read tool scans, edit rewrites and the bash analyzer reads): a session gets its own setting up to this, and a dax older than the setting gets this; 0 is dax's default, %d", tool.DefaultMaxRead))
 	passEnv := fs.String("pass-env", "", "comma-separated variables that look like credentials to pass to the tools' processes anyway")
 	kind := fs.String("kind", workspace.KindRemote, "the workspace's kind as the session records it: "+strings.Join(executeKinds, ", "))
-	ref := fs.String("ref", "", "the workspace's ref as the session records it: an image, a host, an instance; default this host's name")
+	ref := fs.String("ref", "", "the workspace's ref as the session records it: with -kind container the digest of the image the container runs (sha256:<64 hex>, docker inspect -f '{{.Image}}' <container>), required; otherwise the host's name, its default")
 	host := fs.String("host", "", "the machine the workspace is on, as the session records it (workspace.host); default none")
 	project := fs.String("project", "", "the project's identity, for -list, memory and the session's header, when -ref is not it: a box's name beside the image digest -ref names; default the ref")
 	instance := fs.String("instance", "", "the file system's instance as the session records it (workspace.instance): a container's ID, set when a restart gives a new file system; default none")
@@ -80,6 +85,15 @@ func runExecute(ctx context.Context, args []string, p program) error {
 	}
 	if !slices.Contains(executeKinds, *kind) {
 		return fmt.Errorf("execute: -kind %q: want one of %s", *kind, strings.Join(executeKinds, ", "))
+	}
+	if *kind == workspace.KindContainer && !imageDigest.MatchString(*ref) {
+		// agentworkspace RFC 0001 §12: a container's ref is its image's
+		// digest, and the instance and the machine are never in it.
+		got := "none"
+		if *ref != "" {
+			got = fmt.Sprintf("%q", *ref)
+		}
+		return fmt.Errorf("execute: -kind container needs -ref, the digest of the image the container runs (sha256:<64 hex>, from docker inspect -f '{{.Image}}' <container>), not %s: pass the container's ID as -instance, and a name that outlives it as -project", got)
 	}
 	if *maxRead < 0 {
 		return errors.New("execute: -max-read-bytes: want a positive number of bytes")

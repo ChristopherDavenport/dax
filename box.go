@@ -637,7 +637,11 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "%s -executor %s\n", p.name, box.Quote([]string{box.Quote(b.Command())}))
+		// The image's digest as the ref, the container as the instance
+		// and the box's name as the project, as the box host starts it:
+		// dax execute refuses a container named by anything but its
+		// image's digest (#203).
+		fmt.Fprintf(stdout, "%s -executor %s\n", p.name, box.Quote([]string{box.Quote(b.HostedCommand(""))}))
 		return nil
 	case "ls":
 		if fs.NArg() > 0 {

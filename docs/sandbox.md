@@ -812,7 +812,7 @@ docker build -t dax-sandbox .
 cd ~/src/app
 docker run -d --init --name app-box --user "$(id -u):$(id -g)" \
   -v "$PWD:$PWD" -w "$PWD" dax-sandbox sleep infinity
-dax -executor "docker exec -i app-box dax execute -root '$PWD' -kind container -ref app-box"
+dax -executor "docker exec -i app-box dax execute -root '$PWD' -kind container -ref $(docker inspect -f '{{.Image}}' app-box) -instance $(docker inspect -f '{{.Id}}' app-box) -project app-box"
 ```
 
 Your shell fills in `$PWD` inside the double quotes; the single quotes
@@ -823,11 +823,12 @@ a single quote needs the array form, under Config).
 `-i` and not `-t`: the pipe carries MCP. `-root` must exist in the
 container; it is where every tool acts and nothing above it is read.
 `-kind` and `-ref` are what the record and the banner call the
-workspace, and with `-root` they are the project's identity: the
-sessions `-list` finds and the memory scope are keyed by them (see
-[Sessions and memory](#sessions-and-memory)). Give `-ref` explicitly, a
-name that outlives the container: its default is the host's name, and
-a container's changes when it is recreated.
+workspace. A container's `-ref` is the digest of the image it runs, which
+`dax execute -kind container` requires (agentworkspace RFC 0001 §12),
+and `-instance` its ID; `-project` is then the project's identity with
+`-root`: the sessions `-list` finds and the memory scope are keyed by
+it (see [Sessions and memory](#sessions-and-memory)). Give a name that
+outlives the container and its image.
 
 The tools' commands and MCP servers get `dax execute`'s environment,
 which is the container's (the image's `ENV`, `docker run -e`), less

@@ -41,12 +41,20 @@ const executeListenEnv = "DAX_TEST_EXECUTE_LISTEN"
 // DAX_TEST_EXECUTE_ROOT, with an extension whose tool prints to
 // standard output as a careless tool might; or, with
 // DAX_TEST_MCP_SERVER=1, a stdio MCP server (serveTestMCP).
+// testImage and testInstance are the image digest and the container
+// ID the test's executor says it serves, as a box host's does; its
+// project is "box".
+const (
+	testImage    = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testInstance = "c0ffee000001"
+)
+
 func TestMain(m *testing.M) {
 	if os.Getenv(testMCPServerEnv) == "1" {
 		os.Exit(serveTestMCP())
 	}
 	if dir := os.Getenv(executeRoot); dir != "" {
-		args := []string{"execute", "-root", dir, "-kind", "container", "-ref", "box"}
+		args := []string{"execute", "-root", dir, "-kind", "container", "-ref", testImage, "-instance", testInstance, "-project", "box"}
 		if addr := os.Getenv(executeListenEnv); addr != "" {
 			args = append(args, "-listen", addr)
 		}
@@ -139,11 +147,13 @@ func TestExecuteServesTheToolsOverStdio(t *testing.T) {
 
 	raw, _ := json.Marshal(r.Session().InitializeResult().Capabilities.Experimental[executor.CapabilityKey])
 	var c struct {
-		Descriptor struct{ Kind, Ref, Root string }
+		Descriptor struct{ Kind, Ref, Root, Instance string }
+		Project    string
 		Extensions []string
 	}
 	json.Unmarshal(raw, &c)
-	if c.Descriptor.Kind != workspace.KindContainer || c.Descriptor.Ref != "box" || c.Descriptor.Root != dir ||
+	// The digest and the instance are recorded as given (#203).
+	if c.Descriptor.Kind != workspace.KindContainer || c.Descriptor.Ref != testImage || c.Descriptor.Instance != testInstance || c.Project != "box" || c.Descriptor.Root != dir ||
 		strings.Join(c.Extensions, " ") != "dax-coding stray" {
 		t.Errorf("capability %s", raw)
 	}
@@ -217,6 +227,11 @@ func TestExecuteServesTheToolsOverStdio(t *testing.T) {
 func TestExecuteRefusesBadFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"execute", "-kind", "vm"},
+		// A container's ref is its image's digest (agentworkspace RFC
+		// 0001 §12): a name, or none, is refused (#203).
+		{"execute", "-kind", "container", "-ref", "mybox"},
+		{"execute", "-kind", "container"},
+		{"execute", "-kind", "container", "-ref", "sha256:abc"},
 		{"execute", "-max-read-bytes", "-1"},
 		{"execute", "-pass-env", "A=B"},
 		{"execute", "extra"},
@@ -270,7 +285,7 @@ func TestExecuteServesOverHTTP(t *testing.T) {
 	a, b := dial(), dial()
 	defer a.Close()
 	defer b.Close()
-	if d := a.Descriptor(); d.Kind != workspace.KindContainer || d.Ref != "box" {
+	if d := a.Descriptor(); d.Kind != workspace.KindContainer || d.Ref != testImage {
 		t.Errorf("descriptor %+v", d)
 	}
 	res, err := b.Call(ctx, executor.Call{Tool: "read", Call: agenttool.Call{ID: "r", Args: json.RawMessage(`{"path":"notes.txt"}`)}})
