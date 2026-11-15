@@ -537,9 +537,8 @@ type Session struct {
 	recorded bool
 	// agentsMDBudget is the bound the AGENTS.md chain was read under,
 	// and agentsMDProject the project's bound on its own files when it
-	// was the tighter one, 0 otherwise; agentsMDKept the bytes of a file
-	// the chain cut at the budget that reach the model (Info).
-	agentsMDBudget, agentsMDProject, agentsMDKept int64
+	// was the tighter one, 0 otherwise.
+	agentsMDBudget, agentsMDProject int64
 
 	ag     *agentturn.Agent  // the one agent
 	ctl    *agentkit.Control // the kit's control of it, which the session's own delegates to
@@ -915,7 +914,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			}
 		}
 		s.agentsMDBudget = mdOpts.Budget
-		s.agentsMDKept, _ = cutKept(res)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		agentsText = agentsmd.Render(res.Files)
 		// The person's own files are not an A2A caller's (caller.go).

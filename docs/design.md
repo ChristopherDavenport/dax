@@ -251,8 +251,8 @@ out (`Options.AgentsMDProjectBudget`). The chain is read under
 agentsmd's `Truncate`: the first file over the budget is cut at a line,
 with agentsmd's marker, and sent, and the files after it are left out
 whole (`agentsMDOptions` in `agent/trust.go`, which the start chain, the
-kit's part and the nested hook share; `Info.AgentsMDKept` is the bytes
-of it sent). A file cut or left out is the one omission every front
+kit's part and the nested hook share; the omission's `Kept`, agentkit's
+from agentsmd, is the bytes of it sent). A file cut or left out is the one omission every front
 says without `-v` (`agentsMDNotice` in `front.go`): the model was not
 given instructions the person may count on, and the nearest file, the
 most specific, is the one to go.

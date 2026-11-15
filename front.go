@@ -1029,7 +1029,7 @@ func assemblyLines(info agent.Info) []string {
 	for _, o := range info.Omitted {
 		if o.Part == agentsmd.PartID && o.Reason == agentsmd.Truncated.String() {
 			// A cut file is in the instructions, its first part sent.
-			lines = append(lines, fmt.Sprintf("omitted: %s: its first %d bytes sent, %d bytes left out", o, info.AgentsMDKept, o.Size))
+			lines = append(lines, fmt.Sprintf("omitted: %s: its first %d bytes sent, %d bytes left out", o, o.Kept, o.Size))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("omitted: %s", o))
@@ -1066,7 +1066,7 @@ func agentsMDNotice(si agent.Info, userConfig string) string {
 	}
 	var what string
 	if cut {
-		what = fmt.Sprintf("cut %s at %d bytes, %d bytes left out", first.What, si.AgentsMDKept, first.Size)
+		what = fmt.Sprintf("cut %s at %d bytes, %d bytes left out", first.What, first.Kept, first.Size)
 		switch later {
 		case 0:
 		case 1:

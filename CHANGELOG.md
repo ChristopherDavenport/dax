@@ -40,6 +40,11 @@ versions may break flags and the config file.
 - Changed: `memory.WithIndex`, the scopes the block renders as an index
   (agentmemory#55).
 
+- Changed: `agent.Info.AgentsMDKept` is gone: a cut AGENTS.md file's
+  bytes sent are its omission's `Kept` in `Info.Omitted`, agentkit's
+  from agentsmd, where dax read them back from the marker's wording
+  (agentkit#140).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

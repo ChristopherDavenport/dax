@@ -821,11 +821,8 @@ func TestAnAGENTSmdOverTheBudgetIsCutAndSent(t *testing.T) {
 			cut = append(cut, om)
 		}
 	}
-	if len(cut) != 1 || cut[0].What != path || cut[0].Reason != "truncated" || cut[0].Size != whole-kept {
-		t.Fatalf("omitted %+v, want %s truncated with %d bytes cut off", cut, path, whole-kept)
-	}
-	if info := s.Info(); info.AgentsMDKept != kept {
-		t.Errorf("Info's AgentsMDKept = %d, want %d", info.AgentsMDKept, kept)
+	if len(cut) != 1 || cut[0].What != path || cut[0].Reason != "truncated" || cut[0].Size != whole-kept || cut[0].Kept != kept {
+		t.Fatalf("omitted %+v, want %s truncated with %d bytes kept and %d cut off", cut, path, kept, whole-kept)
 	}
 	if _, err := promptOn(t.Context(), s, "hi", nil); err != nil {
 		t.Fatal(err)
