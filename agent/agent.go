@@ -1466,6 +1466,8 @@ func (s *Session) resumed(id string) error {
 	if w := serversResumed(sess.Header(), s.beside); w != "" {
 		fmt.Fprintf(warnings{}, "dax: %s\n", w)
 	}
+	// The person's "yes, always" for the session holds on (#186).
+	s.regrant(context.Background())
 	return nil
 }
 

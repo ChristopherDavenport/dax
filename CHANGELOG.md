@@ -94,6 +94,12 @@ versions may break flags and the config file.
   the executor line the box host runs, with the digest, the container
   and the box's name (#203).
 
+- Fixed: a session's "yes, always" grants (`a`) come back when the
+  session is resumed (`-resume`, `/resume`), rebuilt from the
+  activations and revocations its record holds, and dax says on
+  standard error which rules came back; a resumed session asked again
+  for calls the person had already allowed (#186).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

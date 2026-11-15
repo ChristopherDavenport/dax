@@ -1422,7 +1422,10 @@ set under the conversation's scope, on the record with that scope; it
 holds across a mode switch, reaches the session's sub-agents (a
 sub-agent's call it covers runs unasked, its verdict naming the grant;
 an A2A caller's conversation is not the session's and asks), and ends
-with the session (a resumed session asks again). A kept one is the
+with the session. A resumed session (`-resume`, `/resume`) makes the
+grants again, rebuilt from the record's activations and revocations,
+and says on standard error which came back; a sub-agent's own grant
+does not come back. A kept one is the
 source `dax:saved`; delete it from the file to take it back. `dax
 attach` offers once only.
 
