@@ -175,6 +175,17 @@ type Extension struct {
 	// runs, as a BeforeToolCall hook of the main agent.
 	PolicyHooks func(Env) (PolicyHooks, error)
 
+	// AfterToolCall sees each tool call's result once the call ran, the
+	// main agent's and every sub-agent's built with
+	// Env.ChildAfterToolCall, and may replace it, as agentturn's
+	// AfterToolCall does. The session runs every extension's in the
+	// extensions' order, each seeing the result the one before it
+	// left. It is built over the session as the kit options are. An
+	// extension sets it here and never through Kit: agentkit's
+	// WithAfterToolCall keeps one hook, so a Kit option that sets one,
+	// which would replace every extension's, fails the start.
+	AfterToolCall func(Env) (func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error), error)
+
 	// AfterRun is called after each run of the person's main agent
 	// ends, however it ended and whatever started it (a prompt, a
 	// resume, a steer that started a run), with what the run did. It
@@ -380,6 +391,10 @@ type Env interface {
 	// call the policy asks about put to the user from inside the run.
 	// Nil when the session has no policy.
 	ChildPolicy(name string) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error)
+	// ChildAfterToolCall is the AfterToolCall hook a sub-agent's
+	// configuration takes: every extension's AfterToolCall, in order,
+	// as the main agent runs them. Nil when no extension has one.
+	ChildAfterToolCall() func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error)
 	// Omit reports an instruction source the extension left out, as the
 	// start lines show them: a repository's skills directory that is a
 	// link out of it, say.

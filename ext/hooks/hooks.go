@@ -49,7 +49,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -118,9 +117,11 @@ func New(o Options) extension.Extension {
 		}
 	}
 	if len(o.PostToolUse) > 0 {
-		e.Kit = func(env extension.Env) ([]agentkit.Option, error) {
+		// The session runs it for the main agent's calls and its
+		// sub-agents' alike, beside any other extension's (#187).
+		e.AfterToolCall = func(env extension.Env) (func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error), error) {
 			r := &runner{env: env, matchers: o.PostToolUse}
-			return []agentkit.Option{agentkit.WithAfterToolCall(r.after)}, nil
+			return r.after, nil
 		}
 	}
 	return e

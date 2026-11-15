@@ -279,6 +279,7 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 		Retry:           agentturn.Retry{MaxAttempts: 2},
 		BeforeToolCall:  p.decide(el, mem, seen, passID, auto, p.env.ChildPolicy(passName)),
 		BeforeModelCall: budget.check,
+		AfterToolCall:   p.env.ChildAfterToolCall(),
 	}
 	if cfg, err = kit.ChildConfig(cfg, agentkit.PartMemory); err != nil {
 		return err

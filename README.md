@@ -1451,7 +1451,8 @@ reaches it on standard input alone, never in its command line.
   secret paths), a deny, or an [A2A caller's](#serving-peers-dax-serve--a2a)
   call. `additionalContext` is said to the model beside the call's
   result. Several hooks fold deny over ask over allow.
-- **PostToolUse** runs after each call of the main agent it matches.
+- **PostToolUse** runs after each call it matches, the main agent's
+  and every sub-agent's (`explore`, `task`, the memory pass).
   Exit 2 (its stderr), `"decision": "block"` (its `reason`) and
   `additionalContext` are said to the model after the result.
 - A PreToolUse hook that cannot answer refuses the call, with the

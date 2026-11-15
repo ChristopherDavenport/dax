@@ -100,6 +100,17 @@ versions may break flags and the config file.
   standard error which rules came back; a resumed session asked again
   for calls the person had already allowed (#186).
 
+- Fixed: your PostToolUse hooks run for the sub-agents' calls too
+  (`explore`, `task`, the memory pass), where they saw the main agent's
+  alone (#187).
+- Changed: `extension.Extension.AfterToolCall`, an extension's hook on
+  each call's result, which the session composes in the extensions'
+  order for the main agent and, through the new
+  `extension.Env.ChildAfterToolCall`, every sub-agent; an extension
+  whose `Kit` options set `agentkit.WithAfterToolCall`, which would
+  replace every other's, fails the start naming it and the extension
+  whose hook it would replace (#187).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work
