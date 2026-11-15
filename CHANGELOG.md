@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a
   and tools/a2a v0.0.40, up from v0.0.39; agentkit v0.0.19, up from
