@@ -32,6 +32,8 @@ func TestTheREPLNamesAndResumesASession(t *testing.T) {
 	go func() { done <- f.Run(ctx, sess) }()
 	pw.Write([]byte("the auth work\n"))
 	waitIn(t, out, "tokens]")
+	// The REPL is idle once it prompts again after the end line (#200).
+	waitAfter(t, out, "tokens]", "\n> ")
 	pw.Write([]byte("/name auth refactor\n"))
 	waitIn(t, out, `[session named "auth refactor"]`)
 	pw.Write([]byte("/new\n"))

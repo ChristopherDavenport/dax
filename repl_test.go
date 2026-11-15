@@ -349,6 +349,24 @@ func TestPrintStopsWhileAQuestionWaitsOnALine(t *testing.T) {
 	}
 }
 
+// waitAfter waits for sub in what w holds after the last mark: the
+// REPL's prompt after a run's end line, say, which it prints only once
+// it is idle.
+func waitAfter(t *testing.T, w *syncBuf, mark, sub string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		s := w.String()
+		if i := strings.LastIndex(s, mark); i >= 0 && strings.Contains(s[i+len(mark):], sub) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never shown after %q:\n%s", sub, mark, s)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // waitIn waits for sub in what w holds.
 func waitIn(t *testing.T, w *syncBuf, sub string) {
 	t.Helper()

@@ -84,6 +84,10 @@ func TestTheREPLGrantsForTheSession(t *testing.T) {
 	pw.Write([]byte("a\n"))
 	waitIn(t, out, "[bash(echo hello) allowed for this session]")
 	waitIn(t, out, "[done")
+	// The end line comes before the REPL is idle: a line sent between
+	// the two is a steer of the run that ended, never a new run. So
+	// the second go waits for the prompt after the end line (#200).
+	waitAfter(t, out, "[done", "\n> ")
 	mark := len(out.String())
 	pw.Write([]byte("go\n"))
 	deadline := time.Now().Add(15 * time.Second)
