@@ -67,3 +67,39 @@ func TestASessionGrantComesBackOnResume(t *testing.T) {
 		})
 	}
 }
+
+// A sub-agent's own grant (extension.WithOwnGrants: the memory pass's
+// "always" to memory_save, under <conversation>/<pass>) does not come
+// back on a resume as the conversation's: the main agent's memory_save
+// still asks (#186's review, M1).
+func TestASubagentsOwnGrantDoesNotComeBackAsTheConversations(t *testing.T) {
+	ctx := context.Background()
+	model := perPrompt{"save": {{"memory_save", `{"scope":"user","name":"style","content":"Use tabs."}`}}}
+	o := options(t, model)
+	o.Policy = confirmPolicy(t)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What GrantQuestion does for the pass's question: a grant under
+	// the pass's own scope, recorded in the main session.
+	if err := s.grantUnder(ctx, s.Kit.GrantScope(ctx)+"/dax-memory-pass", "memory_save"); err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Resume(ctx, o, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var asked, offered []string
+	if _, err := Drive(ctx, r, grantPermit(r, GrantOnce, &asked, &offered), openresponses.UserText("save")); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("the resumed main agent's memory_save asked %v, want once: the pass's grant came back as the conversation's", asked)
+	}
+}

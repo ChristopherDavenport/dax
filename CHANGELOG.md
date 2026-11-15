@@ -98,7 +98,9 @@ versions may break flags and the config file.
   session is resumed (`-resume`, `/resume`), rebuilt from the
   activations and revocations its record holds, and dax says on
   standard error which rules came back; a resumed session asked again
-  for calls the person had already allowed (#186).
+  for calls the person had already allowed. Only the conversation's own
+  grants come back: a sub-agent's, such as the memory pass's, stay its
+  own (#186).
 
 - Fixed: your PostToolUse hooks run for the sub-agents' calls too
   (`explore`, `task`, the memory pass), where they saw the main agent's
