@@ -220,7 +220,11 @@ there already. `env:`
 reads the box host's own environment; `command:` runs the line with
 `sh` there and takes its output, trimmed; `file:` reads the file. A
 secret that cannot be resolved fails the unit's start, naming the
-secret and its reference, before anything is made. The workspace's
+secret and its reference, before anything is made. A unit's
+credential is the box host's, the same for every session it serves:
+whoever's session starts or reuses the unit, its secrets are the ones
+the box host's config resolves, and nothing chooses one per person or
+per caller. The workspace's
 bash never sees a unit's secret: they are in different containers. Nor
 does it see your own: a server your config gives `secret_env` runs on
 your machine (`"in": "host"`), never in the box.
