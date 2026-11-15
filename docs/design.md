@@ -490,10 +490,9 @@ own beyond the workspace is not a caller's either: an extension's
 a hook beside the default-mode floor (`personOnlyRefusal`), asking no
 one; dax-memory's store reads empty on a caller's context
 (`Env.Caller`), so the kit renders a caller's requests with no memory
-block; and dax-skills serves a caller only installed skills. The kit
-renders one skill catalogue for every conversation, so a learned
-skill's name and description still reach a caller's instructions until
-agentkit can leave a part out per conversation.
+block; and dax-skills serves a caller only installed skills, and
+leaves the learned ones out of its catalogue (agentkit's
+`WithSkillFilter`, on `Env.Caller`).
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal

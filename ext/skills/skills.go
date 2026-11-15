@@ -122,6 +122,15 @@ func New(o Options) extension.Extension {
 			opts := []agentkit.Option{agentkit.WithSkillSources(sources...)}
 			if manage != nil {
 				opts = append(opts, agentkit.WithTools(manage.tool()), agentkit.WithBeforeToolCall(callerReads(env, manage.taken)))
+				// An A2A caller's catalogue, and its sub-agents', leaves
+				// the learned skills out: their names and descriptions
+				// are the person's as their bodies are (agentkit#129).
+				opts = append(opts, agentkit.WithSkillFilter(func(ctx context.Context, sk agentskill.Skill) bool {
+					if _, caller := env.Caller(ctx); !caller {
+						return true
+					}
+					return !inside(learned, sk.Location)
+				}))
 			}
 			if ok {
 				opts = append(opts, agentkit.WithSkillTool(agentskill.WithFileClaim(projectFileClaim(env.ToolEnv().Files, project.Location))))
@@ -337,10 +346,10 @@ func omission(path, reason string) agentkit.Omission {
 // ~/.dax/learned, is the person's own, as their memory is, and is
 // refused outright, asking no one.
 //
-// The catalogue in a caller's instructions still lists a learned
-// skill's name and description: the kit renders one catalogue for
-// every conversation it serves, and leaving a skill out per
-// conversation is agentkit's to offer.
+// The catalogue in a caller's instructions leaves a learned skill out
+// (agentkit's WithSkillFilter), and the kit's skill tool refuses a
+// name it left out; this hook still holds a caller's call to the
+// skills installed, whatever the catalogue held.
 func callerReads(env extension.Env, taken func() (*agentskill.Catalog, error)) func(context.Context, agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		if info.Call == nil || info.Call.Name != agentskill.ToolName {

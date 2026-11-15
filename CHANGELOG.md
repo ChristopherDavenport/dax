@@ -45,6 +45,12 @@ versions may break flags and the config file.
   from agentsmd, where dax read them back from the marker's wording
   (agentkit#140).
 
+- Changed: an A2A caller's skill catalogue (`dax serve -a2a`), and its
+  sub-agents', leaves out the skills the model wrote for you under
+  `~/.dax/learned`, their names and descriptions too, where it listed
+  them; `dax serve -a2a` no longer warns at start that it does
+  (agentkit#129).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

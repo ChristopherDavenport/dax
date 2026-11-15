@@ -2079,12 +2079,9 @@ dax serve -a2a -listen 127.0.0.1:7878
   sub-agents' leave out their definitions, and the agent card does not
   name them. The `skill` tool serves a caller only the skills you
   installed (the project's, `~/.dax/skills`, `skills_dirs`), never one
-  the model wrote for you under `~/.dax/learned`. The catalogue in a
-  caller's instructions still lists a learned skill's name and
-  description, since the kit renders one catalogue for every
-  conversation; leaving it out per conversation needs agentkit.
-  `dax serve -a2a` says so at start, naming those skills, when
-  `~/.dax/learned` holds any the catalogue lists.
+  the model wrote for you under `~/.dax/learned`, and the catalogue in
+  a caller's instructions, and its sub-agents', leaves those out,
+  their names and descriptions too.
 - **Who answers.** A question in a conversation, a call the policy asks
   about, a sub-agent's asked call or a tool's own question, is put to
   the views attached to the served session (`dax attach`), naming the
