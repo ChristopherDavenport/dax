@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/ChristopherDavenport/agentpolicy"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
@@ -195,6 +196,79 @@ func (s *Session) grantUnder(ctx context.Context, scope, rule string) error {
 	}
 	s.grants.own[scope] = rules
 	return nil
+}
+
+// regrant makes the session's grants again on a resume (#186): the set
+// policy.SourceSession held under exactly the resumed conversation's
+// grant scope when the record ends, rebuilt from the activations and revocations the
+// record holds (agentpolicy RFC 0001, The record), is granted again
+// under the resumed conversation's scope, and the person is told which
+// rules came back. A sub-agent's own grants (extension.WithOwnGrants)
+// are not: its scope is the call's, which a resume does not keep.
+func (s *Session) regrant(ctx context.Context) {
+	if s.Kit == nil || s.Kit.Engine() == nil || s.Kit.Session() == nil {
+		return
+	}
+	sess := s.Kit.Session()
+	rules := sessionGrantsOf(sess.Path(sess.Leaf()), s.Kit.GrantScope(ctx))
+	var back []string
+	for _, rule := range rules {
+		if err := s.grantUnder(ctx, "", rule); err != nil {
+			fmt.Fprintf(warnings{}, "dax: %s was not granted again for the session: %v\n", rule, err)
+			continue
+		}
+		back = append(back, rule)
+	}
+	if len(back) > 0 {
+		fmt.Fprintf(warnings{}, "dax: granted again for the session, as before the resume: %s\n", strings.Join(back, ", "))
+	}
+}
+
+// sessionGrantsOf is the allow rules policy.SourceSession's set held
+// under the grant scope target, the resumed conversation's
+// (Kit.GrantScope), at the end of path: the set of its last activation
+// under exactly that scope, unless a revocation of the source or of
+// the scope followed. A set activated under another scope, a
+// sub-agent's own (target, a slash, and more: the memory pass's "yes,
+// always"), is that sub-agent's and never comes back as the
+// conversation's, as agentkit's replay of skill grants keeps to its
+// target scope.
+func sessionGrantsOf(path []agentsession.Entry, target string) []string {
+	type verdict struct {
+		Grant  string `json:"grant"`
+		Source string `json:"source"`
+		Scope  string `json:"scope"`
+		Set    *struct {
+			Allow []string `json:"allow"`
+		} `json:"set"`
+	}
+	var rules []string
+	for _, e := range path {
+		c, ok := e.(*agentsession.CustomEntry)
+		if !ok || c.NS != agentpolicy.VerdictNS {
+			continue
+		}
+		var v verdict
+		if json.Unmarshal(c.Data, &v) != nil || v.Grant == "" || v.Scope != target {
+			continue
+		}
+		switch agentpolicy.GrantKind(v.Grant) {
+		case agentpolicy.KindActivate:
+			if v.Source == policy.SourceSession {
+				rules = nil
+				if v.Set != nil {
+					rules = slices.Clone(v.Set.Allow)
+				}
+			}
+		case agentpolicy.KindRevoke:
+			if v.Source == policy.SourceSession {
+				rules = nil
+			}
+		case agentpolicy.KindRevokeScope:
+			rules = nil
+		}
+	}
+	return rules
 }
 
 // ownGrantsHeld activates again the grants of the sub-agent's own scope

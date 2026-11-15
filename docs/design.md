@@ -251,8 +251,8 @@ out (`Options.AgentsMDProjectBudget`). The chain is read under
 agentsmd's `Truncate`: the first file over the budget is cut at a line,
 with agentsmd's marker, and sent, and the files after it are left out
 whole (`agentsMDOptions` in `agent/trust.go`, which the start chain, the
-kit's part and the nested hook share; `Info.AgentsMDKept` is the bytes
-of it sent). A file cut or left out is the one omission every front
+kit's part and the nested hook share; the omission's `Kept`, agentkit's
+from agentsmd, is the bytes of it sent). A file cut or left out is the one omission every front
 says without `-v` (`agentsMDNotice` in `front.go`): the model was not
 given instructions the person may count on, and the nearest file, the
 most specific, is the one to go.
@@ -490,10 +490,9 @@ own beyond the workspace is not a caller's either: an extension's
 a hook beside the default-mode floor (`personOnlyRefusal`), asking no
 one; dax-memory's store reads empty on a caller's context
 (`Env.Caller`), so the kit renders a caller's requests with no memory
-block; and dax-skills serves a caller only installed skills. The kit
-renders one skill catalogue for every conversation, so a learned
-skill's name and description still reach a caller's instructions until
-agentkit can leave a part out per conversation.
+block; and dax-skills serves a caller only installed skills, and
+leaves the learned ones out of its catalogue (agentkit's
+`WithSkillFilter`, on `Env.Caller`).
 A front's input is
 dax's: a line that starts with a slash is a command to dax in every
 front (`commands.go`), which the REPL reads itself and the terminal
@@ -508,7 +507,7 @@ refused, since every view acts on the one served conversation.
 `/resume` moves the same way to an earlier session of the project
 (`Session.Sessions`, read from the store by the project's identity,
 never an A2A caller's conversation, which `OpenPeer` marks with the
-header's `dax.origin`),
+header's `dax:origin`),
 and `/name` writes agentsession's `info` entry, which listings read. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Resume`, and every question asked while a call runs is
@@ -603,8 +602,8 @@ is:
   descriptor, so a resume into another workspace is recorded as a
   substitution. The model is told the root as the working directory.
 - The workspace is the project's identity. The header keeps the whole
-  descriptor (`dax.workspace`) and, under an executor, a hash of the
-  address that reached it (`dax.executor`), never the address. `-list`
+  descriptor (`dax:workspace`) and, under an executor, a hash of the
+  address that reached it (`dax:executor`), never the address. `-list`
   lists this directory's workspace, or the one the latest session at
   the configured executor's address recorded, without connecting to
   it; dax-memory's project scope is the workspace's (this machine's
@@ -898,7 +897,13 @@ policy off, `Decide` runs as a main-agent `BeforeToolCall`. dax-hooks
 with `Env.HostEnv`, a line through `/bin/sh -c` as Claude Code runs
 one, in a process group the run's cancellation kills; a PreToolUse
 hook that cannot answer refuses the call (it fails closed, as rule 8
-asks). An extension's `AfterRun` is told, after each run of the person's
+asks). An extension's `AfterToolCall` sees each call's result and may
+replace it: the session composes every extension's, in order, each on
+the result the one before left, for the main agent and, through
+`Env.ChildAfterToolCall`, every sub-agent (`agent/aftertool.go`); since
+agentkit's `WithAfterToolCall` keeps one hook, an extension whose `Kit`
+options set it fails the start. dax-hooks' PostToolUse hooks are its
+`AfterToolCall`. An extension's `AfterRun` is told, after each run of the person's
 main agent ends and is on the record, what the run did: the tools it
 called, whether one reached an open world (an MCP server's tool, or
 one annotated open-world, as dax-a2a's peers are) and its output

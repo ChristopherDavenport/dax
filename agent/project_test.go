@@ -83,7 +83,7 @@ func TestABoxSessionRecordsItsImageAndKeepsItsName(t *testing.T) {
 		rec := string(projected(t, ro, s))
 		for _, want := range []string{
 			`"workspace":{"host":"buildhost","instance":"` + run.instance + `","kind":"container","ref":"` + run.image + `"}`,
-			`"dax.workspace":{"host":"buildhost","instance":"` + run.instance + `","kind":"container","ref":"dax-app-12345678","root":"/work"}`,
+			`"dax:workspace":{"host":"buildhost","instance":"` + run.instance + `","kind":"container","ref":"dax-app-12345678","root":"/work"}`,
 		} {
 			if !strings.Contains(rec, want) {
 				t.Errorf("the record lacks %s:\n%s", want, firstLines(rec, 4))

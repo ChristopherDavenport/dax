@@ -58,8 +58,8 @@ func TestTheAGENTSmdNotice(t *testing.T) {
 	over := func(what string, size int64) agentkit.Omission {
 		return agentkit.Omission{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: what, Reason: agentsmd.OverBudget.String(), Size: size}
 	}
-	cut := func(what string, size int64) agentkit.Omission {
-		return agentkit.Omission{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: what, Reason: agentsmd.Truncated.String(), Size: size}
+	cut := func(what string, kept, size int64) agentkit.Omission {
+		return agentkit.Omission{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: what, Reason: agentsmd.Truncated.String(), Size: size, Kept: kept}
 	}
 	for _, tc := range []struct {
 		name       string
@@ -78,15 +78,15 @@ func TestTheAGENTSmdNotice(t *testing.T) {
 			"AGENTS.md: left out /w/AGENTS.md (70000 bytes) and 2 files after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
 		{"the project's bound", agent.Info{AgentsMDBudget: 6144, AgentsMDProject: 4096, Omitted: []agentkit.Omission{over("/w/AGENTS.md", 5000), over("/w/a/AGENTS.md", 10)}}, "/u/config.json",
 			"AGENTS.md: left out /w/AGENTS.md (5000 bytes) and 1 file after it, past the 4096 bytes the project's .dax/config.json allows its files (agents_md_budget)"},
-		{"a cut", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488)}}, "/u/config.json",
+		{"a cut", agent.Info{AgentsMDBudget: 65536, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 64512, 5488)}}, "/u/config.json",
 			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, past the chain's budget of 65536 bytes; agents_md_budget in your config (/u/config.json) raises it"},
-		{"a cut and a file after it", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488), over("/w/a/AGENTS.md", 10)}}, "",
+		{"a cut and a file after it", agent.Info{AgentsMDBudget: 65536, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 64512, 5488), over("/w/a/AGENTS.md", 10)}}, "",
 			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, and left out 1 file after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
-		{"a cut and files after it", agent.Info{AgentsMDBudget: 65536, AgentsMDKept: 64512, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 5488), over("/w/a/AGENTS.md", 10), over("/w/a/b/AGENTS.md", 10)}}, "",
+		{"a cut and files after it", agent.Info{AgentsMDBudget: 65536, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 64512, 5488), over("/w/a/AGENTS.md", 10), over("/w/a/b/AGENTS.md", 10)}}, "",
 			"AGENTS.md: cut /w/AGENTS.md at 64512 bytes, 5488 bytes left out, and left out 2 files after it, past the chain's budget of 65536 bytes; agents_md_budget in your config raises it"},
-		{"a cut at the project's bound", agent.Info{AgentsMDBudget: 6144, AgentsMDProject: 4096, AgentsMDKept: 3000, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 2000), over("/w/a/AGENTS.md", 10)}}, "/u/config.json",
+		{"a cut at the project's bound", agent.Info{AgentsMDBudget: 6144, AgentsMDProject: 4096, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 3000, 2000), over("/w/a/AGENTS.md", 10)}}, "/u/config.json",
 			"AGENTS.md: cut /w/AGENTS.md at 3000 bytes, 2000 bytes left out, and left out 1 file after it, past the 4096 bytes the project's .dax/config.json allows its files (agents_md_budget)"},
-		{"a cut to the marker alone", agent.Info{AgentsMDBudget: 1024, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 70000)}}, "",
+		{"a cut to the marker alone", agent.Info{AgentsMDBudget: 1024, Omitted: []agentkit.Omission{cut("/w/AGENTS.md", 0, 70000)}}, "",
 			"AGENTS.md: cut /w/AGENTS.md at 0 bytes, 70000 bytes left out, past the chain's budget of 1024 bytes; agents_md_budget in your config raises it"},
 	} {
 		if got := agentsMDNotice(tc.info, tc.userConfig); got != tc.want {
@@ -194,8 +194,8 @@ func TestAnEditorIsToldOfAnAGENTSmdOverBudget(t *testing.T) {
 // bytes sent and the bytes left out, since its first part is in the
 // instructions; a file left out whole is listed as before.
 func TestTheAssemblyListsACutAGENTSmd(t *testing.T) {
-	info := agent.Info{AgentsMDKept: 64512, Omitted: []agentkit.Omission{
-		{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: "/w/AGENTS.md", Reason: agentsmd.Truncated.String(), Size: 2048},
+	info := agent.Info{Omitted: []agentkit.Omission{
+		{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: "/w/AGENTS.md", Reason: agentsmd.Truncated.String(), Size: 2048, Kept: 64512},
 		{Part: agentsmd.PartID, Source: agentkit.SourceAgentsMD, What: "/w/a/AGENTS.md", Reason: agentsmd.OverBudget.String(), Size: 10},
 	}}
 	got := assemblyLines(info)[1:]

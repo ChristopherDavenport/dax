@@ -395,7 +395,11 @@ func runBoxServe(ctx context.Context, args []string, p program, in io.Reader, ou
 		// The session records the image the box runs, its container and
 		// this machine, with the box's name as the project.
 		host, _ := os.Hostname()
-		child, err := start(ctx, b.HostedCommand(host))
+		argv, err := b.HostedCommand(host)
+		if err != nil {
+			return box.Hosted{}, err
+		}
+		child, err := start(ctx, argv)
 		if err != nil {
 			return box.Hosted{}, err
 		}
@@ -637,7 +641,15 @@ func runBoxWith(ctx context.Context, args []string, p program, stdout io.Writer,
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "%s -executor %s\n", p.name, box.Quote([]string{box.Quote(b.Command())}))
+		// The image's digest as the ref, the container as the instance
+		// and the box's name as the project, as the box host starts it:
+		// dax execute refuses a container named by anything but its
+		// image's digest (#203).
+		argv, err := b.HostedCommand("")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s -executor %s\n", p.name, box.Quote([]string{box.Quote(argv)}))
 		return nil
 	case "ls":
 		if fs.NArg() > 0 {

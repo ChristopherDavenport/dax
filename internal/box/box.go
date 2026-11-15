@@ -153,31 +153,26 @@ type Box struct {
 	Image, ID string
 }
 
-// Command is the program and its arguments that start `dax execute`
-// in b, speaking MCP on its standard input and output. The workspace
-// it serves is kind container, ref the box's name, root the project's
-// directory: the project's identity, the same however often the box is
-// made again.
-func (b Box) Command() []string {
-	return []string{"docker", "exec", "-i", b.Name, Binary, "execute", "-root", b.Dir, "-kind", "container", "-ref", b.Name}
-}
-
-// HostedCommand is Command as the box host starts it for a session
-// (agentworkspace RFC 0001 §12 for a container): the workspace's ref the
-// digest of the image the box runs, its instance the container's ID,
-// its host host, the box host's machine, and the box's name as the
-// project's identity (-project), which -list and memory go by and a
-// rebuild does not change. A box whose image and container docker did
-// not report is Command.
-func (b Box) HostedCommand(host string) []string {
+// HostedCommand is the program and its arguments that start `dax
+// execute` in b, speaking MCP on its standard input and output, as the
+// box host starts it for a session (agentworkspace RFC 0001 §12 for a
+// container): the workspace's kind container, its ref the digest of
+// the image the box runs, its instance the container's ID, its host
+// host, the box host's machine, its root the project's directory, and
+// the box's name as the project's identity (-project), which -list and
+// memory go by and a rebuild does not change. A box whose image digest
+// and container docker did not report has none: dax execute refuses a
+// container named by anything but its image's digest, so the box host
+// refuses it first, saying why.
+func (b Box) HostedCommand(host string) ([]string, error) {
 	if b.Image == "" || b.ID == "" {
-		return b.Command()
+		return nil, fmt.Errorf("docker did not report box %s's image digest and container ID, which its executor names (agentworkspace RFC 0001 §12); see docker container inspect %s", b.Name, b.Name)
 	}
 	argv := []string{"docker", "exec", "-i", b.Name, Binary, "execute", "-root", b.Dir, "-kind", "container", "-ref", b.Image, "-instance", b.ID, "-project", b.Name}
 	if host != "" {
 		argv = append(argv, "-host", host)
 	}
-	return argv
+	return argv, nil
 }
 
 // NameFor is the box name of the project in dir: dax-, the directory's

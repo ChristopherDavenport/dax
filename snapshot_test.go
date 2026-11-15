@@ -375,8 +375,10 @@ func TestPrintSnapshotWhenNone(t *testing.T) {
 			t.Fatalf("over the bound: %+v, want too large with its size and no digest", s)
 		}
 		snaps, _ := snapshotsOn(recordOf(t, sess))
-		if r := snaps[s.Entry]; r.Data != nil || r.Error != s.Error {
-			t.Errorf("the entry %+v, want no data and the error", r)
+		// The entry keeps what the patch applies to and how large it
+		// was (agenteval#79): its base the commit, its size the patch's.
+		if r := snaps[s.Entry]; r.Data != nil || r.Error != s.Error || r.Size != s.Size || r.Base == "" || r.Base != s.Base {
+			t.Errorf("the entry %+v, want no data, the error, the size %d and the base -result names (%q)", r, s.Size, s.Base)
 		}
 	})
 }

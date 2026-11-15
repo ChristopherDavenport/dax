@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentkit"
+	"github.com/ChristopherDavenport/agentmemory"
 	"github.com/ChristopherDavenport/agentmemory/filestore"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	"github.com/ChristopherDavenport/openresponses"
@@ -98,8 +100,8 @@ func session(t *testing.T, model openresponses.Streamer) (agent.Options, string)
 
 func TestTheExtension(t *testing.T) {
 	e := memory.New("/m")
-	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search", "memory_insert", "conversation_search"}
-	if e.Name != "dax-memory" || !slices.Equal(e.Owns, want) || !slices.Equal(e.Policy.Allow, []string{"memory_search", "conversation_search"}) ||
+	want := []string{"memory_save", "memory_patch", "memory_forget", "memory_search", "memory_read", "memory_insert", "conversation_search"}
+	if e.Name != "dax-memory" || !slices.Equal(e.Owns, want) || !slices.Equal(e.Policy.Allow, []string{"memory_search", "memory_read", "conversation_search"}) ||
 		len(e.Policy.Ask)+len(e.Policy.Deny) != 0 || e.Tools != nil || e.Kit == nil {
 		t.Errorf("extension %+v", e)
 	}
@@ -137,7 +139,9 @@ func TestASearchRunsUnaskedAndAChangeAsks(t *testing.T) {
 				names = append(names, tl.Name)
 			}
 			for _, n := range memory.New("").Owns {
-				if !slices.Contains(names, n) {
+				// memory_read is offered under an index scope
+				// (TestAnIndexScopeOffersMemoryRead).
+				if n != "memory_read" && !slices.Contains(names, n) {
 					t.Errorf("tools %v lack %s", names, n)
 				}
 			}
@@ -312,5 +316,78 @@ func TestTheProjectScopeIsTheSessionsWorkspace(t *testing.T) {
 	}
 	if len(scopes) != 3 {
 		t.Errorf("scopes %v, want three", scopes)
+	}
+}
+
+// memory.index_scopes renders a scope as an index (agentmemory#55):
+// the block shows the entry's heading and not its content, memory_read
+// is offered, to the main agent and to the sub-agents, and it runs
+// unasked as memory_search does, reading the entry whole.
+func TestAnIndexScopeOffersMemoryRead(t *testing.T) {
+	ctx := context.Background()
+	m := &kept{scripted: scripted{calls: [][2]string{{"memory_read", `{"scope":"user","name":"style"}`}}}}
+	o, dir := session(t, m)
+	var env extension.Env
+	probe := extension.Extension{Name: "probe", Kit: func(e extension.Env) ([]agentkit.Option, error) { env = e; return nil, nil }}
+	o.Extensions = []extension.Extension{memory.New(dir, memory.WithIndex("user")), probe}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fs, err := filestore.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.Put(ctx, agentmemory.Entry{Scope: "user", Name: "style", Content: "Formatting.\n\nUse tabs, never spaces, in every Go file."}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := agent.New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var names []string
+	for _, tl := range s.Tools() {
+		names = append(names, tl.Name)
+	}
+	if !slices.Contains(names, "memory_read") {
+		t.Errorf("tools %v lack memory_read", names)
+	}
+	subs, err := memory.New(dir, memory.WithIndex("user")).SubagentTools(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subNames []string
+	for _, tl := range subs {
+		subNames = append(subNames, tl.Name())
+	}
+	if !slices.Equal(subNames, []string{"memory_search", "memory_read"}) {
+		t.Errorf("the sub-agents' memory tools: %v, want memory_search and memory_read", subNames)
+	}
+	var asked []string
+	if _, err := prompt(ctx, s, "what is my style?", func(c *openresponses.FunctionCall, _ string) bool {
+		asked = append(asked, c.Name)
+		return false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) > 0 {
+		t.Errorf("asked about %v; memory_read runs unasked", asked)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.reqs) < 2 {
+		t.Fatalf("%d requests", len(m.reqs))
+	}
+	if first := m.reqs[0].Instructions; strings.Contains(first, "Use tabs, never spaces") || !strings.Contains(first, "memory_read") || !strings.Contains(first, "style") {
+		t.Errorf("the first request's block shows the entry's content, or does not index it under memory_read:\n%s", first)
+	}
+	var out string
+	for _, it := range m.reqs[len(m.reqs)-1].Input {
+		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
+			out = o.Output.Text
+		}
+	}
+	if !strings.Contains(out, "Use tabs, never spaces") {
+		t.Errorf("memory_read's output %q lacks the entry", out)
 	}
 }

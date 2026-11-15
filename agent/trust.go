@@ -2,7 +2,6 @@ package agent
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -157,29 +156,6 @@ func agentsMDOptions(ws workspace.Workspace, dir, userDir string, global []strin
 		// an error.
 		Truncate: true,
 	}, personal, omitted
-}
-
-// cutKept is the bytes of the file res cut under agentsmd's Truncate
-// that reach the model, ahead of the marker, and false when no file
-// was cut. The marker is the one agentsmd documents; the line before
-// it ends the part kept should its wording ever change.
-func cutKept(res agentsmd.Result) (int64, bool) {
-	for _, o := range res.Omitted {
-		if o.Reason != agentsmd.Truncated {
-			continue
-		}
-		for _, f := range res.Files {
-			if f.Path != o.Path {
-				continue
-			}
-			marker := fmt.Sprintf("[agentsmd: %d bytes of %s left out over the budget]\n", o.Size, o.Path)
-			if strings.HasSuffix(f.Content, marker) {
-				return int64(len(f.Content) - len(marker)), true
-			}
-			return int64(strings.LastIndexByte(strings.TrimSuffix(f.Content, "\n"), '\n') + 1), true
-		}
-	}
-	return 0, false
 }
 
 // hostDir is dir, absolute, when ws says it is that directory on this

@@ -433,6 +433,7 @@ func run(ctx context.Context, args []string, p program) error {
 		Skills: *skillsFlag, SkillsDirs: settings.SkillsDirs, TrustSkills: *trustSkills,
 		MemoryDir:        settings.MemoryDir,
 		MemoryBackground: backgroundPass(settings.Memory, m.SubagentName, *once != "", serving),
+		MemoryIndex:      settings.Memory.IndexScopes,
 		Peers:            settings.Peers,
 		Hooks:            hookOpts,
 	})

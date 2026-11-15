@@ -220,14 +220,6 @@ func TestSidecarArgs(t *testing.T) {
 	}
 }
 
-func TestCommand(t *testing.T) {
-	got := Box{Name: "dax-app-12345678", Dir: "/home/me/src/app"}.Command()
-	want := []string{"docker", "exec", "-i", "dax-app-12345678", "/usr/local/bin/dax", "execute", "-root", "/home/me/src/app", "-kind", "container", "-ref", "dax-app-12345678"}
-	if !slices.Equal(got, want) {
-		t.Errorf("Command() = %q, want %q", got, want)
-	}
-}
-
 func TestNameFor(t *testing.T) {
 	for _, tc := range []struct{ dir, prefix string }{
 		{"/home/me/src/app", "dax-app-"},
@@ -691,7 +683,7 @@ func TestQuote(t *testing.T) {
 // #155: the box host's command names the image the box runs as the
 // workspace's ref, its container as the instance and the box host as
 // the host, with the box's name as the project; a box docker said
-// nothing of, or something else, is Command.
+// nothing of, or something else, has no command.
 func TestEnsureReadsTheImageAndContainer(t *testing.T) {
 	img, id := "sha256:"+strings.Repeat("ab", 32), strings.Repeat("c0", 32)
 	for _, tc := range []struct {
@@ -718,16 +710,18 @@ func TestEnsureReadsTheImageAndContainer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := strings.Join(b.HostedCommand("buildhost"), " ")
-			want := strings.Join(b.Command(), " ")
-			if tc.hosted {
-				want = "docker exec -i dax-app-12345678 " + Binary + " execute -root /home/me/src/app -kind container -ref " + img + " -instance " + id + " -project dax-app-12345678 -host buildhost"
+			argv, err := b.HostedCommand("buildhost")
+			if !tc.hosted {
+				// No digest is no executor: dax execute refuses a
+				// container named otherwise (#203's review).
+				if err == nil || !strings.Contains(err.Error(), "did not report box dax-app-12345678's image digest") {
+					t.Errorf("hosted command %q, %v; want refused for want of the digest", argv, err)
+				}
+				return
 			}
-			if got != want {
-				t.Errorf("hosted command\n%s\nwant\n%s", got, want)
-			}
-			if !strings.Contains(strings.Join(b.Command(), " "), "-ref dax-app-12345678") {
-				t.Errorf("Command %v, want the name as its ref, for dax box up's line", b.Command())
+			want := "docker exec -i dax-app-12345678 " + Binary + " execute -root /home/me/src/app -kind container -ref " + img + " -instance " + id + " -project dax-app-12345678 -host buildhost"
+			if got := strings.Join(argv, " "); err != nil || got != want {
+				t.Errorf("hosted command\n%s (%v)\nwant\n%s", got, err, want)
 			}
 		})
 	}

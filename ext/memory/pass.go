@@ -89,6 +89,9 @@ type passer struct {
 	dir string
 	env extension.Env
 	b   Background
+	// index says which scopes the block renders as an index, which the
+	// pass reads whole with memory_read.
+	index options
 
 	mu sync.Mutex
 	// items are the conversation since the last pass, bounded.
@@ -256,7 +259,7 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 	store := &passStore{Store: mem, rendered: scopes, seen: seen, conflict: func(scope agentmemory.Scope, name string) {
 		p.env.Log("memory pass: %s/%s changed since the pass read it; it was left as it is", scope, name)
 	}}
-	tools := agentmemory.Tools(store, append(slices.Clone(scopes), arch...), agentmemory.WithInsert(arch...))
+	tools := agentmemory.Tools(store, append(slices.Clone(scopes), arch...), append(p.index.toolOptions(scopes), agentmemory.WithInsert(arch...))...)
 	model, think := p.env.Live()
 	if p.b.Model != "" {
 		model = p.b.Model
@@ -276,6 +279,7 @@ func (p *passer) pass(ctx context.Context, items openresponses.Items, auto bool)
 		Retry:           agentturn.Retry{MaxAttempts: 2},
 		BeforeToolCall:  p.decide(el, mem, seen, passID, auto, p.env.ChildPolicy(passName)),
 		BeforeModelCall: budget.check,
+		AfterToolCall:   p.env.ChildAfterToolCall(),
 	}
 	if cfg, err = kit.ChildConfig(cfg, agentkit.PartMemory); err != nil {
 		return err
@@ -324,7 +328,7 @@ func (p *passer) decide(el agenttool.Elicitor, mem agentmemory.Store, seen *seen
 	return func(ctx context.Context, info agentturn.ToolCallInfo) (*agentturn.ToolDecision, error) {
 		name := info.Call.Name
 		write := slices.Contains(writers, name)
-		if !write && name != agentmemory.SearchTool {
+		if !write && name != agentmemory.SearchTool && name != agentmemory.ReadTool {
 			return &agentturn.ToolDecision{Action: agentturn.Block, Reason: "the memory pass has the memory tools alone"}, nil
 		}
 		if slices.Contains(heldWriters, name) {
@@ -630,27 +634,22 @@ func (s *passStore) Put(ctx context.Context, e agentmemory.Entry, opts ...agentm
 }
 
 // Forget forgets the entry only when it is still what the pass read
-// when it decided the call. The store has no conditional forget, so
-// the entry is read again and compared just before it is forgotten,
-// as /memory undo does.
-func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Change, error) {
+// when it decided the call: the forget is conditional on that hash
+// (agentmemory.IfHash), the check and the forget one step in the
+// store, so a save landing in between is never forgotten. An entry
+// gone since the pass read it changed too.
+func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name string, opts ...agentmemory.PutOption) (*agentmemory.Change, error) {
 	seen, ok := s.seen.of(ctx)
 	if !ok {
 		return nil, fmt.Errorf("%w: the memory pass forgets only an entry it read when it decided the call", agentmemory.ErrConflict)
 	}
-	have := ""
-	cur, err := s.Get(ctx, scope, name)
-	switch {
-	case err == nil:
-		have = cur.Hash
-	case !errors.Is(err, agentmemory.ErrNotFound):
-		return nil, err
-	}
-	if have != seen {
+	// The last option wins: the forget lands only on what the pass read.
+	c, err := s.Store.Forget(ctx, scope, name, append(slices.Clone(opts), agentmemory.IfHash(seen))...)
+	if errors.Is(err, agentmemory.ErrConflict) || (seen != "" && errors.Is(err, agentmemory.ErrNotFound)) {
 		if s.conflict != nil {
 			s.conflict(scope, name)
 		}
 		return nil, fmt.Errorf("%w: %s/%s changed since the pass read it", agentmemory.ErrConflict, scope, name)
 	}
-	return s.Store.Forget(ctx, scope, name)
+	return c, err
 }

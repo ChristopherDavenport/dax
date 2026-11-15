@@ -53,7 +53,7 @@ func (s *Session) Name() string {
 // first, with their names: the top-level sessions recorded in the
 // workspace the session's tools act in (the identity -list goes by),
 // this one among them, and not those a continued_in link retired, nor
-// an A2A caller's conversation (OpenPeer's, marked dax.origin "a2a"):
+// an A2A caller's conversation (OpenPeer's, marked dax:origin "a2a"):
 // that text is a caller's, not the person's to continue under their
 // own mode. A caller's conversation recorded before the mark is listed.
 func (s *Session) Sessions(ctx context.Context) ([]agentsession.Summary, error) {
@@ -81,7 +81,7 @@ func (s *Session) Sessions(ctx context.Context) ([]agentsession.Summary, error) 
 // person's own session.
 func sessionOrigin(h agentsession.Header) string {
 	var o string
-	if raw, ok := h.Extra[headerOrigin]; ok {
+	if raw, ok := member(h, headerOrigin); ok {
 		_ = json.Unmarshal(raw, &o)
 	}
 	return o

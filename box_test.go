@@ -54,6 +54,11 @@ func (d *boxDocker) Docker(_ context.Context, args ...string) ([]byte, error) {
 	if !ok && args[0] == "network" {
 		q = []string{"172.30.0.0/16 \n"}
 	}
+	if !ok && args[0] == "container" {
+		// docker container inspect of a running box: its image's digest
+		// and its ID.
+		q = []string{testImage + " " + testInstance + "\n"}
+	}
 	if len(q) == 0 {
 		return nil, nil
 	}
@@ -114,8 +119,17 @@ func TestBoxCommand(t *testing.T) {
 		{
 			name:    "up prints the executor line",
 			args:    []string{"up"},
-			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {testImage + " " + testInstance + "\n"}},
 			out:     "dax -executor ",
+			rules:   "off",
+		},
+		{
+			// A container's ref is its image's digest, which dax execute
+			// requires, and its ID the instance (#203).
+			name:    "up prints the image's digest and the container",
+			args:    []string{"up"},
+			answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {testImage + " " + testInstance + "\n"}},
+			out:     "-ref " + testImage + " -instance " + testInstance + " -project ",
 			rules:   "off",
 		},
 		{
@@ -229,7 +243,7 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+	d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {testImage + " " + testInstance + "\n"}}}
 	var out bytes.Buffer
 	if err := runBoxWith(context.Background(), []string{"up"}, program{name: "dax"}, &out, &box.Client{Runner: d, StateDir: t.TempDir()}, nil); err != nil {
 		t.Fatal(err)
@@ -246,8 +260,13 @@ func TestBoxUpPrintsTheBoxsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(argv, b.Command()) {
-		t.Errorf("the -executor line runs %q, the box's command is %q", argv, b.Command())
+	b.Image, b.ID = testImage, testInstance
+	want, err := b.HostedCommand("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(argv, want) {
+		t.Errorf("the -executor line runs %q, the box's command is %q", argv, want)
 	}
 	i := slices.IndexFunc(d.calls, func(c []string) bool { return c[0] == "run" && slices.Contains(c, box.Label+"=1") })
 	if i < 0 {
@@ -524,12 +543,13 @@ func TestBoxServe(t *testing.T) {
 	}
 	p := program{name: "dax", version: "test"}
 	for _, tc := range []struct {
-		name    string
-		args    []string
-		first   string
-		err     string
-		rules   string   // the box's internet after it
-		runWith []string // words next to each other in the box's docker run
+		name     string
+		args     []string
+		first    string
+		err      string
+		rules    string   // the box's internet after it
+		runWith  []string // words next to each other in the box's docker run
+		noDigest bool     // docker reports no image digest
 	}{
 		{name: "the default profile", args: []string{"-config", hostCfg, "-project", dir}, first: init(""), rules: "allow proxy.golang.org", runWith: []string{"--runtime", "runsc"}},
 		{name: "a profile by name", args: []string{"-config", hostCfg, "-project", dir}, first: init(`,"box":{"profile":"vm"}`), rules: "off", runWith: []string{"--runtime", "io.containerd.kata.v2"}},
@@ -540,9 +560,16 @@ func TestBoxServe(t *testing.T) {
 		{name: "a box host config that is not there", args: []string{"-config", "/nonexistent.json", "-project", dir}, first: init(""), err: "box host config"},
 		{name: "a project that is not there", args: []string{"-project", "/nonexistent/project"}, first: init(""), err: "nonexistent"},
 		{name: "an argument", args: []string{"x"}, err: "unexpected argument"},
+		// A container's executor names its image's digest, so a box
+		// docker reports none of is refused at start, saying so, rather
+		// than handed to a dax execute that refuses it (#203's review).
+		{name: "no image digest", args: []string{"-project", dir}, first: init(""), err: "did not report box", noDigest: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}}}
+			d := &boxDocker{answers: map[string][]string{"ps": {"", "", "running\t\t\n"}, "container": {testImage + " " + testInstance + "\n"}}}
+			if tc.noDigest {
+				d.answers["container"] = []string{""}
+			}
 			state := t.TempDir()
 			var started []string
 			child := newFakeChild()
@@ -567,8 +594,15 @@ func TestBoxServe(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(started, b.Command()) {
-				t.Errorf("started %q, want the box's executor %q", started, b.Command())
+			hb := b
+			hb.Image, hb.ID = testImage, testInstance
+			host, _ := os.Hostname()
+			want, err := hb.HostedCommand(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(started, want) {
+				t.Errorf("started %q, want the box's executor %q", started, want)
 			}
 			if child.got.String() != tc.first {
 				t.Errorf("the executor was sent %q, want the session's initialize as it came", child.got.String())
@@ -654,7 +688,7 @@ func TestBoxServeRelaysARealSession(t *testing.T) {
 				fromSession.Close()
 				t.Fatalf("Dial: %v (the box host: %v)", err, <-served)
 			}
-			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != "box" || desc.Root != root {
+			if desc := r.Descriptor(); desc.Kind != "container" || desc.Ref != testImage || desc.Root != root {
 				t.Errorf("descriptor = %+v, want the in-box executor's", desc)
 			}
 			// What the box host resolved reaches the session, in the

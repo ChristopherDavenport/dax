@@ -203,13 +203,14 @@ type Config struct {
 	// Claude Code's shape (dax-hooks). The user sets them; a project
 	// cannot, since a hook is a command run on this machine.
 	Hooks *Hooks `json:"hooks,omitempty"`
-	// Memory is dax-memory's background pass. The user's alone: a
-	// project cannot turn on writes to the user's memory nobody is
-	// asked about.
+	// Memory is dax-memory's background pass and how its block
+	// renders. The user's alone: a project cannot turn on writes to the
+	// user's memory nobody is asked about.
 	Memory *Memory `json:"memory,omitempty"`
 }
 
-// Memory is dax-memory's background pass after a run (#160).
+// Memory is dax-memory's background pass after a run (#160), and the
+// scopes its block renders as an index.
 type Memory struct {
 	// Background is off (the default), propose or auto.
 	Background string `json:"background,omitempty"`
@@ -221,7 +222,15 @@ type Memory struct {
 	// BackgroundTrivialTokens: a run with no tool call and fewer output
 	// tokens than this starts no pass; 0 is 500.
 	BackgroundTrivialTokens int `json:"background_trivial_tokens,omitempty"`
+	// IndexScopes are the scopes the memory block renders as an index,
+	// each entry its heading and description alone, which the model
+	// reads whole with memory_read (agentmemory's WithScopeIndex): "user",
+	// "project" or both; none, the default, renders every entry whole.
+	IndexScopes []string `json:"index_scopes,omitempty"`
 }
+
+// MemoryIndexScopes are memory.index_scopes' values.
+var MemoryIndexScopes = []string{"user", "project"}
 
 // MemoryModes are memory.background's values.
 var MemoryModes = []string{"off", "propose", "auto"}
@@ -245,6 +254,11 @@ func (m *Memory) check() error {
 	}{{"background_every", m.BackgroundEvery}, {"background_max_tokens", m.BackgroundMaxTokens}, {"background_trivial_tokens", m.BackgroundTrivialTokens}} {
 		if f.n < 0 {
 			return fmt.Errorf("memory.%s %d: want 0 or more", f.name, f.n)
+		}
+	}
+	for i, sc := range m.IndexScopes {
+		if !slices.Contains(MemoryIndexScopes, sc) || slices.Contains(m.IndexScopes[:i], sc) {
+			return fmt.Errorf("memory.index_scopes %q: want user or project, each once", sc)
 		}
 	}
 	return nil
@@ -2202,10 +2216,11 @@ type Settings struct {
 	// Hooks are the user's hooks, nil for none; the last user layer
 	// that sets them wins, and a project's are refused when it is read.
 	Hooks *Hooks
-	// Memory is dax-memory's background pass, from the user's layers
-	// and -memory-background, its defaults filled: Background off,
-	// BackgroundEvery 1, BackgroundMaxTokens 8000,
-	// BackgroundTrivialTokens 500.
+	// Memory is dax-memory's background pass and index scopes, from the
+	// user's layers and -memory-background, its defaults filled:
+	// Background off, BackgroundEvery 1, BackgroundMaxTokens 8000,
+	// BackgroundTrivialTokens 500, no index scope. The last user layer
+	// that names index_scopes holds, [] included.
 	Memory Memory
 	// Sources says which layer set each of provider, model, base_url,
 	// api_key_env, api_key_command, api_key_login, session_header,
@@ -2306,6 +2321,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 			}
 			if m.BackgroundTrivialTokens > 0 {
 				s.Memory.BackgroundTrivialTokens = m.BackgroundTrivialTokens
+			}
+			if m.IndexScopes != nil {
+				s.Memory.IndexScopes = slices.Clone(m.IndexScopes)
 			}
 		}
 		if l.Hooks != nil && !l.Project {

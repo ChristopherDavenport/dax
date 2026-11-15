@@ -82,3 +82,37 @@ func TestThePrinterSaysWhatAGuardDid(t *testing.T) {
 		}
 	}
 }
+
+// A run the provider's content filter stopped prints the refusal and
+// its category, which no delta printed, and ends refused; one whose
+// answer the output limit cut says so and ends cut (#206).
+func TestThePrinterSaysARefusalAndACut(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		end  *agentturn.RunEnd
+		want []string
+	}{
+		{"refused", &agentturn.RunEnd{Reason: agentturn.ReasonStopped, Cause: agentturn.StopContentFilter, Refusal: "I can't help with that.",
+			Incomplete: &openresponses.IncompleteDetails{Reason: openresponses.IncompleteReasonContentFilter, Extra: map[string]any{"anthropic.refusal_category": "cyber"}}},
+			[]string{"[refused: cyber] I can't help with that.\n", "[refused · 0 model call(s)"}},
+		{"refused with no category", &agentturn.RunEnd{Reason: agentturn.ReasonStopped, Cause: agentturn.StopContentFilter, Refusal: "No.",
+			Incomplete: &openresponses.IncompleteDetails{Reason: openresponses.IncompleteReasonContentFilter}},
+			[]string{"[refused] No.\n", "[refused · "}},
+		{"cut", &agentturn.RunEnd{Reason: agentturn.ReasonStopped, Cause: agentturn.StopMaxOutputTokens,
+			Incomplete: &openresponses.IncompleteDetails{Reason: openresponses.IncompleteReasonMaxOutputTokens}},
+			[]string{"[the answer was cut at the model's output limit (max_output_tokens)]\n", "[cut · 0 model call(s)"}},
+	} {
+		var b strings.Builder
+		p := &Printer{W: &b}
+		for _, ev := range []agentturn.Event{&agentturn.RunStart{}, tc.end} {
+			if err := p.Handle(context.Background(), ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(b.String(), w) {
+				t.Errorf("%s: printed:\n%s\nwant %q", tc.name, b.String(), w)
+			}
+		}
+	}
+}

@@ -537,9 +537,12 @@ type Session struct {
 	recorded bool
 	// agentsMDBudget is the bound the AGENTS.md chain was read under,
 	// and agentsMDProject the project's bound on its own files when it
-	// was the tighter one, 0 otherwise; agentsMDKept the bytes of a file
-	// the chain cut at the budget that reach the model (Info).
-	agentsMDBudget, agentsMDProject, agentsMDKept int64
+	// was the tighter one, 0 otherwise.
+	agentsMDBudget, agentsMDProject int64
+
+	// afterTool is the extensions' after-tool hooks composed, the
+	// main agent's and every sub-agent's (aftertool.go); nil for none.
+	afterTool afterHook
 
 	ag     *agentturn.Agent  // the one agent
 	ctl    *agentkit.Control // the kit's control of it, which the session's own delegates to
@@ -915,7 +918,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			}
 		}
 		s.agentsMDBudget = mdOpts.Budget
-		s.agentsMDKept, _ = cutKept(res)
 		kopts = append(kopts, agentkit.WithAgentsMD(agentsMDPath, mdOpts))
 		agentsText = agentsmd.Render(res.Files)
 		// The person's own files are not an A2A caller's (caller.go).
@@ -956,6 +958,17 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if s.beforePrompt, err = beforePromptHooks(o.Extensions, xenv); err != nil {
 		return nil, err
 	}
+	// The extensions' after-tool hooks, composed (aftertool.go), go to
+	// the kit ahead of the extensions' options, so that a Kit option
+	// that sets one is seen replacing it and refused once the kit is
+	// built.
+	afters, afterNames, err := afterToolHooks(o.Extensions, xenv)
+	if err != nil {
+		return nil, err
+	}
+	if s.afterTool = chainAfter(afters); s.afterTool != nil {
+		kopts = append(kopts, agentkit.WithAfterToolCall(s.afterTool))
+	}
 	for _, e := range o.Extensions {
 		if e.Kit == nil {
 			continue
@@ -963,6 +976,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		eo, err := e.Kit(xenv)
 		if err != nil {
 			return nil, fmt.Errorf("extension %s: %w", e.Name, err)
+		}
+		if err := kitSetsAfter(e.Name, eo, afterNames); err != nil {
+			return nil, err
 		}
 		kopts = append(kopts, eo...)
 	}
@@ -1230,6 +1246,10 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if err != nil {
 		return nil, err
 	}
+	if err := checkKitAfter(kit, s.afterTool, afterNames); err != nil {
+		kit.Close()
+		return nil, err
+	}
 	s.Kit = kit
 	if err := a.bind(kit); err != nil {
 		kit.Close()
@@ -1468,6 +1488,8 @@ func (s *Session) resumed(id string) error {
 	if w := serversResumed(sess.Header(), s.beside); w != "" {
 		fmt.Fprintf(warnings{}, "dax: %s\n", w)
 	}
+	// The person's "yes, always" for the session holds on (#186).
+	s.regrant(context.Background())
 	return nil
 }
 

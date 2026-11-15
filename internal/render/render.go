@@ -132,7 +132,16 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		// Cause says what stopped a run the loop ended itself, which
 		// "stopped" alone does not.
 		reason := string(e.Reason)
-		if e.Cause != "" {
+		switch {
+		case e.Reason == agentturn.ReasonStopped && e.Cause == agentturn.StopContentFilter:
+			// The provider refused: what it said, and why when it
+			// says (Anthropic's category), which no delta printed.
+			fmt.Fprintln(p.w(), Refused(e))
+			reason = "refused"
+		case e.Reason == agentturn.ReasonStopped && e.Cause == agentturn.StopMaxOutputTokens:
+			fmt.Fprintln(p.w(), "[the answer was cut at the model's output limit (max_output_tokens)]")
+			reason = "cut"
+		case e.Cause != "":
 			reason += ": " + string(e.Cause)
 		}
 		fmt.Fprintf(p.w(), "[%s · %d model call(s) · %d tool call(s) · %d in / %d out tokens]\n", reason, p.turns, p.calls, p.in, p.out)
@@ -145,6 +154,31 @@ func (p *Printer) Handle(_ context.Context, ev agentturn.Event) error {
 		}
 	}
 	return nil
+}
+
+// Refused is the line that says what a run the provider's content
+// filter stopped was refused with: "[refused: <category>] <text>",
+// the category when the provider's details give one (Anthropic's), the
+// text the refusal parts held, as every front shows it.
+func Refused(e *agentturn.RunEnd) string {
+	line := "[refused" + category(e.Incomplete) + "]"
+	if e.Refusal != "" {
+		line += " " + e.Refusal
+	}
+	return line
+}
+
+// category is ": " and a refusal's category, as the provider's
+// incomplete details give it (Anthropic's anthropic.refusal_category),
+// or "" when they give none.
+func category(d *openresponses.IncompleteDetails) string {
+	if d == nil {
+		return ""
+	}
+	if c, ok := d.Extra["anthropic.refusal_category"].(string); ok && c != "" {
+		return ": " + c
+	}
+	return ""
 }
 
 func firstLine(s string) string {

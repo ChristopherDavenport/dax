@@ -5,6 +5,128 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies, in one step: agentturn, agentturn/session, front/a2a
+  and tools/a2a v0.0.40, up from v0.0.39; agentkit v0.0.19, up from
+  v0.0.18; agentconsole v0.0.17, up from v0.0.16; agentsession v0.0.39,
+  up from v0.0.38; agentmemory v0.0.13, up from v0.0.12; agentsmd
+  v0.0.6, up from v0.0.5; agenteval v0.0.16, up from v0.0.14;
+  openresponses and its anthropic and gemini providers v0.0.20, up from
+  v0.0.19. What changes for you:
+  - A response the provider's content filter refused, or a final
+    answer its output limit cut, ends the run stopped (cause
+    `content_filter` or `max_output_tokens`) where it ended done, and
+    the record writes such a run `aborted` with the cause as its ref.
+    The refused response's tool calls are never run.
+  - The terminal client shows a message's refusal, and says under the
+    conversation when the provider refused or the output limit cut
+    the answer (agentconsole v0.0.17).
+  - The provider adapters refuse an input that would end on an
+    assistant turn their provider continues as a prefix
+    (openresponses v0.0.20).
+
+- Added: `memory.index_scopes` in your config (`["user"]`,
+  `["project"]` or both; none by default) renders those scopes of the
+  memory block as an index, each entry its heading and its description
+  or first line, and offers `memory_read`, which reads one entry whole
+  and runs unasked, to the main agent, the sub-agents and the
+  background pass (agentmemory#55).
+- Fixed: the background memory pass and `/memory undo` forget an entry
+  only while it holds what they read, in one step in the store
+  (agentmemory's conditional forget), so a save landing between their
+  check and the forget is kept and the entry named as changed
+  (agentmemory#53).
+- Changed: `memory.WithIndex`, the scopes the block renders as an index
+  (agentmemory#55).
+
+- Changed: `agent.Info.AgentsMDKept` is gone: a cut AGENTS.md file's
+  bytes sent are its omission's `Kept` in `Info.Omitted`, agentkit's
+  from agentsmd, where dax read them back from the marker's wording
+  (agentkit#140).
+
+- Changed: an A2A caller's skill catalogue (`dax serve -a2a`), and its
+  sub-agents', leaves out the skills the model wrote for you under
+  `~/.dax/learned`, their names and descriptions too, where it listed
+  them; `dax serve -a2a` no longer warns at start that it does
+  (agentkit#129).
+
+- Fixed: a run-end snapshot whose patch is over `snapshot_max_bytes`
+  records, in its `agenteval:snapshot` entry, the commit it applies to
+  and its size beside the error, which `-result` names too, where the
+  entry kept the error alone (agenteval#79).
+
+- Added: a run the provider's content filter refused prints the
+  refusal and its category, `[refused: cyber] ...`, in `-p` and the
+  REPL, where the refusal was never shown; its end line is
+  `[refused · ...]`, `-p` exits 6, and `-result` says reason `refused`
+  with the cause `content_filter`, the refusal and the provider's
+  details. A final answer the output limit cut says so and ends
+  `[cut · ...]`, `-p` exits 7 and `-result` says reason `cut`. Over ACP the
+  editor is sent the refusal line as the agent's message, and a loaded
+  session's refused turn shows its refusal, and the first stops the
+  prompt `refusal` and the second `max_tokens`; the
+  terminal client shows both through agentconsole v0.0.17 (#206).
+
+- Changed: the header members that identify a run are named
+  `dax:<name>`: `dax:workspace`, `dax:executor`, `dax:box`,
+  `dax:servers_workspace`, `dax:servers_workspaces` and `dax:origin`,
+  where they were `dax.<name>`, so a comparison of configurations
+  (agenteval v0.0.16's, which compares `<slug>.<name>` members) no
+  longer reads two runs' workspaces as two configurations. Where the
+  context's budget and window came from moves out of `dax.context`
+  into `dax:context_from` (`budget_from`, `window_from`), so the same
+  budget set by a flag and by the config file is one configuration.
+  `dax.context` and `dax.profile` keep their names. A session recorded
+  before, its members `dax.<name>`, is still read (`-list`, `-resume`,
+  `/resume`); a dax before this one does not read the new names
+  (agenteval#69, agentsession#299).
+
+- Added: the header's `dax.context` records the caps on a tool's
+  result (`bash_max_output`, `mcp_max_output`) and the `AGENTS.md`
+  chain's budget (`agents_md_budget`, `agents_md_project_budget`) in
+  force, defaults included, so two sessions that differ only in one of
+  them compare as different configurations (#174).
+
+- Changed: `dax execute -kind container` refuses to start without a
+  `-ref` that is the digest of the image the container runs
+  (`sha256:<64 hex>`), as agentworkspace RFC 0001 §12 requires; the
+  error says to pass the container's ID as `-instance` (and a lasting
+  name as `-project`), and `-ref`'s help says so. `dax box up` prints
+  the executor line the box host runs, with the digest, the container
+  and the box's name, and the box host (`-box`, `dax box up`) refuses
+  at start, naming the box, when docker reports no image digest for
+  it, where it started the box's executor with its name as the ref
+  (#203).
+
+- Fixed: a session's "yes, always" grants (`a`) come back when the
+  session is resumed (`-resume`, `/resume`), rebuilt from the
+  activations and revocations its record holds, and dax says on
+  standard error which rules came back; a resumed session asked again
+  for calls the person had already allowed. Only the conversation's own
+  grants come back: a sub-agent's, such as the memory pass's, stay its
+  own (#186).
+
+- Fixed: your PostToolUse hooks run for the sub-agents' calls too
+  (`explore`, `task`, the memory pass), where they saw the main agent's
+  alone (#187).
+- Changed: `extension.Extension.AfterToolCall`, an extension's hook on
+  each call's result, which the session composes in the extensions'
+  order for the main agent and, through the new
+  `extension.Env.ChildAfterToolCall`, every sub-agent; an extension
+  whose `Kit` options set `agentkit.WithAfterToolCall`, which would
+  replace every other's, fails the start naming it and the extension
+  whose hook it would replace (#187).
+
+- Added: a peer's call that its policy escalates to the caller (`dax
+  serve -a2a -a2a-escalate`, or any front/a2a agent that does) is put to
+  you as the call it is, naming the call, the peer's reason and the
+  peer, and your approval, or your refusal and its note, goes back on
+  the same task, where the call failed input-required. A call you are
+  not asked about (you cancel the question, or nobody can be asked) is
+  refused on the task, saying so, rather than put to you again as a
+  text question (#83).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

@@ -112,7 +112,8 @@ type Snapshots struct {
 // dirty at the start, the start's change is appended first, its base
 // StartBase and the commit: the run's own change is the final one less
 // it. A change that could not be read, or is over the bound, is
-// recorded with Error saying why and no data. It does nothing, and
+// recorded with Error saying why and no data; one over the bound keeps
+// its base and its size. It does nothing, and
 // returns nil Snapshots, when StartSnapshot started none. The error is
 // an append's; a snapshot that could not be read is no error.
 func (s *Session) EndSnapshot(ctx context.Context) (*Snapshots, error) {
@@ -171,7 +172,9 @@ func snapshotOf(c tool.GitChange, err error, base string, max int64) (agenteval.
 	case !c.Repo:
 		return agenteval.Snapshot{Error: "the workspace is no longer in a git work tree"}, 0
 	case c.Data == nil && c.Size > 0:
-		return agenteval.Snapshot{Error: fmt.Sprintf("too large: the patch is %d bytes, over the bound of %d (snapshot_max_bytes)", c.Size, max)}, c.Size
+		// The entry keeps what the patch applies to and how large it
+		// was, with no patch (agenteval#79).
+		return agenteval.Snapshot{Base: base, Size: c.Size, Error: fmt.Sprintf("too large: the patch is %d bytes, over the bound of %d (snapshot_max_bytes)", c.Size, max)}, c.Size
 	}
 	return agenteval.Snapshot{Data: c.Data, Base: base}, c.Size
 }

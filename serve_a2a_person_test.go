@@ -229,20 +229,37 @@ func TestAnA2ACallersRequestsCarryNoMemory(t *testing.T) {
 	}
 }
 
-// dax serve -a2a says at start which skills the model wrote are listed
-// to callers by name and description, and says nothing when none are
-// (#159's review).
-func TestServeWarnsOfLearnedSkillsListedToCallers(t *testing.T) {
-	rig := startRig(t, &steps{}, policy.Rules{}, withThePersonsOwn(t), nil, false)
-	w := learnedWarning(rig.sess)
-	if !strings.Contains(w, "1 skill(s)") || !strings.Contains(w, "secret-recipe") || strings.Contains(w, "house-style") {
-		t.Errorf("warning %q, want the learned skill alone", w)
-	}
-	plain := startRig(t, &steps{}, policy.Rules{}, func(o *agent.Options) {
-		o.Extensions = append(o.Extensions, skills.New(skills.Options{}))
+// A caller's skill catalogue leaves out the skills the model wrote for
+// the person (agentkit#129's WithSkillFilter): its requests, its
+// own and its sub-agents', list the installed skill and not the learned
+// one, which the person's own requests still list.
+func TestAnA2ACallersCatalogueLeavesOutLearnedSkills(t *testing.T) {
+	m := &instructionsSeen{steps: &steps{parent: [][2]string{{"explore", `{"input":"look"}`}}}}
+	rig := startRig(t, m.steps, policy.Rules{Allow: []string{"explore"}}, func(o *agent.Options) {
+		withThePersonsOwn(t)(o)
+		o.Streamer = m
 	}, nil, false)
-	if w := learnedWarning(plain.sess); w != "" {
-		t.Errorf("with no learned skill: %q", w)
+	if _, err := agent.Drive(t.Context(), rig.sess, agent.Rules{}, openresponses.UserText("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if mine := strings.Join(m.seen(), "\n"); !strings.Contains(mine, "secret-recipe") || !strings.Contains(mine, "house-style") {
+		t.Fatalf("the person's own requests do not list both skills:\n%s", mine)
+	}
+	s := serveA2A(t, rig, false, t.TempDir())
+	if _, err := send(t, s.client(aliceToken), say("c1", "look around")); err != nil {
+		t.Fatal(err)
+	}
+	theirs := m.seen()
+	if len(theirs) < 3 {
+		t.Fatalf("the caller's run made %d requests, want its own two and its sub-agent's", len(theirs))
+	}
+	for _, in := range theirs {
+		if strings.Contains(in, "secret-recipe") {
+			t.Errorf("a caller's request lists the learned skill:\n%s", in)
+		}
+	}
+	if !strings.Contains(theirs[0], "house-style") {
+		t.Errorf("the caller's request does not list the installed skill:\n%s", theirs[0])
 	}
 }
 

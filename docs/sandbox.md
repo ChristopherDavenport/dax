@@ -220,7 +220,11 @@ there already. `env:`
 reads the box host's own environment; `command:` runs the line with
 `sh` there and takes its output, trimmed; `file:` reads the file. A
 secret that cannot be resolved fails the unit's start, naming the
-secret and its reference, before anything is made. The workspace's
+secret and its reference, before anything is made. A unit's
+credential is the box host's, the same for every session it serves:
+whoever's session starts or reuses the unit, its secrets are the ones
+the box host's config resolves, and nothing chooses one per person or
+per caller. The workspace's
 bash never sees a unit's secret: they are in different containers. Nor
 does it see your own: a server your config gives `secret_env` runs on
 your machine (`"in": "host"`), never in the box.
@@ -273,7 +277,7 @@ leave the box host; the box host knows only those.
 The box host tells the session what it resolved, in its answer to the
 handshake: the profile and each unit's envelope (its image, runtime,
 files, internet and hosts, and its secrets' names). The session's
-header records the same (`dax.box`), so a session file says what each
+header records the same (`dax:box`), so a session file says what each
 unit could reach; dax writes no secret's value in it, and a server's
 own output is redacted of its values (above). The executor's line
 at the start names the profile and the units:
@@ -430,7 +434,7 @@ commits origin/main does not; left as it is`): a session's work is
 never discarded. Git runs on the box host, not in the box, with that
 user's own credentials (its git config, ssh agent or credential
 helper), and never prompts; the box's internet does not come into it.
-The record's `dax.box` header and the executor line name the
+The record's `dax:box` header and the executor line name the
 repository, the ref and the head the session started on.
 
 #### Status, removing and taking work back
@@ -808,7 +812,7 @@ docker build -t dax-sandbox .
 cd ~/src/app
 docker run -d --init --name app-box --user "$(id -u):$(id -g)" \
   -v "$PWD:$PWD" -w "$PWD" dax-sandbox sleep infinity
-dax -executor "docker exec -i app-box dax execute -root '$PWD' -kind container -ref app-box"
+dax -executor "docker exec -i app-box dax execute -root '$PWD' -kind container -ref $(docker inspect -f '{{.Image}}' app-box) -instance $(docker inspect -f '{{.Id}}' app-box) -project app-box"
 ```
 
 Your shell fills in `$PWD` inside the double quotes; the single quotes
@@ -819,11 +823,12 @@ a single quote needs the array form, under Config).
 `-i` and not `-t`: the pipe carries MCP. `-root` must exist in the
 container; it is where every tool acts and nothing above it is read.
 `-kind` and `-ref` are what the record and the banner call the
-workspace, and with `-root` they are the project's identity: the
-sessions `-list` finds and the memory scope are keyed by them (see
-[Sessions and memory](#sessions-and-memory)). Give `-ref` explicitly, a
-name that outlives the container: its default is the host's name, and
-a container's changes when it is recreated.
+workspace. A container's `-ref` is the digest of the image it runs, which
+`dax execute -kind container` requires (agentworkspace RFC 0001 §12),
+and `-instance` its ID; `-project` is then the project's identity with
+`-root`: the sessions `-list` finds and the memory scope are keyed by
+it (see [Sessions and memory](#sessions-and-memory)). Give a name that
+outlives the container and its image.
 
 The tools' commands and MCP servers get `dax execute`'s environment,
 which is the container's (the image's `ENV`, `docker run -e`), less
@@ -1379,7 +1384,7 @@ Give each its own local port (`ssh -o ExitOnForwardFailure=yes -L 7780:127.0.0.1
 to keep them apart.
 
 A servers workspace is recorded beside the session's own, never as
-it: the header's `dax.servers_workspace` holds its kind, its identity
+it: the header's `dax:servers_workspace` holds its kind, its identity
 (the URL normalised the same way, or a hub's workspace's ref by its
 name) and the names of the servers it offered, and no root or token.
 `-list` and `-resume`, the memory scope and the MCP trust key on the
