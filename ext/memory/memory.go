@@ -277,11 +277,11 @@ func (p personal) Put(ctx context.Context, e agentmemory.Entry, opts ...agentmem
 	return p.Store.Put(ctx, e, opts...)
 }
 
-func (p personal) Forget(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Change, error) {
+func (p personal) Forget(ctx context.Context, scope agentmemory.Scope, name string, opts ...agentmemory.PutOption) (*agentmemory.Change, error) {
 	if p.isCaller(ctx) {
 		return nil, errCaller
 	}
-	return p.Store.Forget(ctx, scope, name)
+	return p.Store.Forget(ctx, scope, name, opts...)
 }
 
 func (p personal) Journal(ctx context.Context, after uint64) iter.Seq2[agentmemory.Change, error] {

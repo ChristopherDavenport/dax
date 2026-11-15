@@ -633,7 +633,7 @@ func (s *passStore) Put(ctx context.Context, e agentmemory.Entry, opts ...agentm
 // when it decided the call. The store has no conditional forget, so
 // the entry is read again and compared just before it is forgotten,
 // as /memory undo does.
-func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name string) (*agentmemory.Change, error) {
+func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name string, opts ...agentmemory.PutOption) (*agentmemory.Change, error) {
 	seen, ok := s.seen.of(ctx)
 	if !ok {
 		return nil, fmt.Errorf("%w: the memory pass forgets only an entry it read when it decided the call", agentmemory.ErrConflict)
@@ -652,5 +652,5 @@ func (s *passStore) Forget(ctx context.Context, scope agentmemory.Scope, name st
 		}
 		return nil, fmt.Errorf("%w: %s/%s changed since the pass read it", agentmemory.ErrConflict, scope, name)
 	}
-	return s.Store.Forget(ctx, scope, name)
+	return s.Store.Forget(ctx, scope, name, opts...)
 }

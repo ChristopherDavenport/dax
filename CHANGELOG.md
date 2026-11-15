@@ -5,6 +5,27 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies, in one step: agentturn, agentturn/session, front/a2a
+  and tools/a2a v0.0.40, up from v0.0.39; agentkit v0.0.19, up from
+  v0.0.18; agentconsole v0.0.17, up from v0.0.16; agentsession v0.0.39,
+  up from v0.0.38; agentmemory v0.0.13, up from v0.0.12; agentsmd
+  v0.0.6, up from v0.0.5; agenteval v0.0.16, up from v0.0.14;
+  openresponses and its anthropic and gemini providers v0.0.20, up from
+  v0.0.19. What changes for you:
+  - A response the provider's content filter refused, or a final
+    answer its output limit cut, ends the run stopped (cause
+    `content_filter` or `max_output_tokens`) where it ended done, and
+    the record writes such a run `aborted` with the cause as its ref.
+    The refused response's tool calls are never run.
+  - The terminal client shows a message's refusal, and says under the
+    conversation when the provider refused or the output limit cut
+    the answer (agentconsole v0.0.17).
+  - The provider adapters refuse an input that would end on an
+    assistant turn their provider continues as a prefix
+    (openresponses v0.0.20).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work
