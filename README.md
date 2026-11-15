@@ -2164,6 +2164,8 @@ project; `-p` takes them too.
 | 3 | stopped: the loop ended it (the end line says why, `[stopped: max_turns]`) |
 | 4 | requires input: a call waits on an answer nobody gave |
 | 5 | was aborted: Ctrl-C, SIGTERM or `-timeout` (`[timeout: -timeout 12m0s reached]`) |
+| 6 | was refused: the provider's content filter stopped the response; dax prints the refusal and its category, `[refused: cyber] ...`, and ends `[refused · ...]` |
+| 7 | was cut: the model's output limit cut its final answer (`max_output_tokens`), printed as far as it went; the end line is `[cut · ...]` |
 
 `-p` tells the model, in a part of the instructions of its own
 (`one-shot`, source `dax`, kept on the record), that nobody will reply
@@ -2177,7 +2179,7 @@ each one's own, even of a run it killed.
 
 A harness that counts any status but 0 as its own failure gives
 `-result PATH`: dax then writes the run's end to `PATH`, private to you,
-and exits 0 for a run that ended done, stopped, requiring input or
+and exits 0 for a run that ended done, stopped, refused, cut, requiring input or
 aborted; a run that ended in an error (the model call failed, say) is
 in the file too, and exits 1 as without it. `-timeout` also ends a wait
 on standard input for an answer, as no answer:
@@ -2194,7 +2196,12 @@ on standard input for an answer, as no answer:
 ```
 
 `reason`, `cause`, `error` and `pending` (each call's `call_id`, `name`,
-`arguments` and `why`) are the run's end as the session records it,
+`arguments` and `why`) are the run's end as the session records it, but
+that a run the provider refused has `reason` `refused` and one whose
+answer its output limit cut `cut`, each with its `cause`
+(`content_filter`, `max_output_tokens`), `incomplete`, the provider's
+details (Anthropic's `anthropic.refusal_category` among them), and for
+a refusal `refusal`, what the model said;
 `exit` the status dax would have exited with, and `usage` the main
 agent's model calls and tokens (a sub-agent's are its own session's).
 In a git work tree, `snapshot` names the entry that records the change

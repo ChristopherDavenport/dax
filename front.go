@@ -343,7 +343,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	}
 	ended(os.Stdout, t, end)
 	if status := exitStatus(end); status != 0 && f.info.Result == "" {
-		return &runEnded{status: status, reason: end.Reason}
+		return &runEnded{status: status, reason: endReason(end)}
 	}
 	return nil
 }

@@ -589,8 +589,10 @@ func (a *acpSession) run(ctx context.Context, blocks []acp.ContentBlock) (acp.Pr
 		return acp.PromptResponse{StopReason: acp.StopCancelled}, nil
 	case end.Reason == agentturn.ReasonStopped && end.Cause == agentturn.StopMaxTurns:
 		return acp.PromptResponse{StopReason: acp.StopMaxTurnRequests}, nil
-	case end.Reason == agentturn.ReasonStopped && end.Cause == agentturn.StopGuard:
+	case end.Reason == agentturn.ReasonStopped && (end.Cause == agentturn.StopGuard || end.Cause == agentturn.StopContentFilter):
 		return acp.PromptResponse{StopReason: acp.StopRefusal}, nil
+	case end.Reason == agentturn.ReasonStopped && end.Cause == agentturn.StopMaxOutputTokens:
+		return acp.PromptResponse{StopReason: acp.StopMaxTokens}, nil
 	}
 	return acp.PromptResponse{StopReason: acp.StopEndTurn}, nil
 }

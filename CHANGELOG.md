@@ -56,6 +56,16 @@ versions may break flags and the config file.
   and its size beside the error, which `-result` names too, where the
   entry kept the error alone (agenteval#79).
 
+- Added: a run the provider's content filter refused prints the
+  refusal and its category, `[refused: cyber] ...`, in `-p` and the
+  REPL, where the refusal was never shown; its end line is
+  `[refused · ...]`, `-p` exits 6, and `-result` says reason `refused`
+  with the cause `content_filter`, the refusal and the provider's
+  details. A final answer the output limit cut says so and ends
+  `[cut · ...]`, `-p` exits 7 and `-result` says reason `cut`. Over ACP the
+  first stops the prompt `refusal` and the second `max_tokens`; the
+  terminal client shows both through agentconsole v0.0.17 (#206).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

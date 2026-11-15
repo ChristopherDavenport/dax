@@ -41,9 +41,12 @@ func TestExitStatusOfARunsEnd(t *testing.T) {
 			t.Errorf("%s: exit %d, want %d", tc.reason, got, tc.want)
 		}
 	}
-	seen := map[int]agentturn.Reason{}
-	for _, r := range []agentturn.Reason{agentturn.ReasonError, agentturn.ReasonStopped, agentturn.ReasonInputRequired, agentturn.ReasonAborted} {
-		s := exitStatus(&agentturn.RunEnd{Reason: r})
+	// A stop the provider made has its own (#206).
+	ends := []*agentturn.RunEnd{{Reason: agentturn.ReasonError}, {Reason: agentturn.ReasonStopped}, {Reason: agentturn.ReasonInputRequired}, {Reason: agentturn.ReasonAborted},
+		{Reason: agentturn.ReasonStopped, Cause: agentturn.StopContentFilter}, {Reason: agentturn.ReasonStopped, Cause: agentturn.StopMaxOutputTokens}}
+	seen := map[int]string{}
+	for _, e := range ends {
+		s, r := exitStatus(e), endReason(e)
 		if other, ok := seen[s]; ok {
 			t.Errorf("%s and %s both exit %d", r, other, s)
 		}

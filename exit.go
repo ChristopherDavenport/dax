@@ -13,16 +13,21 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentturn"
+	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
 )
 
 // Exit statuses of -p by how its run ended. 0 is done and 1 an error,
 // as for any command; the rest are a run that ended without being done.
+// A stop the provider made has its own: its content filter refused the
+// response (refused), or its output limit cut the answer (cut).
 const (
 	exitStopped       = 3
 	exitInputRequired = 4
 	exitAborted       = 5
+	exitRefused       = 6
+	exitCut           = 7
 )
 
 // exitStatus is the status -p exits with after a run that ended so.
@@ -31,6 +36,12 @@ func exitStatus(end *agentturn.RunEnd) int {
 	case agentturn.ReasonDone:
 		return 0
 	case agentturn.ReasonStopped:
+		switch end.Cause {
+		case agentturn.StopContentFilter:
+			return exitRefused
+		case agentturn.StopMaxOutputTokens:
+			return exitCut
+		}
 		return exitStopped
 	case agentturn.ReasonInputRequired:
 		return exitInputRequired
@@ -44,10 +55,25 @@ func exitStatus(end *agentturn.RunEnd) int {
 // already printed: Main exits with its status and prints nothing more.
 type runEnded struct {
 	status int
-	reason agentturn.Reason
+	reason string
 }
 
-func (e *runEnded) Error() string { return "the run ended " + string(e.reason) }
+func (e *runEnded) Error() string { return "the run ended " + e.reason }
+
+// endReason is how -p names a run's end: agentturn's reason, but
+// refused for a run the provider's content filter stopped and cut for
+// one whose answer its output limit cut, which agentturn ends stopped.
+func endReason(end *agentturn.RunEnd) string {
+	if end.Reason == agentturn.ReasonStopped {
+		switch end.Cause {
+		case agentturn.StopContentFilter:
+			return "refused"
+		case agentturn.StopMaxOutputTokens:
+			return "cut"
+		}
+	}
+	return string(end.Reason)
+}
 
 // timeoutError is -timeout's cause: the run's context ends with it, so
 // the run's end, and the record, say the run was aborted at the
@@ -84,17 +110,25 @@ func (r *runUsage) total() resultUsage {
 }
 
 // runResult is what -result writes: the run's end as the record has it
-// (reason, cause, error, the calls left pending), the session it is
-// recorded in, the status -p would have exited with, and the main
-// agent's usage (a sub-agent's calls are its own session's).
+// (reason, as endReason names it, cause, error, the calls left
+// pending, and for a stop the provider made its refusal and details),
+// the session it is recorded in, the status -p would have exited with,
+// and the main agent's usage (a sub-agent's calls are its own
+// session's).
 type runResult struct {
-	Session string       `json:"session,omitempty"`
-	Reason  string       `json:"reason"`
-	Cause   string       `json:"cause,omitempty"`
-	Error   string       `json:"error,omitempty"`
-	Pending []resultCall `json:"pending"`
-	Exit    int          `json:"exit"`
-	Usage   resultUsage  `json:"usage"`
+	Session string `json:"session,omitempty"`
+	Reason  string `json:"reason"`
+	Cause   string `json:"cause,omitempty"`
+	Error   string `json:"error,omitempty"`
+	// Refusal is the text of the refused response's refusal parts, and
+	// Incomplete its incomplete_details as the provider gave them
+	// (anthropic.refusal_category among them), for a run refused or
+	// cut.
+	Refusal    string                           `json:"refusal,omitempty"`
+	Incomplete *openresponses.IncompleteDetails `json:"incomplete,omitempty"`
+	Pending    []resultCall                     `json:"pending"`
+	Exit       int                              `json:"exit"`
+	Usage      resultUsage                      `json:"usage"`
 	// Snapshot names the entry that records the workspace's change
 	// when the run ended (-snapshot), and StartSnapshot the one that
 	// records the change already there when it started, for a tree
@@ -138,7 +172,7 @@ type resultUsage struct {
 // writeResult writes -result's file, private to the user, as the rest
 // of what dax writes about a session is.
 func writeResult(path, session string, end *agentturn.RunEnd, usage resultUsage, snaps *agent.Snapshots) error {
-	r := runResult{Session: session, Reason: string(end.Reason), Cause: string(end.Cause), Pending: []resultCall{}, Exit: exitStatus(end), Usage: usage}
+	r := runResult{Session: session, Reason: endReason(end), Cause: string(end.Cause), Refusal: end.Refusal, Incomplete: end.Incomplete, Pending: []resultCall{}, Exit: exitStatus(end), Usage: usage}
 	if snaps != nil {
 		r.Snapshot, r.StartSnapshot = resultSnapshotOf(snaps.Final), resultSnapshotOf(snaps.Start)
 	}
