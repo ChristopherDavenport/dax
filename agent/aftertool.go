@@ -5,6 +5,12 @@ package agent
 // composes every extension's into one, in the extensions' order, and
 // gives it to the main agent and, through Env.ChildAfterToolCall, to
 // every sub-agent (#187).
+//
+// kitSetsAfter and checkKitAfter exist only because agentkit keeps one
+// such hook. Drop both once agentkit chains WithAfterToolCall as it
+// does WithBeforeToolCall (agentkit#139): a wrapped hook in the kit's
+// config would fail checkKitAfter's code-pointer comparison and every
+// start with it.
 
 import (
 	"context"
