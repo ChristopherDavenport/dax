@@ -507,7 +507,7 @@ refused, since every view acts on the one served conversation.
 `/resume` moves the same way to an earlier session of the project
 (`Session.Sessions`, read from the store by the project's identity,
 never an A2A caller's conversation, which `OpenPeer` marks with the
-header's `dax.origin`),
+header's `dax:origin`),
 and `/name` writes agentsession's `info` entry, which listings read. The session asks nothing of a
 front it was built with: every permission is a run that ended for input,
 answered with `Resume`, and every question asked while a call runs is
@@ -602,8 +602,8 @@ is:
   descriptor, so a resume into another workspace is recorded as a
   substitution. The model is told the root as the working directory.
 - The workspace is the project's identity. The header keeps the whole
-  descriptor (`dax.workspace`) and, under an executor, a hash of the
-  address that reached it (`dax.executor`), never the address. `-list`
+  descriptor (`dax:workspace`) and, under an executor, a hash of the
+  address that reached it (`dax:executor`), never the address. `-list`
   lists this directory's workspace, or the one the latest session at
   the configured executor's address recorded, without connecting to
   it; dax-memory's project scope is the workspace's (this machine's

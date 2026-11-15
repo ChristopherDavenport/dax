@@ -211,7 +211,7 @@ func sameHeader(ctx context.Context, rec *session.Recorder, want agentsession.He
 	}
 	keys := slices.Sorted(maps.Keys(want.Extra))
 	for k := range h.Extra {
-		if strings.HasPrefix(k, "dax.") && !slices.Contains(keys, k) {
+		if (strings.HasPrefix(k, "dax.") || strings.HasPrefix(k, "dax:")) && !slices.Contains(keys, k) {
 			keys = append(keys, k)
 		}
 	}

@@ -8,12 +8,17 @@ import (
 	"github.com/ChristopherDavenport/openresponses/echo"
 )
 
-// The header says what context strategy the session ran: its budget,
-// where that came from, and the window dax believed, so two sessions
-// that differ only in -compact compare as different (#174).
+// The header says what context strategy the session ran: its budget
+// and the window dax believed, so two sessions that differ only in
+// -compact compare as different (#174), and, in a member of its own,
+// where each came from.
 func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 	ctx := context.Background()
-	got := map[string]recordedContext{}
+	type both struct {
+		recordedContext
+		recordedContextFrom
+	}
+	got := map[string]both{}
 	for name, set := range map[string]func(*Options){
 		"flag": func(o *Options) {
 			o.Compact, o.CompactFrom, o.Window, o.WindowFrom = 1000, "flag", 65536, "ollama /api/ps"
@@ -30,9 +35,12 @@ func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 			t.Fatal(err)
 		}
 		h, _ := headerOf(t, o.Root, s)
-		var c recordedContext
-		if err := json.Unmarshal(h.Extra[headerContext], &c); err != nil {
+		var c both
+		if err := json.Unmarshal(h.Extra[headerContext], &c.recordedContext); err != nil {
 			t.Fatalf("%s: %s = %s: %v", name, headerContext, h.Extra[headerContext], err)
+		}
+		if err := json.Unmarshal(h.Extra[headerContextFrom], &c.recordedContextFrom); err != nil {
+			t.Fatalf("%s: %s = %s: %v", name, headerContextFrom, h.Extra[headerContextFrom], err)
 		}
 		got[name] = c
 		s.Close()
@@ -46,7 +54,7 @@ func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 	if c := got["off"]; c.Budget != 0 || c.BudgetFrom != "off" || c.Window != 0 {
 		t.Errorf("off: %+v", c)
 	}
-	if got["flag"] == got["window"] {
+	if got["flag"].recordedContext == got["window"].recordedContext {
 		t.Error("two sessions that differ in their budget record the same context")
 	}
 }

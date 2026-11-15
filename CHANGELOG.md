@@ -66,6 +66,20 @@ versions may break flags and the config file.
   first stops the prompt `refusal` and the second `max_tokens`; the
   terminal client shows both through agentconsole v0.0.17 (#206).
 
+- Changed: the header members that identify a run are named
+  `dax:<name>`: `dax:workspace`, `dax:executor`, `dax:box`,
+  `dax:servers_workspace`, `dax:servers_workspaces` and `dax:origin`,
+  where they were `dax.<name>`, so a comparison of configurations
+  (agenteval v0.0.16's, which compares `<slug>.<name>` members) no
+  longer reads two runs' workspaces as two configurations. Where the
+  context's budget and window came from moves out of `dax.context`
+  into `dax:context_from` (`budget_from`, `window_from`), so the same
+  budget set by a flag and by the config file is one configuration.
+  `dax.context` and `dax.profile` keep their names. A session recorded
+  before, its members `dax.<name>`, is still read (`-list`, `-resume`,
+  `/resume`); a dax before this one does not read the new names
+  (agenteval#69, agentsession#299).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

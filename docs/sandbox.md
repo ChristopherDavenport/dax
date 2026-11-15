@@ -273,7 +273,7 @@ leave the box host; the box host knows only those.
 The box host tells the session what it resolved, in its answer to the
 handshake: the profile and each unit's envelope (its image, runtime,
 files, internet and hosts, and its secrets' names). The session's
-header records the same (`dax.box`), so a session file says what each
+header records the same (`dax:box`), so a session file says what each
 unit could reach; dax writes no secret's value in it, and a server's
 own output is redacted of its values (above). The executor's line
 at the start names the profile and the units:
@@ -430,7 +430,7 @@ commits origin/main does not; left as it is`): a session's work is
 never discarded. Git runs on the box host, not in the box, with that
 user's own credentials (its git config, ssh agent or credential
 helper), and never prompts; the box's internet does not come into it.
-The record's `dax.box` header and the executor line name the
+The record's `dax:box` header and the executor line name the
 repository, the ref and the head the session started on.
 
 #### Status, removing and taking work back
@@ -1379,7 +1379,7 @@ Give each its own local port (`ssh -o ExitOnForwardFailure=yes -L 7780:127.0.0.1
 to keep them apart.
 
 A servers workspace is recorded beside the session's own, never as
-it: the header's `dax.servers_workspace` holds its kind, its identity
+it: the header's `dax:servers_workspace` holds its kind, its identity
 (the URL normalised the same way, or a hub's workspace's ref by its
 name) and the names of the servers it offered, and no root or token.
 `-list` and `-resume`, the memory scope and the MCP trust key on the

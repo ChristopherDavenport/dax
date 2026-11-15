@@ -25,22 +25,29 @@ import (
 // So every session dax starts records its workspace in its header, and
 // with an executor, which address reached it, so that -list can find
 // the project an executor serves without connecting to it.
+//
+// A member that identifies the run, or says where a setting came from,
+// is named dax:<name>; a setting that shapes the requests it sends is
+// named dax.<name> (agentsession RFC 0001, Header), the form a reader
+// comparing configurations compares, as agenteval does. A session
+// recorded before dax v0.0.37 names the identity members dax.<name>
+// too, which every reader here still reads (member).
 const (
 	// headerWorkspace is the header member holding the session's
 	// workspace: {"kind", "ref", "root"}, ref left out when empty.
-	headerWorkspace = "dax.workspace"
+	headerWorkspace = "dax:workspace"
 	// headerExecutor is the header member holding, for a session whose
 	// tools ran through an executor, {"sha256": hex}: the hash of the
 	// address it was reached by (executorCommandID, executorURLID).
 	// The address itself is never written: a session file is exported
 	// and shared, and a command line can carry what its user would not
 	// want in one.
-	headerExecutor = "dax.executor"
+	headerExecutor = "dax:executor"
 	// headerBox is the header member holding, for a session whose box a
 	// box host made, what it resolved: the profile and each unit's
 	// envelope (its files, internet, and its secrets' names, never their
 	// values), as the box host told the session.
-	headerBox = "dax.box"
+	headerBox = "dax:box"
 	// headerServers is the header member holding, for a session with a
 	// servers workspace beside its own (Options.ServersWorkspace), that
 	// workspace as its servers were offered by: {"kind", "ref",
@@ -50,11 +57,11 @@ const (
 	// offered, which the session connected. Its root is not kept: a
 	// servers-only grant is told the served directory's last name
 	// alone, and nothing of the session acts there.
-	headerServers = "dax.servers_workspace"
+	headerServers = "dax:servers_workspace"
 	// headerOrigin marks a session that is not the person's own
 	// conversation: "a2a" for an A2A caller's (OpenPeer), which
 	// /resume neither lists nor continues (Sessions).
-	headerOrigin = "dax.origin"
+	headerOrigin = "dax:origin"
 	// originPeer is headerOrigin's value for an A2A caller's
 	// conversation.
 	originPeer = "a2a"
@@ -63,13 +70,31 @@ const (
 	// headerServers' form by name. It is a member of its own so a dax
 	// that knows only headerServers still reads servers_workspace's
 	// beside them.
-	headerServersNamed = "dax.servers_workspaces"
+	headerServersNamed = "dax:servers_workspaces"
 	// headerProfile is a bare run's: {"bare": true, "left_out": [...]}.
 	headerProfile = "dax.profile"
 	// headerContext is the context strategy the session started with:
-	// {"compact_budget", "budget_from", "window", "window_from"}.
+	// {"compact_budget", "window"}.
 	headerContext = "dax.context"
+	// headerContextFrom is where headerContext's values came from:
+	// {"budget_from", "window_from"}. Not a setting: the same budget
+	// set by a flag and by the config file is one configuration.
+	headerContextFrom = "dax:context_from"
 )
+
+// member is the header member name holds, read under its dotted
+// spelling (dax.<name>) too, which a session recorded before dax
+// v0.0.37 used for every member.
+func member(h agentsession.Header, name string) (json.RawMessage, bool) {
+	if raw, ok := h.Extra[name]; ok {
+		return raw, true
+	}
+	raw, ok := h.Extra[dotted(name)]
+	return raw, ok
+}
+
+// dotted is a dax:<name> member's spelling before dax v0.0.37.
+func dotted(name string) string { return strings.Replace(name, "dax:", "dax.", 1) }
 
 // recordedServers is a servers workspace as the header holds it.
 type recordedServers struct {
@@ -143,9 +168,14 @@ func normalURL(endpoint string) string {
 // records it, so two sessions that differ only in it compare as the
 // configurations they were.
 type recordedContext struct {
-	Budget     int    `json:"compact_budget"`
+	Budget int   `json:"compact_budget"`
+	Window int64 `json:"window,omitempty"`
+}
+
+// recordedContextFrom is where the recorded context's values came
+// from, a member of its own (headerContextFrom).
+type recordedContextFrom struct {
 	BudgetFrom string `json:"budget_from"`
-	Window     int64  `json:"window,omitempty"`
 	WindowFrom string `json:"window_from,omitempty"`
 }
 
@@ -183,8 +213,11 @@ func extrasOf(o Options, d workspace.Descriptor, beside []ServersBeside) map[str
 	if o.Compact <= 0 {
 		from = "off"
 	}
-	if raw, err := json.Marshal(recordedContext{Budget: max(o.Compact, 0), BudgetFrom: from, Window: o.Window, WindowFrom: o.WindowFrom}); err == nil {
+	if raw, err := json.Marshal(recordedContext{Budget: max(o.Compact, 0), Window: o.Window}); err == nil {
 		out[headerContext] = raw
+	}
+	if raw, err := json.Marshal(recordedContextFrom{BudgetFrom: from, WindowFrom: o.WindowFrom}); err == nil {
+		out[headerContextFrom] = raw
 	}
 	if o.Bare != nil {
 		if raw, err := json.Marshal(recordedProfile{Bare: true, LeftOut: o.Bare}); err == nil {
@@ -242,11 +275,11 @@ func recordServers(l []ServersBeside) (one, named json.RawMessage) {
 func ServersWorkspacesOf(h agentsession.Header) []ServersBeside {
 	var out []ServersBeside
 	var one recordedServers
-	if raw, ok := h.Extra[headerServers]; ok && json.Unmarshal(raw, &one) == nil && one.Kind != "" {
+	if raw, ok := member(h, headerServers); ok && json.Unmarshal(raw, &one) == nil && one.Kind != "" {
 		out = append(out, ServersBeside{Name: config.ServersName, Workspace: workspace.Descriptor{Kind: one.Kind, Ref: one.Ref}, Servers: one.Servers})
 	}
 	var many map[string]recordedServers
-	if raw, ok := h.Extra[headerServersNamed]; ok && json.Unmarshal(raw, &many) == nil {
+	if raw, ok := member(h, headerServersNamed); ok && json.Unmarshal(raw, &many) == nil {
 		for n, r := range many {
 			if r.Kind == "" || n == config.ServersName {
 				continue
@@ -275,7 +308,7 @@ func ServersWorkspaceOf(h agentsession.Header) (workspace.Descriptor, []string, 
 // recordedIn is the workspace a header records, and whether it records
 // one.
 func recordedIn(h agentsession.Header) (workspace.Descriptor, bool) {
-	raw, ok := h.Extra[headerWorkspace]
+	raw, ok := member(h, headerWorkspace)
 	if !ok {
 		return workspace.Descriptor{}, false
 	}
@@ -304,7 +337,7 @@ func sameProject(a, b workspace.Descriptor) bool {
 }
 
 // identity is the workspace the session's project is known by: the
-// header's dax.workspace, -list, memory, the MCP trust and the saved
+// header's dax:workspace, -list, memory, the MCP trust and the saved
 // grants go by it. It is the workspace's descriptor, but for an
 // executor that names its project beside its ref (a box's name beside
 // the image digest the env entry records, `dax execute -project`).
@@ -438,20 +471,24 @@ func listExecutor(ctx context.Context, root, id string) (workspace.Descriptor, [
 		return none, nil, err
 	}
 	defer store.Close()
-	mark, err := json.Marshal(executorMark{SHA256: id})
-	if err != nil {
-		return none, nil, err
-	}
-	// The store lists newest first, so the first is the latest.
+	// The store lists newest first, so the first is the latest. A
+	// session recorded before dax v0.0.37 names the executor under the
+	// member's dotted spelling, so the headers are matched here rather
+	// than by the store's filter on one name.
 	var (
 		ws      workspace.Descriptor
 		found   bool
 		scanErr error
 	)
-	for sum, err := range store.List(ctx, agentsession.ListFilter{Extra: map[string]json.RawMessage{headerExecutor: mark}}) {
+	for sum, err := range store.List(ctx, agentsession.ListFilter{}) {
 		if err != nil {
 			scanErr = err
 			break
+		}
+		raw, ok := member(sum.Header, headerExecutor)
+		var mark executorMark
+		if !ok || json.Unmarshal(raw, &mark) != nil || mark.SHA256 != id {
+			continue
 		}
 		if d, ok := recordedIn(sum.Header); ok {
 			ws, found = d, true

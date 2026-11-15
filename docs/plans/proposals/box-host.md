@@ -249,7 +249,7 @@ out is left as it is, and the box host says so: a session's work is
 never discarded. Git runs on the box host, with its environment and
 credentials and `GIT_TERMINAL_PROMPT=0`, never in the box. The URL
 (without any user), the ref and the head reach the session in the
-handshake's `box` and the record's `dax.box` header, beside the units.
+handshake's `box` and the record's `dax:box` header, beside the units.
 
 ### Taking work back
 
@@ -336,7 +336,7 @@ timeout and a unit that cannot be made refuses the session with the
 reason. The session starts each MCP unit as an MCP
 server named after it (the box host's offered server, so it restarts
 as any MCP server does, its tools `mcp__<unit>__<tool>`), and
-records the envelopes in the session's header (`dax.box`): what each
+records the envelopes in the session's header (`dax:box`): what each
 unit could reach, with its secrets' names and never their values.
 
 A server can still hand its own secret back as output (an env tool, an

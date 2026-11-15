@@ -765,7 +765,7 @@ closed. A signal stops it, and every session's processes with it.
 | `-pass-env` | none | comma-separated variables to pass to commands though they look like credentials, as `pass_env` |
 | `-kind` | `remote` | the workspace's kind as the session records it: `local`, `container` or `remote` |
 | `-ref` | this host's name | the workspace's ref as the session records it: an image, a host, a pod. With `-kind` and `-root` it is the project's identity for `-list` and memory, so give one that outlives a recreated container |
-| `-project` | the ref | the project's identity, for `-list`, memory, the MCP trust, saved grants and the header's `dax.workspace`, when `-ref` is not it: the box host passes a box's name here and the image's digest as `-ref`, so a rebuilt image is on the record and the project stays one |
+| `-project` | the ref | the project's identity, for `-list`, memory, the MCP trust, saved grants and the header's `dax:workspace`, when `-ref` is not it: the box host passes a box's name here and the image's digest as `-ref`, so a rebuilt image is on the record and the project stays one |
 | `-host`, `-instance` | none | the machine the workspace is on and its file system's instance (a container's ID), which the session's env entry records beside kind and ref (`workspace.host`, `workspace.instance`), so a restart into a new file system is on the record; not part of the project's identity |
 | `-listen` | none: standard input and output | serve over HTTP at this address, a loopback one unless `-insecure-no-auth`; the address is printed on standard error |
 | `-insecure-no-auth` | off | with `-listen`, take an address that is not loopback; nothing authenticates a client |
@@ -1054,7 +1054,7 @@ project's config and `AGENTS.md` are not the session's.
   servers workspace. A project's trust stays keyed on the session's own
   workspace, where its servers run.
 - **The record.** The session's header records it as
-  `dax.servers_workspace`, by its identity (a URL as `workspace`'s is
+  `dax:servers_workspace`, by its identity (a URL as `workspace`'s is
   normalised, a hub's workspace by its name) and the servers it
   offered, never its token; `-list` ends a session's line with
   `servers remote <identity>`, and every front's start line says
@@ -1091,9 +1091,9 @@ project's config and `AGENTS.md` are not the session's.
   shared, and no two connections may hold one token or one variable. No
   server name may be offered by two, no workspace given twice, and no
   two hubs take one port. The header records them under
-  `dax.servers_workspaces` as an object by name, and
+  `dax:servers_workspaces` as an object by name, and
   `servers_workspace` beside them keeps its own form under
-  `dax.servers_workspace`, which an older dax reads; `-list` ends a line with `servers
+  `dax:servers_workspace`, which a dax that knows only one reads; `-list` ends a line with `servers
   <name>=<identity>` for each, and the start line names each.
   `-servers-workspace` replaces `servers_workspace` alone.
 
@@ -2300,7 +2300,7 @@ one session's name alone (`/resume auth` for "auth refactor"). Like
 set, and leaves this session's record as it is. `dax attach` refuses
 both: an attached view cannot move the served host to another session.
 An A2A caller's conversation (`dax serve -a2a`) is in the same store,
-its header marked `"dax.origin": "a2a"`, and `/resume` neither lists
+its header marked `"dax:origin": "a2a"`, and `/resume` neither lists
 nor continues it: its words are the caller's, not yours to carry on
 under your mode. One recorded before that mark is listed; `-resume ID`
 still opens any session by its ID.
@@ -2518,12 +2518,18 @@ interface, and the rest of dax cannot tell them apart:
   with the session; in a workspace that cannot start a process they run
   on this machine, with its environment scrubbed.
 - The session records its context strategy in the header's
-  `dax.context`: the compaction budget (`compact_budget`), where it came
-  from (`budget_from`: `flag`, `window`, three quarters of the window,
-  or `off`), and the window dax believed and where that came from
-  (`window`, `window_from`: `vendor:<name>`, Ollama's served window,
-  `config`, `project config` or `flag`), so two sessions that differ
-  only in `-compact` compare as different configurations.
+  `dax.context`: the compaction budget (`compact_budget`) and the
+  window dax believed (`window`), so two sessions that differ only in
+  `-compact` compare as different configurations; and where each came
+  from in `dax:context_from` (`budget_from`: `flag`, `window`, three
+  quarters of the window, or `off`; `window_from`: `vendor:<name>`,
+  Ollama's served window, `config`, `project config` or `flag`), which
+  is not a setting. The members that identify a run, its workspace,
+  executor, box, servers workspaces and origin, are named `dax:<name>`
+  so that a comparison of configurations (agenteval's) leaves them out;
+  the settings that shape its requests, `dax.context` and
+  `dax.profile`, are `dax.<name>`. A session recorded before v0.0.37,
+  which named every member `dax.<name>`, is still read.
 - The session records the workspace: the header's and the env entry's
   `cwd` are its root, and the env entry names its kind (`local`,
   `container`, `remote`) and ref. The model is told the root as the
