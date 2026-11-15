@@ -2105,9 +2105,10 @@ dax serve -a2a -listen 127.0.0.1:7878
   sub-agent's asked call and a tool's own question still go to an
   attached view, by the same rule. A skill's grant lasts for the task
   that read it, so a call it would have let run after an approval
-  resumes the task is asked again. A dax calling with dax-a2a cannot
-  answer an approval yet; a host nobody attaches to and a caller that
-  can answer are what it is for.
+  resumes the task is asked again. A dax calling with dax-a2a answers
+  such a call: you are asked about the remote's call, naming the call,
+  the remote's reason and the peer, and your approval, or your refusal
+  with its note, goes back on the same task.
 
 To call it from another dax, name it as a peer in that dax's config,
 with the A2A token in a variable:

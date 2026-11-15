@@ -111,6 +111,12 @@ versions may break flags and the config file.
   replace every other's, fails the start naming it and the extension
   whose hook it would replace (#187).
 
+- Added: a peer's call that its policy escalates to the caller (`dax
+  serve -a2a -a2a-escalate`, or any front/a2a agent that does) is put to
+  you as the call it is, naming the call, the peer's reason and the
+  peer, and your approval, or your refusal and its note, goes back on
+  the same task, where the call failed input-required (#83).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

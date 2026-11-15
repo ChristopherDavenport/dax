@@ -268,6 +268,13 @@ func connect(ctx context.Context, r Remote, timeout time.Duration, rt http.Round
 	opts := []a2atool.Option{
 		a2atool.WithName(r.Name),
 		a2atool.WithDescription(describe(r, card)),
+		// A call the remote's policy escalates (front/a2a's escalated
+		// calls) is put to the person as the call it is, naming the
+		// remote, and answered on the same task with an approval and
+		// its note (#83); who decided is not sent (WithSendBy), since
+		// a remote that does not take it refuses the approval. A plain
+		// question is the answerer's.
+		a2atool.WithAskCaller(),
 		a2atool.WithInputRequired(answerer(r)),
 	}
 	if r.Relation == Peer {

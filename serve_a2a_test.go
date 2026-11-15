@@ -1427,3 +1427,86 @@ func TestADaxCallsAServedDax(t *testing.T) {
 		t.Errorf("the served side holds no session of the call's conversation among %d", len(listed))
 	}
 }
+
+// A dax that calls a served dax -a2a-escalate answers the call the
+// served side's policy escalates (#83): the question goes to the
+// caller's person, its answer goes back on the same task, an approval
+// runs the call and a refusal's note reaches the served side, and the
+// caller's record holds the person's answer.
+func TestADaxAnswersAServedDaxsEscalatedCall(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		t.Run(map[bool]string{true: "approved", false: "refused"}[approve], func(t *testing.T) {
+			s := startServeFront(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, nil, func(f *serveFront) {
+				f.a2a, f.a2aEscalate, f.a2aDir = true, true, t.TempDir()
+			})
+			t.Setenv("BUILDER_TOKEN", s.a2aToken())
+			caller, err := agent.New(t.Context(), agent.Options{
+				Model: "scripted", Streamer: &steps{parent: [][2]string{{"builder", `{"input":"make it"}`}}}, Dir: t.TempDir(), UserDir: t.TempDir(),
+				Store:  agentsession.NewMemoryStore(),
+				Policy: &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: []string{"builder"}}},
+				Extensions: []extension.Extension{coding.New(0), daxa2a.New(daxa2a.Options{Remotes: []daxa2a.Remote{
+					{Name: "builder", URL: s.url, TokenEnv: "BUILDER_TOKEN"},
+				}})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { caller.Close() })
+			var asked []string
+			reply := func(q agentturn.Question) agenttool.Answer {
+				name := ""
+				if q.Call != nil {
+					name = q.Call.Name
+				}
+				asked = append(asked, name+": "+q.Elicitation.Message)
+				if approve {
+					return agenttool.Answer{Action: agenttool.ActionAccept}
+				}
+				return agenttool.Answer{Action: agenttool.ActionDecline, Note: "not in my tree"}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			if _, err := agent.Drive(ctx, caller, agent.Rules{Reply: reply}, openresponses.UserText("go")); err != nil {
+				t.Fatal(err)
+			}
+			if len(asked) != 1 || !strings.HasPrefix(asked[0], "bash: ") {
+				t.Errorf("the caller's person was asked %q, want the served side's bash call", asked)
+			}
+			if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); (err == nil) != approve {
+				t.Errorf("PEER made: %v, want %v", err == nil, approve)
+			}
+			// The served conversation's decision says what the caller
+			// answered, the refusal's note included.
+			listed, err := agent.List(t.Context(), s.rig.o.Root, s.rig.dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, sum := range listed {
+				if sum.Header.ID == s.rig.sess.ID() {
+					continue
+				}
+				sess, err := s.rig.sess.Recorder().Store().Open(t.Context(), sum.Header.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, decisions(sess)...)
+			}
+			want := "approved by the caller"
+			if !approve {
+				want = "not in my tree"
+			}
+			if !slices.ContainsFunc(got, func(d string) bool { return strings.Contains(d, want) }) {
+				t.Errorf("the served side's decisions %q, want one with %q", got, want)
+			}
+			callerSess, err := caller.Recorder().Store().Open(t.Context(), caller.ID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(callerSess.Entries())
+			if !approve && !strings.Contains(string(data), "not in my tree") {
+				t.Error("the caller's record does not hold the person's refusal")
+			}
+		})
+	}
+}
