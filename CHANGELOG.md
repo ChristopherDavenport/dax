@@ -120,7 +120,10 @@ versions may break flags and the config file.
   serve -a2a -a2a-escalate`, or any front/a2a agent that does) is put to
   you as the call it is, naming the call, the peer's reason and the
   peer, and your approval, or your refusal and its note, goes back on
-  the same task, where the call failed input-required (#83).
+  the same task, where the call failed input-required. A call you are
+  not asked about (you cancel the question, or nobody can be asked) is
+  refused on the task, saying so, rather than put to you again as a
+  text question (#83).
 
 ## v0.0.36 - 2026-11-08
 

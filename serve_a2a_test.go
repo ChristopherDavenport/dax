@@ -1510,3 +1510,59 @@ func TestADaxAnswersAServedDaxsEscalatedCall(t *testing.T) {
 		})
 	}
 }
+
+// An escalated call nobody answers (the person cancels the question)
+// is refused on the remote's task, and the person is not asked it again
+// as a text question, which could not approve it (#83's review, L4).
+func TestAnEscalatedCallNobodyAnswersIsRefused(t *testing.T) {
+	s := startServeFront(t, &steps{parent: [][2]string{{"bash", `{"command":"touch PEER"}`}}}, policy.Rules{}, nil, func(f *serveFront) {
+		f.a2a, f.a2aEscalate, f.a2aDir = true, true, t.TempDir()
+	})
+	t.Setenv("BUILDER_TOKEN", s.a2aToken())
+	caller, err := agent.New(t.Context(), agent.Options{
+		Model: "scripted", Streamer: &steps{parent: [][2]string{{"builder", `{"input":"make it"}`}}}, Dir: t.TempDir(), UserDir: t.TempDir(),
+		Store:  agentsession.NewMemoryStore(),
+		Policy: &policy.Settings{Builtin: true, Fallback: "ask", User: policy.Rules{Allow: []string{"builder"}}},
+		Extensions: []extension.Extension{coding.New(0), daxa2a.New(daxa2a.Options{Remotes: []daxa2a.Remote{
+			{Name: "builder", URL: s.url, TokenEnv: "BUILDER_TOKEN"},
+		}})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { caller.Close() })
+	var asked []string
+	reply := func(q agentturn.Question) agenttool.Answer {
+		asked = append(asked, q.Elicitation.Message)
+		return agenttool.Answer{Action: agenttool.ActionCancel}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if _, err := agent.Drive(ctx, caller, agent.Rules{Reply: reply}, openresponses.UserText("go")); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("the caller's person was asked %d times, want once:\n%s", len(asked), strings.Join(asked, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(s.rig.dir, "PEER")); err == nil {
+		t.Error("the call nobody answered ran")
+	}
+	listed, err := agent.List(t.Context(), s.rig.o.Root, s.rig.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, sum := range listed {
+		if sum.Header.ID == s.rig.sess.ID() {
+			continue
+		}
+		sess, err := s.rig.sess.Recorder().Store().Open(t.Context(), sum.Header.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, decisions(sess)...)
+	}
+	if !slices.ContainsFunc(got, func(d string) bool { return strings.Contains(d, "refused this call") }) {
+		t.Errorf("the served side's decisions %q, want the call refused by the caller", got)
+	}
+}

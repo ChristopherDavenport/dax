@@ -2108,7 +2108,8 @@ dax serve -a2a -listen 127.0.0.1:7878
   resumes the task is asked again. A dax calling with dax-a2a answers
   such a call: you are asked about the remote's call, naming the call,
   the remote's reason and the peer, and your approval, or your refusal
-  with its note, goes back on the same task.
+  with its note, goes back on the same task; one nobody answers is
+  refused.
 
 To call it from another dax, name it as a peer in that dax's config,
 with the A2A token in a variable:

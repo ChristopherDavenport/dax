@@ -42,6 +42,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
+	fronta2a "github.com/ChristopherDavenport/agentturn/front/a2a"
 	a2atool "github.com/ChristopherDavenport/agentturn/tools/a2a"
 	"github.com/ChristopherDavenport/openresponses"
 	"github.com/a2aproject/a2a-go/a2a"
@@ -488,8 +489,41 @@ const maxQuestion = 1000
 // aborted while the question waits. With nobody to ask, or a question
 // not answered, the call ends input-required, the question for the
 // model: nothing answers in the person's place.
+// refuseEscalated refuses every call the remote's status escalated to
+// this caller (front/a2a's escalated calls) when WithAskCaller could not
+// put them to the person: nobody was there, the question was
+// cancelled, or the ask failed. A text answer cannot approve a call, so
+// the round is refused, each call with a note saying why, rather than
+// asked again as a text question (#83's review). It reports false for
+// a status that waits on anything else.
+func refuseEscalated(r Remote, q *a2a.Message) ([]a2a.Part, bool) {
+	if q == nil {
+		return nil, false
+	}
+	if ids, _ := q.Metadata[fronta2a.MetaPendingCalls].([]any); len(ids) > 0 {
+		return nil, false
+	}
+	escalated, _ := q.Metadata[fronta2a.MetaEscalatedCalls].([]any)
+	if len(escalated) == 0 {
+		return nil, false
+	}
+	parts := make([]a2a.Part, 0, len(escalated))
+	for _, e := range escalated {
+		m, _ := e.(map[string]any)
+		id, _ := m["call_id"].(string)
+		if id == "" {
+			return nil, false
+		}
+		parts = append(parts, fronta2a.ApprovalPart(fronta2a.Approval{CallID: id, Note: "the caller's person did not answer whether " + r.Name + "'s call may run, so it is refused"}))
+	}
+	return parts, true
+}
+
 func answerer(r Remote) a2atool.InputRequired {
 	return func(ctx context.Context, _ a2atool.TaskInfo, q *a2a.Message) ([]a2a.Part, error) {
+		if refused, ok := refuseEscalated(r, q); ok {
+			return refused, nil
+		}
 		elicit, ok := agenttool.ElicitorFrom(ctx)
 		if !ok {
 			return nil, agentturn.ErrInputRequired
