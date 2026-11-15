@@ -80,6 +80,12 @@ versions may break flags and the config file.
   `/resume`); a dax before this one does not read the new names
   (agenteval#69, agentsession#299).
 
+- Added: the header's `dax.context` records the caps on a tool's
+  result (`bash_max_output`, `mcp_max_output`) and the `AGENTS.md`
+  chain's budget (`agents_md_budget`, `agents_md_project_budget`) in
+  force, defaults included, so two sessions that differ only in one of
+  them compare as different configurations (#174).
+
 ## v0.0.36 - 2026-11-08
 
 - Added: `-p` records the workspace a run left (#191). In a git work

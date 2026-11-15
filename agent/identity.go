@@ -73,8 +73,10 @@ const (
 	headerServersNamed = "dax:servers_workspaces"
 	// headerProfile is a bare run's: {"bare": true, "left_out": [...]}.
 	headerProfile = "dax.profile"
-	// headerContext is the context strategy the session started with:
-	// {"compact_budget", "window"}.
+	// headerContext is the context the session started with, the
+	// settings that shape each request: {"compact_budget", "window",
+	// "bash_max_output", "mcp_max_output", "agents_md_budget",
+	// "agents_md_project_budget"}.
 	headerContext = "dax.context"
 	// headerContextFrom is where headerContext's values came from:
 	// {"budget_from", "window_from"}. Not a setting: the same budget
@@ -170,6 +172,34 @@ func normalURL(endpoint string) string {
 type recordedContext struct {
 	Budget int   `json:"compact_budget"`
 	Window int64 `json:"window,omitempty"`
+	// BashMaxOutput and ToolMaxOutput are the caps on a tool's result
+	// in force (#172), the defaults included; AgentsMDBudget the
+	// AGENTS.md chain's budget and AgentsMDProject the project's own
+	// bound on its files, when the chain is read.
+	BashMaxOutput   int   `json:"bash_max_output"`
+	ToolMaxOutput   int   `json:"mcp_max_output"`
+	AgentsMDBudget  int64 `json:"agents_md_budget,omitempty"`
+	AgentsMDProject int64 `json:"agents_md_project_budget,omitempty"`
+}
+
+// contextOf is the context the header records of a session under o:
+// each setting's value in force, a default included.
+func contextOf(o Options) recordedContext {
+	c := recordedContext{
+		Budget: max(o.Compact, 0), Window: o.Window,
+		BashMaxOutput: config.DefaultBashMaxOutput, ToolMaxOutput: config.DefaultToolMaxOutput,
+	}
+	if o.BashMaxOutput > 0 {
+		c.BashMaxOutput = o.BashMaxOutput
+	}
+	if o.ToolMaxOutput > 0 {
+		c.ToolMaxOutput = o.ToolMaxOutput
+	}
+	if o.AgentsMD {
+		c.AgentsMDBudget = agentsMDBudget(o.AgentsMDBudget)
+		c.AgentsMDProject = max(o.AgentsMDProjectBudget, 0)
+	}
+	return c
 }
 
 // recordedContextFrom is where the recorded context's values came
@@ -213,7 +243,7 @@ func extrasOf(o Options, d workspace.Descriptor, beside []ServersBeside) map[str
 	if o.Compact <= 0 {
 		from = "off"
 	}
-	if raw, err := json.Marshal(recordedContext{Budget: max(o.Compact, 0), Window: o.Window}); err == nil {
+	if raw, err := json.Marshal(contextOf(o)); err == nil {
 		out[headerContext] = raw
 	}
 	if raw, err := json.Marshal(recordedContextFrom{BudgetFrom: from, WindowFrom: o.WindowFrom}); err == nil {

@@ -2518,9 +2518,13 @@ interface, and the rest of dax cannot tell them apart:
   with the session; in a workspace that cannot start a process they run
   on this machine, with its environment scrubbed.
 - The session records its context strategy in the header's
-  `dax.context`: the compaction budget (`compact_budget`) and the
-  window dax believed (`window`), so two sessions that differ only in
-  `-compact` compare as different configurations; and where each came
+  `dax.context`: the compaction budget (`compact_budget`), the
+  window dax believed (`window`), the caps on a tool's result
+  (`bash_max_output`, `mcp_max_output`) and, when the `AGENTS.md`
+  chain is read, its budget (`agents_md_budget`, and a project's own
+  bound, `agents_md_project_budget`), each the value in force, a
+  default included, so two sessions that differ only in one of them
+  compare as different configurations; and where each came
   from in `dax:context_from` (`budget_from`: `flag`, `window`, three
   quarters of the window, or `off`; `window_from`: `vendor:<name>`,
   Ollama's served window, `config`, `project config` or `flag`), which

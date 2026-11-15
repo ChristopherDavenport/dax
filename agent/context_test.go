@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/ChristopherDavenport/openresponses/echo"
+
+	"github.com/ChristopherDavenport/dax/internal/config"
 )
 
 // The header says what context strategy the session ran: its budget
@@ -56,5 +58,43 @@ func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 	}
 	if got["flag"].recordedContext == got["window"].recordedContext {
 		t.Error("two sessions that differ in their budget record the same context")
+	}
+}
+
+// dax.context records the tool-output caps (#172) and the AGENTS.md
+// budget in force, the defaults included, so two sessions that differ
+// only in one of them compare as different configurations (#174).
+func TestTheHeaderRecordsTheCapsAndTheAgentsMDBudget(t *testing.T) {
+	ctx := context.Background()
+	got := map[string]string{}
+	for name, set := range map[string]func(*Options){
+		"defaults": func(o *Options) {},
+		"tool":     func(o *Options) { o.ToolMaxOutput = 4096 },
+		"bash":     func(o *Options) { o.BashMaxOutput = 4096 },
+		"agentsmd": func(o *Options) { o.AgentsMDBudget = 4096 },
+		"project":  func(o *Options) { o.AgentsMDProjectBudget = 2048 },
+	} {
+		o := options(t, &echo.Adapter{})
+		o.AgentsMD = true
+		set(&o)
+		s, err := New(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _ := headerOf(t, o.Root, s)
+		got[name] = string(h.Extra[headerContext])
+		s.Close()
+	}
+	var c map[string]any
+	if err := json.Unmarshal([]byte(got["defaults"]), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c["bash_max_output"] != float64(config.DefaultBashMaxOutput) || c["mcp_max_output"] != float64(config.DefaultToolMaxOutput) || c["agents_md_budget"] != float64(config.DefaultAgentsMDBudget) {
+		t.Errorf("the defaults' dax.context = %s, want the caps and the budget in force", got["defaults"])
+	}
+	for _, name := range []string{"tool", "bash", "agentsmd", "project"} {
+		if got[name] == got["defaults"] {
+			t.Errorf("%s: dax.context %s is the defaults'", name, got[name])
+		}
 	}
 }
