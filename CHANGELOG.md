@@ -5,6 +5,15 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: an MCP server's OAuth sign-in no longer cuts the page the
+  browser is sent on its redirect: dax ended the callback's server at
+  once when the redirect arrived, which could close the connection
+  before "Signed in" was written and leave the browser a reset page.
+  The server now finishes the response it has started, a second at
+  most, before it stops (#210).
+
 ## v0.0.38 - 2026-11-16
 
 - Dependencies, in one step: openresponses and its anthropic and

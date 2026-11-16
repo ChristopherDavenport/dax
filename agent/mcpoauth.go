@@ -293,7 +293,18 @@ func (s *Session) consent(name string, port int, ln net.Listener, lnErr error) a
 			}
 		})}
 		go srv.Serve(ln)
-		defer srv.Close()
+		// Shutdown, not Close: the redirect's handler has written its
+		// page when the sign-in ends, but the server may not have sent
+		// it yet, and Close would cut it, leaving the browser a reset
+		// (#210). A stranger's stalled request holds the end a second
+		// at most.
+		defer func() {
+			end, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if srv.Shutdown(end) != nil {
+				srv.Close()
+			}
+		}()
 		consentMu.Lock()
 		fmt.Fprintf(consentOut, "dax: mcp %s asks you to sign in. Open this URL in a browser:\n  %s\n(dax waits for its redirect to %s)\n", name, args.URL, "http://127.0.0.1:"+strconv.Itoa(port)+"/callback")
 		consentMu.Unlock()
