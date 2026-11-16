@@ -41,8 +41,11 @@ type sizes struct {
 
 // sizing is the context in force, which SetModel changes.
 type sizing struct {
-	mu  sync.Mutex
-	now sizes
+	// switching is held through a switch's whole re-size (resize), mu
+	// while a field is read or written.
+	switching sync.Mutex
+	mu        sync.Mutex
+	now       sizes
 	// callers is the budget the A2A callers' model needs, once
 	// PeerConfig handed their configuration out: they stay on the model
 	// the session ran then, and share the kit's one compaction with the
@@ -113,6 +116,17 @@ func (s *Session) sizes() sizes {
 // model resolved it; 0 unknown. A status line divides by it.
 func (s *Session) ContextWindow() int64 { return s.sizes().Window }
 
+// budgetFrom is where the budget of a session under o came from, as
+// dax:context_from records it: "off" when nothing compacts, else
+// CompactFrom, "window" with a budget of 0 for a window not known, when
+// compaction folds only on request until a switch sizes it.
+func budgetFrom(o Options) string {
+	if o.Compact <= 0 && !compactsByWindow(o) {
+		return "off"
+	}
+	return o.CompactFrom
+}
+
 // compactsByWindow says whether a session under o builds its
 // compaction although its budget is 0: the budget is the window's,
 // which a switch to a model whose window is known sizes.
@@ -128,39 +142,39 @@ func (s *Session) resize(ctx context.Context, model string) {
 	if s.opts.WindowOf == nil {
 		return
 	}
+	// One switch at a time, from the window asked for to the entry
+	// written, so two views switching at once leave the kit's budget,
+	// the sizes in force and the record in the same order.
+	s.sizing.switching.Lock()
+	defer s.sizing.switching.Unlock()
 	window, from := s.opts.WindowOf(ctx, model)
 	s.sizing.mu.Lock()
 	was := s.sizing.now
+	callers := s.sizing.callers
+	tell := s.sizing.noEndpoint && window > 0 && !s.sizing.said
+	s.sizing.said = s.sizing.said || tell
+	s.sizing.mu.Unlock()
+	if tell {
+		s.opts.log("[-compact-server: this provider has no compaction endpoint, so no compaction budget is sized for %s's %d-token context window]", model, window)
+	}
 	now := was
 	now.Window, now.WindowFrom = window, from
 	held := false
 	if was.CompactFrom == "window" {
 		now.Compact = modelinfo.Info{ContextWindow: window}.CompactBudget()
-		if c := s.sizing.callers; c != nil {
-			b := lowerBudget(*c, now.Compact)
+		if callers != nil {
+			b := lowerBudget(*callers, now.Compact)
 			held, now.Compact = b != now.Compact, b
 		}
 	}
-	if s.sizing.noEndpoint && window > 0 && !s.sizing.said {
-		s.sizing.said = true
-		s.opts.log("[-compact-server: this provider has no compaction endpoint, so no compaction budget is sized for %s's %d-token context window]", model, window)
-	}
-	if now == was {
-		s.sizing.mu.Unlock()
-		return
-	}
-	s.sizing.now = now
-	s.sizing.mu.Unlock()
 	if now.Compact != was.Compact {
 		switch err := s.Kit.SetCompactionBudget(now.Compact); {
 		case errors.Is(err, agentkit.ErrNoCompaction):
 			// Nothing compacts, so no budget is in force or recorded.
-			s.sizing.mu.Lock()
 			now.Compact, now.CompactFrom = 0, ""
-			s.sizing.now = now
-			s.sizing.mu.Unlock()
 		case err != nil:
 			fmt.Fprintf(warnings{}, "dax: compaction budget for %s: %v\n", model, err)
+			now.Compact = was.Compact
 		case held:
 			s.opts.log("[compaction budget %d tokens from the next request: the A2A callers' model's, which they stay on, under %s's]", now.Compact, model)
 		case now.Compact > 0:
@@ -169,20 +183,23 @@ func (s *Session) resize(ctx context.Context, model string) {
 			s.opts.log("[no compaction budget from the next request: %s's context window is unknown; /compact still folds]", model)
 		}
 	}
-	s.recordContext(ctx, now)
+	s.sizing.mu.Lock()
+	s.sizing.now = now
+	s.sizing.mu.Unlock()
+	// Where the window came from is not a setting: a switch that
+	// changes only that records nothing.
+	if contextOf(withSizes(s.opts, now)) != contextOf(withSizes(s.opts, was)) {
+		s.recordContext(ctx, now)
+	}
 }
 
 // contextData is the custom entry's data for the context z: the
 // header's members of it under their own names.
 func (s *Session) contextData(z sizes) map[string]any {
 	o := withSizes(s.opts, z)
-	from := o.CompactFrom
-	if o.Compact <= 0 {
-		from = "off"
-	}
 	return map[string]any{
 		headerContext:     contextOf(o),
-		headerContextFrom: recordedContextFrom{BudgetFrom: from, WindowFrom: o.WindowFrom},
+		headerContextFrom: recordedContextFrom{BudgetFrom: budgetFrom(o), WindowFrom: o.WindowFrom},
 	}
 }
 

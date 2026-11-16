@@ -2543,11 +2543,14 @@ interface, and the rest of dax cannot tell them apart:
   default included, so two sessions that differ only in one of them
   compare as different configurations; and where each came
   from in `dax:context_from` (`budget_from`: `flag`, `window`, three
-  quarters of the window, or `off`; `window_from`: `vendor:<name>`,
+  quarters of the window, with a budget of 0 when the window is not
+  known, which folds only when asked until a switch of model sizes it,
+  or `off`, when nothing compacts; `window_from`: `vendor:<name>`,
   Ollama's served window, `config`, `project config` or `flag`), which
   is not a setting. The header holds them as the session started; a
-  change during it (a switch of model that changes the window or a
-  budget sized from it) and a resume under settings other than those
+  change of `dax.context` during it (a switch of model that changes
+  the window or a budget sized from it, not where the window came
+  from alone) and a resume under settings other than those
   the record last had are each a `custom` entry, `ns` `dax`, whose data
   holds the new `dax.context` and `dax:context_from` under those names,
   as agentsession's RFC 0001 asks. Each fold records the budget and the

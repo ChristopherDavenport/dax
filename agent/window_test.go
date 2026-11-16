@@ -335,3 +335,33 @@ func TestASwitchWithoutACompactionRecordsNoBudget(t *testing.T) {
 		t.Error("want the record to hold the new window and no budget")
 	}
 }
+
+// A switch that changes only where the window came from, the same
+// number from another source, records nothing: dax:context_from is
+// not a setting (review N1).
+func TestASwitchToTheSameWindowRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	o := sizedOptions(options(t, &scripted{}), 40000, 0, map[string]int64{"echo": 40000})
+	o.WindowOf = func(_ context.Context, model string) (int64, string) {
+		if model == "twin" {
+			return 40000, "vendor:other"
+		}
+		return 40000, "config"
+	}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetModel("twin"); err != nil {
+		t.Fatal(err)
+	}
+	if z := s.sizes(); z.WindowFrom != "vendor:other" || z.Compact != 30000 {
+		t.Errorf("after the switch: %+v", z)
+	}
+	if _, err := promptOn(ctx, s, "hi", nil); err != nil {
+		t.Fatal(err)
+	}
+	if data := string(projected(t, o, s)); strings.Contains(data, `"ns":"dax"`) {
+		t.Error("a change of the window's source alone was recorded")
+	}
+}

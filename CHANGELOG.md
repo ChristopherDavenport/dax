@@ -96,11 +96,16 @@ versions may break flags and the config file.
   window is known sizes one; nothing folds for its size until then,
   but `/compact` folds, where it said compaction was off, and so does
   the loop's retry after a context-length refusal (#207).
+- Changed: a session whose window is unknown at the start records
+  `budget_from: "window"` with a budget of 0 in `dax:context_from`,
+  where it recorded `off`: its compaction is built and folds when
+  asked (#207).
 - Added: a change of the settings that shape requests, by a switch of
-  model, is recorded where it happens, as a `custom` entry, `ns`
-  `dax`, holding the new `dax.context` and `dax:context_from`; so is a
-  resume under settings other than those the record last had, where
-  the record said nothing (agentsession RFC 0001, Header) (#207).
+  model, is recorded where it happens (a change of where the window
+  came from alone is not), as a `custom` entry, `ns` `dax`, holding
+  the new `dax.context` and `dax:context_from`; so is a resume under
+  settings other than those the record last had, where the record
+  said nothing (agentsession RFC 0001, Header) (#207).
 - Fixed: the terminal client's status line shows the context used
   against the window of the model the session switched to, where it
   showed nothing for a model whose window only its vendor reports
