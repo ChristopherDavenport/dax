@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.38 - 2026-11-16
 
 - Dependencies, in one step: openresponses and its anthropic and
   gemini providers v0.0.21, up from v0.0.20; agentsession v0.0.40, up
