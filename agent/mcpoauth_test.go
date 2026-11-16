@@ -385,16 +385,38 @@ func TestTwoWritersOfTheTokensFileKeepEachOthersGrants(t *testing.T) {
 	}
 }
 
+// slowListener's connections wait before each write, as a slow
+// network does: what the server has written reaches the client only
+// after its handler has returned.
+type slowListener struct{ net.Listener }
+
+func (l slowListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return slowConn{c}, nil
+}
+
+type slowConn struct{ net.Conn }
+
+func (c slowConn) Write(p []byte) (int, error) {
+	time.Sleep(50 * time.Millisecond)
+	return c.Conn.Write(p)
+}
+
 // The consent's loopback listener answers only the redirect of this
 // sign-in: a request whose state is not the authorization URL's, such
 // as a web page's hit on the port, is turned away and the wait goes on
-// (review low 5).
+// (review low 5). The redirect's own page reaches the browser, however
+// slowly it is sent: the sign-in ending does not cut it (#210).
 func TestTheConsentWaitsForItsOwnState(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
+	ln := slowListener{tcp}
+	port := tcp.Addr().(*net.TCPAddr).Port
 	cb := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
 	var out bytes.Buffer
 	defer swapConsentOut(&out)()
@@ -409,17 +431,19 @@ func TestTheConsentWaitsForItsOwnState(t *testing.T) {
 		res, err := fetch(context.Background(), &auth.AuthorizationArgs{URL: "https://as.example/authorize?state=right-state&client_id=x"})
 		done <- got{res, err}
 	}()
+	// The listener is bound before consent is called, so a request
+	// waits in its backlog until the server takes it: one request, no
+	// retry, and an error is the server's.
 	hit := func(q string) int {
-		for range 50 {
-			resp, err := http.Get(cb + "?" + q)
-			if err == nil {
-				resp.Body.Close()
-				return resp.StatusCode
-			}
-			time.Sleep(20 * time.Millisecond)
+		resp, err := http.Get(cb + "?" + q)
+		if err != nil {
+			t.Fatalf("the callback with %s: %v", q, err)
 		}
-		t.Fatal("the callback never listened")
-		return 0
+		defer resp.Body.Close()
+		if _, err := io.ReadAll(resp.Body); err != nil {
+			t.Fatalf("the callback's page with %s: %v", q, err)
+		}
+		return resp.StatusCode
 	}
 	if code := hit("error=access_denied&state=wrong"); code == http.StatusOK {
 		t.Errorf("a stranger's error was answered %d", code)
