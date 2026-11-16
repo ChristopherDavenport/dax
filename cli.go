@@ -643,10 +643,16 @@ func run(ctx context.Context, args []string, p program) error {
 		// compaction stays off, as before.
 		opts.Compact, opts.CompactFrom = info.CompactBudget(), "window"
 	}
-	opts.Window, opts.WindowFrom = info.ContextWindow, info.WindowFrom
-	if opts.Window > 0 && opts.WindowFrom == "" {
-		opts.WindowFrom = "vendor:" + info.Source
+	opts.Window, opts.WindowFrom = windowOf(info)
+	// A switch of model sizes the context by the new model's window:
+	// the vendor's, under the user's context_window for it and the
+	// project's. -context-window is the start model's alone, so the
+	// start model's window is the one settled on here.
+	describer := modelinfo.Of(opts.Streamer)
+	if m.Describer == nil {
+		describer = nil
 	}
+	opts.WindowOf = windowsByModel(describer, m.Name, info, settings.ContextWindow, settings.ProjectContextWindow)
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)
 		if err != nil {
@@ -723,6 +729,33 @@ func run(ctx context.Context, args []string, p program) error {
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
 	return f.Run(ctx, sess)
+}
+
+// windowsByModel is agent.Options.WindowOf: the window of start, the
+// model the session starts with, as dax settled on it (-context-window
+// included), and of any other model what the vendor says (describer,
+// nil for none) under the user's and the project's context_window.
+func windowsByModel(describer *modelinfo.Streamer, startName string, start modelinfo.Info, user, proj map[string]int64) func(context.Context, string) (int64, string) {
+	return func(ctx context.Context, name string) (int64, string) {
+		if name == startName {
+			return windowOf(start)
+		}
+		var i modelinfo.Info
+		if describer != nil {
+			i, _ = describer.Describe(ctx, name)
+		}
+		return windowOf(i.WithWindow(user[name], proj[name], 0))
+	}
+}
+
+// windowOf is the window info gives and where it came from, the
+// vendor's figure named by its source.
+func windowOf(info modelinfo.Info) (int64, string) {
+	from := info.WindowFrom
+	if info.ContextWindow > 0 && from == "" {
+		from = "vendor:" + info.Source
+	}
+	return info.ContextWindow, from
 }
 
 // windowsOf are the context windows the status line divides by: the

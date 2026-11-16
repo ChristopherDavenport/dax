@@ -52,6 +52,9 @@ func (s *Session) Reopen(ctx context.Context, id string) (*Session, error) {
 	// meters from nothing, or from what a resumed one's record says it
 	// spent, as -resume does; restarting dax would do the same.
 	o := s.base
+	// The context as the last switch of model sized it, so the new
+	// session starts under it and the switch below changes nothing.
+	o = withSizes(o, s.sizes())
 	// A front has the screen: a URL server's sign-in is not asked for.
 	o.noConsent = true
 	think, model := s.now()

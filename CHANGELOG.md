@@ -71,6 +71,29 @@ versions may break flags and the config file.
   U+FFFD and a stray byte; the cleaner holds back a character cut at
   the end of a read until the next read completes it.
 
+- Fixed: a switch of model, by `/model`, plan mode's `plan_model` and
+  `act_model` or an attached view, takes the new model's context
+  window (the vendor's, under your `context_window` for it and the
+  project's), and a compaction budget sized from the window is sized
+  again from the new one from the next request, and said; a `-compact`
+  budget stays. A budget sized for a 200k window no longer outlives a
+  switch to a 32k model. `-context-window` is the start model's alone.
+  The next fold's summary is asked of the new model (agentkit v0.0.20)
+  (#207).
+- Changed: a session whose model's window is unknown at the start
+  builds its compaction with no budget, so a switch to a model whose
+  window is known sizes one; nothing folds for its size until then,
+  but `/compact` folds, where it said compaction was off, and so does
+  the loop's retry after a context-length refusal (#207).
+- Added: a change of the settings that shape requests, by a switch of
+  model, is recorded where it happens, as a `custom` entry, `ns`
+  `dax`, holding the new `dax.context` and `dax:context_from`; so is a
+  resume under settings other than those the record last had, where
+  the record said nothing (agentsession RFC 0001, Header) (#207).
+- Changed: `agent.Options.WindowOf`, the window of a model by name,
+  which a switch of model sizes the context by; nil keeps the context
+  the session opened with (#207).
+
 ## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a

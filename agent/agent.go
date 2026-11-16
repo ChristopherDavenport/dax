@@ -270,6 +270,16 @@ type Options struct {
 	// (config, flag). Both are recorded in the header's dax.context.
 	Window     int64
 	WindowFrom string
+	// WindowOf is the context window, in tokens, of the model named,
+	// and where that came from, as Window and WindowFrom are: what a
+	// switch of model (SetModel) sizes the context by. When Compact
+	// came from the window (CompactFrom "window"), the switch sizes the
+	// budget from the new window, three quarters of it, and the
+	// compaction is built even with a budget of 0, which folds only
+	// when asked (Compact), for a later switch to size; a budget from
+	// anywhere else is kept. nil leaves the context as the session
+	// opened with it.
+	WindowOf func(ctx context.Context, model string) (window int64, from string)
 	// CompactServer folds through the server's compaction endpoint
 	// (compact.New) instead of a local summary (compact.NewLocal).
 	CompactServer bool
@@ -502,6 +512,9 @@ type Session struct {
 	forwards map[int]net.Listener
 
 	opts Options
+	// sizing is the context in force (window.go): Options' budget and
+	// window as the last switch of model sized them.
+	sizing sizing
 	// base is the Options the session was opened with, as the caller
 	// gave them, which Reopen opens another over.
 	base   Options
@@ -821,6 +834,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		s.refused = append(s.refused, omission("config", path.Join(ws.Root(), config.ProjectName), noRead))
 	}
 	s.live.think, s.live.main = o.Think, o.Model
+	s.sizing.now = sizesOf(o)
 	// The user's own templates are of the home directory a bare run
 	// leaves out; the project's are part of its task.
 	userDir := o.UserDir
@@ -1185,7 +1199,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		kopts = append(kopts, agentkit.WithMCPTransport(t, mopts...))
 		s.servers = append(s.servers, info)
 	}
-	if o.Compact > 0 {
+	if o.Compact > 0 || compactsByWindow(o) {
 		fold := agentkit.WithFoldObserver(func(_ context.Context, f compact.Fold) {
 			switch {
 			case errors.Is(f.Err, compact.ErrSummaryTooLarge), errors.Is(f.Err, compact.ErrSummaryIncomplete), errors.Is(f.Err, compact.ErrSummaryNoText):
@@ -1202,11 +1216,13 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			}
 		})
 		if o.CompactServer {
-			c, ok := model.(compact.Compactor)
-			if !ok {
+			// A budget of 0 sized by the window builds no compaction on
+			// a provider without the endpoint, as before.
+			if c, ok := model.(compact.Compactor); ok {
+				kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(s.tasks.pin)), fold)
+			} else if o.Compact > 0 {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
 			}
-			kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(s.tasks.pin)), fold)
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
 			// under -think is effort low. qwen3.5 then spends most of
@@ -1483,6 +1499,9 @@ func (s *Session) resumed(id string) error {
 	}
 	// The person's "yes, always" for the session holds on (#186).
 	s.regrant(context.Background())
+	// Settings that shape its requests and differ from those its record
+	// last had are recorded where it goes on (#207).
+	s.resumedContext(context.Background())
 	return nil
 }
 
@@ -1612,7 +1631,10 @@ func held(p agentturn.PendingCall) bool {
 //
 // The sub-agents follow it from their next call: a task with model
 // main runs it, and so does every sub-agent when no sub-agent model is
-// configured.
+// configured. The context follows it too (window.go): the new model's
+// window, from Options.WindowOf, and a compaction budget sized from the
+// window, recorded when they change; the next fold's summary is asked
+// of the new model.
 func (s *Session) SetModel(name string) error {
 	think, _ := s.now()
 	o := s.opts
@@ -1627,6 +1649,7 @@ func (s *Session) SetModel(name string) error {
 	s.live.mu.Lock()
 	s.live.main = name
 	s.live.mu.Unlock()
+	s.resize(context.Background(), name)
 	return nil
 }
 
