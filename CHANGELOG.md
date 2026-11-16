@@ -101,6 +101,12 @@ versions may break flags and the config file.
   `dax`, holding the new `dax.context` and `dax:context_from`; so is a
   resume under settings other than those the record last had, where
   the record said nothing (agentsession RFC 0001, Header) (#207).
+- Fixed: the terminal client's status line shows the context used
+  against the window of the model the session switched to, where it
+  showed nothing for a model whose window only its vendor reports
+  (#207).
+- Changed: `agent.Session.ContextWindow`, the window the session
+  resolved for the model it now runs (#207).
 - Changed: `agent.Options.WindowOf`, the window of a model by name,
   which a switch of model sizes the context by; nil keeps the context
   the session opened with (#207).

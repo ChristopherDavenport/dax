@@ -108,6 +108,11 @@ func (s *Session) sizes() sizes {
 	return s.sizing.now
 }
 
+// ContextWindow is the context window, in tokens, the session believes
+// the model it now runs has (Model), as the start or the last switch of
+// model resolved it; 0 unknown. A status line divides by it.
+func (s *Session) ContextWindow() int64 { return s.sizes().Window }
+
 // compactsByWindow says whether a session under o builds its
 // compaction although its budget is 0: the budget is the window's,
 // which a switch to a model whose window is known sizes.

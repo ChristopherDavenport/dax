@@ -15,11 +15,13 @@ import (
 )
 
 // statusSession is what the status line reads of a session: its
-// repository, the model it runs next, and its events, after each tool
-// run of which the repository is read again.
+// repository, the model it runs next and the window it resolved for
+// that model, and its events, after each tool run of which the
+// repository is read again.
 type statusSession interface {
 	Git(ctx context.Context) (tool.Git, error)
 	Model() string
+	ContextWindow() int64
 	Mode() (mode, pending string)
 	Subscribe(fn func(context.Context, agentturn.Event) error) func()
 }
@@ -65,7 +67,16 @@ func (h *statusHost) line() console.StatusLine {
 		},
 	}
 	l.Model = h.sess.Model
-	l.Window = func(model string) int { return int(h.info.Windows[model]) }
+	// The model the session runs has the window it resolved at its
+	// last switch; another, the start's or the config's.
+	l.Window = func(model string) int {
+		if model == h.sess.Model() {
+			if w := h.sess.ContextWindow(); w > 0 {
+				return int(w)
+			}
+		}
+		return int(h.info.Windows[model])
+	}
 	l.Updates = h.updates
 	return l
 }
