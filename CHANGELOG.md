@@ -49,6 +49,13 @@ versions may break flags and the config file.
     reports the service tier that served a response. dax asks for
     neither.
 
+- Changed: an extension whose `Kit` options set
+  `agentkit.WithAfterToolCall` no longer fails the session's start:
+  agentkit v0.0.20 chains the option, so its hook runs on the main
+  agent after every extension's `AfterToolCall`, each once a call.
+  `extension.Extension.AfterToolCall` is still the way to reach the
+  sub-agents too (agentkit#139).
+
 ## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a

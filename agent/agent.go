@@ -958,15 +958,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if s.beforePrompt, err = beforePromptHooks(o.Extensions, xenv); err != nil {
 		return nil, err
 	}
-	// The extensions' after-tool hooks, composed (aftertool.go), go to
-	// the kit ahead of the extensions' options, so that a Kit option
-	// that sets one is seen replacing it and refused once the kit is
-	// built.
-	afters, afterNames, err := afterToolHooks(o.Extensions, xenv)
+	// The extensions' after-tool hooks, chained (aftertool.go), go to
+	// the kit ahead of the extensions' options, so a Kit option that
+	// adds one runs after them.
+	afters, err := afterToolHooks(o.Extensions, xenv)
 	if err != nil {
 		return nil, err
 	}
-	if s.afterTool = chainAfter(afters); s.afterTool != nil {
+	if s.afterTool = agentturn.ChainAfterToolCall(afters...); s.afterTool != nil {
 		kopts = append(kopts, agentkit.WithAfterToolCall(s.afterTool))
 	}
 	for _, e := range o.Extensions {
@@ -976,9 +975,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		eo, err := e.Kit(xenv)
 		if err != nil {
 			return nil, fmt.Errorf("extension %s: %w", e.Name, err)
-		}
-		if err := kitSetsAfter(e.Name, eo, afterNames); err != nil {
-			return nil, err
 		}
 		kopts = append(kopts, eo...)
 	}
@@ -1244,10 +1240,6 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 
 	kit, err := agentkit.New(ctx, kopts...)
 	if err != nil {
-		return nil, err
-	}
-	if err := checkKitAfter(kit, s.afterTool, afterNames); err != nil {
-		kit.Close()
 		return nil, err
 	}
 	s.Kit = kit
