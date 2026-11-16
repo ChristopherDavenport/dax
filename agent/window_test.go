@@ -269,3 +269,40 @@ func TestNewAfterASwitchStartsUnderItsContext(t *testing.T) {
 		t.Error("want the header to hold small's budget and no dax.context entry")
 	}
 }
+
+// While A2A callers are served (PeerConfig handed out), they stay on
+// the model the session started with, and the kit's compaction is one
+// for them and the person: a switch applies the smaller of the two
+// models' budgets, 0 counting as none. A switch to a larger window
+// keeps the callers' budget; to a smaller one, the person's, so the
+// callers fold earlier than their model needs (#207 review M1).
+func TestASwitchWhileServingCallersKeepsTheSmallerBudget(t *testing.T) {
+	ctx := context.Background()
+	by := map[string]int64{"echo": 200000, "big": 1000000, "small": 32000}
+	for _, tc := range []struct {
+		model   string
+		callers bool
+		want    int
+	}{
+		{"big", false, 750000},
+		{"big", true, 150000},
+		{"small", true, 24000},
+		{"unknown", true, 150000},
+	} {
+		o := sizedOptions(options(t, &scripted{}), 200000, 0, by)
+		s, err := New(ctx, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.callers {
+			s.PeerConfig()
+		}
+		if err := s.SetModel(tc.model); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.sizes().Compact; got != tc.want {
+			t.Errorf("to %s, callers served %v: budget %d, want %d", tc.model, tc.callers, got, tc.want)
+		}
+		s.Close()
+	}
+}

@@ -78,8 +78,12 @@ versions may break flags and the config file.
   again from the new one from the next request, and said; a `-compact`
   budget stays. A budget sized for a 200k window no longer outlives a
   switch to a 32k model. `-context-window` is the start model's alone.
-  The next fold's summary is asked of the new model (agentkit v0.0.20)
-  (#207).
+  The next fold's summary is asked of the new model (agentkit v0.0.20).
+  Under `dax serve -a2a` the callers stay on the start model and share
+  the session's compaction, so a switch applies the smaller of their
+  budget and the new model's: after a switch to a larger window you
+  fold at the callers' budget, after one to a smaller window they fold
+  at yours (#207).
 - Changed: a session whose model's window is unknown at the start
   builds its compaction with no budget, so a switch to a model whose
   window is known sizes one; nothing folds for its size until then,
