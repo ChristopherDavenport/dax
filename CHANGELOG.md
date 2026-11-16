@@ -5,6 +5,50 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies, in one step: openresponses and its anthropic and
+  gemini providers v0.0.21, up from v0.0.20; agentsession v0.0.40, up
+  from v0.0.39; agentturn, agentturn/session, front/a2a and tools/a2a
+  v0.0.41, up from v0.0.40; agentmemory v0.0.14, up from v0.0.13;
+  agenteval v0.0.17, up from v0.0.16; agentkit v0.0.20, up from
+  v0.0.19; agentconsole v0.0.18, up from v0.0.17; anthropic-sdk-go
+  v1.84.0, up from v1.78.0, and genai v1.77.0, up from v1.72.0, the
+  versions the providers require. What changes for you:
+  - An answer the provider ended incomplete with an empty reason ends
+    the run cut at the output limit, where it ended done: `-p` exits
+    7 and `-result` names `cut` with cause `max_output_tokens`, and
+    the terminal client says the answer was cut (agentturn v0.0.41).
+  - After `/model`, or plan mode's `plan_model` and `act_model`, the
+    next compaction's summary is asked of the model the session now
+    runs, under `-compact-server` too, where it was always asked of
+    the model the session started with; the local summary is still
+    asked at reasoning effort none, fitted to that model (agentkit
+    v0.0.20).
+  - A session with dax-memory and no `memory.index_scopes` no longer
+    records `memory_read` taken away on its first request: the tool is
+    offered only while the conversation's last render left the block
+    out (agentkit v0.0.20).
+  - The terminal client drops control characters and bidirectional
+    formatting characters from text it did not write before drawing
+    it: a carriage return or an escape sequence in a tool's output or
+    a call's subject can no longer draw over the permission panel, and
+    a panel's question, subject and address are cut to three rows,
+    which ctrl+o expands (agentconsole v0.0.18, agentconsole#56).
+  - A Gemini response that ends with finish reason `CONTINUATION`
+    still fails with `model_error`, code `continuation`, after one
+    request, as before: the gemini provider turns off the SDK's
+    automatic continuation, which genai v1.74 turned on unbounded.
+  - anthropic-sdk-go records a span for each API call and sends trace
+    headers when a program registers a global OpenTelemetry tracer
+    provider or propagator. dax registers neither, so nothing is
+    traced or sent; a program built on `dax.Main` that registers them
+    gets the spans, which `ANTHROPIC_OPEN_TELEMETRY=false` turns off.
+  - The chatcompletions provider and Gemini request logprobs only on
+    the `message.output_text.logprobs` include, and each provider
+    reports the service tier that served a response. dax asks for
+    neither.
+
 ## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a
