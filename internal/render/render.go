@@ -9,8 +9,11 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -234,60 +237,78 @@ func (p *Printer) close() {
 }
 
 // w is the writer everything goes through: W, with control sequences
-// taken out. Tool output is a file's contents and a command's output,
-// and model text is whatever the model was shown; either can carry an
-// escape sequence that redraws what the user has already read, such
-// as the line that said what an approved call was.
-func (p *Printer) w() io.Writer { return cleanWriter{p.W} }
+// taken out (view.Clean). Tool output is a file's contents and a
+// command's output, and model text is whatever the model was shown;
+// either can carry an escape sequence that redraws what the user has
+// already read, such as the line that said what an approved call was.
+// Each write is a whole string, so nothing is held back between them.
+func (p *Printer) w() io.Writer { return cleanString{p.W} }
 
-// CleanWriter is w with Clean applied to everything written to it.
-func CleanWriter(w io.Writer) io.Writer { return cleanWriter{w} }
+// cleanString writes each write cleaned on its own.
+type cleanString struct{ w io.Writer }
 
-type cleanWriter struct{ w io.Writer }
-
-func (c cleanWriter) Write(b []byte) (int, error) {
-	if _, err := io.WriteString(c.w, Clean(string(b))); err != nil {
+func (c cleanString) Write(b []byte) (int, error) {
+	if _, err := io.WriteString(c.w, view.Clean(string(b))); err != nil {
 		return 0, err
 	}
 	return len(b), nil
 }
 
-// Clean removes what would act on a terminal rather than show on it:
-// the C0 controls other than newline and tab (ESC, carriage return,
-// backspace, bell, ...), DEL, the C1 controls, and the bidirectional
-// overrides that make text read as something else. An escape sequence
-// loses its ESC and shows as the harmless text it would have been;
-// removing the one byte, rather than parsing the sequence, is what
-// keeps a sequence cut in two by streaming deltas from working.
-func Clean(s string) string {
-	clean := true
-	for _, r := range s {
-		if bad(r) {
-			clean = false
-			break
-		}
-	}
-	if clean {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if !bad(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+// CleanWriter is w with view.Clean applied to what is written to it,
+// for a stream that arrives in chunks, a child's standard error or a
+// server's diagnostics: a character cut between two writes is held
+// back until the write that completes it, where cleaning each chunk on
+// its own would show it as two U+FFFD. Close writes a character the
+// stream ended inside as one U+FFFD. It may be written from several
+// goroutines.
+func CleanWriter(w io.Writer) io.WriteCloser { return &cleanStream{w: w} }
+
+type cleanStream struct {
+	mu   sync.Mutex
+	w    io.Writer
+	held []byte // the start of a character the last write cut
 }
 
-func bad(r rune) bool {
-	switch {
-	case r == '\n' || r == '\t':
-		return false
-	case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
-		return true
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e, r == 0x200f, r == 0x061c:
-		return true
+func (c *cleanStream) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	buf := append(c.held, b...)
+	cut := len(buf) - partialTail(buf)
+	c.held = append([]byte(nil), buf[cut:]...)
+	if cut == 0 {
+		return len(b), nil
 	}
-	return false
+	if _, err := io.WriteString(c.w, view.Clean(string(buf[:cut]))); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// Close writes what is held, a character the stream ended inside, as
+// U+FFFD. It does not close w.
+func (c *cleanStream) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.held) == 0 {
+		return nil
+	}
+	c.held = nil
+	_, err := io.WriteString(c.w, string(utf8.RuneError))
+	return err
+}
+
+// partialTail is how many bytes at the end of b begin a UTF-8 character
+// that b does not finish: 0 when b ends on a whole one, or on bytes no
+// further byte could make one, which view.Clean turns into U+FFFD
+// either way.
+func partialTail(b []byte) int {
+	for i := len(b) - 1; i >= 0 && i > len(b)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if utf8.FullRune(b[i:]) {
+				return 0
+			}
+			return len(b) - i
+		}
+	}
+	return 0
 }

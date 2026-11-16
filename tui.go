@@ -108,7 +108,7 @@ func (h *heldOutput) Write(p []byte) (int, error) {
 func (h *heldOutput) take() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	s := render.Clean(string(h.b))
+	s := view.Clean(string(h.b))
 	if h.dropped {
 		s = "[earlier output dropped]\n" + s
 	}
@@ -164,7 +164,7 @@ func elsewhereLines(info frontInfo) []string {
 func banner(info frontInfo, si agent.Info) []string {
 	// The root is the workspace's to report, so it is cleaned as any
 	// text from elsewhere is.
-	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, render.Clean(info.Dir))}
+	lines := []string{fmt.Sprintf("%s · %s %s · %s", info.Name, info.Provider, info.Model, view.Clean(info.Dir))}
 	if info.ModelInfo != "" {
 		lines = append(lines, "model: "+info.ModelInfo)
 	}
@@ -192,7 +192,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	// either way, and waited on, since it may say the store was exposed.
 	if f.info.Verbose {
 		for _, l := range banner(f.info, si) {
-			fmt.Fprintln(out, render.Clean(l))
+			fmt.Fprintln(out, view.Clean(l))
 		}
 	} else {
 		for _, l := range elsewhereLines(f.info) {
@@ -201,7 +201,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 			if f.info.Status.Shows("executor") && l == elsewhereBanner(f.info) {
 				continue
 			}
-			fmt.Fprintln(out, render.Clean(l))
+			fmt.Fprintln(out, view.Clean(l))
 		}
 	}
 	// The warnings stay captured while the client has the screen, so
@@ -215,7 +215,7 @@ func (f *tuiFront) Run(ctx context.Context, sess *agent.Session) error {
 	// model was not given instructions the person may count on.
 	notice := agentsMDNotice(si, f.info.UserConfig)
 	if notice != "" {
-		fmt.Fprintln(out, render.Clean(notice))
+		fmt.Fprintln(out, view.Clean(notice))
 	}
 	omitted := f.info.Verbose && len(si.Omitted) > 0
 	if f.pause && (warn != "" || notice != "" || omitted) {
@@ -322,7 +322,7 @@ func mentionCompletion(m mentioner) func(context.Context, console.Completing) []
 		mu.Unlock()
 		var out []console.Completion
 		for _, r := range rs {
-			if !strings.HasPrefix(r.Mention, c.Word) || render.Clean(r.Mention) != r.Mention {
+			if !strings.HasPrefix(r.Mention, c.Word) || view.CleanLine(r.Mention) != r.Mention {
 				continue
 			}
 			help := r.Name
@@ -581,7 +581,7 @@ func (f *tuiFront) flush(out io.Writer, si agent.Info) {
 	f.mu.Unlock()
 	if f.info.Verbose {
 		for _, l := range notes {
-			fmt.Fprintln(out, render.Clean(l))
+			fmt.Fprintln(out, view.Clean(l))
 		}
 	}
 	if si.Recorded {
@@ -593,7 +593,7 @@ func (f *tuiFront) flush(out io.Writer, si agent.Info) {
 // name (/name) when it has one.
 func sessionLine(si agent.Info) string {
 	if si.Name != "" {
-		return "session " + si.ID + " " + strconv.Quote(render.Clean(si.Name))
+		return "session " + si.ID + " " + strconv.Quote(view.Clean(si.Name))
 	}
 	return "session " + si.ID
 }
@@ -601,7 +601,7 @@ func sessionLine(si agent.Info) string {
 // resumeLine is what the terminal client leaves on the terminal when it
 // exits, for the program called name.
 func resumeLine(name, id string) string {
-	return "To resume this session: " + render.Clean(name) + " -resume " + render.Clean(id)
+	return "To resume this session: " + view.Clean(name) + " -resume " + view.Clean(id)
 }
 
 // Abandon is for a session that could not be opened after Prepare: the
@@ -620,6 +620,6 @@ func (f *tuiFront) Abandon() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, l := range f.log {
-		fmt.Fprintln(w, render.Clean(l))
+		fmt.Fprintln(w, view.Clean(l))
 	}
 }

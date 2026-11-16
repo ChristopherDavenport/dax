@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
@@ -297,7 +298,7 @@ func (s *acpServer) add(sess *agent.Session) *acpSession {
 	// prompt's reply, as an agent message (run), the one update ACP
 	// shows that is not a call's.
 	if a.notice = agentsMDNotice(sess.Info(), s.f.info.UserConfig); a.notice != "" {
-		fmt.Fprintln(s.f.stderr(), "dax: "+render.Clean(a.notice))
+		fmt.Fprintln(s.f.stderr(), "dax: "+view.Clean(a.notice))
 	}
 	a.done = append(a.done, sess.Answering(), sess.Subscribe(a.event))
 	s.mu.Lock()
@@ -328,16 +329,16 @@ func (a *acpSession) startServers(ctx context.Context, servers []acp.MCPServer) 
 	for _, m := range servers {
 		switch {
 		case m.Type != "" && m.Type != "stdio":
-			fmt.Fprintf(w, "dax: the editor's MCP server %s (%s) is not started: dax takes stdio servers from an editor\n", render.Clean(m.Name), render.Clean(m.Type))
+			fmt.Fprintf(w, "dax: the editor's MCP server %s (%s) is not started: dax takes stdio servers from an editor\n", view.Clean(m.Name), view.Clean(m.Type))
 		case !a.srv.f.trustMCP:
-			fmt.Fprintf(w, "dax: the editor's MCP server %s is not started: start dax with -trust-mcp to run an editor's servers\n", render.Clean(m.Name))
+			fmt.Fprintf(w, "dax: the editor's MCP server %s is not started: start dax with -trust-mcp to run an editor's servers\n", view.Clean(m.Name))
 		default:
 			env := map[string]string{}
 			for _, e := range m.Env {
 				env[e.Name] = e.Value
 			}
 			if _, err := a.sess.AddEditorMCP(ctx, m.Name, m.Command, m.Args, env); err != nil {
-				fmt.Fprintf(w, "dax: the editor's MCP server %s: %v\n", render.Clean(m.Name), render.Clean(err.Error()))
+				fmt.Fprintf(w, "dax: the editor's MCP server %s: %v\n", view.Clean(m.Name), view.Clean(err.Error()))
 			}
 		}
 	}
@@ -476,7 +477,7 @@ func (a *acpSession) question(ctx context.Context, q agentturn.Question) {
 		return
 	}
 	offer := a.sess.QuestionOffer(ctx, q)
-	tc := acp.SessionUpdate{ToolCallID: q.Call.CallID, Title: render.Clean(q.Elicitation.Message), Kind: toolKind(q.Call.Name), Status: acp.StatusPending, RawInput: agent.Unstamped(q.Call.Args)}
+	tc := acp.SessionUpdate{ToolCallID: q.Call.CallID, Title: view.Clean(q.Elicitation.Message), Kind: toolKind(q.Call.Name), Status: acp.StatusPending, RawInput: agent.Unstamped(q.Call.Args)}
 	choice, err := a.ask(ctx, tc, offer.Rule)
 	switch {
 	case err != nil || choice == acp.RejectOnce:
@@ -624,7 +625,7 @@ func (a *acpSession) answer(ctx context.Context, perms []agent.Permission) ([]ag
 	var out []agentturn.Answer
 	for _, p := range perms {
 		offer := a.sess.GrantOffer(ctx, p.Call.CallID)
-		tc := acp.SessionUpdate{ToolCallID: p.Call.CallID, Title: render.Clean(p.Call.Name + ": " + p.Reason), Kind: toolKind(p.Call.Name), Status: acp.StatusPending, RawInput: rawJSON(p.Call.Arguments)}
+		tc := acp.SessionUpdate{ToolCallID: p.Call.CallID, Title: view.Clean(p.Call.Name + ": " + p.Reason), Kind: toolKind(p.Call.Name), Status: acp.StatusPending, RawInput: rawJSON(p.Call.Arguments)}
 		choice, err := a.ask(ctx, tc, offer.Rule)
 		if err != nil {
 			return nil, err

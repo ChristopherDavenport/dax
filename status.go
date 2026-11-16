@@ -8,9 +8,9 @@ import (
 	"sync"
 
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
 
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/tool"
 )
 
@@ -50,7 +50,7 @@ func newStatus(info frontInfo, sess statusSession) *statusHost {
 func (h *statusHost) line() console.StatusLine {
 	l := h.info.Status.Line()
 	user := userAtHost()
-	dir := render.Clean(tildeHome(h.info.Dir, h.info.Executor == "" && h.info.Workspace == ""))
+	dir := view.CleanLine(tildeHome(h.info.Dir, h.info.Executor == "" && h.info.Workspace == ""))
 	l.Host = map[string]func() console.Segment{
 		"user": func() console.Segment { return console.Segment{Text: user, Color: h.color("user", "0")} },
 		"dir":  func() console.Segment { return console.Segment{Text: dir, Color: h.color("dir", "4")} },
@@ -59,7 +59,7 @@ func (h *statusHost) line() console.StatusLine {
 		"executor": func() console.Segment {
 			if b := elsewhereBanner(h.info); b != "" {
 				_, where, _ := strings.Cut(b, ": ")
-				return console.Segment{Text: render.Clean(where)}
+				return console.Segment{Text: view.CleanLine(where)}
 			}
 			return console.Segment{Text: "here"}
 		},
@@ -82,13 +82,13 @@ func (h *statusHost) gitSegment() console.Segment {
 	case !g.Repo:
 		return console.Segment{}
 	case g.Withheld != "":
-		return console.Segment{Text: "git not read: " + render.Clean(g.Withheld), Color: color("3")}
+		return console.Segment{Text: "git not read: " + view.CleanLine(g.Withheld), Color: color("3")}
 	case g.Branch == "":
 		return console.Segment{}
 	case g.Dirty:
-		return console.Segment{Text: render.Clean(g.Branch) + " ±", Color: color("3")}
+		return console.Segment{Text: view.CleanLine(g.Branch) + " ±", Color: color("3")}
 	}
-	return console.Segment{Text: render.Clean(g.Branch), Color: color("2")}
+	return console.Segment{Text: view.CleanLine(g.Branch), Color: color("2")}
 }
 
 // modeSegment is the permission mode, and the one waiting for the
@@ -100,7 +100,7 @@ func (h *statusHost) modeSegment() console.Segment {
 	if pending != "" {
 		text += " → " + pending
 	}
-	return console.Segment{Text: render.Clean(text), Color: h.color("mode", map[string]string{"acceptEdits": "5", "dontAsk": "3", "bypassPermissions": "1"}[mode])}
+	return console.Segment{Text: view.CleanLine(text), Color: h.color("mode", map[string]string{"acceptEdits": "5", "dontAsk": "3", "bypassPermissions": "1"}[mode])}
 }
 
 // color is a host segment's own color, def, or "" when the config
@@ -181,7 +181,7 @@ func userAtHost() string {
 	}
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
-	return render.Clean(name + "@" + host)
+	return view.CleanLine(name + "@" + host)
 }
 
 // tildeHome is dir with this machine's home shown as ~, when the tools

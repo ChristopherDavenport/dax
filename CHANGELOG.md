@@ -56,6 +56,21 @@ versions may break flags and the config file.
   `extension.Extension.AfterToolCall` is still the way to reach the
   sub-agents too (agentkit#139).
 
+- Changed: dax cleans text it did not write with agentconsole's
+  `view.Clean`, the one cleaner the terminal client uses, where it had
+  its own with the same set of characters: the REPL, `-p`, ACP's
+  titles, the start lines, notices, errors and the status line. What
+  reaches you is the same, but for a byte that is not UTF-8, which is
+  now shown as U+FFFD where it was passed on as it came unless a
+  control character was beside it. The status line's segments and the
+  `@` completions are cleaned as one row (`view.CleanLine`), a newline
+  or tab in them a space.
+- Fixed: a character a child's standard error, an MCP server's
+  diagnostics or an executor's split across two reads reaches the
+  terminal whole, where a control character in the same read made it
+  U+FFFD and a stray byte; the cleaner holds back a character cut at
+  the end of a read until the next read completes it.
+
 ## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a

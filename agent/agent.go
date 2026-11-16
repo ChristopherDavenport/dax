@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
@@ -2081,7 +2082,7 @@ func scopeNames(scopes []remote.Scope) string {
 	for i, s := range scopes {
 		names[i] = string(s)
 	}
-	return render.Clean(strings.Join(names, ","))
+	return view.Clean(strings.Join(names, ","))
 }
 
 // mcpServer is the dial of an MCP server started from a command line,

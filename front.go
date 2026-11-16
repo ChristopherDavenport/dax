@@ -37,6 +37,7 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/toolview"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsmd"
@@ -234,7 +235,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 	if l := agentsMDNotice(info, f.info.UserConfig); l != "" {
 		// On standard error too: the model was not given instructions
 		// the person may count on, which a script's output would hide.
-		fmt.Fprintln(stderr, render.Clean(l))
+		fmt.Fprintln(stderr, view.Clean(l))
 	}
 	showAssembly(os.Stdout, info)
 	showPending(os.Stdout, t, "resumed")
@@ -291,7 +292,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 			answered.Store(q.ID, true)
 			return replyOf(q.Elicitation, line)
 		},
-		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", render.Clean(c.Name)) },
+		Refused: func(c *openresponses.FunctionCall) { fmt.Printf("  ✗ %s denied\n", view.Clean(c.Name)) },
 		// The person at this terminal, for what they typed.
 		By: func(q agentturn.Question) agentturn.Trigger {
 			if _, ok := answered.LoadAndDelete(q.ID); ok {
@@ -305,7 +306,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		// Before the run, so its env entry names the commit it starts
 		// from.
 		if serr := snap.StartSnapshot(ctx, f.info.SnapshotMax); serr != nil {
-			fmt.Fprintf(stderr, "dax: %s\n", render.Clean(serr.Error()))
+			fmt.Fprintf(stderr, "dax: %s\n", view.Clean(serr.Error()))
 		}
 	}
 	end, err := agent.Drive(ctx, t, rules, openresponses.UserText(f.info.Prompt))
@@ -330,7 +331,7 @@ func (f *printFront) run(ctx context.Context, t agentturn.Control, ctl agent.Con
 		// run's failure.
 		var serr error
 		if snaps, serr = snap.EndSnapshot(context.WithoutCancel(ctx)); serr != nil {
-			fmt.Fprintf(stderr, "dax: %s\n", render.Clean(serr.Error()))
+			fmt.Fprintf(stderr, "dax: %s\n", view.Clean(serr.Error()))
 		}
 	}
 	if end != nil && f.info.Result != "" {
@@ -463,18 +464,18 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 	// command's output) is recorded as composed whatever its trigger.
 	byPerson := agentturn.ContextWithTrigger(ctx, agent.AtTerminal)
 	info := ctl.Info()
-	fmt.Fprintf(w, "%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, render.Clean(f.info.Dir))
+	fmt.Fprintf(w, "%s · %s %s · %s\n", f.info.Name, f.info.Provider, f.info.Model, view.Clean(f.info.Dir))
 	if f.info.ModelInfo != "" {
 		fmt.Fprintf(w, "model: %s\n", f.info.ModelInfo)
 	}
 	for _, l := range elsewhereLines(f.info) {
-		fmt.Fprintln(w, render.Clean(l))
+		fmt.Fprintln(w, view.Clean(l))
 	}
 	if info.Recorded {
 		fmt.Fprintln(w, sessionLine(info))
 	}
 	if l := agentsMDNotice(info, f.info.UserConfig); l != "" {
-		fmt.Fprintln(w, render.Clean(l))
+		fmt.Fprintln(w, view.Clean(l))
 	}
 	showAssembly(w, info)
 	showPending(w, t, "resumed")
@@ -531,7 +532,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 		for _, pm := range perms {
 			if p := planOf(pm.Call); p != "" {
 				// The plan, whole, before its question.
-				fmt.Fprintf(w, "\nplan:\n%s\n", render.Clean(p))
+				fmt.Fprintf(w, "\nplan:\n%s\n", view.Clean(p))
 			}
 			o := offerOf(ctx, ctl, pm.Call.CallID)
 			asks = append(asks, waiting{q: questionOffer(pm.Call, pm.Reason, o), call: pm.Call, offer: o})
@@ -581,7 +582,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 				if sentCommand != "" {
 					// Its message is marked with where it came from, which
 					// a steer of text would lose: it is not sent.
-					fmt.Fprintf(w, "[calls wait for approval; %s was not sent: run it again once they are answered]\n", render.Clean(sentCommand))
+					fmt.Fprintf(w, "[calls wait for approval; %s was not sent: run it again once they are answered]\n", view.Clean(sentCommand))
 				}
 				if perms := agent.HeldPermissions(t); len(perms) > 0 {
 					ask(perms)
@@ -675,7 +676,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 						if err := g.GrantQuestion(ctx, a.asked, a.offer.Rule); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else {
-							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", view.Clean(a.offer.Rule))
 							line = "y " + gnote
 						}
 					}
@@ -686,9 +687,9 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 						if err := g.Grant(ctx, a.call.CallID, kind, a.offer.Rule); err != nil {
 							fmt.Fprintln(os.Stderr, "error:", err)
 						} else if kind == agent.GrantSaved {
-							fmt.Fprintf(w, "  [%s kept for this project]\n", render.Clean(a.offer.Rule))
+							fmt.Fprintf(w, "  [%s kept for this project]\n", view.Clean(a.offer.Rule))
 						} else {
-							fmt.Fprintf(w, "  [%s allowed for this session]\n", render.Clean(a.offer.Rule))
+							fmt.Fprintf(w, "  [%s allowed for this session]\n", view.Clean(a.offer.Rule))
 						}
 					}
 				}
@@ -702,7 +703,7 @@ func (f *replFront) run(ctx context.Context, t agentturn.Control, ctl agent.Cont
 					}
 					answers = append(answers, ans)
 				default:
-					fmt.Fprintf(w, "  ✗ %s denied\n", render.Clean(a.call.Name))
+					fmt.Fprintf(w, "  ✗ %s denied\n", view.Clean(a.call.Name))
 					answers = append(answers, agent.Refusal(a.call.CallID, note, stop))
 				}
 				if len(asks) > 0 {
@@ -816,7 +817,7 @@ func questionOffer(c *openresponses.FunctionCall, reason string, o agent.GrantOf
 	case o.Rule != "":
 		keys = "[y/a/N] (a: allow " + o.Rule + " for this session) "
 	}
-	return render.Clean(fmt.Sprintf("? allow %s %s%s %s", c.Name, c.Arguments, reason, keys))
+	return view.Clean(fmt.Sprintf("? allow %s %s%s %s", c.Name, c.Arguments, reason, keys))
 }
 
 // planOf is the plan of a call of dax-plan's exit_plan_mode, "" for any
@@ -897,9 +898,9 @@ func questionTextOffer(q agentturn.Question, o agent.GrantOffer) string {
 		return questionOffer(&openresponses.FunctionCall{CallID: c.CallID, Name: c.Name, Arguments: string(c.Args)}, msg, o)
 	}
 	if extension.IsTextQuestion(q.Elicitation) {
-		return "? " + render.Clean(q.Elicitation.Message) + " [your answer, or n] "
+		return "? " + view.Clean(q.Elicitation.Message) + " [your answer, or n] "
 	}
-	return "? " + render.Clean(q.Elicitation.Message) + " [y/N] "
+	return "? " + view.Clean(q.Elicitation.Message) + " [y/N] "
 }
 
 // answerLine reads the user's answer to a question: y or yes allows,
@@ -993,7 +994,7 @@ func ended(w io.Writer, t agentturn.Control, end *agentturn.RunEnd) {
 		showPending(w, t, "aborted")
 	case agentturn.ReasonInputRequired:
 		for _, p := range end.Pending {
-			fmt.Fprintf(w, "[input required: %s %s]\n", render.Clean(p.Call.Name), render.Clean(p.Call.Arguments))
+			fmt.Fprintf(w, "[input required: %s %s]\n", view.Clean(p.Call.Name), view.Clean(p.Call.Arguments))
 		}
 	case agentturn.ReasonStopped:
 		fmt.Fprintf(w, "[stopped: %s]\n", end.Cause)
@@ -1192,11 +1193,11 @@ func placedText(m agent.MCPServerInfo) string {
 	return strings.TrimSpace(oneLine(string(m.Placement), maxField) + " " + at)
 }
 
-// oneLine is s cleaned (render.Clean) with its runs of white space,
+// oneLine is s cleaned (view.Clean) with its runs of white space,
 // newlines and tabs among them, made one space, and cut to limit
 // columns of the terminal, a wide character two, ending "…".
 func oneLine(s string, limit int) string {
-	s = strings.Join(strings.Fields(render.Clean(s)), " ")
+	s = strings.Join(strings.Fields(view.Clean(s)), " ")
 	if ansi.StringWidth(s) > limit {
 		s = strings.TrimRight(ansi.Truncate(s, limit-1, ""), " ") + "…"
 	}
@@ -1205,7 +1206,7 @@ func oneLine(s string, limit int) string {
 
 func showAssembly(w io.Writer, info agent.Info) {
 	for _, l := range assemblyLines(info) {
-		fmt.Fprintln(w, render.Clean(l))
+		fmt.Fprintln(w, view.Clean(l))
 	}
 }
 
@@ -1218,6 +1219,6 @@ func showPending(w io.Writer, t agentturn.Control, why string) {
 	}
 	fmt.Fprintf(w, "[%s; %d tool call(s) unanswered, answered on the next prompt]\n", why, len(pending))
 	for _, p := range pending {
-		fmt.Fprintf(w, "  ⏸ %s\n", render.Clean(agent.Describe(p)))
+		fmt.Fprintf(w, "  ⏸ %s\n", view.Clean(agent.Describe(p)))
 	}
 }
