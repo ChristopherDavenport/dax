@@ -258,10 +258,12 @@ func (c cleanString) Write(b []byte) (int, error) {
 // for a stream that arrives in chunks, a child's standard error or a
 // server's diagnostics: a character cut between two writes is held
 // back until the write that completes it, where cleaning each chunk on
-// its own would show it as two U+FFFD. Close writes a character the
-// stream ended inside as one U+FFFD. It may be written from several
-// goroutines.
-func CleanWriter(w io.Writer) io.WriteCloser { return &cleanStream{w: w} }
+// its own would show it as two U+FFFD. A held start the next write does
+// not continue is written as one U+FFFD before that write, so it never
+// joins what follows. A character the stream ends inside is dropped:
+// none of the streams dax cleans says when it ends, so give each
+// process its own writer. It may be written from several goroutines.
+func CleanWriter(w io.Writer) io.Writer { return &cleanStream{w: w} }
 
 type cleanStream struct {
 	mu   sync.Mutex
@@ -272,29 +274,22 @@ type cleanStream struct {
 func (c *cleanStream) Write(b []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var lead string
 	buf := append(c.held, b...)
+	if len(c.held) > 0 && len(b) > 0 && utf8.RuneStart(b[0]) {
+		// The held start can never be completed: it is one cut
+		// character.
+		lead, buf = string(utf8.RuneError), b
+	}
 	cut := len(buf) - partialTail(buf)
 	c.held = append([]byte(nil), buf[cut:]...)
-	if cut == 0 {
+	if lead == "" && cut == 0 {
 		return len(b), nil
 	}
-	if _, err := io.WriteString(c.w, view.Clean(string(buf[:cut]))); err != nil {
+	if _, err := io.WriteString(c.w, lead+view.Clean(string(buf[:cut]))); err != nil {
 		return 0, err
 	}
 	return len(b), nil
-}
-
-// Close writes what is held, a character the stream ended inside, as
-// U+FFFD. It does not close w.
-func (c *cleanStream) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.held) == 0 {
-		return nil
-	}
-	c.held = nil
-	_, err := io.WriteString(c.w, string(utf8.RuneError))
-	return err
 }
 
 // partialTail is how many bytes at the end of b begin a UTF-8 character

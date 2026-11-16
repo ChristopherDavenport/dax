@@ -37,7 +37,9 @@ func TestClean(t *testing.T) {
 
 // A character a pipe delivers in two chunks reaches the terminal whole
 // through CleanWriter, an escape before it in the same chunk or not
-// (review L5); one the stream ends inside is U+FFFD at Close.
+// (review L5). A start held back that the next write does not
+// continue is one U+FFFD before it, so it never joins what follows; one
+// the stream ends inside is dropped.
 func TestCleanWriterJoinsACharacterSplitAcrossWrites(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -47,7 +49,9 @@ func TestCleanWriterJoinsACharacterSplitAcrossWrites(t *testing.T) {
 		{"two bytes", []string{"caf\xc3", "\xa9 ok"}, "café ok"},
 		{"after an escape", []string{"\x1b[2Jcaf\xc3", "\xa9"}, "[2Jcafé"},
 		{"four bytes over three writes", []string{"a\xf0\x9f", "\x98", "\x80b"}, "a😀b"},
-		{"cut at the end", []string{"x\xe6\x97"}, "x\uFFFD"},
+		{"cut at the end", []string{"x\xe6\x97"}, "x"},
+		{"cut, then text", []string{"x\xe2\x82", "hello"}, "x\uFFFDhello"},
+		{"cut, then another character", []string{"x\xe2", "é"}, "x\uFFFDé"},
 		{"invalid", []string{"x\xff", "y"}, "x\uFFFDy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,9 +61,6 @@ func TestCleanWriterJoinsACharacterSplitAcrossWrites(t *testing.T) {
 				if n, err := w.Write([]byte(c)); err != nil || n != len(c) {
 					t.Fatalf("Write(%q) = %d, %v", c, n, err)
 				}
-			}
-			if err := w.Close(); err != nil {
-				t.Fatal(err)
 			}
 			if out.String() != tc.want {
 				t.Errorf("wrote %q, want %q", out.String(), tc.want)

@@ -2129,18 +2129,22 @@ func mcpServer(ws workspace.Workspace, command string, env []string) (mcpDial, e
 		return nil, err
 	}
 	// A server's diagnostics are text from a program the model may have
-	// chosen; they get the same cleaning as its output. Each Connect
-	// starts the server anew, so one transport serves every start.
-	t := mcpworkspace.CommandTransport(starter, workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})})
-	return func(context.Context) (mcp.Transport, error) { return t, nil }, nil
+	// chosen; they get the same cleaning as its output, through a
+	// cleaner of each start's own, so a character one start's output
+	// ends inside never joins the next's.
+	return func(context.Context) (mcp.Transport, error) {
+		return mcpworkspace.CommandTransport(starter, workspace.Command{Args: fields, Stream: render.CleanWriter(warnings{})}), nil
+	}, nil
 }
 
 // mcpOffered is the dial of the server called name that the workspace
 // offers (workspace.ServerProvider): a box host's unit, started where
 // the box host runs it, its diagnostics cleaned onto dax's stderr.
 func mcpOffered(sp workspace.ServerProvider, name string) mcpDial {
-	t := mcpworkspace.ServerTransport(sp, name, render.CleanWriter(warnings{}))
-	return func(context.Context) (mcp.Transport, error) { return t, nil }
+	// A cleaner of each start's own, as mcpServer's.
+	return func(context.Context) (mcp.Transport, error) {
+		return mcpworkspace.ServerTransport(sp, name, render.CleanWriter(warnings{})), nil
+	}
 }
 
 // mcpTransport is the dial of an MCP server started on this machine

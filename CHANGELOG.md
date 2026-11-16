@@ -69,7 +69,10 @@ versions may break flags and the config file.
   diagnostics or an executor's split across two reads reaches the
   terminal whole, where a control character in the same read made it
   U+FFFD and a stray byte; the cleaner holds back a character cut at
-  the end of a read until the next read completes it.
+  the end of a read until the next read completes it. A cut character
+  the next read does not continue shows as one U+FFFD, and one a
+  process's output ends inside is dropped; each start of an MCP server
+  cleans its output on its own, so nothing of one start joins the next.
 
 - Fixed: a switch of model, by `/model`, plan mode's `plan_model` and
   `act_model` or an attached view, takes the new model's context
