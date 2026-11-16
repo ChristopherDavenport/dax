@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.39 - 2026-11-16
 
 - Fixed: an MCP server's OAuth sign-in no longer cuts the page the
   browser is sent on its redirect: dax ended the callback's server at
