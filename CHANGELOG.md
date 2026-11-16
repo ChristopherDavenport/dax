@@ -87,6 +87,10 @@ versions may break flags and the config file.
   budget and the new model's: after a switch to a larger window you
   fold at the callers' budget, after one to a smaller window they fold
   at yours (#207).
+- Fixed: under `-compact-server` on a provider without a compaction
+  endpoint, a start whose window is unknown builds no compaction, as
+  before; a switch to a model whose window is known then says so and
+  sizes no budget, and the record says none is in force (#207).
 - Changed: a session whose model's window is unknown at the start
   builds its compaction with no budget, so a switch to a model whose
   window is known sizes one; nothing folds for its size until then,

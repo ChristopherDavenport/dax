@@ -306,3 +306,32 @@ func TestASwitchWhileServingCallersKeepsTheSmallerBudget(t *testing.T) {
 		s.Close()
 	}
 }
+
+// Under -compact-server on a provider without the endpoint, a start
+// whose window is unknown builds no compaction; a switch to a model
+// whose window is known then sizes no budget, says why, and records
+// none (review L2).
+func TestASwitchWithoutACompactionRecordsNoBudget(t *testing.T) {
+	ctx := context.Background()
+	o := sizedOptions(options(t, &scripted{}), 0, 0, map[string]int64{"small": 8000})
+	o.CompactServer = true
+	var notes []string
+	o.Log = func(format string, args ...any) { notes = append(notes, fmt.Sprintf(format, args...)) }
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetModel("small"); err != nil {
+		t.Fatal(err)
+	}
+	if z := s.sizes(); z.Compact != 0 || z.Window != 8000 {
+		t.Errorf("after the switch: %+v, want no budget and the window of 8000", z)
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), "no compaction endpoint") {
+		t.Errorf("notes %q, want the missing endpoint said", notes)
+	}
+	data := string(projected(t, o, s))
+	if strings.Contains(data, `"compact_budget":6000`) || !strings.Contains(data, `"window":8000`) {
+		t.Error("want the record to hold the new window and no budget")
+	}
+}

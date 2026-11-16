@@ -48,6 +48,21 @@ type sizing struct {
 	// the session ran then, and share the kit's one compaction with the
 	// person (servingCallers). nil while no caller is served.
 	callers *int
+	// noEndpoint is set when -compact-server found no compaction
+	// endpoint, so no budget is sized; said once a switch finds a
+	// window (noCompaction).
+	noEndpoint, said bool
+}
+
+// noCompaction notes that the session's compaction, sized by the
+// window, could not be built (-compact-server on a provider without
+// the endpoint): its budget stays 0, recorded as off.
+func (s *Session) noCompaction() {
+	s.sizing.mu.Lock()
+	defer s.sizing.mu.Unlock()
+	s.sizing.noEndpoint = true
+	s.sizing.now.CompactFrom = ""
+	s.opts.CompactFrom = ""
 }
 
 // servingCallers notes that A2A callers run on the session's model and
@@ -121,6 +136,10 @@ func (s *Session) resize(ctx context.Context, model string) {
 			held, now.Compact = b != now.Compact, b
 		}
 	}
+	if s.sizing.noEndpoint && window > 0 && !s.sizing.said {
+		s.sizing.said = true
+		s.opts.log("[-compact-server: this provider has no compaction endpoint, so no compaction budget is sized for %s's %d-token context window]", model, window)
+	}
 	if now == was {
 		s.sizing.mu.Unlock()
 		return
@@ -130,6 +149,11 @@ func (s *Session) resize(ctx context.Context, model string) {
 	if now.Compact != was.Compact {
 		switch err := s.Kit.SetCompactionBudget(now.Compact); {
 		case errors.Is(err, agentkit.ErrNoCompaction):
+			// Nothing compacts, so no budget is in force or recorded.
+			s.sizing.mu.Lock()
+			now.Compact, now.CompactFrom = 0, ""
+			s.sizing.now = now
+			s.sizing.mu.Unlock()
 		case err != nil:
 			fmt.Fprintf(warnings{}, "dax: compaction budget for %s: %v\n", model, err)
 		case held:

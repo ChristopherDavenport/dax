@@ -1218,10 +1218,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if o.CompactServer {
 			// A budget of 0 sized by the window builds no compaction on
 			// a provider without the endpoint, as before.
+			// The budget then stays 0 through a switch, which says why
+			// (window.go).
 			if c, ok := model.(compact.Compactor); ok {
 				kopts = append(kopts, agentkit.WithCompactor(c, o.Compact, compact.WithPin(s.tasks.pin)), fold)
 			} else if o.Compact > 0 {
 				return nil, errors.New("-compact-server: this provider has no compaction endpoint")
+			} else {
+				s.noCompaction()
 			}
 		} else {
 			// The kit asks the summary under the agent's reasoning, which
