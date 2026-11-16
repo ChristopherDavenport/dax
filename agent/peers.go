@@ -34,7 +34,10 @@ import (
 // last one goes while it waits it is given up: the policy's question
 // becomes a refusal, never an allow. Its ToolRecorder is nil;
 // PeerRecord.Attach routes a run's records to the conversation's
-// session.
+// session. The conversations keep the model it names; the kit's
+// compaction, which they share with the person, is held from then on
+// to the smaller of their model's budget and the one a switch of the
+// person's sizes (SetModel).
 //
 // Its calls, and its sub-agents', are decided by the session's engine
 // held to the stricter of the default permission mode and the person's
@@ -44,6 +47,7 @@ import (
 // The conversations share the workspace with the session, and with each
 // other, as parallel sub-agents do.
 func (s *Session) PeerConfig() agentturn.Config {
+	s.servingCallers()
 	cfg := s.ag.Config()
 	cfg.ToolRecorder = nil
 	// The person's memory is not a caller's: the store reads empty on

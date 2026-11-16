@@ -5,6 +5,117 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies, in one step: openresponses and its anthropic and
+  gemini providers v0.0.21, up from v0.0.20; agentsession v0.0.40, up
+  from v0.0.39; agentturn, agentturn/session, front/a2a and tools/a2a
+  v0.0.41, up from v0.0.40; agentmemory v0.0.14, up from v0.0.13;
+  agenteval v0.0.17, up from v0.0.16; agentkit v0.0.20, up from
+  v0.0.19; agentconsole v0.0.18, up from v0.0.17; anthropic-sdk-go
+  v1.84.0, up from v1.78.0, and genai v1.77.0, up from v1.72.0, the
+  versions the providers require. What changes for you:
+  - An answer the provider ended incomplete with an empty reason ends
+    the run cut at the output limit, where it ended done: `-p` exits
+    7 and `-result` names `cut` with cause `max_output_tokens`, and
+    the terminal client says the answer was cut (agentturn v0.0.41).
+  - After `/model`, or plan mode's `plan_model` and `act_model`, the
+    next compaction's summary is asked of the model the session now
+    runs, under `-compact-server` too, where it was always asked of
+    the model the session started with; the local summary is still
+    asked at reasoning effort none, fitted to that model (agentkit
+    v0.0.20).
+  - A session with dax-memory and no `memory.index_scopes` no longer
+    records `memory_read` taken away on its first request: the tool is
+    offered only while the conversation's last render left the block
+    out (agentkit v0.0.20).
+  - The terminal client drops control characters and bidirectional
+    formatting characters from text it did not write before drawing
+    it: a carriage return or an escape sequence in a tool's output or
+    a call's subject can no longer draw over the permission panel, and
+    a panel's question, subject and address are cut to three rows,
+    which ctrl+o expands (agentconsole v0.0.18, agentconsole#56).
+  - A Gemini response that ends with finish reason `CONTINUATION`
+    still fails with `model_error`, code `continuation`, after one
+    request, as before: the gemini provider turns off the SDK's
+    automatic continuation, which genai v1.74 turned on unbounded.
+  - anthropic-sdk-go records a span for each API call and sends trace
+    headers when a program registers a global OpenTelemetry tracer
+    provider or propagator. dax registers neither, so nothing is
+    traced or sent; a program built on `dax.Main` that registers them
+    gets the spans, which `ANTHROPIC_OPEN_TELEMETRY=false` turns off.
+  - The chatcompletions provider and Gemini request logprobs only on
+    the `message.output_text.logprobs` include, and each provider
+    reports the service tier that served a response. dax asks for
+    neither.
+
+- Changed: an extension whose `Kit` options set
+  `agentkit.WithAfterToolCall` no longer fails the session's start:
+  agentkit v0.0.20 chains the option, so its hook runs on the main
+  agent after every extension's `AfterToolCall`, each once a call.
+  `extension.Extension.AfterToolCall` is still the way to reach the
+  sub-agents too (agentkit#139).
+
+- Changed: dax cleans text it did not write with agentconsole's
+  `view.Clean`, the one cleaner the terminal client uses, where it had
+  its own with the same set of characters: the REPL, `-p`, ACP's
+  titles, the start lines, notices, errors and the status line. What
+  reaches you is the same, but for a byte that is not UTF-8, which is
+  now shown as U+FFFD where it was passed on as it came unless a
+  control character was beside it. The status line's segments and the
+  `@` completions are cleaned as one row (`view.CleanLine`), a newline
+  or tab in them a space.
+- Fixed: a character a child's standard error, an MCP server's
+  diagnostics or an executor's split across two reads reaches the
+  terminal whole, where a control character in the same read made it
+  U+FFFD and a stray byte; the cleaner holds back a character cut at
+  the end of a read until the next read completes it. A cut character
+  the next read does not continue shows as one U+FFFD, and one a
+  process's output ends inside is dropped; each start of an MCP server
+  cleans its output on its own, so nothing of one start joins the next.
+
+- Fixed: a switch of model, by `/model`, plan mode's `plan_model` and
+  `act_model` or an attached view, takes the new model's context
+  window (the vendor's, under your `context_window` for it and the
+  project's), and a compaction budget sized from the window is sized
+  again from the new one from the next request, and said; a `-compact`
+  budget stays. A budget sized for a 200k window no longer outlives a
+  switch to a 32k model. `-context-window` is the start model's alone.
+  The next fold's summary is asked of the new model (agentkit v0.0.20).
+  Under `dax serve -a2a` the callers stay on the start model and share
+  the session's compaction, so a switch applies the smaller of their
+  budget and the new model's: after a switch to a larger window you
+  fold at the callers' budget, after one to a smaller window they fold
+  at yours (#207).
+- Fixed: under `-compact-server` on a provider without a compaction
+  endpoint, a start whose window is unknown builds no compaction, as
+  before; a switch to a model whose window is known then says so and
+  sizes no budget, and the record says none is in force (#207).
+- Changed: a session whose model's window is unknown at the start
+  builds its compaction with no budget, so a switch to a model whose
+  window is known sizes one; nothing folds for its size until then,
+  but `/compact` folds, where it said compaction was off, and so does
+  the loop's retry after a context-length refusal (#207).
+- Changed: a session whose window is unknown at the start records
+  `budget_from: "window"` with a budget of 0 in `dax:context_from`,
+  where it recorded `off`: its compaction is built and folds when
+  asked (#207).
+- Added: a change of the settings that shape requests, by a switch of
+  model, is recorded where it happens (a change of where the window
+  came from alone is not), as a `custom` entry, `ns` `dax`, holding
+  the new `dax.context` and `dax:context_from`; so is a resume under
+  settings other than those the record last had, where the record
+  said nothing (agentsession RFC 0001, Header) (#207).
+- Fixed: the terminal client's status line shows the context used
+  against the window of the model the session switched to, where it
+  showed nothing for a model whose window only its vendor reports
+  (#207).
+- Changed: `agent.Session.ContextWindow`, the window the session
+  resolved for the model it now runs (#207).
+- Changed: `agent.Options.WindowOf`, the window of a model by name,
+  which a switch of model sizes the context by; nil keeps the context
+  the session opened with (#207).
+
 ## v0.0.37 - 2026-11-15
 
 - Dependencies, in one step: agentturn, agentturn/session, front/a2a

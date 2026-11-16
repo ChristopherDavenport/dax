@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
@@ -21,7 +22,6 @@ import (
 	"github.com/ChristopherDavenport/dax/facts/factspolicy"
 	"github.com/ChristopherDavenport/dax/internal/executor"
 	"github.com/ChristopherDavenport/dax/internal/prompt"
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -505,5 +505,5 @@ func (s *Session) systemPrompt(except ...string) string {
 // may carry (a card's URL, a server's status line), whichever extension
 // it is, since the note goes straight to the user's terminal.
 func logText(format string, args ...any) string {
-	return render.Clean(fmt.Sprintf(format, args...))
+	return view.Clean(fmt.Sprintf(format, args...))
 }

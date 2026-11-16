@@ -42,6 +42,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	wstunnel "github.com/ChristopherDavenport/agentworkspace/tunnel"
 
@@ -273,7 +274,7 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 		// and nothing is served to a hub that cannot answer it. What it
 		// does not do is bind the connection.
 		u, _ := neturl.Parse(w.connect)
-		fmt.Fprintln(out, "dax workspace: note: ws:// is not encrypted; the hub must prove it holds the token before anything is served, which holds behind ssh -o ExitOnForwardFailure=yes -R against a user of this host who takes "+render.Clean(u.Host)+", but not against one who can also reach the hub some other way and relay to it: then use wss:// with -tls-ca")
+		fmt.Fprintln(out, "dax workspace: note: ws:// is not encrypted; the hub must prove it holds the token before anything is served, which holds behind ssh -o ExitOnForwardFailure=yes -R against a user of this host who takes "+view.Clean(u.Host)+", but not against one who can also reach the hub some other way and relay to it: then use wss:// with -tls-ca")
 	}
 	ws, err := w.open()
 	if err != nil {
@@ -281,7 +282,7 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 	}
 	closed := make(chan struct{})
 	closeWS := func() { ws.Close(); close(closed) }
-	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" to the hub at "+render.Clean(w.connect)+", which may "+scopeList(w.scopes))
+	fmt.Fprintln(out, "dax workspace: serving "+view.Clean(ws.Root())+" to the hub at "+view.Clean(w.connect)+", which may "+scopeList(w.scopes))
 	w.sayOffered(out)
 	fmt.Fprintln(out, "token: $"+config.TunnelTokenEnv)
 
@@ -298,7 +299,7 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 	watch := &dialWatch{base: hc.Transport, stop: cancelServe}
 	hc.Transport = watch
 	notTheHub := func(err error) error {
-		return fmt.Errorf("whatever answered %s is not the session's hub: it could not prove it holds $%s, so nothing was served to it, the token was not exposed, and this run stops rather than dial it again. Another user of this host may hold the port: one who fetched a nonce from the hub while the forward was up can replay this upgrade within %s, so wait that long, or restart the session's hub, before you bring the ssh -R forward back; rotate $%s only if it may have leaked some other way (%w: %w)", render.Clean(w.connect), config.TunnelTokenEnv, authn.NonceLifetime, config.TunnelTokenEnv, wstunnel.ErrHubProof, err)
+		return fmt.Errorf("whatever answered %s is not the session's hub: it could not prove it holds $%s, so nothing was served to it, the token was not exposed, and this run stops rather than dial it again. Another user of this host may hold the port: one who fetched a nonce from the hub while the forward was up can replay this upgrade within %s, so wait that long, or restart the session's hub, before you bring the ssh -R forward back; rotate $%s only if it may have leaked some other way (%w: %w)", view.Clean(w.connect), config.TunnelTokenEnv, authn.NonceLifetime, config.TunnelTokenEnv, wstunnel.ErrHubProof, err)
 	}
 	header := func(ctx context.Context) (http.Header, error) {
 		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -309,7 +310,7 @@ func (w *workspaceServer) dial(ctx context.Context) error {
 			// An answer that rules a session's hub of this dax out: no
 			// redial changes it. One a hub gives for a while (5xx, 429,
 			// 408, ErrNonceLater) is a failed dial, tried again.
-			watch.halt(fmt.Errorf("asking %s for a nonce: %w; it is not a session's hub of dax %s or later (an older one: upgrade both)", render.Clean(w.connect), err, proofSince))
+			watch.halt(fmt.Errorf("asking %s for a nonce: %w; it is not a session's hub of dax %s or later (an older one: upgrade both)", view.Clean(w.connect), err, proofSince))
 			return nil, err
 		case err != nil:
 			return nil, err
@@ -681,13 +682,13 @@ func startHub(s config.HubSettings, token, prog string, out io.Writer) (*hostedH
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: serveIdle}
 	go srv.Serve(ln)
 	h := &hostedHub{URL: scheme + "://" + servedHost(ln.Addr()) + config.TunnelPath, s: s, hub: hub, srv: srv}
-	h.connect = config.TunnelTokenEnv + "=... " + render.Clean(prog) + " workspace -connect " + render.Clean(h.URL) + " -name " + s.Name
+	h.connect = config.TunnelTokenEnv + "=... " + view.Clean(prog) + " workspace -connect " + view.Clean(h.URL) + " -name " + s.Name
 	if s.Field == config.ServersField+".hub" {
 		// A servers workspace is granted its servers alone, which the
 		// session requires.
 		h.connect += " -scopes servers -servers FILE"
 	}
-	fmt.Fprintf(out, "%s: waiting up to %s for workspace %s at %s; on its host run: %s\n", s.Setting(), s.Wait, s.Name, render.Clean(h.URL), h.connect)
+	fmt.Fprintf(out, "%s: waiting up to %s for workspace %s at %s; on its host run: %s\n", s.Setting(), s.Wait, s.Name, view.Clean(h.URL), h.connect)
 	return h, nil
 }
 
@@ -701,7 +702,7 @@ func (h *hostedHub) await(ctx context.Context) error {
 	ws, err := h.hub.Workspace(wctx, h.s.Name, wsremote.WithTimeout(hubRequestTimeout))
 	if err != nil {
 		if errors.Is(err, wstunnel.ErrNotConnected) && ctx.Err() == nil {
-			return fmt.Errorf("%s: workspace %s did not connect to %s within %s; on its host run: %s", h.s.Setting(), h.s.Name, render.Clean(h.URL), h.s.Wait, h.connect)
+			return fmt.Errorf("%s: workspace %s did not connect to %s within %s; on its host run: %s", h.s.Setting(), h.s.Name, view.Clean(h.URL), h.s.Wait, h.connect)
 		}
 		return fmt.Errorf("%s: %w", h.s.Setting(), err)
 	}
@@ -746,5 +747,5 @@ func listenHub(setting, addr string, cfg *tls.Config) (net.Listener, string, err
 // session's hub: remote, its name, the hub, its root, and whether it
 // can start a process.
 func hubLine(h *hostedHub, name string) string {
-	return "remote " + name + " through the hub at " + render.Clean(h.URL) + " · " + render.Clean(h.Workspace.Root()) + startsNoProcess(h.Workspace)
+	return "remote " + name + " through the hub at " + view.Clean(h.URL) + " · " + view.Clean(h.Workspace.Root()) + startsNoProcess(h.Workspace)
 }

@@ -249,22 +249,34 @@ func TestTwoExtensionsAfterToolHooksBothRun(t *testing.T) {
 	}
 }
 
-// An extension that sets agentkit.WithAfterToolCall through Kit would
-// replace every extension's after-tool hook, so the session refuses to
-// start, naming it and the extension whose hook it would replace (#187).
-func TestAKitAfterToolCallFailsTheStart(t *testing.T) {
+// An extension that sets agentkit.WithAfterToolCall through Kit adds
+// its hook beside the extensions' AfterToolCall hooks, which agentkit
+// chains (agentkit#139): each runs once a call, the extensions' first,
+// where the session refused to start (#187).
+func TestAKitAfterToolCallRunsBesideTheExtensions(t *testing.T) {
+	ctx := context.Background()
 	var seen []string
-	rogue := extension.Extension{Name: "rogue", Kit: func(extension.Env) ([]agentkit.Option, error) {
-		return []agentkit.Option{agentkit.WithAfterToolCall(func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error) { return nil, nil })}, nil
+	kitHook := extension.Extension{Name: "kit", Kit: func(extension.Env) ([]agentkit.Option, error) {
+		h, _ := afterExt("kit", &seen).AfterToolCall(nil)
+		return []agentkit.Option{agentkit.WithAfterToolCall(h)}, nil
 	}}
-	o := options(t, &scripted{})
-	o.Extensions = append(slices.Clone(o.Extensions), afterExt("first", &seen), rogue)
-	s, err := New(context.Background(), o)
-	if err == nil {
-		s.Close()
-		t.Fatal("the session started")
+	o := options(t, &scripted{calls: [][2]string{{"ls", `{}`}}})
+	o.Extensions = append(slices.Clone(o.Extensions), afterExt("first", &seen), kitHook)
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "extension rogue") || !strings.Contains(err.Error(), "extension first's") {
-		t.Errorf("the error %q, want it to name rogue and first", err)
+	defer s.Close()
+	if _, err := promptOn(ctx, s, "go", nil); err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	for _, it := range s.Agent().State().Transcript {
+		if o, ok := it.(*openresponses.FunctionCallOutput); ok {
+			out = o.Output.String()
+		}
+	}
+	if !strings.HasSuffix(out, " first kit") || len(seen) != 2 || seen[1] != "kit saw first" {
+		t.Errorf("the output %q, the hooks saw %q: want each once, the extension's then the kit's", out, seen)
 	}
 }

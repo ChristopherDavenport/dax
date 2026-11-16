@@ -180,10 +180,10 @@ type Extension struct {
 	// Env.ChildAfterToolCall, and may replace it, as agentturn's
 	// AfterToolCall does. The session runs every extension's in the
 	// extensions' order, each seeing the result the one before it
-	// left. It is built over the session as the kit options are. An
-	// extension sets it here and never through Kit: agentkit's
-	// WithAfterToolCall keeps one hook, so a Kit option that sets one,
-	// which would replace every extension's, fails the start.
+	// left. It is built over the session as the kit options are. A
+	// hook set through Kit with agentkit's WithAfterToolCall, which
+	// chains, runs after these on the main agent alone; a sub-agent
+	// takes only the hooks set here.
 	AfterToolCall func(Env) (func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error), error)
 
 	// AfterRun is called after each run of the person's main agent

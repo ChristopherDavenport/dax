@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -15,7 +16,6 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/ext/memory"
 	"github.com/ChristopherDavenport/dax/ext/skills"
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -94,9 +94,9 @@ type commandResult struct {
 // would act on.
 func command(ctx context.Context, t agentturn.Control, ctl agent.Controls, line string, running bool) (commandResult, error) {
 	r, err := runCommand(ctx, t, ctl, line, running)
-	r.out = render.Clean(r.out)
+	r.out = view.Clean(r.out)
 	if err != nil {
-		err = errors.New(render.Clean(err.Error()))
+		err = errors.New(view.Clean(err.Error()))
 	}
 	return r, err
 }
@@ -461,7 +461,7 @@ func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openres
 			seen[p] = true
 			img, err := im.Image(ctx, p)
 			if err != nil {
-				return nil, errors.New(render.Clean("@" + p + ": " + err.Error()))
+				return nil, errors.New(view.Clean("@" + p + ": " + err.Error()))
 			}
 			msg.Content = append(msg.Content, img)
 		}
@@ -473,7 +473,7 @@ func typedItems(ctx context.Context, ctl agent.Controls, text string) ([]openres
 	}
 	more, err := m.MCPMentions(ctx, text)
 	if err != nil {
-		return nil, errors.New(render.Clean(err.Error()))
+		return nil, errors.New(view.Clean(err.Error()))
 	}
 	return append(items, more...), nil
 }
@@ -567,7 +567,7 @@ func permissionLines(info agent.Info) []string {
 		list("  ", g.Allow, g.Ask, g.Deny)
 	}
 	for i, l := range lines {
-		lines[i] = render.Clean(l)
+		lines[i] = view.Clean(l)
 	}
 	return lines
 }

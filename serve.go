@@ -37,6 +37,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentsession/remote"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/front/control"
@@ -45,7 +46,6 @@ import (
 	"github.com/ChristopherDavenport/dax/agent"
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/private"
-	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // stopSignals stop dax serve, dax execute and dax workspace cleanly:
@@ -174,7 +174,7 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		}
 	}
 	h, closeStore := serveHandler(sess, f.info.Dir, token, peers, func(err error) {
-		fmt.Fprintln(out, render.Clean("dax serve: "+err.Error()))
+		fmt.Fprintln(out, view.Clean("dax serve: "+err.Error()))
 	})
 	// Questions and held calls wait for whoever attaches, for as long
 	// as the session is served.
@@ -185,21 +185,21 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 	go func() { served <- srv.Serve(ln) }()
 
 	for _, l := range banner(f.info, si) {
-		fmt.Fprintln(out, render.Clean(l))
+		fmt.Fprintln(out, view.Clean(l))
 	}
-	fmt.Fprintln(out, "serving at "+render.Clean(url))
+	fmt.Fprintln(out, "serving at "+view.Clean(url))
 	if peers != nil {
 		at := url
 		if f.a2aURL != "" {
 			at = strings.TrimSuffix(f.a2aURL, "/")
 		}
-		line := "a2a: " + render.Clean(at+a2aPath) + ", card at " + render.Clean(at+a2asrv.WellKnownAgentCardPath)
+		line := "a2a: " + view.Clean(at+a2aPath) + ", card at " + view.Clean(at+a2asrv.WellKnownAgentCardPath)
 		if f.a2aEscalate {
 			line += "; the policy's questions go to the caller"
 		}
 		fmt.Fprintln(out, line)
 		if a2aTokenFile != "" {
-			fmt.Fprintln(out, "a2a token: "+render.Clean(a2aTokenFile))
+			fmt.Fprintln(out, "a2a token: "+view.Clean(a2aTokenFile))
 		} else {
 			fmt.Fprintln(out, "a2a token: $"+a2aTokenEnv)
 		}
@@ -211,11 +211,11 @@ func (f *serveFront) Run(ctx context.Context, sess *agent.Session) error {
 		ca = "[-tls-ca <the certificate's CA>] "
 	}
 	if tokenFile != "" {
-		fmt.Fprintln(out, "token: "+render.Clean(tokenFile))
-		fmt.Fprintln(out, "attach: "+render.Clean(f.info.Name)+" attach "+ca+"-token-file "+render.Clean(tokenFile)+" "+render.Clean(url))
+		fmt.Fprintln(out, "token: "+view.Clean(tokenFile))
+		fmt.Fprintln(out, "attach: "+view.Clean(f.info.Name)+" attach "+ca+"-token-file "+view.Clean(tokenFile)+" "+view.Clean(url))
 	} else {
 		fmt.Fprintln(out, "token: $"+serveTokenEnv)
-		fmt.Fprintln(out, "attach: "+serveTokenEnv+"=... "+render.Clean(f.info.Name)+" attach "+ca+render.Clean(url))
+		fmt.Fprintln(out, "attach: "+serveTokenEnv+"=... "+view.Clean(f.info.Name)+" attach "+ca+view.Clean(url))
 	}
 	if f.ready != nil {
 		f.ready(url)

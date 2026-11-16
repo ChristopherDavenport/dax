@@ -18,11 +18,11 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentredact/secrets"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
-	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // MinSecretBytes is the shortest secret value taken: a shorter one
@@ -50,7 +50,7 @@ func Filter(_ string, values map[string]string, r io.Reader) io.Reader {
 
 // Offering is workspace.Offering whose secret-holding servers' standard
 // error is, past the Filter, cleaned of what would act on a terminal
-// (render.Clean) and then redacted again, a line at a time: control
+// (view.Clean) and then redacted again, a line at a time: control
 // characters a server puts inside a value ("SEC\aRET") cannot carry it
 // past the filter to be joined up by the cleaning a reader of standard
 // error applies.
@@ -148,7 +148,7 @@ func (c *cleanRedact) Write(p []byte) (int, error) {
 		}
 		line := string(c.buf[:i])
 		c.buf = c.buf[i+1:]
-		if _, err := io.WriteString(c.out, c.r.String(render.Clean(line))+"\n"); err != nil {
+		if _, err := io.WriteString(c.out, c.r.String(view.Clean(line))+"\n"); err != nil {
 			return len(p), err
 		}
 	}
@@ -171,7 +171,7 @@ func (c *cleanRedact) flushLocked() error {
 	}
 	line := string(c.buf)
 	c.buf = nil
-	_, err := io.WriteString(c.out, c.r.String(render.Clean(line)))
+	_, err := io.WriteString(c.out, c.r.String(view.Clean(line)))
 	return err
 }
 

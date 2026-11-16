@@ -610,8 +610,8 @@ no other account could have written it.
 | `-agents-md-global 'a.md:b.md'` | overrides `agents_md_global`, split on `:` as `PATH` is, so a path may hold a space; `""` clears it |
 | `-bare` | a run that does not depend on your home directory, for an eval or a comparison: leaves out your config (and with it your MCP servers, peers and rules), `~/.dax/AGENTS.md`, `agents_md_global`, skills and memory. The repository's `AGENTS.md` files and `.dax/config.json` stay, as part of the task. `-config`, `-agents-md`, `-agents-md-global`, `-skills` or `-memory` beside it brings that one source back. Your config is not even parsed unless `-config` brings it back, and `~/.dax/mcp-trust.json` is neither read nor written: a project's MCP servers start only with `-trust-mcp`, for that run. The session's header records the run as bare and what it left out (`dax.profile`) |
 | `-agents-md`, `-skills`, `-trust-skills` | the AGENTS.md files (`~/.dax/AGENTS.md`, `agents_md_global` and the repository's chain; an `AGENTS.md` below where the session starts reaches the model, and a sub-agent, the turn after a file tool touches a path in its directory or a `bash` line reads or writes one (`cat svc/main.go`, a redirect), once, as a message the record holds as composed from that file, never as your words), skills, and a skill's `allowed-tools` running unasked until the next message, for skills in `~/.dax/skills` and `skills_dirs` only, never the repository's |
-| `-context-window N` | the main model's window for this run, over `context_window` and what the vendor says |
-| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and compaction is off when it does not; `-compact 0` turns it off. Every message the record holds as yours (a prompt, a steer, a note with an answer you typed; see [Sessions](#sessions)) up to 8 KiB is kept verbatim through every fold, after the summary, the newest of them up to a quarter of N in all, so the task's exact words outlive it; so is `-p`'s prompt, which claims nobody, and the request a prompt template or an MCP prompt sent, which is composed but is what you chose to send, after `-resume` or a head move too. The compaction entry records what it kept. A longer one, a pasted log, and any other message dax composed are folded like the rest |
+| `-context-window N` | the start model's window for this run, over `context_window` and what the vendor says; a model `/model` or plan mode switches to takes its own window, the vendor's or `context_window`'s, and the start model this one again; under `dax serve -a2a` the callers stay on the start model, and its budget bounds the one a switch sizes |
+| `-compact N`, `-compact-server` | fold the transcript above N estimated tokens, locally or through the server; without `-compact`, N is three quarters of the model's context window when the vendor reports the window, and sized again from the new model's on a switch of model; with no window known nothing folds for its size until a switch to a model whose window is known, but `/compact` and a context-length refusal still fold. `-compact N` is kept through a switch, and `-compact 0` turns compaction off. Under `dax serve -a2a` the budget a switch sizes is held to the A2A callers' too (see [Serving peers](#serving-peers-dax-serve--a2a)). Every message the record holds as yours (a prompt, a steer, a note with an answer you typed; see [Sessions](#sessions)) up to 8 KiB is kept verbatim through every fold, after the summary, the newest of them up to a quarter of N in all, so the task's exact words outlive it; so is `-p`'s prompt, which claims nobody, and the request a prompt template or an MCP prompt sent, which is composed but is what you chose to send, after `-resume` or a head move too. The compaction entry records what it kept. A longer one, a pasted log, and any other message dax composed are folded like the rest |
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
@@ -1763,7 +1763,12 @@ the input until the next line, and an error gives the line back to edit.
   terminal client `@` completes the servers' resources. `dax attach`
   sends the line as typed.
 - `/model name`, `/think on|off`: the model and reasoning from the next
-  request.
+  request. A switch of model, by `/model`, plan mode's `plan_model` and
+  `act_model` or an attached view, also takes the new model's context
+  window (the vendor's, under `context_window` for it), and a
+  compaction budget sized from the window is sized again from the new
+  one and said; a `-compact` budget stays. The next fold's summary is
+  asked of the new model.
 - `/memory undo` reverts the latest background memory pass of this
   project's (see [The background pass](#the-background-pass)), each
   entry back to what it held unless changed since; again, the pass
@@ -2022,7 +2027,13 @@ dax serve -a2a -listen 127.0.0.1:7878
   served session's model and reasoning as they stood when serve
   started, and its extensions, rules and MCP servers as they are: an
   MCP server added or removed in an attached view is added or removed
-  for the conversations too. Its tools act in the same workspace. The
+  for the conversations too. The conversations and the session share
+  one compaction: while `-a2a` serves, a switch of model by an
+  attached view applies the smaller of the budget sized for the model
+  the callers run and the one sized for the new model, so neither runs
+  past its window; after a switch to a smaller window the callers fold
+  at its budget, earlier than their model needs, and after one to a
+  larger window you fold at theirs. Its tools act in the same workspace. The
   conversations and the served session run at the same time, on the
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in
@@ -2532,9 +2543,18 @@ interface, and the rest of dax cannot tell them apart:
   default included, so two sessions that differ only in one of them
   compare as different configurations; and where each came
   from in `dax:context_from` (`budget_from`: `flag`, `window`, three
-  quarters of the window, or `off`; `window_from`: `vendor:<name>`,
+  quarters of the window, with a budget of 0 when the window is not
+  known, which folds only when asked until a switch of model sizes it,
+  or `off`, when nothing compacts; `window_from`: `vendor:<name>`,
   Ollama's served window, `config`, `project config` or `flag`), which
-  is not a setting. The members that identify a run, its workspace,
+  is not a setting. The header holds them as the session started; a
+  change of `dax.context` during it (a switch of model that changes
+  the window or a budget sized from it, not where the window came
+  from alone) and a resume under settings other than those
+  the record last had are each a `custom` entry, `ns` `dax`, whose data
+  holds the new `dax.context` and `dax:context_from` under those names,
+  as agentsession's RFC 0001 asks. Each fold records the budget and the
+  model it was made under itself. The members that identify a run, its workspace,
   executor, box, servers workspaces and origin, are named `dax:<name>`
   so that a comparison of configurations (agenteval's) leaves them out;
   the settings that shape its requests, `dax.context` and

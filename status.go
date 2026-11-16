@@ -8,18 +8,20 @@ import (
 	"sync"
 
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentturn"
 
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/tool"
 )
 
 // statusSession is what the status line reads of a session: its
-// repository, the model it runs next, and its events, after each tool
-// run of which the repository is read again.
+// repository, the model it runs next and the window it resolved for
+// that model, and its events, after each tool run of which the
+// repository is read again.
 type statusSession interface {
 	Git(ctx context.Context) (tool.Git, error)
 	Model() string
+	ContextWindow() int64
 	Mode() (mode, pending string)
 	Subscribe(fn func(context.Context, agentturn.Event) error) func()
 }
@@ -50,7 +52,7 @@ func newStatus(info frontInfo, sess statusSession) *statusHost {
 func (h *statusHost) line() console.StatusLine {
 	l := h.info.Status.Line()
 	user := userAtHost()
-	dir := render.Clean(tildeHome(h.info.Dir, h.info.Executor == "" && h.info.Workspace == ""))
+	dir := view.CleanLine(tildeHome(h.info.Dir, h.info.Executor == "" && h.info.Workspace == ""))
 	l.Host = map[string]func() console.Segment{
 		"user": func() console.Segment { return console.Segment{Text: user, Color: h.color("user", "0")} },
 		"dir":  func() console.Segment { return console.Segment{Text: dir, Color: h.color("dir", "4")} },
@@ -59,13 +61,22 @@ func (h *statusHost) line() console.StatusLine {
 		"executor": func() console.Segment {
 			if b := elsewhereBanner(h.info); b != "" {
 				_, where, _ := strings.Cut(b, ": ")
-				return console.Segment{Text: render.Clean(where)}
+				return console.Segment{Text: view.CleanLine(where)}
 			}
 			return console.Segment{Text: "here"}
 		},
 	}
 	l.Model = h.sess.Model
-	l.Window = func(model string) int { return int(h.info.Windows[model]) }
+	// The model the session runs has the window it resolved at its
+	// last switch; another, the start's or the config's.
+	l.Window = func(model string) int {
+		if model == h.sess.Model() {
+			if w := h.sess.ContextWindow(); w > 0 {
+				return int(w)
+			}
+		}
+		return int(h.info.Windows[model])
+	}
 	l.Updates = h.updates
 	return l
 }
@@ -82,13 +93,13 @@ func (h *statusHost) gitSegment() console.Segment {
 	case !g.Repo:
 		return console.Segment{}
 	case g.Withheld != "":
-		return console.Segment{Text: "git not read: " + render.Clean(g.Withheld), Color: color("3")}
+		return console.Segment{Text: "git not read: " + view.CleanLine(g.Withheld), Color: color("3")}
 	case g.Branch == "":
 		return console.Segment{}
 	case g.Dirty:
-		return console.Segment{Text: render.Clean(g.Branch) + " ±", Color: color("3")}
+		return console.Segment{Text: view.CleanLine(g.Branch) + " ±", Color: color("3")}
 	}
-	return console.Segment{Text: render.Clean(g.Branch), Color: color("2")}
+	return console.Segment{Text: view.CleanLine(g.Branch), Color: color("2")}
 }
 
 // modeSegment is the permission mode, and the one waiting for the
@@ -100,7 +111,7 @@ func (h *statusHost) modeSegment() console.Segment {
 	if pending != "" {
 		text += " → " + pending
 	}
-	return console.Segment{Text: render.Clean(text), Color: h.color("mode", map[string]string{"acceptEdits": "5", "dontAsk": "3", "bypassPermissions": "1"}[mode])}
+	return console.Segment{Text: view.CleanLine(text), Color: h.color("mode", map[string]string{"acceptEdits": "5", "dontAsk": "3", "bypassPermissions": "1"}[mode])}
 }
 
 // color is a host segment's own color, def, or "" when the config
@@ -181,7 +192,7 @@ func userAtHost() string {
 	}
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
-	return render.Clean(name + "@" + host)
+	return view.CleanLine(name + "@" + host)
 }
 
 // tildeHome is dir with this machine's home shown as ~, when the tools

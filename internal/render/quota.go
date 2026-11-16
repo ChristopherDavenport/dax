@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/openresponses"
 )
 
@@ -67,7 +68,7 @@ func Explain(err error, compact bool) (string, bool) {
 		b.WriteString(": /compact folds the conversation")
 	}
 	b.WriteString(". The full error is in the session's record.")
-	return Clean(b.String()), true
+	return view.Clean(b.String()), true
 }
 
 // quotaMetadata reads OpenRouter's metadata: its remedy_hint and its

@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
 	wsremote "github.com/ChristopherDavenport/agentworkspace/remote"
 	wstunnel "github.com/ChristopherDavenport/agentworkspace/tunnel"
@@ -38,7 +39,6 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/authn"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/offer"
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/tool"
 )
 
@@ -321,7 +321,7 @@ func (w *workspaceServer) sayOffered(out io.Writer) {
 		if len(o.SecretEnv) > 0 {
 			line += " (given $" + strings.Join(o.SecretEnv, ", $") + ", redacted from its output)"
 		}
-		fmt.Fprintln(out, render.Clean(line))
+		fmt.Fprintln(out, view.Clean(line))
 	}
 }
 
@@ -378,7 +378,7 @@ func (w *workspaceServer) run(ctx context.Context) error {
 	go func() { served <- srv.Serve(ln) }()
 
 	url := scheme + "://" + servedHost(ln.Addr())
-	fmt.Fprintln(out, "dax workspace: serving "+render.Clean(ws.Root())+" at "+render.Clean(url)+", which may "+scopeList(w.scopes))
+	fmt.Fprintln(out, "dax workspace: serving "+view.Clean(ws.Root())+" at "+view.Clean(url)+", which may "+scopeList(w.scopes))
 	w.sayOffered(out)
 	ca := ""
 	if scheme == "https" {
@@ -391,13 +391,13 @@ func (w *workspaceServer) run(ctx context.Context) error {
 		env, flag, field = config.ServersWorkspaceTokenEnv, "-servers-workspace", config.ServersField
 	}
 	if tokenFile != "" {
-		fmt.Fprintln(out, "token: "+render.Clean(tokenFile))
-		fmt.Fprintln(out, "connect: "+env+"=\"$(cat "+render.Clean(tokenFile)+")\" "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
+		fmt.Fprintln(out, "token: "+view.Clean(tokenFile))
+		fmt.Fprintln(out, "connect: "+env+"=\"$(cat "+view.Clean(tokenFile)+")\" "+view.Clean(w.name)+" "+flag+" "+view.Clean(url))
 	} else {
 		fmt.Fprintln(out, "token: $"+config.WorkspaceTokenEnv)
-		fmt.Fprintln(out, "connect: "+env+"=... "+render.Clean(w.name)+" "+flag+" "+render.Clean(url))
+		fmt.Fprintln(out, "connect: "+env+"=... "+view.Clean(w.name)+" "+flag+" "+view.Clean(url))
 	}
-	fmt.Fprintln(out, `or in your config: {"`+field+`": {"url": "`+render.Clean(url)+`", "token_env": "`+env+`"`+ca+`}}`)
+	fmt.Fprintln(out, `or in your config: {"`+field+`": {"url": "`+view.Clean(url)+`", "token_env": "`+env+`"`+ca+`}}`)
 	if w.ready != nil {
 		w.ready(url)
 	}
@@ -711,7 +711,7 @@ func workspaceHTTPClient(field, base, caFile string) (*http.Client, error) {
 // project's are refused.
 func workspaceLine(ws workspace.Workspace) string {
 	d := ws.Descriptor()
-	return render.Clean(d.Kind+" "+d.Ref+" · "+d.Root) + startsNoProcess(ws)
+	return view.Clean(d.Kind+" "+d.Ref+" · "+d.Root) + startsNoProcess(ws)
 }
 
 // startsNoProcess is the banner's note on a served workspace that

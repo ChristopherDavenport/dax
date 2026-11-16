@@ -900,9 +900,10 @@ hook that cannot answer refuses the call (it fails closed, as rule 8
 asks). An extension's `AfterToolCall` sees each call's result and may
 replace it: the session composes every extension's, in order, each on
 the result the one before left, for the main agent and, through
-`Env.ChildAfterToolCall`, every sub-agent (`agent/aftertool.go`); since
-agentkit's `WithAfterToolCall` keeps one hook, an extension whose `Kit`
-options set it fails the start. dax-hooks' PostToolUse hooks are its
+`Env.ChildAfterToolCall`, every sub-agent (`agent/aftertool.go`); a
+hook an extension's `Kit` options set with agentkit's
+`WithAfterToolCall`, which chains, runs after them on the main agent
+alone. dax-hooks' PostToolUse hooks are its
 `AfterToolCall`. An extension's `AfterRun` is told, after each run of the person's
 main agent ends and is on the record, what the run did: the tools it
 called, whether one reached an open world (an MCP server's tool, or

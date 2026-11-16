@@ -239,14 +239,10 @@ func extrasOf(o Options, d workspace.Descriptor, beside []ServersBeside) map[str
 			out[headerBox] = raw
 		}
 	}
-	from := o.CompactFrom
-	if o.Compact <= 0 {
-		from = "off"
-	}
 	if raw, err := json.Marshal(contextOf(o)); err == nil {
 		out[headerContext] = raw
 	}
-	if raw, err := json.Marshal(recordedContextFrom{BudgetFrom: from, WindowFrom: o.WindowFrom}); err == nil {
+	if raw, err := json.Marshal(recordedContextFrom{BudgetFrom: budgetFrom(o), WindowFrom: o.WindowFrom}); err == nil {
 		out[headerContextFrom] = raw
 	}
 	if o.Bare != nil {

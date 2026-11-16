@@ -179,6 +179,26 @@ func projected(t *testing.T, o Options, s *Session) []byte {
 	return data
 }
 
+// A session with dax-memory and no index scope records no tool taken
+// away on its first request: memory_read, offered only while the
+// conversation's last render dropped the block, is not in the
+// configuration the recorder writes at the run's start, and not
+// removed from the request either (agentkit#144).
+func TestAMemorySessionsFirstRequestRemovesNoTool(t *testing.T) {
+	ctx := context.Background()
+	o := options(t, &echo.Adapter{})
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "hello", nil); err != nil {
+		t.Fatal(err)
+	}
+	if data := projected(t, o, s); strings.Contains(string(data), "tools_removed") {
+		t.Error("the record holds a tools_removed config entry")
+	}
+}
+
 func TestTheKitAssemblesEveryLayer(t *testing.T) {
 	ctx := context.Background()
 	o := options(t, &echo.Adapter{})

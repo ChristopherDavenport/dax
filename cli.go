@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ChristopherDavenport/agentconsole/client"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agenteval/price"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
@@ -37,7 +38,6 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
 	"github.com/ChristopherDavenport/dax/internal/provider"
-	"github.com/ChristopherDavenport/dax/internal/render"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
 )
@@ -554,7 +554,7 @@ func run(ctx context.Context, args []string, p program) error {
 			}
 			defer h.Close()
 			swHosted = append(swHosted, h)
-			one, line = h.Workspace, "remote "+c.w.Hub.Name+" through the hub at "+render.Clean(h.URL)+" · its servers alone"
+			one, line = h.Workspace, "remote "+c.w.Hub.Name+" through the hub at "+view.Clean(h.URL)+" · its servers alone"
 		} else {
 			served, err := dialWorkspace(ctx, *c.w, c.token)
 			if err != nil {
@@ -562,7 +562,7 @@ func run(ctx context.Context, args []string, p program) error {
 			}
 			defer served.Close()
 			d := served.Descriptor()
-			one, line = served, render.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
+			one, line = served, view.Clean(d.Kind+" "+d.Ref)+" · its servers alone"
 			if a, ok := served.(abandoner); ok {
 				dialed = append(dialed, a)
 			}
@@ -643,10 +643,16 @@ func run(ctx context.Context, args []string, p program) error {
 		// compaction stays off, as before.
 		opts.Compact, opts.CompactFrom = info.CompactBudget(), "window"
 	}
-	opts.Window, opts.WindowFrom = info.ContextWindow, info.WindowFrom
-	if opts.Window > 0 && opts.WindowFrom == "" {
-		opts.WindowFrom = "vendor:" + info.Source
+	opts.Window, opts.WindowFrom = windowOf(info)
+	// A switch of model sizes the context by the new model's window:
+	// the vendor's, under the user's context_window for it and the
+	// project's. -context-window is the start model's alone, so the
+	// start model's window is the one settled on here.
+	describer := modelinfo.Of(opts.Streamer)
+	if m.Describer == nil {
+		describer = nil
 	}
+	opts.WindowOf = windowsByModel(describer, m.Name, info, settings.ContextWindow, settings.ProjectContextWindow)
 	if settings.InstructionsFile != "" {
 		data, err := os.ReadFile(settings.InstructionsFile)
 		if err != nil {
@@ -723,6 +729,33 @@ func run(ctx context.Context, args []string, p program) error {
 	// agentturn's control contract, with dax's controls, as a front over
 	// a wire would.
 	return f.Run(ctx, sess)
+}
+
+// windowsByModel is agent.Options.WindowOf: the window of start, the
+// model the session starts with, as dax settled on it (-context-window
+// included), and of any other model what the vendor says (describer,
+// nil for none) under the user's and the project's context_window.
+func windowsByModel(describer *modelinfo.Streamer, startName string, start modelinfo.Info, user, proj map[string]int64) func(context.Context, string) (int64, string) {
+	return func(ctx context.Context, name string) (int64, string) {
+		if name == startName {
+			return windowOf(start)
+		}
+		var i modelinfo.Info
+		if describer != nil {
+			i, _ = describer.Describe(ctx, name)
+		}
+		return windowOf(i.WithWindow(user[name], proj[name], 0))
+	}
+}
+
+// windowOf is the window info gives and where it came from, the
+// vendor's figure named by its source.
+func windowOf(info modelinfo.Info) (int64, string) {
+	from := info.WindowFrom
+	if info.ContextWindow > 0 && from == "" {
+		from = "vendor:" + info.Source
+	}
+	return info.ContextWindow, from
 }
 
 // windowsOf are the context windows the status line divides by: the
@@ -803,14 +836,14 @@ func runList(ctx context.Context, w io.Writer, root, dir, cfgPath string, f conf
 		for _, b := range agent.ServersWorkspacesOf(s.Header) {
 			servers += "  servers "
 			if b.Name != config.ServersName {
-				servers += render.Clean(b.Name) + "="
+				servers += view.Clean(b.Name) + "="
 			}
-			servers += render.Clean(b.Workspace.Kind + " " + b.Workspace.Ref)
+			servers += view.Clean(b.Workspace.Kind + " " + b.Workspace.Ref)
 		}
 		// Its name (/name) is the person's text, cleaned as any is.
 		name := ""
 		if s.Name != "" {
-			name = "  " + strconv.Quote(render.Clean(s.Name))
+			name = "  " + strconv.Quote(view.Clean(s.Name))
 		}
 		fmt.Fprintf(w, "%s  %s%s  %7d B  %s%s%s\n", s.Header.CreatedAt.Local().Format("2006-01-02 15:04"), s.Header.ID, name, s.Size, s.Path, at, servers)
 	}

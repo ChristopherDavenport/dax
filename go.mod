@@ -4,36 +4,36 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
-	github.com/ChristopherDavenport/agentconsole v0.0.17
-	github.com/ChristopherDavenport/agenteval v0.0.16
-	github.com/ChristopherDavenport/agentkit v0.0.19
-	github.com/ChristopherDavenport/agentmemory v0.0.13
+	github.com/ChristopherDavenport/agentconsole v0.0.18
+	github.com/ChristopherDavenport/agenteval v0.0.17
+	github.com/ChristopherDavenport/agentkit v0.0.20
+	github.com/ChristopherDavenport/agentmemory v0.0.14
 	github.com/ChristopherDavenport/agentpolicy v0.0.20
 	github.com/ChristopherDavenport/agentredact v0.0.4
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.4
-	github.com/ChristopherDavenport/agentsession v0.0.39
+	github.com/ChristopherDavenport/agentsession v0.0.40
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.6
 	github.com/ChristopherDavenport/agenttool v0.0.30
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.30
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.30
-	github.com/ChristopherDavenport/agentturn v0.0.40
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.40
-	github.com/ChristopherDavenport/agentturn/session v0.0.40
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.40
+	github.com/ChristopherDavenport/agentturn v0.0.41
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.41
+	github.com/ChristopherDavenport/agentturn/session v0.0.41
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.41
 	github.com/ChristopherDavenport/agentworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.12
-	github.com/ChristopherDavenport/openresponses v0.0.20
-	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.20
-	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.20
+	github.com/ChristopherDavenport/openresponses v0.0.21
+	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.21
+	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.21
 	github.com/a2aproject/a2a-go v0.3.15
-	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.46.0
-	google.golang.org/genai v1.72.0
+	google.golang.org/genai v1.77.0
 )
 
 require (
@@ -61,7 +61,7 @@ require (
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
@@ -92,9 +92,10 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
-	go.opentelemetry.io/otel v1.44.0 // indirect
-	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.57.0 // indirect

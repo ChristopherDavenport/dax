@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
@@ -24,7 +25,6 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/extension"
-	"github.com/ChristopherDavenport/dax/internal/render"
 )
 
 // ErrHeld is what Prompt returns while calls a stopped session held for
@@ -269,10 +269,10 @@ func (s *Session) elicit(ctx context.Context, q agenttool.Elicitation) (agenttoo
 	text := extension.IsTextQuestion(q)
 	switch {
 	case q.URL != "":
-		s.opts.log("[a tool asks you to visit %s: %s]", render.Clean(q.URL), render.Clean(q.Message))
+		s.opts.log("[a tool asks you to visit %s: %s]", view.Clean(q.URL), view.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	case hasFields(q.Schema) && !text:
-		s.opts.log("[a tool asks for a form dax cannot show: %s]", render.Clean(q.Message))
+		s.opts.log("[a tool asks for a form dax cannot show: %s]", view.Clean(q.Message))
 		return agenttool.Answer{Action: agenttool.ActionCancel}, nil
 	}
 	// A call an A2A caller's conversation asks about (front/a2a puts

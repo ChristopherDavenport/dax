@@ -29,6 +29,11 @@ func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 			o.Compact, o.CompactFrom, o.Window, o.WindowFrom = 49152, "window", 65536, "ollama /api/ps"
 		},
 		"off": func(o *Options) {},
+		// The window unknown at the start: compaction is built with no
+		// budget, which a switch sizes, so it is not off (review N3).
+		"window unknown": func(o *Options) {
+			o.CompactFrom, o.WindowOf = "window", windows(nil)
+		},
 	} {
 		o := options(t, &echo.Adapter{})
 		set(&o)
@@ -55,6 +60,9 @@ func TestTheHeaderRecordsTheContextSettings(t *testing.T) {
 	}
 	if c := got["off"]; c.Budget != 0 || c.BudgetFrom != "off" || c.Window != 0 {
 		t.Errorf("off: %+v", c)
+	}
+	if c := got["window unknown"]; c.Budget != 0 || c.BudgetFrom != "window" || c.Window != 0 {
+		t.Errorf("window unknown: %+v", c)
 	}
 	if got["flag"].recordedContext == got["window"].recordedContext {
 		t.Error("two sessions that differ in their budget record the same context")

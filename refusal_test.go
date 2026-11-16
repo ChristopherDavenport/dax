@@ -64,18 +64,24 @@ func (s withCategory) Send(ev openresponses.StreamEvent) error {
 // -p ends a run the provider's content filter refused with an exit
 // status of its own and reason refused in -result, its refusal and the
 // details beside it; an answer the output limit cut has its own, cut
-// (#206).
+// (#206), and so does an answer its provider ended incomplete with no
+// reason (agentturn v0.0.41).
 func TestPrintSaysARefusalAndACut(t *testing.T) {
 	for _, tc := range []struct {
 		reason  openresponses.IncompleteReason
 		status  int
 		said    string
 		refusal string
+		// cause is the cause and the details' reason -result names:
+		// the reason's, but for an empty reason, which agentturn
+		// v0.0.41 reads as the output limit's cut.
+		cause string
 	}{
-		{openresponses.IncompleteReasonContentFilter, exitRefused, "refused", refusalText},
-		{openresponses.IncompleteReasonMaxOutputTokens, exitCut, "cut", ""},
+		{openresponses.IncompleteReasonContentFilter, exitRefused, "refused", refusalText, "content_filter"},
+		{openresponses.IncompleteReasonMaxOutputTokens, exitCut, "cut", "", "max_output_tokens"},
+		{"", exitCut, "cut", "", "max_output_tokens"},
 	} {
-		t.Run(string(tc.reason), func(t *testing.T) {
+		t.Run("reason_"+string(tc.reason), func(t *testing.T) {
 			sess, _ := sessionOver(t, stoppedShort{reason: tc.reason})
 			f := &printFront{info: frontInfo{Name: "dax", Prompt: "go"}, in: bufio.NewScanner(strings.NewReader(""))}
 			var ended *runEnded
@@ -100,8 +106,8 @@ func TestPrintSaysARefusalAndACut(t *testing.T) {
 			if err := json.Unmarshal(data, &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Reason != tc.said || got.Cause != string(tc.reason) || got.Exit != tc.status || got.Refusal != tc.refusal || got.Incomplete["reason"] != string(tc.reason) {
-				t.Errorf("result %s, want reason %s, cause %s, exit %d, refusal %q and the details", data, tc.said, tc.reason, tc.status, tc.refusal)
+			if got.Reason != tc.said || got.Cause != tc.cause || got.Exit != tc.status || got.Refusal != tc.refusal || got.Incomplete["reason"] != tc.cause {
+				t.Errorf("result %s, want reason %s, cause %s, exit %d, refusal %q and the details", data, tc.said, tc.cause, tc.status, tc.refusal)
 			}
 			if tc.status == exitRefused && got.Incomplete["anthropic.refusal_category"] != "cyber" {
 				t.Errorf("result %s, want the refusal's category", data)

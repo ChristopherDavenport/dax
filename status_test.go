@@ -20,14 +20,27 @@ import (
 type fakeStatusSession struct {
 	git           tool.Git
 	model         string
+	window        int64
 	mode, pending string
 }
 
 func (f *fakeStatusSession) Git(context.Context) (tool.Git, error) { return f.git, nil }
 func (f *fakeStatusSession) Model() string                         { return f.model }
+func (f *fakeStatusSession) ContextWindow() int64                  { return f.window }
 func (f *fakeStatusSession) Mode() (string, string)                { return f.mode, f.pending }
 func (f *fakeStatusSession) Subscribe(func(context.Context, agentturn.Event) error) func() {
 	return func() {}
+}
+
+// After a switch of model the status line divides by the window the
+// session resolved for the model it now runs, which the start's map
+// may not hold; another model's is still the map's (#207 review L3).
+func TestTheStatusLineTakesTheSwitchedModelsWindow(t *testing.T) {
+	info := frontInfo{Model: "big", Status: &config.Status{Segments: []string{"model", "context"}}, Windows: map[string]int64{"big": 200000, "mine": 64000}}
+	l := newStatus(info, &fakeStatusSession{model: "small", window: 32000}).line()
+	if l.Window("small") != 32000 || l.Window("big") != 200000 || l.Window("mine") != 64000 {
+		t.Errorf("windows small %d, big %d, mine %d; want 32000, 200000, 64000", l.Window("small"), l.Window("big"), l.Window("mine"))
+	}
 }
 
 // The config's block is the console's line: its position, style,
