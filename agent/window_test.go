@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
 
@@ -270,13 +271,11 @@ func TestNewAfterASwitchStartsUnderItsContext(t *testing.T) {
 	}
 }
 
-// While A2A callers are served (PeerConfig handed out), they stay on
-// the model the session started with, and the kit's compaction is one
-// for them and the person: a switch applies the smaller of the two
-// models' budgets, 0 counting as none. A switch to a larger window
-// keeps the callers' budget; to a smaller one, the person's, so the
-// callers fold earlier than their model needs (#207 review M1).
-func TestASwitchWhileServingCallersKeepsTheSmallerBudget(t *testing.T) {
+// A switch sizes the person's budget alone, whether A2A callers are
+// served or not: the callers' conversations keep their own (#212), so
+// the kit-wide budget is the person's model's, a window not known
+// giving none.
+func TestASwitchSizesThePersonsBudgetAlone(t *testing.T) {
 	ctx := context.Background()
 	by := map[string]int64{"echo": 200000, "big": 1000000, "small": 32000}
 	for _, tc := range []struct {
@@ -285,9 +284,9 @@ func TestASwitchWhileServingCallersKeepsTheSmallerBudget(t *testing.T) {
 		want    int
 	}{
 		{"big", false, 750000},
-		{"big", true, 150000},
+		{"big", true, 750000},
 		{"small", true, 24000},
-		{"unknown", true, 150000},
+		{"unknown", true, 0},
 	} {
 		o := sizedOptions(options(t, &scripted{}), 200000, 0, by)
 		s, err := New(ctx, o)
@@ -304,6 +303,77 @@ func TestASwitchWhileServingCallersKeepsTheSmallerBudget(t *testing.T) {
 			t.Errorf("to %s, callers served %v: budget %d, want %d", tc.model, tc.callers, got, tc.want)
 		}
 		s.Close()
+	}
+}
+
+// callerPrompts runs prompts in an A2A caller's conversation, recorded
+// in p, on a, as front/a2a does: each run attached on its own; scope is
+// the conversation's grant scope.
+func callerPrompts(t *testing.T, ctx context.Context, p *PeerRecord, a *agentturn.Agent, prompts ...string) (scope string) {
+	t.Helper()
+	for _, text := range prompts {
+		rctx, detach, err := p.Attach(ctx, a, "A2A caller")
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope = p.s.Kit.GrantScope(rctx)
+		_, err = a.Prompt(rctx, openresponses.UserText(text))
+		detach()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return scope
+}
+
+// A switch to a model with a smaller window folds the person's
+// conversation at the new model's budget, while an A2A caller's
+// conversation, which stays on the model the session served it, keeps
+// that model's budget, pinned at each of its runs (#212): it folds no
+// earlier than its model needs, where the kit's one budget, the
+// smaller of the two, folded it at the person's (#207). A caller's
+// conversation the kit let go of (ClearCompactionBudgetFor, as past
+// agentkit's last 1024) is pinned again at its next run.
+func TestACallersConversationKeepsItsBudgetThroughASwitch(t *testing.T) {
+	ctx := context.Background()
+	m := &foldModels{}
+	o := sizedOptions(options(t, m), 24000, 0, map[string]int64{"echo": 24000, "small": 8000})
+	o.Policy = &policy.Settings{Builtin: true, Fallback: "allow"}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg := s.PeerConfig()
+	fill(t, ctx, s)
+	if err := s.SetModel("small"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := promptOn(ctx, s, "next", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.asked(); !slices.Equal(got, []string{"small"}) {
+		t.Fatalf("folds asked of %v, want the person's one, of small", got)
+	}
+	p, err := s.OpenPeer(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := agentturn.New(cfg)
+	var long []string
+	for i := range 4 {
+		long = append(long, strings.Repeat(fmt.Sprintf("call %d ", i), 10000/7))
+	}
+	scope := callerPrompts(t, ctx, p, a, long...)
+	if got := m.asked(); !slices.Equal(got, []string{"small"}) {
+		t.Errorf("folds asked of %v: the caller's conversation, under echo's budget of 18000, folded", got)
+	}
+	if err := s.Kit.ClearCompactionBudgetFor(scope); err != nil {
+		t.Fatal(err)
+	}
+	callerPrompts(t, ctx, p, a, "again")
+	if got := m.asked(); !slices.Equal(got, []string{"small"}) {
+		t.Errorf("folds asked of %v once the kit let the caller's budget go: its next run folded at the person's", got)
 	}
 }
 

@@ -29,6 +29,15 @@ versions may break flags and the config file.
   so both key paths use the header anthropic-sdk-go v2 sends
   `ANTHROPIC_API_KEY` in. A command that prints an auth token in place
   of an API key now works too (#212).
+- Changed: under `dax serve -a2a`, a switch of model by an attached
+  view no longer folds the A2A callers' conversations at the new
+  model's budget, nor yours at theirs: each caller's conversation keeps
+  the budget of the model it stays on, the session's when serve
+  started, and the switch sizes your budget alone (agentkit v0.0.21's
+  per-conversation budget, in place of the smaller of the two from
+  #207). A start whose window is unknown leaves the callers with no
+  budget: they fold when asked or when the provider refuses the
+  length (#212).
 
 ## v0.0.39 - 2026-11-16
 

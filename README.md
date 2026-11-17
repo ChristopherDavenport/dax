@@ -2027,13 +2027,13 @@ dax serve -a2a -listen 127.0.0.1:7878
   served session's model and reasoning as they stood when serve
   started, and its extensions, rules and MCP servers as they are: an
   MCP server added or removed in an attached view is added or removed
-  for the conversations too. The conversations and the session share
-  one compaction: while `-a2a` serves, a switch of model by an
-  attached view applies the smaller of the budget sized for the model
-  the callers run and the one sized for the new model, so neither runs
-  past its window; after a switch to a smaller window the callers fold
-  at its budget, earlier than their model needs, and after one to a
-  larger window you fold at theirs. Its tools act in the same workspace. The
+  for the conversations too. Each conversation folds under the
+  compaction budget of the model the callers run, the session's when
+  serve started: a switch of model by an attached view sizes the
+  session's budget alone, so neither folds earlier or later than its
+  own model needs. A budget of none, the start model's window not
+  known, stays none for the callers: they fold when asked or when the
+  provider refuses the length. Its tools act in the same workspace. The
   conversations and the served session run at the same time, on the
   same files, as parallel sub-agents do; nothing orders them. One
   conversation runs one task at a time: a message while one is in

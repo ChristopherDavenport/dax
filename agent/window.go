@@ -48,8 +48,8 @@ type sizing struct {
 	now       sizes
 	// callers is the budget the A2A callers' model needs, once
 	// PeerConfig handed their configuration out: they stay on the model
-	// the session ran then, and share the kit's one compaction with the
-	// person (servingCallers). nil while no caller is served.
+	// the session ran then, and each caller's conversation folds under
+	// it (pinCaller). nil while no caller is served.
 	callers *int
 	// noEndpoint is set when -compact-server found no compaction
 	// endpoint, so no budget is sized; said once a switch finds a
@@ -69,28 +69,39 @@ func (s *Session) noCompaction() {
 }
 
 // servingCallers notes that A2A callers run on the session's model and
-// budget as they are now, which a later switch of the person's keeps
-// in force for them: the kit's budget, kit-wide, is the smaller of
-// theirs and the person's from then on (resize).
-func (s *Session) servingCallers() {
+// budget as they are now, which a later switch of the person's leaves
+// in force for them, and returns that budget: each caller's
+// conversation is pinned to it (pinCaller), and the kit-wide budget is
+// the person's alone (resize).
+func (s *Session) servingCallers() int {
 	s.sizing.mu.Lock()
 	defer s.sizing.mu.Unlock()
 	if s.sizing.callers == nil {
 		b := s.sizing.now.Compact
 		s.sizing.callers = &b
 	}
+	return *s.sizing.callers
 }
 
-// lowerBudget is the smaller of two budgets, 0 being none, so the
-// other.
-func lowerBudget(a, b int) int {
-	switch {
-	case a <= 0:
-		return b
-	case b <= 0:
-		return a
+// pinCaller gives the A2A caller's conversation ctx runs in, by its
+// grant scope, the callers' budget (servingCallers) as its own
+// (agentkit's SetCompactionBudgetFor), so a switch of the person's
+// model, which sets the kit-wide budget, does not fold it earlier or
+// later than the model it stays on needs. A budget of 0, a model whose
+// window was not known when the callers were first served, is no
+// budget, as agentkit has it: the conversation folds only when asked
+// or when the provider refuses its length. It is called at each run,
+// not only the first, so a conversation the kit let go of, past its
+// last 1024 given one, is pinned again before it runs; setting the
+// same budget again keeps the fold the conversation's transform
+// remembers. Nothing is pinned when the session does not compact.
+func (s *Session) pinCaller(ctx context.Context) {
+	budget := s.servingCallers()
+	switch err := s.Kit.SetCompactionBudgetFor(s.Kit.GrantScope(ctx), budget); {
+	case err == nil, errors.Is(err, agentkit.ErrNoCompaction):
+	default:
+		fmt.Fprintf(warnings{}, "dax: compaction budget for an A2A caller's conversation: %v\n", err)
 	}
-	return min(a, b)
 }
 
 // sizesOf is the context o opens a session with.
@@ -135,9 +146,9 @@ func compactsByWindow(o Options) bool { return o.CompactFrom == "window" && o.Wi
 // resize sizes the context for model, which the session has just
 // switched to: the window Options.WindowOf gives it, and a budget from
 // the window sized from the new one, applied to the kit's compaction
-// from the next request; a budget the person set is kept. While A2A
-// callers are served, the kit's budget is held to theirs too
-// (servingCallers). A change is said and recorded.
+// from the next request; a budget the person set is kept. It is the
+// kit-wide budget, the person's conversation's: an A2A caller's
+// conversation has its own (pinCaller). A change is said and recorded.
 func (s *Session) resize(ctx context.Context, model string) {
 	if s.opts.WindowOf == nil {
 		return
@@ -150,7 +161,6 @@ func (s *Session) resize(ctx context.Context, model string) {
 	window, from := s.opts.WindowOf(ctx, model)
 	s.sizing.mu.Lock()
 	was := s.sizing.now
-	callers := s.sizing.callers
 	tell := s.sizing.noEndpoint && window > 0 && !s.sizing.said
 	s.sizing.said = s.sizing.said || tell
 	s.sizing.mu.Unlock()
@@ -159,13 +169,8 @@ func (s *Session) resize(ctx context.Context, model string) {
 	}
 	now := was
 	now.Window, now.WindowFrom = window, from
-	held := false
 	if was.CompactFrom == "window" {
 		now.Compact = modelinfo.Info{ContextWindow: window}.CompactBudget()
-		if callers != nil {
-			b := lowerBudget(*callers, now.Compact)
-			held, now.Compact = b != now.Compact, b
-		}
 	}
 	if now.Compact != was.Compact {
 		switch err := s.Kit.SetCompactionBudget(now.Compact); {
@@ -175,8 +180,6 @@ func (s *Session) resize(ctx context.Context, model string) {
 		case err != nil:
 			fmt.Fprintf(warnings{}, "dax: compaction budget for %s: %v\n", model, err)
 			now.Compact = was.Compact
-		case held:
-			s.opts.log("[compaction budget %d tokens from the next request: the A2A callers' model's, which they stay on, under %s's]", now.Compact, model)
 		case now.Compact > 0:
 			s.opts.log("[compaction budget %d tokens from the next request: three quarters of %s's %d-token context window]", now.Compact, model, now.Window)
 		default:
