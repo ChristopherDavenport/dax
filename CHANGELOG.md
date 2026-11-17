@@ -16,6 +16,14 @@ versions may break flags and the config file.
   - Claude requests go out under API version `2026-10-21`; on the
     vertex provider that version is the request body's
     `anthropic_version`, where it was `vertex-2023-10-16`.
+  - On the anthropic provider with `ANTHROPIC_API_KEY`, the key goes
+    as `Authorization: Bearer`, where it went as `X-Api-Key`; a proxy
+    you name with `ANTHROPIC_BASE_URL`, which the SDK still honours
+    there, must read the bearer token. The headers in
+    `ANTHROPIC_CUSTOM_HEADERS` are now sent too, where the SDK left
+    them out once it had found that key. The key is still the one
+    credential sent: no `ANTHROPIC_AUTH_TOKEN` or profile goes beside
+    it.
   - A Claude turn still paused (`pause_turn`) when the adapter's eight
     continuations run out ends the run cut at the output limit, where
     it finished done with what it had: `-p` exits 7 and `-result` names

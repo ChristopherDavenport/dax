@@ -377,6 +377,41 @@ func TestACallersConversationKeepsItsBudgetThroughASwitch(t *testing.T) {
 	}
 }
 
+// After a switch to a model with a larger window, an A2A caller's
+// conversation still folds at its own model's budget (#212): pinned to
+// the person's larger one, or to none, it would run past the window of
+// the model it stays on.
+func TestACallersConversationFoldsAtItsBudgetAfterALargerSwitch(t *testing.T) {
+	ctx := context.Background()
+	m := &foldModels{}
+	o := sizedOptions(options(t, m), 24000, 0, map[string]int64{"echo": 24000, "big": 1000000})
+	o.Policy = &policy.Settings{Builtin: true, Fallback: "allow"}
+	s, err := New(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	cfg := s.PeerConfig()
+	if err := s.SetModel("big"); err != nil {
+		t.Fatal(err)
+	}
+	if z := s.sizes(); z.Compact != 750000 {
+		t.Fatalf("the person's budget %d after the switch, want 750000", z.Compact)
+	}
+	p, err := s.OpenPeer(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var long []string
+	for i := range 8 {
+		long = append(long, strings.Repeat(fmt.Sprintf("call %d ", i), 10000/7))
+	}
+	callerPrompts(t, ctx, p, agentturn.New(cfg), long...)
+	if got := m.asked(); len(got) == 0 || slices.ContainsFunc(got, func(model string) bool { return model != "echo" }) {
+		t.Errorf("folds asked of %v: want the caller's, of echo, past its budget of 18000", got)
+	}
+}
+
 // Under -compact-server on a provider without the endpoint, a start
 // whose window is unknown builds no compaction; a switch to a model
 // whose window is known then sizes no budget, says why, and records
