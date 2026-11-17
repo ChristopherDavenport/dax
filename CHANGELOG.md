@@ -24,6 +24,11 @@ versions may break flags and the config file.
     by the adapter, up to eight times; one it cannot continue ends the
     run cut, exit 7, with `gemini.finish_reason` `CONTINUATION` in the
     details, where the run failed with `model_error`.
+- Changed: on the anthropic provider, the key `api_key_command` prints
+  is sent as `Authorization: Bearer`, where dax sent it as `X-Api-Key`,
+  so both key paths use the header anthropic-sdk-go v2 sends
+  `ANTHROPIC_API_KEY` in. A command that prints an auth token in place
+  of an API key now works too (#212).
 
 ## v0.0.39 - 2026-11-16
 

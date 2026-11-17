@@ -426,12 +426,7 @@ func TestTransportSurfacesACommandFailure(t *testing.T) {
 }
 
 func TestHeaderSetters(t *testing.T) {
-	h := http.Header{"Authorization": {"Bearer placeholder"}}
-	xAPIKey(h, "k")
-	if h.Get("X-Api-Key") != "k" || h.Get("Authorization") != "" {
-		t.Errorf("x-api-key: %v", h)
-	}
-	h = http.Header{"X-Goog-Api-Key": {"placeholder"}}
+	h := http.Header{"X-Goog-Api-Key": {"placeholder"}}
 	googAPIKey(h, "k")
 	if h.Get("X-Goog-Api-Key") != "k" || len(h) != 1 {
 		t.Errorf("x-goog-api-key: %v", h)
@@ -457,17 +452,11 @@ func TestClientsSendTheCommandsKey(t *testing.T) {
 			}))
 			_, _ = c.Create(context.Background(), openresponses.Request{Model: "m"})
 		}},
-		{"anthropic", func(r *http.Request) string {
-			if r.Header.Get("Authorization") != "" {
-				return "both headers"
-			}
-			return r.Header.Get("X-Api-Key")
-		}, func(t *testing.T, keys *keySource, url string) {
+		{"anthropic", claudeKeyOf, func(t *testing.T, keys *keySource, url string) {
 			// The SDK's own variables must not add a credential.
 			t.Setenv("ANTHROPIC_API_KEY", "from-env")
 			t.Setenv("ANTHROPIC_AUTH_TOKEN", "from-env")
-			opts := append(anthropicOptions("", keys, transport(Spec{}, keys, xAPIKey, nil)), option.WithBaseURL(url))
-			c := sdk.NewClient(opts...)
+			c := anthropicClient(Spec{}, "", keys, option.WithBaseURL(url))
 			_, _ = c.Models.List(context.Background(), sdk.ModelListParams{})
 		}},
 		{"gemini", func(r *http.Request) string { return r.Header.Get("X-Goog-Api-Key") }, func(t *testing.T, keys *keySource, url string) {
@@ -504,8 +493,8 @@ func TestModelCallsReportKeyErrors(t *testing.T) {
 		{"openresponses", bearerOf, func(t *testing.T, keys *keySource, url string) openresponses.Streamer {
 			return openresponses.NewClient(url, openresponses.WithMiddleware(keyTransport{keys: keys, set: bearer}.wrap)).AsAdapter()
 		}},
-		{"anthropic", func(r *http.Request) string { return r.Header.Get("X-Api-Key") }, func(t *testing.T, keys *keySource, url string) openresponses.Streamer {
-			c := sdk.NewClient(append(anthropicOptions("", keys, transport(Spec{}, keys, xAPIKey, nil)), option.WithBaseURL(url))...)
+		{"anthropic", claudeKeyOf, func(t *testing.T, keys *keySource, url string) openresponses.Streamer {
+			c := anthropicClient(Spec{}, "", keys, option.WithBaseURL(url))
 			return anthropic.New(c.Messages)
 		}},
 		{"gemini", func(r *http.Request) string { return r.Header.Get("X-Goog-Api-Key") }, func(t *testing.T, keys *keySource, url string) openresponses.Streamer {

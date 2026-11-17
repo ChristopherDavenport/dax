@@ -396,13 +396,9 @@ func (t keyTransport) wrap(next http.RoundTripper) http.RoundTripper {
 	return &t
 }
 
-// bearer, xAPIKey and googAPIKey put a key where each vendor reads it.
+// bearer and googAPIKey put a key where each vendor reads it: bearer
+// for Open Responses servers and Claude, googAPIKey for Gemini.
 func bearer(h http.Header, key string) { h.Set("Authorization", "Bearer "+key) }
-
-func xAPIKey(h http.Header, key string) {
-	h.Del("Authorization")
-	h.Set("X-Api-Key", key)
-}
 
 func googAPIKey(h http.Header, key string) { h.Set("X-Goog-Api-Key", key) }
 
