@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	sdk "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"google.golang.org/genai"
 
 	"github.com/ChristopherDavenport/agentturn/session"

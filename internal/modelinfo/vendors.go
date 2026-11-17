@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	sdk "github.com/anthropics/anthropic-sdk-go"
+	sdk "github.com/anthropics/anthropic-sdk-go/v2"
 	"google.golang.org/genai"
 
 	"github.com/ChristopherDavenport/openresponses"

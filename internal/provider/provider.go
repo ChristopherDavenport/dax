@@ -20,9 +20,9 @@ import (
 	"strings"
 
 	"cloud.google.com/go/auth/oauth2adapt"
-	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/vertex"
+	sdk "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
+	"github.com/anthropics/anthropic-sdk-go/v2/vertex"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/genai"
 

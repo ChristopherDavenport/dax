@@ -5,6 +5,26 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: openresponses and its anthropic and gemini providers
+  v0.0.22, up from v0.0.21; agentkit v0.0.21, up from v0.0.20;
+  anthropic-sdk-go v2.10.0 (module `github.com/anthropics/anthropic-sdk-go/v2`),
+  up from v1.84.0, the version the anthropic provider requires, so a
+  program built on dax can take providers/anthropic v0.0.22 (#212).
+  What changes for you:
+  - Claude requests go out under API version `2026-10-21`; on the
+    vertex provider that version is the request body's
+    `anthropic_version`, where it was `vertex-2023-10-16`.
+  - A Claude turn still paused (`pause_turn`) when the adapter's eight
+    continuations run out ends the run cut at the output limit, where
+    it finished done with what it had: `-p` exits 7 and `-result` names
+    `cut`, with `anthropic.stop_reason` `pause_turn` in its details.
+  - A Gemini answer cut with finish reason `CONTINUATION` is continued
+    by the adapter, up to eight times; one it cannot continue ends the
+    run cut, exit 7, with `gemini.finish_reason` `CONTINUATION` in the
+    details, where the run failed with `model_error`.
+
 ## v0.0.39 - 2026-11-16
 
 - Fixed: an MCP server's OAuth sign-in no longer cuts the page the
