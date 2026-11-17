@@ -5,6 +5,48 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: openresponses and its anthropic and gemini providers
+  v0.0.22, up from v0.0.21; agentkit v0.0.21, up from v0.0.20;
+  anthropic-sdk-go v2.10.0 (module `github.com/anthropics/anthropic-sdk-go/v2`),
+  up from v1.84.0, the version the anthropic provider requires, so a
+  program built on dax can take providers/anthropic v0.0.22 (#212).
+  What changes for you:
+  - Claude requests go out under API version `2026-10-21`; on the
+    vertex provider that version is the request body's
+    `anthropic_version`, where it was `vertex-2023-10-16`.
+  - On the anthropic provider with `ANTHROPIC_API_KEY`, the key goes
+    as `Authorization: Bearer`, where it went as `X-Api-Key`; a proxy
+    you name with `ANTHROPIC_BASE_URL`, which the SDK still honours
+    there, must read the bearer token. The headers in
+    `ANTHROPIC_CUSTOM_HEADERS` are now sent too, where the SDK left
+    them out once it had found that key. The key is still the one
+    credential sent: no `ANTHROPIC_AUTH_TOKEN` or profile goes beside
+    it.
+  - A Claude turn still paused (`pause_turn`) when the adapter's eight
+    continuations run out ends the run cut at the output limit, where
+    it finished done with what it had: `-p` exits 7 and `-result` names
+    `cut`, with `anthropic.stop_reason` `pause_turn` in its details.
+  - A Gemini answer cut with finish reason `CONTINUATION` is continued
+    by the adapter, up to eight times; one it cannot continue ends the
+    run cut, exit 7, with `gemini.finish_reason` `CONTINUATION` in the
+    details, where the run failed with `model_error`.
+- Changed: on the anthropic provider, the key `api_key_command` prints
+  is sent as `Authorization: Bearer`, where dax sent it as `X-Api-Key`,
+  so both key paths use the header anthropic-sdk-go v2 sends
+  `ANTHROPIC_API_KEY` in. A command that prints an auth token in place
+  of an API key now works too (#212).
+- Changed: under `dax serve -a2a`, a switch of model by an attached
+  view no longer folds the A2A callers' conversations at the new
+  model's budget, nor yours at theirs: each caller's conversation keeps
+  the budget of the model it stays on, the session's when serve
+  started, and the switch sizes your budget alone (agentkit v0.0.21's
+  per-conversation budget, in place of the smaller of the two from
+  #207). A start whose window is unknown leaves the callers with no
+  budget: they fold when asked or when the provider refuses the
+  length (#212).
+
 ## v0.0.39 - 2026-11-16
 
 - Fixed: an MCP server's OAuth sign-in no longer cuts the page the

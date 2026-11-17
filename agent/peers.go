@@ -34,10 +34,11 @@ import (
 // last one goes while it waits it is given up: the policy's question
 // becomes a refusal, never an allow. Its ToolRecorder is nil;
 // PeerRecord.Attach routes a run's records to the conversation's
-// session. The conversations keep the model it names; the kit's
-// compaction, which they share with the person, is held from then on
-// to the smaller of their model's budget and the one a switch of the
-// person's sizes (SetModel).
+// session. The conversations keep the model it names, and each folds
+// under that model's compaction budget, the session's when it is
+// called, which PeerRecord.Attach gives the conversation as its own at
+// each run: a switch of the person's (SetModel) sizes the person's
+// budget alone.
 //
 // Its calls, and its sub-agents', are decided by the session's engine
 // held to the stricter of the default permission mode and the person's
@@ -127,7 +128,10 @@ func (p *PeerRecord) ID() string { return p.rec.SessionID() }
 // from, which a front is told with each (who: the caller, say). detach
 // undoes it once the run is over, and revokes the skill grants the run
 // made, as the session's own end at its next message, so the kit keeps
-// nothing for a conversation between its tasks.
+// nothing for a conversation between its tasks but its compaction: the
+// conversation folds under the A2A callers' budget (pinCaller), and the
+// kit keeps the fold it made, for its next task, among its last 1024
+// conversations given a budget.
 func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string) (context.Context, func(), error) {
 	cfg := a.Config()
 	cfg.ToolRecorder = p.rec.RecordFunc()
@@ -140,6 +144,7 @@ func (p *PeerRecord) Attach(ctx context.Context, a *agentturn.Agent, who string)
 	ctx = session.ContextWithSessionID(ctx, id)
 	ctx = agentmemory.WithSession(ctx, id)
 	ctx = context.WithValue(ctx, peerKey{}, who+" (session "+id+")")
+	p.s.pinCaller(ctx)
 	grants := context.WithoutCancel(ctx)
 	return ctx, func() {
 		unsubscribe()

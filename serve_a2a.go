@@ -302,7 +302,8 @@ func (p *a2aPeers) recorderFor(ctx context.Context, contextID string, a *agenttu
 
 // record opens the conversation's session for one task: the one the
 // store says records it, or a new one, which the store then names.
-// Nothing is kept of it after the task, so a conversation costs nothing
+// Nothing is kept of it after the task but the fold its compaction
+// remembers (agent.PeerRecord.Attach), so a conversation costs little
 // between its messages. front/a2a runs one task of a conversation at a
 // time, so no two open one conversation's session at once, and no lock
 // of this process is held across the store's reads and writes.

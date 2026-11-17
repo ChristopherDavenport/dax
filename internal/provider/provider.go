@@ -20,9 +20,9 @@ import (
 	"strings"
 
 	"cloud.google.com/go/auth/oauth2adapt"
-	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/vertex"
+	sdk "github.com/anthropics/anthropic-sdk-go/v2"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
+	"github.com/anthropics/anthropic-sdk-go/v2/vertex"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/genai"
 
@@ -304,7 +304,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 			m.Describer = modelinfo.OpenRouter(base, nil)
 		}
 	case "anthropic":
-		client := sdk.NewClient(anthropicOptions(key, keys, transport(spec, keys, xAPIKey, nil))...)
+		client := anthropicClient(spec, key, keys)
 		var sub openresponses.Adapter
 		m.Streamer, sub, separate = claudeAdapters(client.Messages, spec)
 		m.SubagentStreamer = sub
@@ -374,6 +374,16 @@ func vertexLocation(getenv func(string) string) string {
 		return l
 	}
 	return strings.TrimSpace(getenv(RegionEnv))
+}
+
+// anthropicClient is the Anthropic client for spec, authenticated with
+// key or the command's key, with opts after New's own (a test's base
+// URL). Both keys go as Authorization: Bearer, which is how
+// anthropic-sdk-go v2 sends the environment's key, at API version
+// 2026-10-21: one header for both paths, and the only one a key command
+// that prints an auth token rather than an API key would be accepted in.
+func anthropicClient(spec Spec, key string, keys *keySource, opts ...option.RequestOption) sdk.Client {
+	return sdk.NewClient(append(anthropicOptions(key, keys, transport(spec, keys, bearer, nil)), opts...)...)
 }
 
 // anthropicOptions authenticates the Anthropic client with key, or with

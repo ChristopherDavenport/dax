@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
 	github.com/ChristopherDavenport/agentconsole v0.0.18
 	github.com/ChristopherDavenport/agenteval v0.0.17
-	github.com/ChristopherDavenport/agentkit v0.0.20
+	github.com/ChristopherDavenport/agentkit v0.0.21
 	github.com/ChristopherDavenport/agentmemory v0.0.14
 	github.com/ChristopherDavenport/agentpolicy v0.0.20
 	github.com/ChristopherDavenport/agentredact v0.0.4
@@ -24,15 +24,15 @@ require (
 	github.com/ChristopherDavenport/agentworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.12
-	github.com/ChristopherDavenport/openresponses v0.0.21
-	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.21
-	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.21
+	github.com/ChristopherDavenport/openresponses v0.0.22
+	github.com/ChristopherDavenport/openresponses/providers/anthropic v0.0.22
+	github.com/ChristopherDavenport/openresponses/providers/gemini v0.0.22
 	github.com/a2aproject/a2a-go v0.3.15
-	github.com/anthropics/anthropic-sdk-go v1.84.0
+	github.com/anthropics/anthropic-sdk-go/v2 v2.10.0
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/term v0.46.0
+	golang.org/x/term v0.48.0
 	google.golang.org/genai v1.77.0
 )
 
@@ -98,11 +98,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.278.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800 // indirect

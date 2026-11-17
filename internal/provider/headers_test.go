@@ -8,8 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	sdk "github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/v2/option"
 	"google.golang.org/genai"
 
 	"github.com/ChristopherDavenport/agentturn/session"
@@ -106,7 +105,7 @@ func TestClientsSendSessionAndClient(t *testing.T) {
 			return m.Streamer
 		}},
 		{"anthropic", func(t *testing.T, keys *keySource, url string) openresponses.Streamer {
-			c := sdk.NewClient(append(anthropicOptions("", keys, transport(spec, keys, xAPIKey, nil)), option.WithBaseURL(url))...)
+			c := anthropicClient(spec, "", keys, option.WithBaseURL(url))
 			return anthropic.New(c.Messages)
 		}},
 		{"gemini", func(t *testing.T, keys *keySource, url string) openresponses.Streamer {
