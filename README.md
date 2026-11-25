@@ -1632,7 +1632,8 @@ tokens, cost, model, retry, turn, session. Your config can make it up:
   executor's or the served workspace's line, or `here`; shown there,
   it is no longer printed before the client takes the screen) and
   `mode` (the permission mode, with the one waiting for the run's next
-  turn, `default → acceptEdits`). `model`
+  turn, `default → acceptEdits`) and `model_name` (the model dax runs
+  next, the name alone, where `model` says `model X`). `model`
   names the model dax runs next, and `context` divides by the window
   dax believes that model has.
 - `colors`, by segment: a color (`black`, `red`, `green`, `yellow`,

@@ -58,6 +58,11 @@ func (h *statusHost) line() console.StatusLine {
 		"dir":  func() console.Segment { return console.Segment{Text: dir, Color: h.color("dir", "4")} },
 		"git":  h.gitSegment,
 		"mode": h.modeSegment,
+		// The name alone, as the model dax runs next; the built-in model
+		// segment says "model X" and the record model beside it.
+		"model_name": func() console.Segment {
+			return console.Segment{Text: view.CleanLine(h.sess.Model())}
+		},
 		"executor": func() console.Segment {
 			if b := elsewhereBanner(h.info); b != "" {
 				_, where, _ := strings.Cut(b, ": ")

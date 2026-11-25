@@ -5,6 +5,12 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: a `model_name` status segment, the model dax runs next by its
+  name alone, where the client's `model` segment says `model X`. Color
+  it with `status.colors.model_name`.
+
 ## v0.0.40 - 2026-11-16
 
 - Dependencies: openresponses and its anthropic and gemini providers

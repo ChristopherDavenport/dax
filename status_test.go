@@ -73,6 +73,9 @@ func TestTheStatusBlockMakesUpTheLine(t *testing.T) {
 	if u := l.Host["user"](); !strings.Contains(u.Text, "@") || u.Color != "0" {
 		t.Errorf("user: %+v", u)
 	}
+	if got := l.Host["model_name"](); got != (console.Segment{Text: "big"}) {
+		t.Errorf("model_name: %+v, want the name alone", got)
+	}
 	if l.Model() != "big" || l.Window("big") != 200000 || l.Window("other") != 0 {
 		t.Errorf("model %q window %d", l.Model(), l.Window("big"))
 	}

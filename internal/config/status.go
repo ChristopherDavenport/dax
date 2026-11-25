@@ -32,8 +32,10 @@ type Status struct {
 
 // StatusHostSegments are the segments dax draws itself: who and where
 // (user@host), the working directory, the git branch and whether the
-// tree is dirty, where the tools act, and the permission mode.
-var StatusHostSegments = []string{"user", "dir", "git", "executor", "mode"}
+// tree is dirty, where the tools act, the permission mode, and the
+// model dax runs next by its name alone (the built-in model segment
+// says "model X").
+var StatusHostSegments = []string{"user", "dir", "git", "executor", "mode", "model_name"}
 
 // numericSegments are the built-ins a threshold can color.
 var numericSegments = []string{"context", "tokens", "cost", "time", "turn", "retry"}
