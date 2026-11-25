@@ -22,7 +22,8 @@ versions may break flags and the config file.
   client gets them through `console.WithToolSummarizers`, in the TUI
   and in `-attach`. A collapsed bash call reads `○ $ ls`, not `○ bash
   $ ls` (and `background`'s likewise), and dax-coding sums up a folded
-  run of bash calls as `ran 3 commands: mkdir, cd, touch` (#214).
+  run of bash calls as `ran 3 commands: mkdir, cd, touch` and a folded
+  run of reads as `read a.go, b.go` (`toolrender.Summarizers`, #214).
 
 ## v0.0.40 - 2026-11-16
 
