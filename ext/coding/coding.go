@@ -75,5 +75,6 @@ func New(maxRead int64) extension.Extension {
 		Lifts:        lifts,
 		Instructions: instructions,
 		Renderers:    toolrender.Renderers,
+		Summarizers:  toolrender.Summarizers,
 	}
 }

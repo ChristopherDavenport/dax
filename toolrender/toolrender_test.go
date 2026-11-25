@@ -395,3 +395,28 @@ func TestThePlanIsDrawnWholeWhileItWaits(t *testing.T) {
 		t.Errorf("ended: %d lines, want %d and a more line", len(b), collapsedLines+1)
 	}
 }
+
+// A bare renderer's head stands in for the tool's name, so it must say
+// what the tool is by itself, and decline a call it was not written for.
+func TestBashAndBackgroundHeadsStandInForTheName(t *testing.T) {
+	rs := Renderers("")
+	for _, name := range []string{"bash", "background"} {
+		b, ok := rs[name].(toolview.Bare)
+		if !ok || !b.Bare() {
+			t.Errorf("%s is not bare", name)
+		}
+	}
+	// background's head names the tool itself; bash's is the command.
+	if got := head(rs["background"], view.Call{Name: "background", Args: `{"action":"start","command":"sleep 9"}`}); got != "background $ sleep 9" {
+		t.Errorf("background head %q", got)
+	}
+	if got := head(rs["bash"], view.Call{Name: "bash", Args: `{"command":"ls"}`}); got != "$ ls" {
+		t.Errorf("bash head %q", got)
+	}
+	other := json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string"}}}`)
+	for name, args := range map[string]string{"bash": `{"command":"ls"}`, "background": `{"action":"start","command":"ls"}`} {
+		if _, ok := rs[name].Head(view.Call{Name: name, Args: args, Schema: other}); ok {
+			t.Errorf("%s drew a call against another schema", name)
+		}
+	}
+}

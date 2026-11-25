@@ -2,8 +2,13 @@ package extension
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentconsole/toolview"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agenttool"
 )
 
@@ -54,5 +59,54 @@ func TestSecretsOf(t *testing.T) {
 	got := SecretsOf([]Extension{{Secrets: []string{"A", ""}}, {}, {Secrets: []string{"B", "A"}}})
 	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
 		t.Errorf("SecretsOf = %q", got)
+	}
+}
+
+type fakeSummarizer struct{ line string }
+
+func (s fakeSummarizer) Summarize([]view.Call) (toolview.Line, bool) {
+	return toolview.Line{toolview.S(toolview.Plain, s.line)}, true
+}
+
+func TestSummarizersMergeTheExtensionsOwn(t *testing.T) {
+	a := Extension{Name: "a", Summarizers: func(string) toolview.Summarizers {
+		return toolview.Summarizers{"one": fakeSummarizer{"a1"}, "two": fakeSummarizer{"a2"}}
+	}}
+	b := Extension{Name: "b", Summarizers: func(dir string) toolview.Summarizers {
+		return toolview.Summarizers{"three": fakeSummarizer{dir}}
+	}}
+	none := Extension{Name: "none"}
+	for _, tc := range []struct {
+		name    string
+		exts    []Extension
+		want    []string
+		wantErr string
+	}{
+		{name: "no extensions", want: nil},
+		{name: "one without", exts: []Extension{none}, want: nil},
+		{name: "merged", exts: []Extension{a, none, b}, want: []string{"one", "three", "two"}},
+		{name: "two summarize one tool", exts: []Extension{a, {Name: "c", Summarizers: a.Summarizers}}, wantErr: "extensions a and c both summarize"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Summarizers("/work", tc.exts)
+			if tc.wantErr != "" {
+				if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+					t.Fatalf("err %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := slices.Sorted(maps.Keys(got))
+			if !slices.Equal(names, tc.want) {
+				t.Errorf("names %v, want %v", names, tc.want)
+			}
+		})
+	}
+	// The directory is the session's.
+	got, _ := Summarizers("/work", []Extension{b})
+	if l, _ := got["three"].Summarize(nil); l.String() != "/work" {
+		t.Errorf("the summarizer was built for %q", l.String())
 	}
 }

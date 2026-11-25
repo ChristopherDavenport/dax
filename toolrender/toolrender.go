@@ -5,7 +5,8 @@
 // extension hands its own through
 // extension.Extension.Renderers, and a front gives the client the
 // extensions' together (extension.Renderers) through
-// console.WithToolRenderers.
+// console.WithToolRenderers. Summarizers are the one-line sums of a
+// folded run of quiet calls, handed over the same way.
 //
 // A renderer reads the record's facts about a call, never the tool, so
 // it parses the arguments with its own structs and reads the output the

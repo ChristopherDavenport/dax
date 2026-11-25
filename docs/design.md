@@ -944,7 +944,13 @@ offered no grant. A sub-agent's
 reaches every sub-agent through `sessionGrantFor`. `extension.Renderers` merges the extensions' renderers for the
 terminal client; two that draw one tool are an error, and a renderer
 declines a call it was not written for, such as one an older version
-recorded.
+recorded. `Extension.Summarizers` is its twin for a collapsed run of
+quiet calls: one line of what the run of a tool did, merged by
+`extension.Summarizers` under the same rule (an extension names its own
+tools, two that summarize one are an error) and declined (ok false) for a
+run it cannot say anything useful of, whereupon the client shows its
+counts. A renderer may also be `toolview.Bare`, its head standing in for
+the tool's name on the collapsed line (bash's `$ ls`).
 
 The rules above hold for every extension: its tools are chosen before a
 front runs (rule 4), its calls, results and verdicts are recorded and

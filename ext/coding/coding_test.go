@@ -60,6 +60,10 @@ func TestDaxCodingIsAnExtensionOfItsOwnTools(t *testing.T) {
 	if e.Renderers == nil || len(e.Renderers(ws.Root())) != len(names) {
 		t.Errorf("renderers do not draw its %d tools", len(names))
 	}
+	// A folded run of bash calls or of reads has its own line.
+	if e.Summarizers == nil || e.Summarizers(ws.Root())["bash"] == nil || e.Summarizers(ws.Root())["read"] == nil {
+		t.Error("no summarizers for bash and read")
+	}
 	// Through the kit it adds read_output alone, which reads the
 	// session's own kept outputs where the session runs (#172).
 	if e.Kit == nil || !slices.Equal(e.Owns, []string{"read_output"}) {

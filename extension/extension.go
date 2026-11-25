@@ -240,6 +240,16 @@ type Extension struct {
 	// recorded; the client then draws the call as raw text. Two
 	// extensions may not draw one tool.
 	Renderers func(dir string) toolview.Renderers
+
+	// Summarizers say in one line what a run of the extension's calls
+	// of one tool did, by tool name, for a session rooted at dir: the
+	// line the terminal client shows for a collapsed run of quiet
+	// calls (ended, not failed, with a short output), in place of its
+	// own counts. Like a renderer, a summarizer reads only the record,
+	// is pure, and declines (ok false) a run it cannot say anything
+	// useful of. An extension names only its own tools, and two
+	// extensions may not summarize one tool.
+	Summarizers func(dir string) toolview.Summarizers
 }
 
 // PolicyHooks are an extension's hooks in the policy engine's decision
@@ -443,6 +453,27 @@ func Renderers(dir string, exts []Extension) (toolview.Renderers, error) {
 			}
 			by[name] = e.Name
 			out[name] = r
+		}
+	}
+	return out, nil
+}
+
+// Summarizers are the extensions' summarizers for a session rooted at
+// dir, for a front to hand the terminal client beside Renderers. Two
+// extensions that summarize one tool are an error.
+func Summarizers(dir string, exts []Extension) (toolview.Summarizers, error) {
+	out := toolview.Summarizers{}
+	by := map[string]string{}
+	for _, e := range exts {
+		if e.Summarizers == nil {
+			continue
+		}
+		for name, s := range e.Summarizers(dir) {
+			if by[name] != "" {
+				return nil, fmt.Errorf("extensions %s and %s both summarize %s", by[name], e.Name, name)
+			}
+			by[name] = e.Name
+			out[name] = s
 		}
 	}
 	return out, nil
