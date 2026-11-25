@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.41 - 2026-11-25
 
 - Dependencies: agentconsole v0.0.21, up from v0.0.18. The terminal
   client draws a dim `turn N · ...` header above every response (a stop
