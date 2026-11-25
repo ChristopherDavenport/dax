@@ -5,6 +5,18 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentconsole v0.0.20, up from v0.0.18. The terminal
+  client draws a dim `turn N · ...` header above every response (a stop
+  of the row cursor, so ctrl+p takes one more press per response) and
+  folds quiet tool calls (ended, not failed, at most 5 lines and 400
+  runes of output) into one line a turn, such as `ran 2 bash · 3 lines
+  out`; ctrl+o expands it. A pasted line loses bidi controls, and
+  ctrl+v's paste lands only if the input is still on screen. Its
+  `toolview.Bare` and `toolview.Summarizers` (`console.WithToolSummarizers`)
+  are now available to dax's renderers; dax#214 follows up to use them.
+
 ## v0.0.40 - 2026-11-16
 
 - Dependencies: openresponses and its anthropic and gemini providers

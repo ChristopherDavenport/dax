@@ -643,8 +643,9 @@ func TestAnAttachedViewContinuesFromAnEarlierEntry(t *testing.T) {
 	r.type_("second question\r")
 	s.waitPath("first question", "second question")
 	// The row cursor goes up from the last row: the second reply, the
-	// second question, then the first reply.
-	for range 3 {
+	// second response's turn header (a stop since agentconsole v0.0.20),
+	// the second question, then the first reply.
+	for range 4 {
 		r.type_("\x10") // ctrl+p
 	}
 	// The view takes the move once it has seen the second run end, which
