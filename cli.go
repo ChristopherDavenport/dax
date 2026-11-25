@@ -684,12 +684,16 @@ func run(ctx context.Context, args []string, p program) error {
 	if err != nil {
 		return err
 	}
+	summarizers, err := extension.Summarizers(wsRoot, exts)
+	if err != nil {
+		return err
+	}
 
 	// The front is chosen here: -p prints one answer, otherwise -front
 	// names the interactive one. A new front implements the front
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
-		Name: p.name, Version: p.version, Renderers: renderers,
+		Name: p.name, Version: p.version, Renderers: renderers, Summarizers: summarizers,
 		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory, Snapshot: *snapshot, SnapshotMax: settings.SnapshotMaxBytes,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),

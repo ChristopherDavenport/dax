@@ -196,10 +196,15 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 	if err != nil {
 		return err
 	}
+	summarizers, err := extension.Summarizers(served.Dir, f.exts)
+	if err != nil {
+		return err
+	}
 	// The session's run is not the view's to wait for when it leaves:
 	// the run goes on, served, and the record keeps it.
 	opts := append([]console.Option{
 		console.WithToolRenderers(renderers),
+		console.WithToolSummarizers(summarizers),
 		console.WithDrainTimeout(0),
 		console.WithWarn(func(string) {}),
 	}, f.console...)

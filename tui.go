@@ -261,7 +261,7 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 	}
 	// The client answers the questions asked while a call runs.
 	defer sess.Answering()()
-	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers)}, f.console...)
+	opts := append([]console.Option{console.WithToolRenderers(f.info.Renderers), console.WithToolSummarizers(f.info.Summarizers)}, f.console...)
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}

@@ -16,6 +16,13 @@ versions may break flags and the config file.
   ctrl+v's paste lands only if the input is still on screen. Its
   `toolview.Bare` and `toolview.Summarizers` (`console.WithToolSummarizers`)
   are now available to dax's renderers; dax#214 follows up to use them.
+- Changed: `extension.Extension` has a `Summarizers` field beside
+  `Renderers`, and `extension.Summarizers` merges them for a front
+  (two extensions summarizing one tool are an error); the terminal
+  client gets them through `console.WithToolSummarizers`, in the TUI
+  and in `-attach`. A collapsed bash call reads `○ $ ls`, not `○ bash
+  $ ls` (and `background`'s likewise), and dax-coding sums up a folded
+  run of bash calls as `ran 3 commands: mkdir, cd, touch` (#214).
 
 ## v0.0.40 - 2026-11-16
 

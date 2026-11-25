@@ -61,7 +61,10 @@ type frontInfo struct {
 	Name, Version string
 	// Renderers draw tool calls in the terminal client: dax's, with
 	// the extensions' laid over them.
-	Renderers            toolview.Renderers
+	Renderers toolview.Renderers
+	// Summarizers say what a collapsed run of quiet calls did: the
+	// extensions' (extension.Summarizers).
+	Summarizers          toolview.Summarizers
 	Provider, Model, Dir string
 	// ModelInfo is a line about what the model takes; empty when its
 	// vendor says nothing.

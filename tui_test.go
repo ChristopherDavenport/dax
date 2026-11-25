@@ -21,6 +21,8 @@ import (
 
 	"github.com/ChristopherDavenport/agentconsole/client"
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentconsole/toolview"
+	"github.com/ChristopherDavenport/agentconsole/view"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
@@ -458,6 +460,37 @@ func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
 	r.type_("go\r")
 	r.waitOutput("−0")
 	r.quit()
+}
+
+// An extension's summarizer reaches the client: a run of quiet bash
+// calls is drawn with the summarizer's line, not the client's counts.
+func TestTheTUISumsUpAQuietRunWithAnExtensionsSummarizer(t *testing.T) {
+	// agentconsole v0.0.20 treats a call whose last decision carries a
+	// reason as needing the person, and dax records "allowed by read"
+	// on every call a rule allows, so no call of dax's is quiet yet.
+	// The wiring passes with the client's check narrowed to held
+	// calls; drop the skip once a release does that.
+	t.Skip("agentconsole folds no call whose proceed carries a reason, which every allowed dax call does")
+	m := &steps{parent: [][2]string{{"read", `{"path":"main.go"}`}, {"read", `{"path":"main.go"}`}}}
+	ext := extension.Extension{Name: "acme-sum", Summarizers: func(string) toolview.Summarizers {
+		return toolview.Summarizers{"read": acmeSummarizer{}}
+	}}
+	r := startRig(t, m, policy.Rules{Allow: []string{"bash(echo:*)"}}, nil, func(f *tuiFront) {
+		s, err := extension.Summarizers(f.info.Dir, []extension.Extension{ext})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.info.Summarizers = s
+	}, true)
+	r.type_("go\r")
+	r.waitOutput("acme summed 2 calls")
+	r.quit()
+}
+
+type acmeSummarizer struct{}
+
+func (acmeSummarizer) Summarize(cs []view.Call) (toolview.Line, bool) {
+	return toolview.Line{toolview.S(toolview.Plain, fmt.Sprintf("acme summed %d calls", len(cs)))}, true
 }
 
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
