@@ -16,6 +16,14 @@ func bashCalls(cmds ...string) []view.Call {
 	return out
 }
 
+// withOut sets the output of the calls, one each.
+func withOut(calls []view.Call, outs ...string) []view.Call {
+	for i := range calls {
+		calls[i].Output = outs[i]
+	}
+	return calls
+}
+
 func readCalls(paths ...string) []view.Call {
 	var out []view.Call
 	for _, p := range paths {
@@ -50,6 +58,15 @@ func TestSummarizersSumUpARun(t *testing.T) {
 		{"no calls declines", "bash", nil, ""},
 		{"arguments of another shape decline", "bash", garbled, ""},
 		{"a schema it does not fit declines", "bash", foreign, ""},
+		{"success adds nothing", "bash", withOut(bashCalls("ls", "true"), "a\n[exit 0]", "[exit 0]"), "ran 2 commands: ls, true"},
+		{"no status line adds nothing", "bash", withOut(bashCalls("ls"), "a b c"), "ran 1 command: ls"},
+		{"one non-zero", "bash", withOut(bashCalls("git status", "false"), "ok\n[exit 0]", "[exit 1]"), "ran 2 commands: git, false · 1 failed"},
+		{"several", "bash", withOut(bashCalls("a", "b", "c"), "[exit 2]", "x\n[exit 0]", "[exit 127]\n"), "ran 3 commands: a, b, c · 2 failed"},
+		{"a timeout", "bash", withOut(bashCalls("sleep 9"), "partial\n[killed after 30s]"), "ran 1 command: sleep · 1 failed"},
+		{"background note, non-zero", "bash", withOut(bashCalls("x &"), "[exit 3; a process it left running in the background still holds its output and keeps running after this call; send a background job's output to a file (cmd > job.log 2>&1 &) so the call does not wait on it]"), "ran 1 command: x · 1 failed"},
+		{"background note, zero", "bash", withOut(bashCalls("x &"), "[exit 0; a process it left running in the background still holds its output and keeps running after this call]"), "ran 1 command: x"},
+		{"a status in the middle does not count", "bash", withOut(bashCalls("cat log"), "[exit 1]\n[killed after 5s]\nmore\n[exit 0]"), "ran 1 command: cat"},
+		{"the output's text is never shown", "bash", withOut(bashCalls("cat log"), "secret-token\n[exit 4]"), "ran 1 command: cat · 1 failed"},
 		{"read lists the files", "read", readCalls("/work/a.go", "b/c.go", "/etc/hosts"), "read a.go, b/c.go, /etc/hosts"},
 		{"read names a file once", "read", readCalls("a.go", "a.go", "b.go"), "read a.go, b.go"},
 		{"read past four", "read", readCalls("a", "b", "c", "d", "e"), "read a, b, c, d +1 more"},

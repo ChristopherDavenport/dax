@@ -3,6 +3,7 @@ package toolrender
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentconsole/toolview"
@@ -62,14 +63,45 @@ func listed(names []string) string {
 	return fmt.Sprintf("%s +%d more", strings.Join(names[:summaryNames], ", "), len(names)-summaryNames)
 }
 
+// A bash output's last line is the status dax's bash tool writes
+// (package tool, which toolrender does not import): "[exit N]", the same
+// with "; a process it left running ..." after N, or "[killed after D]"
+// for a timeout. The tool does not flag such a call as failed, so the
+// summary reads the line itself.
+var (
+	exitStatus   = regexp.MustCompile(`^\[exit (-?\d+)(;.*)?\]$`)
+	killedStatus = regexp.MustCompile(`^\[killed after [^\]]*\]$`)
+)
+
+// unsuccessful reports whether out ends in a status line that is not a
+// clean exit: a non-zero exit code or a timeout. Only the last line
+// counts, and nothing of the output but that fact is kept.
+func unsuccessful(out string) bool {
+	out = strings.TrimRight(out, " \t\r\n")
+	last := out[strings.LastIndex(out, "\n")+1:]
+	if killedStatus.MatchString(last) {
+		return true
+	}
+	m := exitStatus.FindStringSubmatch(last)
+	if m == nil {
+		return false
+	}
+	n, err := strconv.Atoi(m[1])
+	return err != nil || n != 0
+}
+
 // bashSummarizer sums up a run of commands as the programs they start.
 type bashSummarizer struct{}
 
 func (bashSummarizer) Summarize(calls []view.Call) (toolview.Line, bool) {
 	var words []string
+	failed := 0
 	for _, c := range calls {
 		if !fits(c.Schema, "command") {
 			return nil, false
+		}
+		if unsuccessful(c.Output) {
+			failed++
 		}
 		if w := firstWord(parseArgs(c.Args).str("command")); w != "" {
 			words = append(words, w)
@@ -82,10 +114,15 @@ func (bashSummarizer) Summarize(calls []view.Call) (toolview.Line, bool) {
 	if len(calls) == 1 {
 		noun = "command"
 	}
-	return toolview.Line{
+	line := toolview.Line{
 		toolview.S(toolview.Dim, fmt.Sprintf("ran %d %s: ", len(calls), noun)),
 		toolview.S(toolview.Emphasis, listed(words)),
-	}, true
+	}
+	if failed > 0 {
+		// "failed" holds for a non-zero exit and a timeout alike.
+		line = append(line, toolview.S(toolview.Error, fmt.Sprintf(" · %d failed", failed)))
+	}
+	return line, true
 }
 
 // readSummarizer sums up a run of reads as the files, each once.
