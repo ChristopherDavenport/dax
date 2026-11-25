@@ -7,11 +7,12 @@ versions may break flags and the config file.
 
 ## Unreleased
 
-- Dependencies: agentconsole v0.0.20, up from v0.0.18. The terminal
+- Dependencies: agentconsole v0.0.21, up from v0.0.18. The terminal
   client draws a dim `turn N · ...` header above every response (a stop
   of the row cursor, so ctrl+p takes one more press per response) and
-  folds quiet tool calls (ended, not failed, at most 5 lines and 400
-  runes of output) into one line a turn, such as `ran 2 bash · 3 lines
+  folds quiet tool calls (ended, not failed, allowed by the policy with
+  or without a reason, at most 5 lines and 400 runes of output) into one
+  line a turn, such as `ran 2 bash · 3 lines
   out`; ctrl+o expands it. A pasted line loses bidi controls, and
   ctrl+v's paste lands only if the input is still on screen. Its
   `toolview.Bare` and `toolview.Summarizers` (`console.WithToolSummarizers`)

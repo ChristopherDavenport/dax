@@ -30,7 +30,9 @@ func deployTool(extension.ToolEnv) []agenttool.Tool {
 			if err := json.Unmarshal(c.Args, &a); err != nil {
 				return agenttool.Result{}, err
 			}
-			return agenttool.Text("deployed to " + a.Env), nil
+			// More than the client's quiet cutoff (5 lines), so the call is
+			// drawn by its renderer and not folded into a summary line.
+			return agenttool.Text("deployed to " + a.Env + strings.Repeat("\nstep ok", 6)), nil
 		})}
 }
 

@@ -465,12 +465,6 @@ func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
 // An extension's summarizer reaches the client: a run of quiet bash
 // calls is drawn with the summarizer's line, not the client's counts.
 func TestTheTUISumsUpAQuietRunWithAnExtensionsSummarizer(t *testing.T) {
-	// agentconsole v0.0.20 treats a call whose last decision carries a
-	// reason as needing the person, and dax records "allowed by read"
-	// on every call a rule allows, so no call of dax's is quiet yet.
-	// The wiring passes with the client's check narrowed to held
-	// calls; drop the skip once a release does that.
-	t.Skip("agentconsole folds no call whose proceed carries a reason, which every allowed dax call does")
 	m := &steps{parent: [][2]string{{"read", `{"path":"main.go"}`}, {"read", `{"path":"main.go"}`}}}
 	ext := extension.Extension{Name: "acme-sum", Summarizers: func(string) toolview.Summarizers {
 		return toolview.Summarizers{"read": acmeSummarizer{}}
