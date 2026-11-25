@@ -257,6 +257,10 @@ func counted(c view.Call, expanded bool, nothing, none string, count func([]stri
 // count when it succeeded and its last lines when it failed.
 type bashRenderer struct{}
 
+// Bare makes the head `$ <command>` stand in for the tool's name on the
+// collapsed line, so a call reads `○ $ ls` and not `○ bash $ ls`.
+func (bashRenderer) Bare() bool { return true }
+
 func (bashRenderer) Head(c view.Call) (toolview.Line, bool) {
 	a := parseArgs(c.Args)
 	cmd := a.str("command")
@@ -435,6 +439,10 @@ func (peerRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 // for a start its command line as bash's head draws one; the result as
 // the client draws any.
 type backgroundRenderer struct{}
+
+// Bare: every head names the tool itself ("background $ ls",
+// "background stop 3"), so the client's name before it would say it twice.
+func (backgroundRenderer) Bare() bool { return true }
 
 func (backgroundRenderer) Head(c view.Call) (toolview.Line, bool) {
 	a := parseArgs(c.Args)
