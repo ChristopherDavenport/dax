@@ -418,6 +418,9 @@ func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
 
+// Deliver implements extension.Env (deliver.go).
+func (e *sessionEnv) Deliver(d extension.Delivery) error { return e.s.deliver(d) }
+
 // DeferMCP implements extension.Env.
 func (e *sessionEnv) DeferMCP(source string, tools []agenttool.Tool) bool {
 	return e.s.deferMCP(source, tools)
@@ -506,4 +509,29 @@ func (s *Session) systemPrompt(except ...string) string {
 // it is, since the note goes straight to the user's terminal.
 func logText(format string, args ...any) string {
 	return view.Clean(fmt.Sprintf(format, args...))
+}
+
+// kitEnv is the Env an extension's Kit is given: the session's, with
+// WrapOwned bound to the extension's names.
+type kitEnv struct {
+	*sessionEnv
+	own []string
+}
+
+// WrapOwned implements extension.Env for the extension's Kit.
+func (k kitEnv) WrapOwned(fn func(agenttool.Tool) agenttool.Tool) {
+	for _, n := range k.own {
+		k.s.wraps[n] = fn
+	}
+}
+
+// WrapOwned implements extension.Env: outside an extension's Kit there
+// is no extension whose tools it would wrap.
+func (e *sessionEnv) WrapOwned(func(agenttool.Tool) agenttool.Tool) {}
+
+// OnClose implements extension.Env.
+func (e *sessionEnv) OnClose(fn func()) {
+	e.s.closeMu.Lock()
+	defer e.s.closeMu.Unlock()
+	e.s.onClose = append(e.s.onClose, fn)
 }

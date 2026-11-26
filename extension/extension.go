@@ -308,6 +308,45 @@ type ToolEnv struct {
 	// MaxReadBytes is the most of a file a tool should read; zero is
 	// tool.DefaultMaxRead.
 	MaxReadBytes int64
+	// Deliver hands the session an input that arrives on its own time:
+	// a background process's exit, say (see Delivery). It is the
+	// session's own, so it is set only for tools that run where the
+	// session does; when the tools run in another process (an executor
+	// elsewhere, `dax execute`) it is nil, and a tool that wants to
+	// report to the session makes do without. It does not block.
+	Deliver func(Delivery) error
+}
+
+// Delivery is an input an extension hands the session on its own time,
+// with Env.Deliver or ToolEnv.Deliver: the result of work the model
+// started and went on without, which the session takes as the agent's
+// own. With no run going it starts one; with one going it joins it if
+// the run will still take it (agentturn's Deliver), and while calls wait
+// on a person it waits, queued on the record, for the Resume that
+// answers them, so no delivery is lost to a held approval.
+//
+// The session frames it, never the extension: a header line, one line
+// saying the payload is data and not instructions, and the payload
+// between fixed markers, which are neutralised in it, cut to MaxBytes.
+// The model reads a payload as untrusted, since a process prints, and a
+// sub-agent answers with, text that files, the network or the model's
+// own earlier input may have shaped; the record labels it so, and it
+// never reads as the person's words.
+type Delivery struct {
+	// Trigger is what the input is recorded as arriving by. Its Kind
+	// must be set and is not agentturn.TriggerHuman, which says a person
+	// typed it; a sub-agent's late answer is agentturn.CalleeTrigger, and
+	// other work names a kind of its own, with the work's id as the Ref.
+	Trigger agentturn.Trigger
+	// Header says in a line what this is and which work it is: the
+	// extension's text, not the work's output.
+	Header string
+	// Payload is what the work produced, untrusted.
+	Payload string
+	// MaxBytes is the most of Payload the model is sent; zero is 4096
+	// and the session allows at most 65536. Cut at the end: an
+	// extension that wants a tail sends only the tail.
+	MaxBytes int
 }
 
 // Env is the session as an extension's kit options see it.
@@ -435,6 +474,31 @@ type Env interface {
 	// cap, by the output id the cut result names (out_<hex>): only an
 	// output this session kept.
 	ToolOutput(ctx context.Context, ref string) ([]byte, error)
+	// Deliver hands the session an input that arrives on its own time
+	// (see Delivery): the answer of a sub-agent the model started and
+	// went on without, say. It returns once the delivery is queued for
+	// the session, and fails for one the session cannot take (no kind
+	// in its trigger, the session closed). It does not block, and may
+	// be called from any goroutine.
+	Deliver(d Delivery) error
+	// WrapOwned, called from the extension's Kit, says how to replace
+	// each tool the extension owns (a name in Owns) as the session's
+	// kit is made: fn is called once for each, with the tool the kit
+	// made of it, and returns the tool the model is offered in its
+	// place, or nil to leave it out of what the model is offered. A
+	// tool it replaces or drops stays the extension's to call, which
+	// is the point: dax-agents offers one explore for its foreground and
+	// background children this way, the two tools it registers under
+	// names of their own being the one the model sees and the one it
+	// does not. fn sees no other extension's tool. Called anywhere but
+	// the extension's Kit, it does nothing.
+	WrapOwned(fn func(agenttool.Tool) agenttool.Tool)
+	// OnClose registers fn to run when the session closes, before its
+	// kit, record and workspace do, so work an extension started that
+	// outlives a call (a background sub-agent) ends while what it
+	// writes to is still open. The functions run once, last registered
+	// first, and should return in seconds.
+	OnClose(fn func())
 }
 
 // Renderers are the extensions' renderers for a session rooted at dir,

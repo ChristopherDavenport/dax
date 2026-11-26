@@ -622,6 +622,16 @@ type Session struct {
 	// events are the session's MCP event subscriptions, nil for none
 	// (mcpevents.go).
 	events *eventHub
+	// onClose are the functions extensions asked to run when the session
+	// closes (Env.OnClose).
+	closeMu sync.Mutex
+	onClose []func()
+	// wraps are the extensions' replacements of the tools they own,
+	// by tool name, set by their Kit options.
+	wraps map[string]func(agenttool.Tool) agenttool.Tool
+	// dl are the session's deliveries (deliver.go), made on first use.
+	dlMu sync.Mutex
+	dl   *deliverer
 	// snap is where the workspace started, as StartSnapshot read it
 	// (snapshot.go).
 	snap snapshots
@@ -881,7 +891,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// scrubbed (mcpServer).
 	env := tool.DefaultEnv(o.PassEnv, o.secrets()...)
 	s.env = env
-	te := extension.ToolEnv{Workspace: ws, Files: s.files, MaxReadBytes: o.MaxReadBytes}
+	te := extension.ToolEnv{Workspace: ws, Files: s.files, MaxReadBytes: o.MaxReadBytes, Deliver: s.deliver}
 	// The extensions' tools run in the executor; the session decides
 	// on their calls and runs them through it.
 	s.x = o.executor
@@ -974,8 +984,18 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	// Every tool's result is cut to its cap, an MCP server's and a
 	// child agent's among them, in every placement (outputcap.go).
 	// A read's image is shown only to a model that takes images (images.go).
-	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool { return s.capTool(s.imageGate(t)) }))
 	xenv := &sessionEnv{s: s, a: a, te: te, agentsMD: agentsText, eng: &engine}
+	// An extension may replace or drop a tool it owns first
+	// (Env.WrapOwned, from its Kit).
+	s.wraps = map[string]func(agenttool.Tool) agenttool.Tool{}
+	kopts = append(kopts, agentkit.WithToolWrap(func(_ string, t agenttool.Tool) agenttool.Tool {
+		if w := s.wraps[t.Name()]; w != nil {
+			if t = w(t); t == nil {
+				return nil
+			}
+		}
+		return s.capTool(s.imageGate(t))
+	}))
 	if err := xenv.buildSubagentTools(o.Extensions); err != nil {
 		return nil, err
 	}
@@ -1004,7 +1024,7 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 		if e.Kit == nil {
 			continue
 		}
-		eo, err := e.Kit(xenv)
+		eo, err := e.Kit(kitEnv{xenv, e.Owns})
 		if err != nil {
 			return nil, fmt.Errorf("extension %s: %w", e.Name, err)
 		}
@@ -1873,10 +1893,20 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) close() error {
+	// What extensions started ends first, while the record it writes to
+	// is open.
+	s.closeMu.Lock()
+	fns := s.onClose
+	s.onClose = nil
+	s.closeMu.Unlock()
+	for i := len(fns) - 1; i >= 0; i-- {
+		fns[i]()
+	}
 	s.releaseCallbacks()
 	// The event subscriptions end before the kit and the record they
 	// deliver to.
 	s.stopEvents()
+	s.stopDeliveries()
 	// The extensions' AfterRun hooks end first, while the kit and the
 	// recorder they write through are open.
 	s.after.stop()
