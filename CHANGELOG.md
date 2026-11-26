@@ -5,6 +5,22 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: a choice of session store, `sessions` in your config and
+  `-sessions`: `user`, `~/.dax/sessions` for every project (the
+  default), `directory`, `.dax/sessions` in the directory dax starts
+  in, a path, or `""` to record nothing. The admin modes (`-list`,
+  `-resume`, `-gc`, ...) act on the store chosen. A directory store is
+  made private with a `.gitignore` of `*`, so `git add -A` leaves the
+  record out, and a `.dax` or store that is a link is refused.
+  `sessions` is refused in a project's file.
+- Changed: `-sessions user` and `-sessions directory` name those stores,
+  no longer directories of those names (give `./user` or
+  `./directory`), and `-sessions` no longer defaults to
+  `~/.dax/sessions` over the config: without it the config's
+  `sessions` applies.
+
 ## v0.0.42 - 2026-11-26
 
 - Dependencies: agenttool, agenttool/mcpclient and agenttool/mcpserver

@@ -132,6 +132,12 @@ type Config struct {
 	// MemoryDir is where the model's memory is kept; "" in a file that
 	// sets it turns memory off.
 	MemoryDir *string `json:"memory_dir,omitempty"`
+	// Sessions is the session store sessions are recorded in:
+	// SessionsUser (~/.dax/sessions, the default), SessionsDirectory
+	// (.dax/sessions in the directory dax starts in), another path, or
+	// "", which records nothing. The user sets it; a project cannot,
+	// since the store is the person's record of every session.
+	Sessions *string `json:"sessions,omitempty"`
 	// MCPServers are MCP servers, by name; the name is the prefix of
 	// their tools, mcp__<name>__<tool>. A project's file may name them,
 	// but they start only once the user trusts the project's set
@@ -1032,6 +1038,11 @@ func (l *Layer) validate() error {
 	if err := checkPaths("agents_md_global", c.AgentsMDGlobal); err != nil {
 		return err
 	}
+	if c.Sessions != nil {
+		if err := checkSessions("sessions", *c.Sessions); err != nil {
+			return err
+		}
+	}
 	if c.Effort != "" && !slices.Contains(Efforts, c.Effort) {
 		return fmt.Errorf(`effort %q: want one of %s`, c.Effort, strings.Join(Efforts, ", "))
 	}
@@ -1098,7 +1109,7 @@ func (l *Layer) validate() error {
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
 			{"think", c.Think != nil}, {"show_reasoning", c.ShowReasoning != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
-			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
+			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil}, {"sessions", c.Sessions != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0}, {"snapshot_max_bytes", c.SnapshotMaxBytes != 0},
 			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil}, {"memory", c.Memory != nil},
 		} {
@@ -2007,6 +2018,70 @@ func (b Box) check(field string) error {
 	return nil
 }
 
+// The sessions setting's keywords. Any other value is a path; one that
+// is a directory named so is given as ./user or ./directory.
+const (
+	// SessionsUser is the user's store, ~/.dax/sessions, for every
+	// project: the default.
+	SessionsUser = "user"
+	// SessionsDirectory is a store of the directory dax starts in, its
+	// .dax/sessions.
+	SessionsDirectory = "directory"
+)
+
+// sessionsKeyword reports whether v names a store rather than a path:
+// a keyword, or "", which records nothing.
+func sessionsKeyword(v string) bool {
+	return v == "" || v == SessionsUser || v == SessionsDirectory
+}
+
+// checkSessions refuses what cannot be a store: a value of spaces
+// alone, which would otherwise be a directory of that name, or one with
+// a line break or NUL. Anything else is a keyword or a path; which
+// path was meant cannot be told from a mistyped keyword.
+func checkSessions(field, v string) error {
+	if v != "" && strings.TrimSpace(v) == "" {
+		return fmt.Errorf("%s %q: want %s, %s, a path, or \"\" to record nothing", field, v, SessionsUser, SessionsDirectory)
+	}
+	if strings.ContainsAny(v, "\x00\n\r") {
+		return fmt.Errorf("%s %q: a path holds no line break or NUL", field, v)
+	}
+	return nil
+}
+
+// SessionsOf is the root of the session store the user's layer and
+// the flags choose, the flag over the layer's sessions and that over
+// the default, SessionsUser: userRoot for SessionsUser, dir's
+// .dax/sessions for SessionsDirectory, a path as given (the flag's,
+// when relative, dir's; the layer's resolved when it was read), or ""
+// for no recording. directory reports the SessionsDirectory store,
+// which the caller keeps out of the repository. Like ExecutorOf it
+// reads only its own setting, so the modes that only read or tend the
+// store (-list, -gc) act on the store a run would record in without
+// the rest of the settings.
+func SessionsOf(user Layer, f Flags, userRoot, dir string) (root string, directory bool, err error) {
+	v := SessionsUser
+	if user.Sessions != nil {
+		v = *user.Sessions
+	}
+	if f.Sessions != nil {
+		if err := checkSessions("-sessions", *f.Sessions); err != nil {
+			return "", false, err
+		}
+		v = *f.Sessions
+		if !sessionsKeyword(v) {
+			v = resolvePath(v, dir)
+		}
+	}
+	switch v {
+	case SessionsUser:
+		return userRoot, false, nil
+	case SessionsDirectory:
+		return filepath.Join(dir, ".dax", "sessions"), true, nil
+	}
+	return v, false, nil
+}
+
 // ExecutorOf is the executor the user's layer and the flags name, as
 // Resolve takes it: the program and its arguments of the command that
 // starts it, or the URL where it serves; neither when the tools run in
@@ -2160,6 +2235,10 @@ func (l *Layer) resolvePaths() {
 		m := fix(*l.MemoryDir)
 		l.MemoryDir = &m
 	}
+	if l.Sessions != nil && !sessionsKeyword(*l.Sessions) {
+		s := fix(*l.Sessions)
+		l.Sessions = &s
+	}
 	l.PricingFile = fix(l.PricingFile)
 	for _, w := range append([]*Workspace{l.Workspace, l.ServersWorkspace}, mapValues(l.ServersWorkspaces)...) {
 		if w == nil {
@@ -2244,6 +2323,10 @@ type Flags struct {
 	Mode *string
 	// MaxTurns replaces max_turns; 0 turns the limit off.
 	MaxTurns *int
+	// Sessions replaces sessions (-sessions): a keyword, a path, which
+	// when relative is the directory dax starts in's, or "", which
+	// records nothing.
+	Sessions *string
 }
 
 // Settings is what dax runs with: the layers folded, the flags laid

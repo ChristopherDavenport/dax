@@ -112,6 +112,57 @@ func TestSwitchingProviderLeavesItsSettingsBehind(t *testing.T) {
 	}
 }
 
+// The session store: the default, SessionsUser, under the user's
+// config's sessions under -sessions; each a keyword, a path or "".
+func TestSessionsOf(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	const userRoot, dir = "/home/u/.dax/sessions", "/work/proj"
+	for _, tc := range []struct {
+		name, json string // the user's config; "" for none
+		flag       *string
+		want       string
+		directory  bool
+		err        string
+	}{
+		{name: "the default", want: userRoot},
+		{name: "config user", json: `{"sessions":"user"}`, want: userRoot},
+		{name: "config directory", json: `{"sessions":"directory"}`, want: "/work/proj/.dax/sessions", directory: true},
+		{name: "config path", json: `{"sessions":"/srv/sessions"}`, want: "/srv/sessions"},
+		{name: "config relative path is the config file's", json: `{"sessions":"rec"}`, want: "/home/u/.config/dax/rec"},
+		{name: "config ./user is a path", json: `{"sessions":"./user"}`, want: "/home/u/.config/dax/user"},
+		{name: "config home", json: `{"sessions":"~/rec"}`, want: filepath.Join(home, "rec")},
+		{name: "config off", json: `{"sessions":""}`, want: ""},
+		{name: "flag over the default", flag: ptr("directory"), want: "/work/proj/.dax/sessions", directory: true},
+		{name: "flag over config directory", json: `{"sessions":"directory"}`, flag: ptr("user"), want: userRoot},
+		{name: "flag over config user", json: `{"sessions":"user"}`, flag: ptr("directory"), want: "/work/proj/.dax/sessions", directory: true},
+		{name: "flag off over config", json: `{"sessions":"directory"}`, flag: ptr(""), want: ""},
+		{name: "flag path over config", json: `{"sessions":"directory"}`, flag: ptr("/srv/s"), want: "/srv/s"},
+		{name: "flag relative path is the start directory's", flag: ptr("rec"), want: "/work/proj/rec"},
+		{name: "flag ./directory is a path", flag: ptr("./directory"), want: "/work/proj/directory"},
+		{name: "flag of spaces", flag: ptr(" "), err: `-sessions " ": want user, directory`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var user Layer
+			if tc.json != "" {
+				user = parse(t, tc.json, false)
+			}
+			got, directory, err := SessionsOf(user, Flags{Sessions: tc.flag}, userRoot, dir)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("err %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want || directory != tc.directory {
+				t.Fatalf("SessionsOf = %q, %v; want %q, %v", got, directory, tc.want, tc.directory)
+			}
+		})
+	}
+}
+
 func TestMemoryDir(t *testing.T) {
 	user := parse(t, `{"memory_dir":"~/mem"}`, false)
 	home, _ := os.UserHomeDir()
@@ -306,6 +357,11 @@ func TestValidation(t *testing.T) {
 		{"project skills_dirs", `{"skills_dirs":["/etc"]}`, true, "skills_dirs: a project file may only tighten"},
 		{"project memory_dir", `{"memory_dir":"/tmp/x"}`, true, "memory_dir: a project file may only tighten"},
 		{"project empty memory_dir", `{"memory_dir":""}`, true, "memory_dir: a project file may only tighten"},
+		{"project sessions", `{"sessions":"directory"}`, true, "sessions: a project file may only tighten"},
+		{"project sessions path", `{"sessions":"/tmp/x"}`, true, "sessions: a project file may only tighten"},
+		{"project empty sessions", `{"sessions":""}`, true, "sessions: a project file may only tighten"},
+		{"sessions of spaces", `{"sessions":"  "}`, false, `sessions "  ": want user, directory, a path`},
+		{"sessions with a line break", `{"sessions":"a\nb"}`, false, "a path holds no line break or NUL"},
 		{"project pricing_file", `{"pricing_file":"/tmp/prices.json"}`, true, "pricing_file: a project file may only tighten"},
 		{"project executor", `{"executor":{"command":"ssh evil.example dax execute"}}`, true, "executor: a project file may only tighten"},
 		{"executor without command", `{"executor":{}}`, false, "executor.command or executor.url is required"},

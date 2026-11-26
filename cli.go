@@ -37,6 +37,7 @@ import (
 	"github.com/ChristopherDavenport/dax/internal/cmdline"
 	"github.com/ChristopherDavenport/dax/internal/config"
 	"github.com/ChristopherDavenport/dax/internal/modelinfo"
+	"github.com/ChristopherDavenport/dax/internal/private"
 	"github.com/ChristopherDavenport/dax/internal/provider"
 	"github.com/ChristopherDavenport/dax/policy"
 	"github.com/ChristopherDavenport/dax/tool"
@@ -119,7 +120,7 @@ func run(ctx context.Context, args []string, p program) error {
 	trajectory := fs.String("trajectory", "", "with -p, write the session as an ATIF trajectory to this file once the run ends, each sub-agent's session embedded")
 	snapshot := fs.Bool("snapshot", true, "with -p, in a git work tree, record the workspace's change against the commit it started from when the run ends (git diff --binary, untracked files that are not ignored included), and the change already there at the start for a dirty tree; -result names the entries; -snapshot=false records none")
 	resultPath := fs.String("result", "", "with -p, write how the run ended (reason, cause, error, pending calls, usage) to this file as JSON, and exit 0 however it ended")
-	root := fs.String("sessions", agent.DefaultRoot(), "session store, a content-addressed store for every project; empty disables recording")
+	sessionsFlag := fs.String("sessions", "", "the session store: user (~/.dax/sessions, every project's; the default), directory (.dax/sessions in this directory), or a path, relative to this directory; \"\" records nothing; overrides the config's sessions, and a directory named user or directory is ./user or ./directory")
 	resume := fs.String("resume", "", "continue the session with this ID")
 	list := fs.Bool("list", false, "list the recorded sessions of this project, this directory or the configured executor's or served workspace's, and exit")
 	verify := fs.String("verify", "", "verify the request hashes of the session with this ID and exit")
@@ -184,11 +185,24 @@ func run(ctx context.Context, args []string, p program) error {
 	if *timeout < 0 {
 		return errors.New("-timeout: want a duration of 0 or more")
 	}
+	if *gc != "" && *gc != "pack" && *gc != "sweep" {
+		return fmt.Errorf("-gc %q: want pack or sweep", *gc)
+	}
 	if serving && (*once != "" || *frontName != "") {
 		return errors.New("dax serve has no front of its own: drop -p and -front, and attach with dax attach")
 	}
-	if serving && *root == "" {
-		return errors.New("dax serve needs a session store: an attached view follows the record; drop -sessions \"\"")
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	// The store is chosen once, before anything opens it: the admin
+	// modes below act on the store a run would record in.
+	root, directory, err := sessionsRoot(given, *sessionsFlag, *cfgPath, *bare, dir)
+	if err != nil {
+		return err
+	}
+	if serving && root == "" {
+		return errors.New("dax serve needs a session store: an attached view follows the record; drop -sessions \"\" or the config's sessions \"\"")
 	}
 	if serving {
 		// The address and the TLS files are checked before anything
@@ -209,9 +223,11 @@ func run(ctx context.Context, args []string, p program) error {
 		}
 	}
 
-	dir, err := os.Getwd()
-	if err != nil {
-		return err
+	if directory {
+		// Only -list, -project and -verify leave the store as it is.
+		if err := directoryStore(root, !*list && *project == "" && *verify == ""); err != nil {
+			return err
+		}
 	}
 	switch {
 	case *list:
@@ -225,24 +241,21 @@ func run(ctx context.Context, args []string, p program) error {
 		if given["workspace"] {
 			f.Workspace = wsFlag
 		}
-		return runList(ctx, os.Stdout, *root, dir, *cfgPath, f)
+		return runList(ctx, os.Stdout, root, dir, *cfgPath, f)
 	case *project != "":
-		path, err := agent.Project(ctx, *root, *project, *out)
+		path, err := agent.Project(ctx, root, *project, *out)
 		if err == nil {
 			fmt.Println(path)
 		}
 		return err
 	case *gc != "":
-		if *gc != "pack" && *gc != "sweep" {
-			return fmt.Errorf("-gc %q: want pack or sweep", *gc)
-		}
-		n, err := agent.GC(ctx, *root, *gc == "sweep", time.Hour)
+		n, err := agent.GC(ctx, root, *gc == "sweep", time.Hour)
 		if err == nil {
 			fmt.Printf("%s: %d object(s)\n", *gc, n)
 		}
 		return err
 	case *repair != "":
-		rep, err := agent.Repair(ctx, *root, *repair)
+		rep, err := agent.Repair(ctx, root, *repair)
 		if err != nil {
 			return err
 		}
@@ -255,13 +268,13 @@ func run(ctx context.Context, args []string, p program) error {
 		fmt.Printf("kept %d entries, head %s; the damaged log is %s\n", len(rep.Kept), rep.Head, rep.DamagedLog)
 		return nil
 	case *importFile != "":
-		id, err := agent.Import(ctx, *root, *importFile)
+		id, err := agent.Import(ctx, root, *importFile)
 		if err == nil {
 			fmt.Println(id)
 		}
 		return err
 	case *verify != "":
-		return runVerify(ctx, *root, *verify)
+		return runVerify(ctx, root, *verify)
 	}
 
 	policyMode, ok := map[string]cas.SyncPolicy{"append": cas.SyncEveryAppend, "response": cas.SyncOnResponse, "never": cas.SyncNever}[*syncMode]
@@ -588,7 +601,7 @@ func run(ctx context.Context, args []string, p program) error {
 	opts := agent.Options{
 		Extensions: exts,
 		Streamer:   m.Streamer, Model: m.Name, Think: settings.Think,
-		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, ServersWorkspaces: named, Executor: ex, Root: *root, Sync: policyMode,
+		Effort: openresponses.ReasoningEffort(settings.Effort), Dir: dir, Workspace: ws, ServersWorkspace: sw, ServersWorkspaces: named, Executor: ex, Root: root, Sync: policyMode,
 		BoxConfine:     boxConfineOf(settings.Box),
 		UserDir:        agent.DefaultUserDir(),
 		MemoryDir:      settings.MemoryDir,
@@ -679,7 +692,7 @@ func run(ctx context.Context, args []string, p program) error {
 		// model needs a price before anything spends.
 		opts.PricedModels = []string{m.SubagentName}
 	}
-	if *trajectory != "" && *root == "" {
+	if *trajectory != "" && root == "" {
 		return errors.New("-trajectory writes the recorded session: drop -sessions \"\"")
 	}
 	opts.TrustMCP = *trustMCP
@@ -712,8 +725,8 @@ func run(ctx context.Context, args []string, p program) error {
 	var f front
 	if serving {
 		// dax serve is in place of a front: the views attach to it.
-		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: *root, hostDir: dir, memoryDir: settings.MemoryDir}
-	} else if f, err = selectFront(*frontName, *once, fi, frontEnvOf(*root != "", *trustMCP)); err != nil {
+		f = &serveFront{info: fi, addr: *listen, tlsCert: *tlsCert, tlsKey: *tlsKey, signals: true, a2a: *a2aFlag, a2aEscalate: *a2aEscalate, a2aURL: *a2aURL, sessions: root, hostDir: dir, memoryDir: settings.MemoryDir}
+	} else if f, err = selectFront(*frontName, *once, fi, frontEnvOf(root != "", *trustMCP)); err != nil {
 		return err
 	}
 	// The terminal client owns the screen, so a key command run while
@@ -896,6 +909,67 @@ func loadUserFor(userPath string, leftOut []string) (config.Layer, error) {
 		return config.Layer{}, nil
 	}
 	return loadUser(userPath)
+}
+
+// sessionsRoot is the root of the session store the run records in
+// and the admin modes act on: -sessions when given, else the user's
+// config's sessions (none when -bare leaves the config out), else
+// ~/.dax/sessions, as config.SessionsOf resolves them against dir, the
+// directory dax starts in. directory reports the store of dir's own.
+// With -sessions given the config is not read for it, so a mode that
+// tends the store (-gc, -repair) is not failed by a broken config.
+func sessionsRoot(given map[string]bool, flagValue, cfgPath string, bare bool, dir string) (root string, directory bool, err error) {
+	var (
+		user config.Layer
+		f    config.Flags
+	)
+	if given["sessions"] {
+		f.Sessions = &flagValue
+	} else {
+		var leftOut []string
+		if bare {
+			leftOut = bareLeftOut(given)
+		}
+		if user, err = loadUserFor(cfgPath, leftOut); err != nil {
+			return "", false, err
+		}
+	}
+	return config.SessionsOf(user, f, agent.DefaultRoot(), dir)
+}
+
+// directoryStore readies the store of the directory dax starts in,
+// root: a link in its way (the project's .dax or the store itself) is
+// refused, since a repository could ship one that sends the record
+// elsewhere. With write, the store is made private, as the user's is,
+// and given a .gitignore of "*" if it has none, so the record is not
+// committed with the project (git add -A); the store reads nothing at
+// its root but its own files, so the extra file is harmless to it.
+func directoryStore(root string, write bool) error {
+	for _, p := range []string{filepath.Dir(root), root} {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("-sessions directory: %s is a link; the project's store must be a directory of its own", p)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("-sessions directory: %w", err)
+		}
+	}
+	if !write {
+		return nil
+	}
+	if err := private.SecureDir(root); err != nil {
+		return fmt.Errorf("-sessions directory: %w", err)
+	}
+	g, err := os.OpenFile(filepath.Join(root, ".gitignore"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("-sessions directory: %w", err)
+	}
+	if _, err := g.WriteString("*\n"); err != nil {
+		g.Close()
+		return fmt.Errorf("-sessions directory: %w", err)
+	}
+	return g.Close()
 }
 
 // applyBare leaves out what leftOut names: the user's layer, the

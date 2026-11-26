@@ -490,6 +490,7 @@ Settings come from three layers, each overriding the one before:
   "instructions_file": "~/.config/dax/instructions.md",
   "skills_dirs": ["~/skills"],
   "memory_dir": "~/.dax/memory",
+  "sessions": "user",
   "pricing_file": "~/.config/dax/prices.json",
   "mcp_servers": {
     "fs": { "command": "mcp-server-filesystem /home/me/notes", "in": "host" },
@@ -535,6 +536,7 @@ names the file and the field.
 | `agents_md_global` | your own instruction files for every session, whatever the repository holds, such as an `AGENTS.md` in a directory above your checkouts: read on this machine after `~/.dax/AGENTS.md` and before the repository's `AGENTS.md` chain, in order; a missing one is skipped; a relative path is relative to the file that names it |
 | `agents_md_budget` | the most bytes the `AGENTS.md` files may take together, yours first (`~/.dax/AGENTS.md`, `agents_md_global`), then the repository's from its root down; default 65536. The first file that would take the total past it is cut at the last line that fits, with a line saying how many of its bytes were left out, and every file after it is left out whole; the session says so as it starts, in the terminal client, the REPL, on `-p`'s standard error, and to an editor (`-front acp`) as a message ahead of the first reply and on standard error, naming the file, where it was cut and how much went (or, for a file left out whole, its size) and the budget. 1024 to 1048576. A project's file may set it only lower, and then it bounds the repository's files alone, after yours: a repository can make its own instructions cost less, never raise the total or push yours out |
 | `memory_dir` | where the model's memory lives; `""` turns memory off. Default `~/.dax/memory` |
+| `sessions` | the session store every run records in and `-list`, `-resume`, `-gc` and the other admin modes act on: `"user"`, `~/.dax/sessions` for every project (the default); `"directory"`, `.dax/sessions` in the directory dax starts in, one store per project (see [Sessions](#sessions)); any other string a path, relative to the file that names it (a directory named `user` or `directory` is `./user` or `./directory`); `""` records nothing. `-sessions` overrides it. Not in a project file: a repository does not choose where your record of it is kept |
 | `memory` | the background memory pass (see [The background pass](#the-background-pass)): `{"background": "off", "background_every": 1, "background_max_tokens": 8000, "background_trivial_tokens": 500, "index_scopes": []}`, those the defaults. `background` is `off`, `propose` or `auto`; `-memory-background` overrides it. `index_scopes` names the scopes, `user` and `project`, the memory block renders as an index, each entry its heading alone, read whole with `memory_read` (see [Memory](#memory)). Not in a project file: a repository cannot turn on writes to your memory |
 | `pricing_file` | a JSON file of model prices (`"model": {"input","cached","output"}` in USD per million tokens), used by the terminal client's status line and session pane to show cost; without it the client shows token usage but no cost |
 | `mcp_servers` | MCP servers by name; the name prefixes their tools, `mcp__<name>__<tool>`. Each is a `command`, split as `executor`'s string is, or a `url`, not both. A command's `in` is `workspace` (the default: in the workspace, or the executor or box, when it can start a process, here when it cannot) or `host` (on this machine, with its credentials scrubbed, even beside an executor). A `url` is a streamable HTTP server called from this machine, https or http to loopback, or an older HTTP+SSE one (a server that answers the first `initialize` with a 4xx other than 401, 403, 408 or 429, and then a GET with an SSE stream whose first event is `endpoint`, is reached over SSE from then on, and you are told once), and `token_env` names the variable whose token is sent to its origin alone and which no child process gets; `oauth` signs in instead (below). A project's file may name servers too (no `token_env`, no `secret_env`, and no name yours has), which start only once you trust the project's set with `-trust-mcp`. The same shape is `dax workspace -servers`' file, so one definition moves between your config and a workspace's offer unchanged |
@@ -570,7 +572,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
 one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `plan_model`, `act_model`, `think`, `show_reasoning`, `effort`, `agents`,
-`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
+`instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `sessions`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
 what programs start are decisions that send your code, your files and your
@@ -629,7 +631,7 @@ no other account could have written it.
 | `-mcp "cmd"` | one more stdio MCP server, as `mcp__cli__<tool>`; split as `-executor` is |
 | `-trust-mcp` | start the MCP servers the project's config names, and trust that set for the project from now on (`~/.dax/mcp-trust.json`) |
 | `-agents` | offer the `explore` and `task` sub-agents (default on; `-agents=false` turns them off) |
-| `-sessions dir`, `-sync append\|response\|never` | the session store (`-sessions ""` disables recording) and when appends are durable |
+| `-sessions user\|directory\|path`, `-sync append\|response\|never` | the session store, over the config's `sessions`: `user` (`~/.dax/sessions`), `directory` (`.dax/sessions` here), or a path, relative to this directory (`./user` for a directory of that name); `-sessions ""` disables recording. And when appends are durable |
 
 ## Tools
 
@@ -2297,8 +2299,29 @@ as you would the files.
 
 ## Sessions
 
-Every run is recorded in one content-addressed store,
-`~/.dax/sessions`, for every project. Admin commands:
+Every run is recorded in a content-addressed store. By default it is
+your store, `~/.dax/sessions`, one for every project. A project can
+keep its own instead: the `directory` store is `.dax/sessions` in the
+directory dax starts in (the same "this directory" `-list` lists).
+Choose with `sessions` in your config (`"user"`, `"directory"`, a path,
+or `""` to record nothing) or with `-sessions`, which overrides it for
+one run; a repository's `.dax/config.json` cannot set it. The admin
+commands below act on whichever store is chosen, so `dax -sessions
+directory -list` lists the project's store and `dax -sessions user
+-list` yours.
+
+When dax makes a directory store it makes it private (mode 0700, as
+`~/.dax/sessions` is) and writes a `.gitignore` of `*` into it, if it
+has none, so `git add -A` leaves the record out of the project. A
+`.dax` or `.dax/sessions` that is a link is refused, so a repository
+cannot point your record somewhere else. The store sits inside the
+workspace, so the model's read tools (`read`, `grep`, `glob`, `ls`, a
+read-only `bash` line) can read this project's past sessions, every
+file and command output they hold among them; a `write` or `edit`
+there asks even in `acceptEdits`, since `.dax` is a protected path.
+For the same reason `dax serve -a2a` refuses a workspace that holds
+the store, as it refuses one holding `~/.dax`. A store a repository ships committed is a record someone else
+wrote: use the directory store in projects you trust. Admin commands:
 
 ```sh
 dax -list                          # sessions of this project, with their names: this directory, or the executor's (docs/sandbox.md)
