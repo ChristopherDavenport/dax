@@ -523,6 +523,7 @@ names the file and the field.
 | `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
 | `plan_model`, `act_model` | the model plan mode moves to, and the one your approval of a plan moves to (see [Permission modes](#permission-modes)); empty leaves the model as it is. Like `model`, each is the provider's it was set beside |
 | `agents` | offer the explore and task sub-agents; default `true` |
+| `show_reasoning` | start the terminal client with every reasoning row expanded, as Ctrl-R with no row selected does; Ctrl-R still toggles. Default `false`: reasoning is a collapsed row. Your file only |
 | `api_key_env` | the variable holding the `openresponses` provider's key (the name, never the key) |
 | `api_key_command` | a program and its arguments, `["program", "arg", ...]`, that prints the provider's key; run again as the key ages or is refused (see above) |
 | `api_key_login` | how to sign in again, a URL or a command, shown when `api_key_command` fails or its key is refused; one line, at most 500 bytes |
@@ -568,7 +569,7 @@ drop the shipped allow rules (their asks and denies stay), and set
 `"fallback"` to `ask` or `deny`, and `"default_mode"` to `dontAsk`, when
 that is stricter than yours. It cannot bring back what you dropped or
 loosen what you set, and its rules rank below yours so they cannot cancel
-one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `plan_model`, `act_model`, `think`, `effort`, `agents`,
+one of yours. It may **not** set `provider`, `model`, `subagent_model`, `base_url`, `api_key_env`, `api_key_command`, `api_key_login`, `session_header`, `client_header`, `cache_ttl`, `subagent_cache_ttl`, `plan_model`, `act_model`, `think`, `show_reasoning`, `effort`, `agents`,
 `instructions_file`, `skills_dirs`, `agents_md_global`, `memory_dir`, `memory`, `pricing_file`, `executor`, `box`, `workspace`, `servers_workspace`, `servers_workspaces`, `peers`, `status` or `hooks`: dax
 refuses the file with an error naming the field and saying to put it in
 your own config. (Where the model runs, what it is told and remembers, and
@@ -594,6 +595,7 @@ no other account could have written it.
 | flag | |
 |---|---|
 | `-provider`, `-model`, `-subagent-model`, `-base-url`, `-api-key-env`, `-think`, `-effort` | override the config |
+| `-show-reasoning` | overrides `show_reasoning`: the terminal client starts with reasoning expanded; `-show-reasoning=false` starts it collapsed |
 | `-api-key-command 'program arg ...'` | overrides `api_key_command`, split as a shell splits words with nothing expanded; `""` turns it off, and `api_key_login` with it |
 | `-api-key-login hint` | overrides `api_key_login` |
 | `-session-header name`, `-client-header name` | override `session_header` and `client_header`; `""` turns one off |
@@ -1683,7 +1685,7 @@ drawn as the client draws any call, its name and arguments.
 | `y` / `n` / `s` | approve / refuse the permission asked and let the run go on / refuse it and stop the run; `n` and `s` then take an optional reason and Enter. A refusal is told to the model in the REPL's words, not to get the same result another way and to say so if it is still needed, with your reason after. A panel takes no answer for half a second after it opens, so a `y` typed in the middle of a line is not an approval |
 | `y` / `a` / `n` | on a question: allow, allow with a note, refuse with an optional reason; the note or the reason is typed, then Enter |
 | PgUp, PgDn, Ctrl-Up/Down, Ctrl-Home/End, mouse wheel | scroll the conversation |
-| Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's |
+| Ctrl-R / Ctrl-O | show reasoning / tool arguments and output in full: the selected row's, or with no row selected every row's; `show_reasoning` (`-show-reasoning`) starts with every reasoning row shown |
 | Ctrl-T | the tree of the session's branches; Enter views one, `c` continues from it |
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |

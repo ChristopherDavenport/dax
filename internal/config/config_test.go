@@ -33,7 +33,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Provider != "ollama" || s.Model != "" || s.BaseURL != "" || !s.Think || s.MemoryDir != "/mem" {
+	if s.Provider != "ollama" || s.Model != "" || s.BaseURL != "" || !s.Think || s.ShowReasoning || s.MemoryDir != "/mem" {
 		t.Fatalf("defaults: %+v", s)
 	}
 	if !s.Policy.Builtin || s.Policy.Fallback != "ask" || s.Policy.Mode != "default" {
@@ -45,25 +45,25 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestPrecedenceIsFileThenFlags(t *testing.T) {
-	user := parse(t, `{"provider":"openresponses","model":"u-model","base_url":"https://u.example/v1","api_key_env":"U_KEY","think":false}`, false)
+	user := parse(t, `{"provider":"openresponses","model":"u-model","base_url":"https://u.example/v1","api_key_env":"U_KEY","think":false,"show_reasoning":true}`, false)
 	proj := parse(t, `{"policy":{"ask":["write"]}}`, true)
 
 	s, err := Resolve([]Layer{user, proj}, Flags{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Provider != "openresponses" || s.Model != "u-model" || s.BaseURL != "https://u.example/v1" || s.APIKeyEnv != "U_KEY" || s.Think {
+	if s.Provider != "openresponses" || s.Model != "u-model" || s.BaseURL != "https://u.example/v1" || s.APIKeyEnv != "U_KEY" || s.Think || !s.ShowReasoning {
 		t.Fatalf("file: %+v", s)
 	}
 	if s.Sources["provider"] != user.Path || s.Sources["model"] != user.Path || s.Sources["api_key_env"] != user.Path {
 		t.Fatalf("sources: %v", s.Sources)
 	}
 
-	s, err = Resolve([]Layer{user, proj}, Flags{Model: ptr("f-model"), Think: ptr(true), BaseURL: ptr("https://f.example/v1"), APIKeyEnv: ptr("F_KEY")}, "")
+	s, err = Resolve([]Layer{user, proj}, Flags{Model: ptr("f-model"), Think: ptr(true), ShowReasoning: ptr(false), BaseURL: ptr("https://f.example/v1"), APIKeyEnv: ptr("F_KEY")}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Model != "f-model" || !s.Think || s.BaseURL != "https://f.example/v1" || s.APIKeyEnv != "F_KEY" || s.Provider != "openresponses" {
+	if s.Model != "f-model" || !s.Think || s.ShowReasoning || s.BaseURL != "https://f.example/v1" || s.APIKeyEnv != "F_KEY" || s.Provider != "openresponses" {
 		t.Fatalf("flags win: %+v", s)
 	}
 	if s.Sources["model"] != "flag" || s.Sources["api_key_env"] != "flag" {
@@ -253,6 +253,7 @@ func TestValidation(t *testing.T) {
 		{"unknown field", `{"modle":"x"}`, false, `unknown field "modle"`},
 		{"bad json", `{"model":`, false, "unexpected EOF"},
 		{"wrong type", `{"think":"yes"}`, false, "think"},
+		{"show_reasoning not a bool", `{"show_reasoning":"yes"}`, false, "show_reasoning"},
 		{"trailing data", `{} {}`, false, "trailing data"},
 		{"unknown provider", `{"provider":"cohere"}`, false, `provider "cohere": want one of ollama, openai, openrouter, openresponses, anthropic, gemini`},
 		{"unknown effort", `{"effort":"max"}`, false, `effort "max": want one of minimal, low, medium, high, xhigh`},
@@ -298,6 +299,7 @@ func TestValidation(t *testing.T) {
 		{"client_header as the key", `{"client_header":"X-Api-Key"}`, false, "client_header: X-Api-Key is a header the client sets itself"},
 		{"project subagent_model", `{"subagent_model":"x"}`, true, "subagent_model: a project file may only tighten"},
 		{"project think", `{"think":false}`, true, "think: a project file may only tighten"},
+		{"project show_reasoning", `{"show_reasoning":true}`, true, "show_reasoning: a project file may only tighten"},
 		{"project effort", `{"effort":"xhigh"}`, true, "effort: a project file may only tighten"},
 		{"project agents", `{"agents":true}`, true, "agents: a project file may only tighten"},
 		{"project instructions_file", `{"instructions_file":"~/.aws/credentials"}`, true, "instructions_file: a project file may only tighten"},

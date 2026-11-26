@@ -109,6 +109,7 @@ func run(ctx context.Context, args []string, p program) error {
 	subCacheTTL := fs.String("subagent-cache-ttl", "", "how long Claude's prompt cache keeps a sub-agent's requests: 5m (the default) or 1h (anthropic and vertex)")
 	cfgPath := fs.String("config", "", "user config file; default ~/.config/dax/config.json")
 	think := fs.Bool("think", true, "request and show reasoning")
+	showReasoning := fs.Bool("show-reasoning", false, "start the terminal client with reasoning expanded; ctrl+r still toggles")
 	effort := fs.String("effort", "", "the reasoning effort -think asks for: minimal, low (default), medium, high or xhigh")
 	noPolicy := fs.Bool("no-policy", false, "the old name of -mode bypassPermissions: run every call no deny rule refuses, without asking")
 	modeFlag := fs.String("mode", "", "the permission mode to start in: default, acceptEdits, plan, dontAsk or bypassPermissions (/mode changes it); default policy.default_mode")
@@ -325,6 +326,9 @@ func run(ctx context.Context, args []string, p program) error {
 	}
 	if given["think"] {
 		flags.Think = think
+	}
+	if given["show-reasoning"] {
+		flags.ShowReasoning = showReasoning
 	}
 	if given["memory"] {
 		m := *memoryFlag
@@ -696,7 +700,7 @@ func run(ctx context.Context, args []string, p program) error {
 	// interface in front.go and gets a case in selectFront.
 	fi := frontInfo{
 		Name: p.name, Version: p.version, Renderers: renderers, Summarizers: summarizers,
-		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory, Snapshot: *snapshot, SnapshotMax: settings.SnapshotMaxBytes,
+		Provider: settings.Provider, Model: modelNames(m, hasExtension(exts, agents.Name)), ModelInfo: modelLine, Dir: wsRoot, Executor: executorLine(ex, boxConfineOf(settings.Box)), Workspace: wsLine, Servers: swLine, Think: settings.Think, ShowReasoning: settings.ShowReasoning, Prompt: *once, Timeout: *timeout, Result: *resultPath, Trajectory: *trajectory, Snapshot: *snapshot, SnapshotMax: settings.SnapshotMaxBytes,
 		Policy: policySummary(settings.Policy, exts), Cost: cost, Price: opts.Price, Verbose: *verbose,
 		Status: settings.Status, Windows: windowsOf(settings.ContextWindow, m.Name, opts.Window),
 		UserConfig: user.Path,

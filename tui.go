@@ -265,6 +265,9 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 	if f.info.Cost != nil {
 		opts = append(opts, console.WithCost(f.info.Cost))
 	}
+	if f.info.ShowReasoning {
+		opts = append(opts, console.WithReasoningShown())
+	}
 	var redraw func()
 	if f.info.Status != nil {
 		h := newStatus(f.info, sess)
