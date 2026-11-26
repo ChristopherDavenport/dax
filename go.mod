@@ -14,9 +14,9 @@ require (
 	github.com/ChristopherDavenport/agentsession v0.0.40
 	github.com/ChristopherDavenport/agentskill v0.0.12
 	github.com/ChristopherDavenport/agentsmd v0.0.6
-	github.com/ChristopherDavenport/agenttool v0.0.30
-	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.30
-	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.30
+	github.com/ChristopherDavenport/agenttool v0.0.31
+	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.31
+	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.31
 	github.com/ChristopherDavenport/agentturn v0.0.41
 	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.41
 	github.com/ChristopherDavenport/agentturn/session v0.0.41

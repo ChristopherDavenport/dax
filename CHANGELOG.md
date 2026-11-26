@@ -5,6 +5,21 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agenttool, agenttool/mcpclient and agenttool/mcpserver
+  v0.0.31, up from v0.0.30: MCP Events (`mcpclient.WithEvents`,
+  `Remote.RunEvents`, `mcpserver.AddEvents`).
+- Added: `mcp_servers.<name>.events`, MCP Events by poll: a server's
+  event types are polled, each event delivered to the session as a
+  user message framed as untrusted data (a run when idle, a follow-up
+  during one), with a cursor in `~/.dax/mcp-events.json`. The config
+  block (`types`, `session`) is validated and refused in a project's
+  file; `session: "dedicated"` is defined but not yet served.
+- Changed: package `agent` gains `MCPServer.Events`, the `MCPEvents` and
+  `MCPEventType` types and the constants `EventTrigger`, `EventBuffer` and
+  `EventPayloadBytes`.
+
 ## v0.0.41 - 2026-11-25
 
 - Dependencies: agentconsole v0.0.21, up from v0.0.18. The terminal
