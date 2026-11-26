@@ -306,7 +306,8 @@ func TestASessionRunsItsToolsInTheExecutor(t *testing.T) {
 	}
 	// skill_manage is dax-skills' and control: it writes the user's
 	// learned skills where the session runs, never in the executor.
-	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output", "skill_manage"}; !slices.Equal(names, want) {
+	// background_agents is dax-agents' and control too: the session's own children.
+	if want := []string{"read", "write", "edit", "glob", "grep", "ls", "bash", "background", "ask", "status", "broken", "read_output", "skill_manage", "background_agents"}; !slices.Equal(names, want) {
 		t.Errorf("tools %v, want %v", names, want)
 	}
 	if om := s.Omitted(); len(om) != 0 {

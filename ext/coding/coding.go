@@ -10,11 +10,16 @@
 package coding
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/ChristopherDavenport/agentkit"
 
 	"github.com/ChristopherDavenport/agenttool"
+	"github.com/ChristopherDavenport/agentturn"
 
 	"github.com/ChristopherDavenport/dax/extension"
 	"github.com/ChristopherDavenport/dax/policy"
@@ -54,7 +59,11 @@ func New(maxRead int64) extension.Extension {
 	return extension.Extension{
 		Name: Name,
 		Tools: func(e extension.ToolEnv) []agenttool.Tool {
-			return tool.Builtins(e.Files, maxRead)
+			var proc []tool.ProcessOption
+			if e.Deliver != nil {
+				proc = append(proc, tool.WithExitNotice(exitDelivery(e.Deliver)))
+			}
+			return tool.BuiltinsWith(e.Files, maxRead, proc)
 		},
 		ReadOnly: []string{"read", "glob", "grep", "ls", "bash"},
 		// read_output reads the session's own kept outputs, so it runs
@@ -77,4 +86,60 @@ func New(maxRead int64) extension.Extension {
 		Renderers:    toolrender.Renderers,
 		Summarizers:  toolrender.Summarizers,
 	}
+}
+
+// ExitTrigger is the kind of the trigger a background process's exit is
+// recorded under: the process's id as the ref, its command beside.
+const ExitTrigger = "background-exit"
+
+// exitDelivery tells the session of a background process that ended on
+// its own: its command, how it ended, how long it ran, and the tail of
+// its output, which the session frames as untrusted data. The session
+// starts a run for it, or lets the run in flight take it.
+func exitDelivery(deliver func(extension.Delivery) error) func(tool.ExitNotice) {
+	return func(n tool.ExitNotice) {
+		_ = deliver(extension.Delivery{
+			Trigger: agentturn.Trigger{Kind: ExitTrigger, Source: "background", Ref: strconv.Itoa(n.ID),
+				Extra: map[string]any{"command": clip(n.Command, 200)}},
+			Header:   exitHeader(n),
+			Payload:  exitPayload(n),
+			MaxBytes: tool.NoticeTail,
+		})
+	}
+}
+
+// exitHeader is the first line of a process's exit, which names the
+// process and says how it ended, in dax's words and not the process's.
+func exitHeader(n tool.ExitNotice) string {
+	how := fmt.Sprintf("exited with status %d", n.Status)
+	switch {
+	case n.Err != nil:
+		how = fmt.Sprintf("ended abnormally (status %d: %v)", n.Status, n.Err)
+	case n.Status == 0:
+		how = "exited with status 0"
+	}
+	return fmt.Sprintf("[Background process %d %s after %s. Command: %s]", n.ID, how, n.Duration.Round(time.Second), strings.Join(strings.Fields(n.Command), " "))
+}
+
+// exitPayload is the tail of the output the model has not read.
+func exitPayload(n tool.ExitNotice) string {
+	n.Tail = strings.TrimRight(n.Tail, "\n")
+	switch {
+	case n.Tail == "" && n.Cut == 0:
+		return "[no unread output]"
+	case n.Cut > 0:
+		return fmt.Sprintf("[%d earlier bytes of unread output left out; the last %d follow]\n%s", n.Cut, len(n.Tail), n.Tail)
+	}
+	return n.Tail
+}
+
+// clip is s cut to at most n bytes at a character.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "..."
 }

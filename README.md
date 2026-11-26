@@ -268,6 +268,17 @@ sub-agent model, recorded as a child session:
     task that depends on what was said or decided in it.
   - `model`: `subagent` (the default) runs the sub-agent model; `main`
     runs the main model, for a task that needs it.
+  - `background`: `true` returns the call at once with an id and delivers
+    the answer later, as a message that wakes the agent (a new run when
+    it is idle, the run in flight when that will still take it). At most
+    four run at once, and `background_agents` lists them and cancels one.
+    A background sub-agent cannot ask you: a call the policy asks about
+    stops it, and the agent is told. It ends with the session.
+
+A `background` process that ends on its own reports to the agent the same
+way: its command, exit status and duration, and the tail of the output it
+has not read, framed as untrusted data. (Not with an executor elsewhere,
+where the tool is polled.)
 
   Each call reads `/think` and `/model` as they stand: `main` is the
   model `/model` last chose, and with no `subagent_model` configured the
