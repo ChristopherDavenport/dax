@@ -9,6 +9,10 @@
 // read-only ones, env.ReadOnlyTools, for explore), so a tool another
 // extension adds reaches them too, whichever order the extensions come
 // in.
+//
+// Each also takes background: true, which returns the call at once and
+// delivers the sub-agent's answer to the session when it ends
+// (background.go), and background_agents lists and cancels those.
 package agents
 
 import (
@@ -52,6 +56,8 @@ const delegation = "Your context lasts the whole session; spend it on decisions,
 	"- task: a change you can brief completely, giving the goal, the files, the conventions and how to check it. " +
 	"A fresh task sees only your brief. Use context fork only when the brief would leave out what was decided here.\n" +
 	"- Calls in one turn run in parallel; give parallel tasks separate files.\n" +
+	"- background: true on explore or task returns at once and delivers the answer later, as a message that wakes you; use it for work that is not on the path of your next step, never to wait. " +
+	"At most 4 run at once; background_agents lists and cancels them. A background sub-agent cannot ask the user: a call the policy asks about stops it.\n" +
 	"- Work directly when you know the file or symbol, when the change is small, or when you need to see the code to decide.\n" +
 	"- Do not repeat a search you delegated. Before you build on a sub-agent's report, read the lines it depends on.\n" +
 	"- In your reply, pass on what a sub-agent found, since the user sees only the start of its report; " +
@@ -64,26 +70,36 @@ const delegation = "Your context lasts the whole session; spend it on decisions,
 func New(o Options) extension.Extension {
 	return extension.Extension{
 		Name:         Name,
-		Owns:         []string{"explore", "task"},
-		Policy:       policy.Rules{Allow: []string{"explore", "task"}},
+		Owns:         []string{"explore", "task", "explore_background", "task_background", ControlTool},
+		Policy:       policy.Rules{Allow: []string{"explore", "task", ControlTool}},
 		Instructions: delegation,
 		Kit: func(env extension.Env) ([]agentkit.Option, error) {
 			ctx := context.Background()
-			return []agentkit.Option{
-				// A call the session's policy asks about inside a
-				// sub-agent is put to whoever answers the task call's
-				// questions, and with nobody to ask the call fails
-				// input-required (agentturn RFC 0001 Composition).
-				//
-				// The memory block, and task's AGENTS.md, are the kit's
-				// parts, rendered for each of the child's requests and
-				// recorded in its session as parts with their source and
-				// trust, not as text of the child's own prompt.
-				agentkit.WithChildAgent(o.explore(ctx, env), agentkit.ChildParts(agentkit.PartMemory),
-					agentkit.ChildAgentOptions(childagent.WithCallConfig(o.exploreCall(env)), childagent.WithAskParent())),
-				agentkit.WithChildAgent(o.task(ctx, env), agentkit.ChildParts(agentkit.PartMemory, agentsmd.PartID),
-					agentkit.ChildAgentOptions(childagent.WithCallConfig(o.taskCall(env)), childagent.WithAskParent())),
-			}, nil
+			bg := newBackgrounds(env)
+			env.WrapOwned(bg.wrap)
+			// A call the session's policy asks about inside a
+			// sub-agent is put to whoever answers the task call's
+			// questions, and with nobody to ask the call fails
+			// input-required (agentturn RFC 0001 Composition).
+			//
+			// The memory block, and task's AGENTS.md, are the kit's
+			// parts, rendered for each of the child's requests and
+			// recorded in its session as parts with their source and
+			// trust, not as text of the child's own prompt.
+			//
+			// Each is two tools, a foreground one and a background one
+			// (background.go), which the model is offered as one.
+			child := func(cfg agentturn.Config, call childagent.Option, parts ...string) []agentkit.Option {
+				fg := agentkit.WithChildAgent(cfg, agentkit.ChildParts(parts...),
+					agentkit.ChildAgentOptions(call, childagent.WithAskParent()))
+				back := agentkit.WithChildAgent(cfg, agentkit.ChildParts(parts...),
+					agentkit.ChildAgentOptions(append([]childagent.Option{childagent.WithToolName(cfg.Name + "_background"),
+						call, childagent.WithAskParent()}, bg.options()...)...))
+				return []agentkit.Option{back, fg}
+			}
+			opts := child(o.explore(ctx, env), childagent.WithCallConfig(o.exploreCall(env)), agentkit.PartMemory)
+			opts = append(opts, child(o.task(ctx, env), childagent.WithCallConfig(o.taskCall(env)), agentkit.PartMemory, agentsmd.PartID)...)
+			return append(opts, agentkit.WithTools(bg.control())), nil
 		},
 		Renderers: func(string) toolview.Renderers { return toolrender.SubAgents() },
 	}
