@@ -110,17 +110,18 @@ func callCI(t *testing.T, s *Session, tool string, args map[string]any) string {
 	t.Helper()
 	var text string
 	waitCond(t, "the call to "+tool, func() bool {
-		for _, m := range s.Kit.MCPServers() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			res, err := m.Remote.Session().CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
-			cancel()
-			if err != nil || res.IsError {
-				return false
-			}
-			text = res.Content[0].(*mcp.TextContent).Text
-			return true
+		servers := s.Kit.MCPServers()
+		if len(servers) == 0 {
+			return false
 		}
-		return false
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		res, err := servers[0].Remote.Session().CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+		if err != nil || res.IsError {
+			return false
+		}
+		text = res.Content[0].(*mcp.TextContent).Text
+		return true
 	})
 	return text
 }
