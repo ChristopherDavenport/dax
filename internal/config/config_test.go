@@ -1727,3 +1727,56 @@ func TestServersWorkspaces(t *testing.T) {
 		}
 	}
 }
+
+// An events block is the user's alone: a project's file may not have
+// events start runs, whether read from a file or built as a layer, and
+// a workspace's offered servers take none.
+func TestMCPEventsPrecedenceAndValidation(t *testing.T) {
+	user := parse(t, `{"mcp_servers":{"ci":{"url":"https://ci.example/mcp","events":{"types":[{"name":"build","arguments":{"repo":"dax"}},{"name":"deploy"}],"session":"dedicated"}}}}`, false)
+	s, err := Resolve([]Layer{user, parse(t, `{"mcp_servers":{"lint":{"command":"lint-mcp"}}}`, true)}, Flags{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *MCPEvents
+	for _, m := range s.MCP {
+		if m.Name == "ci" {
+			got = m.Events
+		}
+		if m.Name == "lint" && m.Events != nil {
+			t.Error("a server without a block has events")
+		}
+	}
+	if got == nil || len(got.Types) != 2 || got.Session != MCPEventsDedicated || string(got.Types[0].Arguments) != `{"repo":"dax"}` {
+		t.Errorf("events = %+v", got)
+	}
+
+	if _, err := Parse([]byte(`{"mcp_servers":{"ci":{"command":"x","events":{"types":[{"name":"b"}]}}}}`), "p.json", true); err == nil || !strings.Contains(err.Error(), "a project file may not have events") {
+		t.Errorf("a project's events = %v, want refused", err)
+	}
+	l := Layer{Project: true, Config: Config{MCPServers: map[string]MCPServer{"ci": {Command: "x", Events: &MCPEvents{Types: []MCPEventType{{Name: "b"}}}}}}}
+	if _, err := Resolve([]Layer{l}, Flags{}, ""); err == nil || !strings.Contains(err.Error(), "a project file may not have events") {
+		t.Errorf("a project's events in Resolve = %v, want refused", err)
+	}
+	if _, err := ParseOffered([]byte(`{"mcp_servers":{"ci":{"command":"x","events":{"types":[{"name":"b"}]}}}}`), "s.json"); err == nil || !strings.Contains(err.Error(), "events") {
+		t.Errorf("an offered server's events = %v, want refused", err)
+	}
+	for _, tc := range []struct{ name, block, want string }{
+		{"no types", `{"types":[]}`, "name at least one"},
+		{"no name", `{"types":[{"name":""}]}`, "events.types[0].name"},
+		{"a control character", `{"types":[{"name":"a\nb"}]}`, "control"},
+		{"arguments not an object", `{"types":[{"name":"a","arguments":[1]}]}`, "JSON object"},
+		{"arguments null", `{"types":[{"name":"a","arguments":null}]}`, "JSON object"},
+		{"twice", `{"types":[{"name":"a","arguments":{"x":1,"y":2}},{"name":"a","arguments":{"y":2,"x":1}}]}`, "named twice"},
+		{"same name, other arguments", `{"types":[{"name":"a","arguments":{"x":1}},{"name":"a","arguments":{"x":2}}]}`, ""},
+		{"a session", `{"types":[{"name":"a"}],"session":"other"}`, "events.session"},
+		{"a current session", `{"types":[{"name":"a"}],"session":"current"}`, ""},
+	} {
+		_, err := Parse([]byte(`{"mcp_servers":{"ci":{"command":"x","events":`+tc.block+`}}}`), "u.json", false)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}

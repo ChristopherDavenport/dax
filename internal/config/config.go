@@ -681,6 +681,92 @@ type MCPServer struct {
 	// alone: false would make every request carry what the user's
 	// default holds back.
 	Defer *bool `json:"defer,omitempty"`
+	// Events takes the server's MCP Events (SEP-3415) by poll: the
+	// event types to subscribe to, each event delivered to the session
+	// as input the model reads as untrusted data. Refused in a project's
+	// file, and in a workspace's offered servers: an event starts a run
+	// no one asked for, which only you may set up.
+	Events *MCPEvents `json:"events,omitempty"`
+}
+
+// The session values of an MCPEvents.
+const (
+	// MCPEventsCurrent delivers events to the session you are working
+	// in, the default.
+	MCPEventsCurrent = "current"
+	// MCPEventsDedicated runs a server's events in a session record of
+	// their own, which a view attaches to. It is defined and validated
+	// but not yet served: a session that names it fails to start.
+	MCPEventsDedicated = "dedicated"
+)
+
+// The bounds of an events block.
+const (
+	// MaxEventTypes is the most event types one server's block names.
+	MaxEventTypes = 16
+	// MaxEventNameBytes bounds an event type's name.
+	MaxEventNameBytes = 128
+	// MaxEventArgumentBytes bounds one subscription's arguments.
+	MaxEventArgumentBytes = 4096
+)
+
+// MCPEvents is a server's events block.
+type MCPEvents struct {
+	// Types are the event types to take, each with the arguments its
+	// subscription needs. At least one.
+	Types []MCPEventType `json:"types"`
+	// Session is MCPEventsCurrent (the default) or MCPEventsDedicated.
+	Session string `json:"session,omitempty"`
+}
+
+// MCPEventType is one subscription: an event type the server lists, and
+// the arguments of its input schema, a JSON object, left out for none.
+type MCPEventType struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+// check refuses an events block that names no type, a type twice, a
+// name or arguments that cannot be sent, and a session that is neither
+// value.
+func (e *MCPEvents) check(name string) error {
+	switch e.Session {
+	case "", MCPEventsCurrent, MCPEventsDedicated:
+	default:
+		return fmt.Errorf("mcp_servers.%s: events.session %q: want %s or %s", name, e.Session, MCPEventsCurrent, MCPEventsDedicated)
+	}
+	if len(e.Types) == 0 {
+		return fmt.Errorf("mcp_servers.%s: events.types: name at least one event type", name)
+	}
+	if len(e.Types) > MaxEventTypes {
+		return fmt.Errorf("mcp_servers.%s: events.types: %d types; at most %d", name, len(e.Types), MaxEventTypes)
+	}
+	seen := map[string]bool{}
+	for i, t := range e.Types {
+		switch {
+		case t.Name == "" || len(t.Name) > MaxEventNameBytes || !utf8.ValidString(t.Name):
+			return fmt.Errorf("mcp_servers.%s: events.types[%d].name: want 1 to %d bytes of text", name, i, MaxEventNameBytes)
+		case strings.IndexFunc(t.Name, unicode.IsControl) >= 0:
+			return fmt.Errorf("mcp_servers.%s: events.types[%d].name: no control characters", name, i)
+		}
+		key := t.Name
+		if len(t.Arguments) > 0 {
+			if len(t.Arguments) > MaxEventArgumentBytes {
+				return fmt.Errorf("mcp_servers.%s: events.types[%d].arguments: %d bytes; at most %d", name, i, len(t.Arguments), MaxEventArgumentBytes)
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(t.Arguments, &obj); err != nil || obj == nil {
+				return fmt.Errorf("mcp_servers.%s: events.types[%d].arguments: want a JSON object", name, i)
+			}
+			c, _ := json.Marshal(obj)
+			key += "\x00" + string(c)
+		}
+		if seen[key] {
+			return fmt.Errorf("mcp_servers.%s: events.types[%d]: %s is named twice with the same arguments", name, i, t.Name)
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 // MCPOAuth is a url server's oauth block.
@@ -1346,6 +1432,14 @@ func (s MCPServer) check(name string, project bool) error {
 	if err := checkDescription(s.Description); err != nil {
 		return fmt.Errorf("mcp_servers.%s: description: %w", name, err)
 	}
+	if s.Events != nil {
+		if project {
+			return fmt.Errorf("mcp_servers.%s: events: a project file may not have events start runs, which only you may set up; put the server in your own config (%s)", name, Path())
+		}
+		if err := s.Events.check(name); err != nil {
+			return err
+		}
+	}
 	if project && s.Defer != nil && !*s.Defer {
 		return fmt.Errorf(`mcp_servers.%s: defer: a project file may hold a server's tools back ("defer": true), never send them all; leave defer out or put the server in your own config (%s)`, name, Path())
 	}
@@ -1463,6 +1557,8 @@ func ParseOffered(data []byte, path string) (map[string]MCPServer, error) {
 			return nil, fmt.Errorf("servers %s: mcp_servers.%s: a server at a url is not the workspace's to offer; the session calls it from where it runs, so put it in the session's config", path, name)
 		case s.In == MCPInHost:
 			return nil, fmt.Errorf(`servers %s: mcp_servers.%s: in "host" places a server on the session's machine; an offered server runs in the served directory, so leave in out`, path, name)
+		case s.Events != nil:
+			return nil, fmt.Errorf("servers %s: mcp_servers.%s: events are the session's to take, from the user's own config; leave events out", path, name)
 		case s.Defer != nil:
 			return nil, fmt.Errorf("servers %s: mcp_servers.%s: defer is the session's to choose, which holds an offered server's tools back by their size; leave defer out", path, name)
 		}
@@ -2239,6 +2335,8 @@ type MCP struct {
 	Project                          bool
 	// Defer is mcp_servers' defer: nil decides by size.
 	Defer *bool
+	// Events is mcp_servers' events: the user's file alone.
+	Events *MCPEvents
 }
 
 // PolicySettings is the policy folded across layers; policy.Build
@@ -2426,7 +2524,7 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 					}
 				}
 			}
-			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project, Defer: m.Defer}
+			servers[n] = MCP{Name: n, Command: m.Command, In: m.In, URL: m.URL, TokenEnv: m.TokenEnv, OAuth: m.OAuth, Description: m.Description, SecretEnv: slices.Clone(m.SecretEnv), Project: l.Project, Defer: m.Defer, Events: m.Events}
 		}
 		if !l.Project {
 			// Refused in a project's file when it was read; a layer
@@ -2877,6 +2975,16 @@ func checkSecretEnv(s Settings) error {
 		}
 	}
 	for _, m := range s.MCP {
+		if m.Events != nil {
+			// Refused when the file was read; a layer built some other
+			// way is held to the same rules.
+			if m.Project {
+				return fmt.Errorf("mcp_servers.%s: events: a project file may not have events start runs", m.Name)
+			}
+			if err := m.Events.check(m.Name); err != nil {
+				return err
+			}
+		}
 		if m.Project && m.Defer != nil && !*m.Defer {
 			// Refused when the file was read, as below.
 			return fmt.Errorf("mcp_servers.%s: defer: a project file may hold a server's tools back, never send them all", m.Name)
