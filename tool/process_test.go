@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/ChristopherDavenport/agenttool"
 	"os/exec"
 	"strings"
 	"testing"
@@ -128,4 +130,116 @@ func TestAnAutoAllowedStartsOutputIsRedacted(t *testing.T) {
 	if strings.Contains(out, "SECRETTOKEN") || !strings.Contains(out, "https://***@github.com/o/r.git") {
 		t.Errorf("start = %q", out)
 	}
+}
+
+// exitNotices runs commands under a background tool that reports each
+// process that ends on its own, and returns the notices as they come.
+func exitNotices(t *testing.T) (agenttool.Tool, <-chan ExitNotice) {
+	t.Helper()
+	old := startSettle
+	t.Cleanup(func() { startSettle = old })
+	startSettle = 200 * time.Millisecond
+	ch := make(chan ExitNotice, 8)
+	pt := Process(newWS(t, t.TempDir()), 0, WithExitNotice(func(n ExitNotice) { ch <- n }))
+	t.Cleanup(func() { pt.(interface{ Close() error }).Close() })
+	return pt, ch
+}
+
+func noticeWithin(t *testing.T, ch <-chan ExitNotice, d time.Duration) (ExitNotice, bool) {
+	t.Helper()
+	select {
+	case n := <-ch:
+		return n, true
+	case <-time.After(d):
+		return ExitNotice{}, false
+	}
+}
+
+// A process that ends on its own after the start call returned is
+// reported once: its status, how long it ran and the unread tail of its
+// output.
+func TestAProcessThatEndsOnItsOwnIsReported(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		status  int
+		check   func(*testing.T, ExitNotice)
+	}{
+		{"exit status and output", "echo up; sleep 0.6; echo bye; exit 3", 3, func(t *testing.T, n ExitNotice) {
+			// What the start call showed is read; only the rest is the tail.
+			if n.Tail != "bye\n" || n.Cut != 0 || n.Command == "" || n.Duration < 500*time.Millisecond {
+				t.Errorf("notice = %+v", n)
+			}
+		}},
+		{"a long tail is cut to its bound", "sleep 0.6; head -c 20000 /dev/zero | tr '\\0' x", 0, func(t *testing.T, n ExitNotice) {
+			if len(n.Tail) != NoticeTail || n.Cut != 20000-NoticeTail {
+				t.Errorf("tail %d bytes, cut %d", len(n.Tail), n.Cut)
+			}
+		}},
+		{"no output", "sleep 0.6", 0, func(t *testing.T, n ExitNotice) {
+			if n.Tail != "" || n.Cut != 0 {
+				t.Errorf("notice = %+v", n)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pt, ch := exitNotices(t)
+			if _, err := call(t.Context(), pt, `{"action":"start","command":`+jsonString(tc.command)+`}`); err != nil {
+				t.Fatal(err)
+			}
+			n, ok := noticeWithin(t, ch, 10*time.Second)
+			if !ok {
+				t.Fatal("no notice")
+			}
+			if n.ID != 1 || n.Status != tc.status || n.Err != nil {
+				t.Errorf("notice = %+v", n)
+			}
+			tc.check(t, n)
+			if n2, ok := noticeWithin(t, ch, 300*time.Millisecond); ok {
+				t.Errorf("a second notice: %+v", n2)
+			}
+		})
+	}
+}
+
+// A process whose end a call told the model of, or the model ended or
+// the session's close did, is not reported again.
+func TestAProcessWhoseEndWasToldIsNotReported(t *testing.T) {
+	t.Run("ended while start waited", func(t *testing.T) {
+		pt, ch := exitNotices(t)
+		out, err := call(t.Context(), pt, `{"action":"start","command":"echo quick"}`)
+		if err != nil || !strings.Contains(out, "exited 0") {
+			t.Fatalf("start = %q, %v", out, err)
+		}
+		if n, ok := noticeWithin(t, ch, 500*time.Millisecond); ok {
+			t.Errorf("notice for an end the start call reported: %+v", n)
+		}
+	})
+	t.Run("stopped by the model", func(t *testing.T) {
+		pt, ch := exitNotices(t)
+		if _, err := call(t.Context(), pt, `{"action":"start","command":"sleep 30"}`); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := call(t.Context(), pt, `{"action":"stop","id":1}`); err != nil || !strings.Contains(out, "exited") {
+			t.Fatalf("stop = %q, %v", out, err)
+		}
+		if n, ok := noticeWithin(t, ch, 500*time.Millisecond); ok {
+			t.Errorf("notice for a stop: %+v", n)
+		}
+	})
+	t.Run("ended with the tool", func(t *testing.T) {
+		pt, ch := exitNotices(t)
+		if _, err := call(t.Context(), pt, `{"action":"start","command":"sleep 30"}`); err != nil {
+			t.Fatal(err)
+		}
+		pt.(interface{ Close() error }).Close()
+		if n, ok := noticeWithin(t, ch, 500*time.Millisecond); ok {
+			t.Errorf("notice for the close: %+v", n)
+		}
+	})
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

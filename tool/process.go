@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ChristopherDavenport/agenttool"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -30,10 +31,11 @@ const (
 	// bytes; processShow the most one output call returns.
 	processKeep = 256 << 10
 	processShow = 16 << 10
-	// startSettle is how long start waits for a process's first output,
-	// or its end, before it answers.
-	startSettle = time.Second
 )
+
+// startSettle is how long start waits for a process's end before it
+// answers.
+var startSettle = time.Second
 
 // stopWait is how long stop, and the tool's close, wait for a process
 // they ended to be reported ended.
@@ -49,17 +51,67 @@ type ProcessArgs struct {
 	Stamp string `json:"dax_stamp,omitempty" desc:"Set by dax; leave it out"`
 }
 
+// ExitNotice is what the background tool says of a process that ended
+// on its own, to the function WithExitNotice gives: everything the host
+// needs to tell the session, and none of it framed, since the host
+// frames it (a process's output is untrusted text).
+type ExitNotice struct {
+	// ID is the process's id, as start and list give it.
+	ID int
+	// Command is the command line the model started, whole.
+	Command string
+	// Status is the exit status, and Err what Wait said beside it, nil
+	// for a plain exit.
+	Status int
+	Err    error
+	// Duration is how long it ran.
+	Duration time.Duration
+	// Tail is the last bytes of the output the model has not read, at
+	// most NoticeTail, with credentials in URLs removed where the call
+	// was one the policy auto-allowed, as output calls remove them. Cut
+	// is how many bytes of unread output were left out before it.
+	Tail string
+	Cut  int64
+}
+
+// NoticeTail is the most of a process's unread output an ExitNotice
+// carries.
+const NoticeTail = 4096
+
+// ProcessOption configures the background tool.
+type ProcessOption func(*processes)
+
+// WithExitNotice calls fn, on its own goroutine's, once for each
+// process that ends on its own: not one the model stopped, not one
+// still running when the tool closes, and not one whose end the call
+// that started it already told the model (a process that ended within
+// start's wait). The model's own list and output calls do not change
+// whether fn is called. fn must not block long: it runs where the
+// process's wait ended, and the tool's close waits for it.
+func WithExitNotice(fn func(ExitNotice)) ProcessOption {
+	return func(p *processes) { p.notice = fn }
+}
+
 // Process returns the background tool over f's workspace, which must be a
 // workspace.Starter for start. A start is decided as a bash call of its
 // command (the same analysis, the same rules and the same stamp), and
 // list, output and stop touch only the processes this tool started;
 // its facts claim says so. Closing the tool stops every process it
 // holds.
-func Process(f *Files, maxFile int64) agenttool.Tool {
+func Process(f *Files, maxFile int64, opts ...ProcessOption) agenttool.Tool {
 	p := &processes{f: f, an: &Analyzer{Files: f, MaxFile: maxFile}, byID: map[int]*proc{}}
+	for _, o := range opts {
+		o(p)
+	}
 	p.ctx, p.cancel = context.WithCancel(context.Background())
-	t := agenttool.New("background", "Run a long-lived command, a dev server or a watcher, in the background in the working directory: "+
-		"start it, list the processes, read a process's new output, and stop it when done. Use it instead of `cmd &` in bash.",
+	desc := "Run a long-lived command, a dev server or a watcher, in the background in the working directory: " +
+		"start it, list the processes, read a process's new output, and stop it when done. Use it instead of `cmd &` in bash. " +
+		"Processes end with the session: after a resume, list them before you rely on one."
+	if p.notice != nil {
+		desc += " When a process ends on its own you are told, as a message framed as untrusted data, with its exit status and the tail of its output you have not read; " +
+			"do not poll for it. Stopping one yourself reports nothing further."
+	}
+	t := agenttool.New("background", desc,
 		p.run, agenttool.WithFacts(p.facts), agenttool.WithBarrier(), agenttool.WithCloser(p.close))
 	return exactArgs[ProcessArgs](t)
 }
@@ -70,10 +122,16 @@ type processes struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// notice is told of a process that ended on its own, or nil.
+	notice func(ExitNotice)
+
 	mu     sync.Mutex
 	next   int
 	byID   map[int]*proc
 	closed bool
+	// noticing counts the notices in flight, which close waits for
+	// (never the processes themselves, which it lets go after stopWait).
+	noticing sync.WaitGroup
 }
 
 // proc is one started process and what it printed.
@@ -94,6 +152,13 @@ type proc struct {
 	done    chan struct{}
 	status  int
 	waitErr error
+	// hold is set while start waits for the process's first output or
+	// end: an end in that time is reported by the call's result, not by
+	// a notice. stopped is set by stop and close, whose results say the
+	// end. finished is set with the status, under mu, so start can tell
+	// an end that came as its wait gave up.
+	hold, stopped, finished bool
+	ended                   time.Time
 }
 
 func (r *proc) Write(b []byte) (int, error) {
@@ -169,6 +234,9 @@ func (p *processes) run(ctx context.Context, in ProcessArgs) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		r.mu.Lock()
+		r.stopped = true
+		r.mu.Unlock()
 		r.p.Close()
 		select {
 		case <-r.done:
@@ -208,7 +276,7 @@ func (p *processes) start(ctx context.Context, in ProcessArgs) (string, error) {
 		return "", fmt.Errorf("%d processes are running; stop one first", running)
 	}
 	p.next++
-	r := &proc{id: p.next, command: in.Command, started: time.Now(), done: make(chan struct{}), redact: plan}
+	r := &proc{id: p.next, command: in.Command, started: time.Now(), done: make(chan struct{}), redact: plan, hold: true}
 	p.byID[r.id] = r
 	p.mu.Unlock()
 
@@ -228,14 +296,32 @@ func (p *processes) start(ctx context.Context, in ProcessArgs) (string, error) {
 		io.Copy(r, proc.Stdout())
 		status, err := proc.Wait()
 		r.mu.Lock()
-		r.status, r.waitErr = status, err
+		r.status, r.waitErr, r.finished, r.ended = status, err, true, time.Now()
+		notify := p.notice != nil && !r.hold && !r.stopped
+		if notify {
+			// Counted under the lock close takes to set stopped, so
+			// close's wait sees it.
+			p.noticing.Add(1)
+		}
 		r.mu.Unlock()
 		close(r.done)
+		if notify {
+			p.notice(r.exitNotice())
+			p.noticing.Done()
+		}
 	}()
 	select {
 	case <-r.done:
 	case <-time.After(startSettle):
 	case <-ctx.Done():
+	}
+	r.mu.Lock()
+	r.hold = false
+	finished := r.finished
+	r.mu.Unlock()
+	if finished {
+		// It ended as the wait gave up, with no notice: say so here.
+		<-r.done
 	}
 	return r.report(true), nil
 }
@@ -346,6 +432,9 @@ func (p *processes) close() error {
 		if r.p == nil {
 			continue
 		}
+		r.mu.Lock()
+		r.stopped = true
+		r.mu.Unlock()
 		r.p.Close()
 		// Its output drained and its status read, so a list after the
 		// close says it ended; a wire that never says so is let go.
@@ -355,5 +444,30 @@ func (p *processes) close() error {
 		}
 	}
 	p.cancel()
+	p.noticing.Wait()
 	return nil
+}
+
+// exitNotice is the process's end as the host is told of it: its
+// unread output's tail, marked read.
+func (r *proc) exitNotice() ExitNotice {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fresh := min(r.total-r.read, int64(len(r.out)))
+	text := r.out[int64(len(r.out))-fresh:]
+	cut := r.total - r.read - int64(len(text))
+	if len(text) > NoticeTail {
+		cut += int64(len(text) - NoticeTail)
+		text = text[len(text)-NoticeTail:]
+	}
+	for len(text) > 0 && !utf8.RuneStart(text[0]) {
+		text = text[1:]
+	}
+	r.read = r.total
+	tail := string(text)
+	if r.redact {
+		tail = redactUserinfo(tail)
+	}
+	return ExitNotice{ID: r.id, Command: r.command, Status: r.status, Err: r.waitErr,
+		Duration: r.ended.Sub(r.started), Tail: tail, Cut: cut}
 }
