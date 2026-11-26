@@ -80,6 +80,9 @@ type frontInfo struct {
 	// whose offered servers alone the session connects; empty for none.
 	Servers string
 	Think   bool
+	// ShowReasoning starts the terminal client with reasoning expanded
+	// (show_reasoning); ctrl+r still toggles.
+	ShowReasoning bool
 	// Prompt is the one-shot prompt of -p; empty for an interactive
 	// front.
 	Prompt string

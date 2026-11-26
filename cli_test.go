@@ -141,13 +141,13 @@ func must(t *testing.T, err error) {
 func TestSettingsPrecedenceFromRealFiles(t *testing.T) {
 	h := home(t)
 	proj := t.TempDir()
-	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"anthropic","model":"from-user","think":false}`)
+	write(t, filepath.Join(h, ".config", "dax", "config.json"), `{"provider":"anthropic","model":"from-user","think":false,"show_reasoning":true}`)
 
 	s, err := settingsOf(local(t, proj), "", config.Flags{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Provider != "anthropic" || s.Model != "from-user" || s.Think {
+	if s.Provider != "anthropic" || s.Model != "from-user" || s.Think || !s.ShowReasoning {
 		t.Fatalf("user file: %+v", s)
 	}
 

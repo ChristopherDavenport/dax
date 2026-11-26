@@ -38,6 +38,13 @@ versions may break flags and the config file.
   options. `ext/agents` gains the `ControlTool` constant and dax-agents
   owns `explore_background`, `task_background` and `background_agents`;
   `ext/coding` gains `ExitTrigger`.
+- Added: `show_reasoning` in your config and the `-show-reasoning` flag
+  start the terminal client with every reasoning row expanded, as Ctrl-R
+  with no row selected does; Ctrl-R still toggles. Default false, and
+  refused in a project's file. Reasoning stays where it is, folded with
+  the quiet calls around it; the setting only picks whether it starts
+  expanded. `dax attach` reads no config and starts collapsed.
+- Dependencies: agentconsole v0.0.22, for `console.WithReasoningShown`.
 
 ## v0.0.41 - 2026-11-25
 

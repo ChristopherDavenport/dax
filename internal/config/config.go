@@ -96,6 +96,10 @@ type Config struct {
 	SubagentCacheTTL string `json:"subagent_cache_ttl,omitempty"`
 	// Think asks the model to reason and shows it.
 	Think *bool `json:"think,omitempty"`
+	// ShowReasoning starts the terminal client with every reasoning row
+	// expanded, as Ctrl-R with no row selected does; Ctrl-R still
+	// toggles. Default false: reasoning is shown collapsed.
+	ShowReasoning *bool `json:"show_reasoning,omitempty"`
 	// Effort is the reasoning effort Think asks for: minimal, low (the
 	// default), medium, high or xhigh.
 	Effort string `json:"effort,omitempty"`
@@ -1093,7 +1097,7 @@ func (l *Layer) validate() error {
 			{"api_key_env", c.APIKeyEnv != ""}, {"api_key_command", len(c.APIKeyCommand) > 0},
 			{"api_key_login", c.APIKeyLogin != ""}, {"session_header", c.SessionHeader != ""}, {"client_header", c.ClientHeader != ""},
 			{"cache_ttl", c.CacheTTL != ""}, {"subagent_cache_ttl", c.SubagentCacheTTL != ""},
-			{"think", c.Think != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
+			{"think", c.Think != nil}, {"show_reasoning", c.ShowReasoning != nil}, {"effort", c.Effort != ""}, {"agents", c.Agents != nil}, {"instructions_file", c.InstructionsFile != ""},
 			{"skills_dirs", len(c.SkillsDirs) > 0}, {"agents_md_global", len(c.AgentsMDGlobal) > 0}, {"memory_dir", c.MemoryDir != nil},
 			{"pass_env", len(c.PassEnv) > 0}, {"max_read_bytes", c.MaxReadBytes != 0}, {"snapshot_max_bytes", c.SnapshotMaxBytes != 0},
 			{"pricing_file", c.PricingFile != ""}, {"executor", c.Executor != nil}, {"box", c.Box != nil}, {"workspace", c.Workspace != nil}, {"servers_workspace", c.ServersWorkspace != nil}, {"servers_workspaces", len(c.ServersWorkspaces) > 0}, {"peers", len(c.Peers) > 0}, {"status", c.Status != nil}, {"hooks", c.Hooks != nil}, {"memory", c.Memory != nil},
@@ -2228,6 +2232,7 @@ type Flags struct {
 	// replaces workspace.url; "" clears the config's servers_workspace.
 	ServersWorkspace *string
 	Think, Agents    *bool
+	ShowReasoning    *bool
 	// AgentsMDGlobal replaces the config's agents_md_global; nil was
 	// not given and empty clears it. A relative path is the working
 	// directory's.
@@ -2259,6 +2264,7 @@ type Settings struct {
 	CacheTTL            string   // empty: Claude's default, 5m
 	SubagentCacheTTL    string   // empty: Claude's default, 5m
 	Think               bool
+	ShowReasoning       bool   // the terminal client starts with reasoning expanded
 	Effort              string // the effort Think asks for
 	Agents              bool
 	InstructionsFile    string
@@ -2436,6 +2442,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		}
 		if l.Think != nil {
 			s.Think = *l.Think
+		}
+		if l.ShowReasoning != nil {
+			s.ShowReasoning = *l.ShowReasoning
 		}
 		if l.Effort != "" {
 			s.Effort = l.Effort
@@ -2641,6 +2650,9 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 	}
 	if f.Think != nil {
 		s.Think = *f.Think
+	}
+	if f.ShowReasoning != nil {
+		s.ShowReasoning = *f.ShowReasoning
 	}
 	if f.Effort != nil {
 		s.Effort = *f.Effort
