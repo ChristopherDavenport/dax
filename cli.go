@@ -661,6 +661,8 @@ func run(ctx context.Context, args []string, p program) error {
 		opts.Instructions = string(data)
 	}
 	opts.MCP = mcpServersOf(settings, *mcp)
+	// A one-shot run ends with its answer: no event starts another.
+	opts.Events = *once == ""
 	if *maxTokens < 0 || *maxCost < 0 {
 		return errors.New("-max-tokens and -max-cost: want 0 or more")
 	}
@@ -979,11 +981,23 @@ func mcpServersOf(s config.Settings, flag string) []agent.MCPServer {
 		out = append(out, agent.MCPServer{
 			Name: m.Name, Command: m.Command, Host: m.In == config.MCPInHost,
 			URL: m.URL, TokenEnv: m.TokenEnv, OAuth: oauthOf(m.OAuth), Project: m.Project,
-			Description: m.Description, SecretEnv: m.SecretEnv, Defer: m.Defer,
+			Description: m.Description, SecretEnv: m.SecretEnv, Defer: m.Defer, Events: eventsOf(m.Events),
 		})
 	}
 	if flag != "" {
 		out = append(out, agent.MCPServer{Name: config.MCPFlagName, Command: flag})
+	}
+	return out
+}
+
+// eventsOf is a server's events block as the session takes it.
+func eventsOf(e *config.MCPEvents) *agent.MCPEvents {
+	if e == nil {
+		return nil
+	}
+	out := &agent.MCPEvents{Dedicated: e.Session == config.MCPEventsDedicated}
+	for _, t := range e.Types {
+		out.Types = append(out.Types, agent.MCPEventType{Name: t.Name, Arguments: t.Arguments})
 	}
 	return out
 }

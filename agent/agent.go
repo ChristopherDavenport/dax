@@ -339,6 +339,15 @@ type Options struct {
 	// DefaultViewGrace.
 	ViewGrace time.Duration
 
+	// Events takes the MCP Events of the servers that name them
+	// (MCPServer.Events): a front that stays, the REPL, the terminal
+	// client, dax serve, sets it; a one-shot run does not, since it
+	// ends with its prompt's answer.
+	Events bool
+	// eventsFloor is the least between polls and the first wait after
+	// one fails, for tests; 0 is a second.
+	eventsFloor time.Duration
+
 	// noConsent says no one is at the terminal to sign in to a URL
 	// server (a session Reopen opens while a front has the screen).
 	noConsent bool
@@ -404,6 +413,10 @@ type MCPServer struct {
 	// MCPDeferBytes. A server /mcp add starts, or a workspace offers, is
 	// nil.
 	Defer *bool
+	// Events takes the server's MCP Events by poll, each event
+	// delivered to the session as untrusted input (mcpevents.go). Never
+	// a project's server's, and only with Options.Events.
+	Events *MCPEvents
 	// secretValues are SecretEnv's values when a front gave them (an
 	// editor's MCP server over ACP), in place of this process's
 	// environment.
@@ -605,6 +618,10 @@ type Session struct {
 	// closing makes Close once, and closeErr is its error.
 	closing  sync.Once
 	closeErr error
+
+	// events are the session's MCP event subscriptions, nil for none
+	// (mcpevents.go).
+	events *eventHub
 	// snap is where the workspace started, as StartSnapshot read it
 	// (snapshot.go).
 	snap snapshots
@@ -1176,6 +1193,9 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 			return nil, fmt.Errorf("mcp %s: a server your config names and one the workspace offers have the name; rename the server", r)
 		}
 	}
+	if err := checkEvents(servers); err != nil {
+		return nil, err
+	}
 	for _, m := range servers {
 		s.mcpNames = append(s.mcpNames, m.Name)
 	}
@@ -1315,6 +1335,8 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	if s.ctl, err = kit.Control(s.ag); err != nil {
 		return nil, err
 	}
+	// The servers' events start once the session can take them.
+	s.startEvents(servers)
 	ok = true
 	s.opened.Store(true)
 	s.releaseCallbacks()
@@ -1852,6 +1874,9 @@ func (s *Session) Close() error {
 
 func (s *Session) close() error {
 	s.releaseCallbacks()
+	// The event subscriptions end before the kit and the record they
+	// deliver to.
+	s.stopEvents()
 	// The extensions' AfterRun hooks end first, while the kit and the
 	// recorder they write through are open.
 	s.after.stop()
@@ -2339,12 +2364,12 @@ func (s *Session) mcpStart(ctx context.Context, m MCPServer) (mcp.Transport, []m
 	if err != nil {
 		return nil, nil, info, err
 	}
-	t, opts, err := s.mcpConnect(ctx, m.Name, dial)
+	t, opts, err := s.mcpConnect(ctx, m.Name, dial, m.Events != nil && s.opts.Events)
 	return t, opts, info, err
 }
 
 // mcpConnect is mcpStart's for a dial already made.
-func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial) (mcp.Transport, []mcpclient.Option, error) {
+func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial, events bool) (mcp.Transport, []mcpclient.Option, error) {
 	prefix, err := mcpPrefix(name)
 	if err != nil {
 		return nil, nil, err
@@ -2353,12 +2378,18 @@ func (s *Session) mcpConnect(ctx context.Context, name string, dial mcpDial) (mc
 	if err != nil {
 		return nil, nil, err
 	}
-	return t, []mcpclient.Option{
+	opts := []mcpclient.Option{
 		mcpclient.WithPrefix(prefix),
 		mcpclient.WithReconnect(dial),
 		mcpclient.WithReconnected(s.mcpRestarted(name)),
 		mcpclient.WithEnded(s.mcpEnded(name)),
-	}, nil
+	}
+	if events {
+		// The extension is offered only to a server the user's events
+		// block names.
+		opts = append(opts, mcpclient.WithEvents())
+	}
+	return t, opts, nil
 }
 
 // mcpEnded is the hook of the server called name for the end of each of

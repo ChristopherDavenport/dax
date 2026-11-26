@@ -681,3 +681,20 @@ func TestNoBackgroundPassUnderPOrServe(t *testing.T) {
 		}
 	}
 }
+
+// A server's events block reaches the session as it is: the types with
+// their arguments, and a dedicated session as the session's flag.
+func TestMCPServersOfCarriesEvents(t *testing.T) {
+	s := config.Settings{MCP: []config.MCP{{Name: "ci", URL: "https://ci.example/mcp", Events: &config.MCPEvents{
+		Types:   []config.MCPEventType{{Name: "build", Arguments: []byte(`{"repo":"dax"}`)}, {Name: "deploy"}},
+		Session: config.MCPEventsDedicated,
+	}}, {Name: "plain", Command: "x"}}}
+	got := mcpServersOf(s, "")
+	if got[1].Events != nil {
+		t.Errorf("a server without a block has events: %+v", got[1].Events)
+	}
+	e := got[0].Events
+	if e == nil || !e.Dedicated || len(e.Types) != 2 || e.Types[0].Name != "build" || string(e.Types[0].Arguments) != `{"repo":"dax"}` {
+		t.Errorf("events = %+v", e)
+	}
+}

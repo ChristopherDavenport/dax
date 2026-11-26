@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ChristopherDavenport/agenttool/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -55,7 +56,14 @@ func (s *Session) mcpURL(ctx context.Context, m MCPServer) (mcpDial, error) {
 			return nil, fmt.Errorf("token_env %s is not set; the server at %s is not reached without its token", m.TokenEnv, g.origin)
 		}
 	}
-	client := &http.Client{CheckRedirect: g.redirect, Transport: g}
+	var rt http.RoundTripper = g
+	if m.Events != nil {
+		// A server that takes events asks for the event's name and
+		// arguments in headers (Mcp-Name, Mcp-Param-*); other requests
+		// pass unchanged.
+		rt = mcpclient.EventHeaders(g)
+	}
+	client := &http.Client{CheckRedirect: g.redirect, Transport: rt}
 	var oh *auth.AuthorizationCodeHandler
 	if m.OAuth != nil {
 		if m.TokenEnv != "" {

@@ -968,6 +968,38 @@ tools need it): they are
 the command line's and the session's, and `modelinfo` is a trial meant to
 move to openresponses.
 
+### Events from an MCP server
+
+A server's `events` block (the user's config alone) subscribes the
+session to MCP Events (SEP-3415) by poll: `agent/mcpevents.go`, over
+agenttool's `mcpclient.WithEvents` and `Remote.RunEvents`. Nothing
+here runs inside an agent subscriber: a poll loop per subscription only
+fills a bounded buffer (8 events, the oldest dropped), and a deliverer
+hands the buffer to the session through its control. With no run going
+it is `Accept`, which starts one; during a run it is `Queue` as a
+follow-up, taken when the run would otherwise end and never a steer,
+and the deliverer waits until the session took it before it hands over
+the next batch, so what a busy session cannot take waits in the bounded
+buffer and the next delivery says how many were dropped. Follow-ups
+queued just as a run ended, which nothing would start, are taken by a
+run the deliverer starts.
+
+An event is a user message in a fixed frame (`eventText`): a header, a
+line saying the payload is untrusted data and not instructions, and the
+payload between fixed markers, cut at 4 KiB. The record gets the trigger
+`mcp-event` (source the server, ref the event id, `event_type` and
+`event_time` beside) and the `untrusted` label, so it never reads as the
+person's words (`agentsession.WordsOf`). The run an event starts is
+decided by the session's current policy like any other: dax does not
+taint a run after untrusted input, so event text can lead to calls the
+rules allow. The cursors are kept in `~/.dax/mcp-events.json` (private,
+locked), so a restart resumes where the last session left off; a server
+whose session ends is started again by the loop (`Remote.Refresh`) and
+polled from the saved cursor. `session: "dedicated"`, the events in a
+session record of their own that a view attaches to, is defined but not
+served: it would need a second session hosted in the process with its
+own control endpoint and record for `dax attach`.
+
 ## Not built
 
 Compaction beyond what `agentturn/compact` does (a local summary or a
