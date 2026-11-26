@@ -16,6 +16,9 @@ versions may break flags and the config file.
   during one), with a cursor in `~/.dax/mcp-events.json`. The config
   block (`types`, `session`) is validated and refused in a project's
   file; `session: "dedicated"` is defined but not yet served.
+- Changed: package `agent` gains `MCPServer.Events`, the `MCPEvents` and
+  `MCPEventType` types and the constants `EventTrigger`, `EventBuffer` and
+  `EventPayloadBytes`.
 
 ## v0.0.41 - 2026-11-25
 
