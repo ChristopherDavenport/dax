@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.42 - 2026-11-26
 
 - Dependencies: agenttool, agenttool/mcpclient and agenttool/mcpserver
   v0.0.31, up from v0.0.30: MCP Events (`mcpclient.WithEvents`,
