@@ -190,6 +190,14 @@ Where dax does not keep to this yet, and what each needs:
 8. **Fail toward asking.** The policy's default is ask. A bash command it
    cannot read is asked about or blocked, never allowed because a rule
    happened to match its first word.
+9. **Background work reports to the session that started it, framed as
+   data.** What the model starts and goes on without (a `background`
+   process, an `explore` or `task` with `background: true`) hands its
+   result back through `Env.Deliver` as the agent's own input: it
+   starts a run when the session is idle and joins the run in flight
+   when that run will still take it. The session frames it, never the
+   extension that made it, and labels it untrusted. The work ends with
+   the session and is not kept for a restart.
 
 ## The run
 
@@ -967,6 +975,61 @@ program to build on and own, could come later. `config`, `provider`,
 tools need it): they are
 the command line's and the session's, and `modelinfo` is a trial meant to
 move to openresponses.
+
+### Background work
+
+Work the model starts and goes on without reports back through
+`Env.Deliver` (`ToolEnv.Deliver` for an execution tool): an
+`extension.Delivery` of a trigger, a header line the extension writes
+and a payload the work produced. `agent/deliver.go` takes it as the
+agent's own, not as outside input: it is agentturn's `Accept`, so with
+no run going it starts one, and with one going it joins it when the run
+will still take it, as a steer before the run's next model call. That
+differs from an MCP event on purpose: an event is external, a follow-up
+the run takes only when it would end; a delivery is the agent's work
+coming home. `Accept` queues the input on the record first, so none is
+lost: while calls wait on a person the `Resume` that answers them takes
+it, an abort leaves it for the next run, and only the brief
+`agentturn.ErrHeld` is retried, on one goroutine per delivery that ends
+with the session. The deliveries are bounded by what makes them (eight
+processes, four background sub-agents).
+
+The session frames every delivery with the one frame an MCP event uses
+(`frame` in `agent/mcpevents.go`): the header, a line saying the
+payload is untrusted data and not instructions, and the payload between
+fixed markers, which are neutralised in it, cut to the delivery's bound
+(4 KiB, 16 KiB for a child's answer, 64 KiB at most). The record gets
+the extension's trigger and the `untrusted` label, so it reads as
+composed text (`agentsession.WordsOf`). dax ships two:
+
+- the `background` tool's process that ends on its own
+  (`tool.WithExitNotice`, dax-coding's `exitDelivery`): trigger kind
+  `background-exit` (ref the process id, `command` beside), the header
+  the command, status and duration, the payload the tail of the output
+  the model has not read (at most 4 KiB). A stop, the session's close
+  and an end the start call reported say nothing further. Only tools
+  that run where the session does can deliver: with an executor
+  elsewhere (`-executor`, `dax execute`) `ToolEnv.Deliver` is nil and
+  the tool is as it was, polled with `output`.
+- an `explore` or `task` called with `background: true`
+  (`ext/agents/background.go`): trigger `callee` (`agentturn.CalleeTrigger`,
+  ref the call). agentturn's `WithDetach` is a choice of the tool, so
+  each sub-agent is two child tools, a foreground one and a
+  `<name>_background` one, which `Env.WrapOwned` presents to the model as
+  one tool with the extra argument. At most four run at once, and
+  `background_agents` lists them and cancels one. A user's abort of the
+  parent's run cuts them, a cancel reports nothing, and the session's
+  close aborts them (`Env.OnClose`) before the record closes. They
+  cannot ask: a call the policy asks about stops the child with the call
+  pending, and its end is delivered as a stop that names the call.
+
+Nothing is kept for a restart: a process or a child ends with the
+session. After a resume the model sees the start's result and no end,
+which its tools' descriptions tell it to expect; `background` list and
+`background_agents` list are empty. A synthetic "ended: session closed"
+on resume would need the record to say which tool results were
+background starts, which package `agent` cannot read without naming a
+tool, or a job record of its own; neither is built.
 
 ### Events from an MCP server
 

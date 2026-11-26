@@ -19,6 +19,25 @@ versions may break flags and the config file.
 - Changed: package `agent` gains `MCPServer.Events`, the `MCPEvents` and
   `MCPEventType` types and the constants `EventTrigger`, `EventBuffer` and
   `EventPayloadBytes`.
+- Added: background work wakes the loop. A `background` process that
+  ends on its own, and an `explore` or `task` called with the new
+  `background: true` argument, deliver their result to the session as
+  the agent's own input: a run when it is idle, the run in flight when
+  that will still take it, queued under a held approval for the Resume.
+  The text (command, status, duration and output tail; or the child's
+  answer) is framed as untrusted data and recorded under the triggers
+  `background-exit` and `callee`, labelled `untrusted`. At most four
+  background sub-agents run at once; the new `background_agents` tool
+  lists and cancels them. Both end with the session. With an executor
+  elsewhere a process still has to be polled.
+- Changed: package `extension` gains `Env.Deliver`, `Env.WrapOwned` and
+  `Env.OnClose`, the `Delivery` type and `ToolEnv.Deliver` (nil when the
+  tools run in another process); a program that implements `Env` adds the
+  three. Package `tool` gains `BuiltinsWith`, `ProcessOption`,
+  `WithExitNotice`, `ExitNotice` and `NoticeTail`, and `Process` takes
+  options. `ext/agents` gains the `ControlTool` constant and dax-agents
+  owns `explore_background`, `task_background` and `background_agents`;
+  `ext/coding` gains `ExitTrigger`.
 
 ## v0.0.41 - 2026-11-25
 

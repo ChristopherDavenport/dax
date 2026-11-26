@@ -18,7 +18,9 @@ package agent
 //     resumes from the saved cursor, and a deliverer), all ended by the
 //     hub's context when the session closes;
 //   - eventBuffer, the bounded queue between them;
-//   - eventText and eventItem, the one place the wrapper text is made;
+//   - frame, the one place the wrapper text is made (deliver.go frames
+//     the session's own background results with it too), and eventText
+//     and eventItem, which build an event's;
 //   - fileCursors, the cursors kept in ~/.dax/mcp-events.json.
 //
 // The poll loop never delivers: it only buffers, so what runs inside
