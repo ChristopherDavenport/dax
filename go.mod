@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
-	github.com/ChristopherDavenport/agentconsole v0.0.23
+	github.com/ChristopherDavenport/agentconsole v0.0.24
 	github.com/ChristopherDavenport/agenteval v0.0.18
 	github.com/ChristopherDavenport/agentkit v0.0.21
 	github.com/ChristopherDavenport/agentmemory v0.0.14

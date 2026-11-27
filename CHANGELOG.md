@@ -12,6 +12,9 @@ versions may break flags and the config file.
   colors, by the file's name. `toolrender`'s lines say so with
   `toolview.Span.Syntax`; the mark or the line number before the code
   is a span of its own.
+- Dependencies: agentconsole v0.0.24, up from v0.0.23: a renderer's
+  span can say it is code (`toolview.Span.Syntax`), and the client
+  colors it, over a change's band for an added or removed line.
 
 ## v0.0.45 - 2026-11-27
 
