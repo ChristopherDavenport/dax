@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.45 - 2026-11-27
 
 - Changed: in the terminal client a short `read` of a part of a file,
   at most 20 lines, shows what it read with its line numbers, so a
