@@ -21,8 +21,9 @@ import (
 // each request it is sent.
 type headerServer struct {
 	*httptest.Server
-	mu   sync.Mutex
-	seen []http.Header
+	mu    sync.Mutex
+	seen  []http.Header
+	paths []string
 }
 
 func newHeaderServer(t *testing.T) *headerServer {
@@ -30,11 +31,22 @@ func newHeaderServer(t *testing.T) *headerServer {
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.seen = append(s.seen, r.Header.Clone())
+		s.paths = append(s.paths, r.URL.Path)
 		s.mu.Unlock()
 		http.Error(w, `{"error":{"type":"invalid_request_error","message":"no"}}`, http.StatusBadRequest)
 	}))
 	t.Cleanup(s.Close)
 	return s
+}
+
+// lastPath is the path of the latest request.
+func (s *headerServer) lastPath() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.paths) == 0 {
+		return ""
+	}
+	return s.paths[len(s.paths)-1]
 }
 
 func (s *headerServer) last(t *testing.T) http.Header {
@@ -141,5 +153,87 @@ func TestVertexRefusesTheHeaders(t *testing.T) {
 	_, err := New(context.Background(), Spec{Provider: "vertex", SessionHeader: "X-Session-Id", Getenv: func(string) string { return "global" }})
 	if err == nil || !strings.Contains(err.Error(), "session_header") {
 		t.Errorf("err = %v, want vertex to refuse session_header", err)
+	}
+}
+
+// The anthropic provider with a base_url sends to /v1/messages on that
+// server, with the key as a bearer token whether it comes from the
+// environment or from the key command, and with the session and client
+// headers.
+func TestAnthropicBaseURLIsTheServerSent(t *testing.T) {
+	const sid = "019a0000-0000-7000-8000-0000000000bb"
+	for _, tc := range []struct {
+		name    string
+		command bool
+		want    string
+	}{
+		{"environment key", false, "Bearer env-key"},
+		{"key command", true, "Bearer gw-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newHeaderServer(t)
+			spec := Spec{
+				Provider: "anthropic", BaseURL: srv.URL, Getenv: env(map[string]string{"ANTHROPIC_API_KEY": "env-key"}),
+				SessionHeader: "X-Session-Id", ClientHeader: "X-Client", Client: "dax/v1.2.3",
+			}
+			if tc.command {
+				spec.KeyCommand = helper(t, "gw-key")
+			}
+			m, err := New(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Endpoint != srv.URL {
+				t.Errorf("endpoint %q, want %q", m.Endpoint, srv.URL)
+			}
+			ctx := session.ContextWithSessionID(context.Background(), sid)
+			// The test server answers 400, so an error is expected; it must
+			// be that answer, not a failure to reach the server.
+			err = m.Streamer.CreateStream(ctx, openresponses.Request{Model: "claude-sonnet-5-5", Input: openresponses.Items{openresponses.UserText("hi")}}, discard)
+			if err == nil || !strings.Contains(err.Error(), "400") {
+				t.Errorf("CreateStream error = %v, want the 400 the server sent", err)
+			}
+			h := srv.last(t)
+			if path := srv.lastPath(); path != "/v1/messages" {
+				t.Errorf("path %q, want /v1/messages", path)
+			}
+			if got := h.Get("Authorization"); got != tc.want {
+				t.Errorf("authorization %q, want %q", got, tc.want)
+			}
+			if got := h.Get("X-Api-Key"); got != "" {
+				t.Errorf("x-api-key %q, want none", got)
+			}
+			if got := h.Get("X-Session-Id"); got != sid {
+				t.Errorf("session header %q, want %q", got, sid)
+			}
+			if got := h.Get("X-Client"); got != "dax/v1.2.3" {
+				t.Errorf("client header %q", got)
+			}
+		})
+	}
+}
+
+// A base_url ending in /v1 would be sent to /v1/v1/messages, so it is
+// refused; any other URL is used as given.
+func TestAnthropicBaseURLRefusesATrailingV1(t *testing.T) {
+	for _, tc := range []struct {
+		base string
+		ok   bool
+	}{
+		{"https://proxy.example/anthropic", true},
+		{"https://proxy.example/anthropic/", true},
+		{"https://proxy.example", true},
+		{"https://proxy.example/v1", false},
+		{"https://proxy.example/v1/", false},
+		{"https://proxy.example/anthropic/v1", false},
+		{"https://proxy.example/v10", true},
+	} {
+		_, err := New(context.Background(), Spec{Provider: "anthropic", BaseURL: tc.base, Getenv: env(map[string]string{"ANTHROPIC_API_KEY": "k"})})
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", tc.base, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "/v1")) {
+			t.Errorf("%s: err = %v, want a refusal naming /v1", tc.base, err)
+		}
 	}
 }

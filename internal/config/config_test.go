@@ -97,6 +97,8 @@ func TestSwitchingProviderLeavesItsSettingsBehind(t *testing.T) {
 		{"the user's subagent model goes with its provider", user(`{"provider":"ollama","model":"a","subagent_model":"b"}`), Flags{Provider: ptr("openrouter")}, "openrouter", "", "", "", "default"},
 		{"a model flag alone is the file's provider's", user(`{"provider":"anthropic","model":"claude-x"}`), Flags{Model: ptr("claude-y")}, "anthropic", "claude-y", "", "", "flag"},
 		{"an openresponses server's settings, a provider flag", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{Provider: ptr("openai")}, "openai", "", "", "", "default"},
+		{"an anthropic base_url is kept", user(`{"provider":"anthropic","base_url":"https://proxy.example/anthropic"}`), Flags{}, "anthropic", "", "https://proxy.example/anthropic", "", "default"},
+		{"an anthropic base_url flag", user(`{"provider":"anthropic"}`), Flags{BaseURL: ptr("https://proxy.example/anthropic")}, "anthropic", "", "https://proxy.example/anthropic", "", "default"},
 		{"no switch, nothing dropped", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{}, "openresponses", "m", "https://llm/v1", "K", "/home/u/.config/dax/config.json"},
 	}
 	for _, tc := range tests {
@@ -508,7 +510,7 @@ func TestResolveRefusals(t *testing.T) {
 		want   string
 	}{
 		{"flag provider", nil, Flags{Provider: ptr("nope")}, `provider "nope"`},
-		{"base url with anthropic", []Layer{parse(t, `{"provider":"anthropic","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama and openresponses providers, not anthropic"},
+		{"base url with gemini", []Layer{parse(t, `{"provider":"gemini","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama, openresponses and anthropic providers, not gemini"},
 		{"base url flag with gemini", nil, Flags{Provider: ptr("gemini"), BaseURL: ptr("https://x")}, "not gemini"},
 		// openai means OpenAI; another server is openresponses.
 		{"base url with openai", []Layer{parse(t, `{"provider":"openai","base_url":"https://openrouter.ai/api/v1"}`, false)}, Flags{}, "not openai (/home/u/.config/dax/config.json); use provider openresponses"},

@@ -5,6 +5,18 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: `base_url` and `-base-url` for the `anthropic` provider, the
+  Messages API server it talks to in place of `api.anthropic.com`, such
+  as a proxy or a private deployment. The key goes as
+  `Authorization: Bearer`, from `ANTHROPIC_API_KEY` or from
+  `api_key_command` alike, so a server that reads only `x-api-key` will
+  refuse it. Give the URL without a trailing `/v1`: the client adds
+  `/v1/messages`, and a URL that ends in `/v1` is refused. Claude's
+  thinking blocks, signatures and cache control are kept, as with
+  Anthropic itself. A project file still may not set it.
+
 ## v0.0.43 - 2026-11-26
 
 - Dependencies: agentsession v0.0.42, up from v0.0.40: format 0.22,

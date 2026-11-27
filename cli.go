@@ -99,7 +99,7 @@ func run(ctx context.Context, args []string, p program) error {
 	prov := fs.String("provider", "", "model provider: ollama (default), openai, openrouter, openresponses, anthropic, gemini or vertex")
 	model := fs.String("model", "", "model name; empty takes the provider's default")
 	subModel := fs.String("subagent-model", "", "the sub-agents' model; empty takes the provider's default for them, else -model")
-	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers)")
+	base := fs.String("base-url", "", "endpoint of an Open Responses server (ollama and openresponses providers), or of a Messages API server (anthropic)")
 	keyEnv := fs.String("api-key-env", "", "environment variable holding the openresponses provider's key")
 	keyCmd := fs.String("api-key-command", "", "command line whose output is the provider's key, run again as the key ages or is refused; split as a shell splits words, nothing expanded")
 	keyLogin := fs.String("api-key-login", "", "how to sign in again when the key command fails or its key is refused, a URL or a command; shown with the error")

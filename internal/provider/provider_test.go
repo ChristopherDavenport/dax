@@ -214,7 +214,6 @@ func TestErrorsNeverCarryTheKey(t *testing.T) {
 	const secret = "sk-very-secret-value"
 	getenv := env(map[string]string{"ANTHROPIC_API_KEY": secret, "OPENAI_API_KEY": secret, "GEMINI_API_KEY": secret, "OPENROUTER_API_KEY": secret})
 	for _, spec := range []Spec{
-		{Provider: "anthropic", BaseURL: "https://x"},
 		{Provider: "gemini", BaseURL: "https://x"},
 		{Provider: "openrouter", BaseURL: "https://x"},
 		{Provider: "openresponses", Model: "m", BaseURL: "http://x/v1", KeyEnv: "UNSET_KEY"},
