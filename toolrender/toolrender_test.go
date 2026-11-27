@@ -82,9 +82,9 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		body, expanded   []string // nil: the renderer declines
 	}{
 		{name: "read a range", tool: "read", args: `{"path":"a.go","offset":3,"limit":4}`,
-			head: "a.go:3-6", body: []string{"· 4 lines (4 more lines; use offset=7)"}},
+			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "… 1 more line (ctrl+o) (4 more lines; use offset=7)"}},
 		{name: "read a whole file", tool: "read", args: `{"path":"sub/b.go"}`,
-			head: "sub/b.go", body: []string{"· 3 lines"}},
+			head: "sub/b.go", body: []string{"1  package b", "2  ", "3  func Steer() {}"}},
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
@@ -417,6 +417,52 @@ func TestBashAndBackgroundHeadsStandInForTheName(t *testing.T) {
 	for name, args := range map[string]string{"bash": `{"command":"ls"}`, "background": `{"action":"start","command":"ls"}`} {
 		if _, ok := rs[name].Head(view.Call{Name: name, Args: args, Schema: other}); ok {
 			t.Errorf("%s drew a call against another schema", name)
+		}
+	}
+}
+
+// A read's excerpt keeps the numbers in one column and a tab's indent,
+// and says how many lines are behind it.
+func TestAReadShowsItsFirstLinesNumbered(t *testing.T) {
+	rs := Renderers("")
+	out := ""
+	for i := 98; i <= 120; i++ {
+		out += fmt.Sprintf("%6d\t\tx := %d\n", i, i)
+	}
+	c := view.Call{Name: "read", Args: `{"path":"a.go","offset":98}`, State: view.CallEnded, Output: out}
+	want := []string{" 98      x := 98", " 99      x := 99", "100      x := 100", "… 20 more lines (ctrl+o)"}
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, want) {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+	// Every line of it is dim: it is context, not a change.
+	body, _ := rs["read"].Body(c, false)
+	for _, l := range body {
+		for _, sp := range l {
+			if sp.Role != toolview.Dim {
+				t.Errorf("span %q has role %v, want dim", sp.Text, sp.Role)
+			}
+		}
+	}
+	// An empty file is a count, and expanded the client shows the output.
+	empty := view.Call{Name: "read", Args: `{"path":"e"}`, State: view.CallEnded}
+	if got := drawn(rs["read"].Body(empty, false)); !slices.Equal(got, []string{"· 0 lines"}) {
+		t.Errorf("empty = %q", got)
+	}
+	if _, ok := rs["read"].Body(c, true); ok {
+		t.Error("an expanded read did not leave the output to the client")
+	}
+}
+
+// An edit and a write are never folded into a run of quiet calls, and
+// the tools that only look may be.
+func TestEditAndWriteAreLoud(t *testing.T) {
+	for name, r := range Renderers("") {
+		// toolview.Loud, spelled out: the agentconsole dax requires may
+		// be older than the interface.
+		l, ok := r.(interface{ Loud() bool })
+		loud := ok && l.Loud()
+		if want := name == "edit" || name == "write"; loud != want {
+			t.Errorf("%s: loud = %v, want %v", name, loud, want)
 		}
 	}
 }

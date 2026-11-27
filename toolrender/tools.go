@@ -12,7 +12,8 @@ import (
 // ---- read
 
 // readRenderer shows a read as its path and the lines asked for, and
-// what it read as a count.
+// what it read as its first lines with their numbers, so the person
+// sees where the agent is looking, and a count of the rest.
 type readRenderer struct{ paths }
 
 func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -44,10 +45,15 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 		return nil, false
 	}
 	n, note := 0, ""
+	var shown [][2]string // the number and the text of the first lines
 	for _, l := range lines(c.Output) {
 		switch {
 		case numbered.MatchString(l):
 			n++
+			if len(shown) < excerptLines {
+				num, text, _ := strings.Cut(l, "\t")
+				shown = append(shown, [2]string{strings.TrimSpace(num), text})
+			}
 		case strings.HasPrefix(l, "... ("):
 			// "... (312 more lines; use offset=81)" or the byte cap.
 			note = " " + strings.TrimPrefix(l, "... ")
@@ -56,7 +62,25 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
-	return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true
+	if n == 0 {
+		return []toolview.Line{dim("· 0 lines" + clip(note))}, true
+	}
+	// The numbers share a column, the width of the last one shown.
+	width := len(shown[len(shown)-1][0])
+	out := make([]toolview.Line, 0, len(shown)+1)
+	for _, s := range shown {
+		// A tab is drawn as four columns, so the indentation reads.
+		text := strings.ReplaceAll(s[1], "\t", "    ")
+		out = append(out, dim(clip(fmt.Sprintf("%*s  %s", width, s[0], text))))
+	}
+	switch rest := n - len(shown); {
+	case rest > 0:
+		l := more(rest)
+		out = append(out, append(l, toolview.S(toolview.Dim, clip(note))))
+	case note != "":
+		out = append(out, dim("…"+clip(note)))
+	}
+	return out, true
 }
 
 // ---- write
@@ -76,6 +100,11 @@ func (r writeRenderer) Head(c view.Call) (toolview.Line, bool) {
 	}
 	return head, true
 }
+
+// Loud keeps a write on the screen: its output, "wrote 120 bytes to
+// x.go", is one line, and the client would fold it away with the calls
+// that say nothing.
+func (writeRenderer) Loud() bool { return true }
 
 func (r writeRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	var out []toolview.Line
@@ -118,6 +147,11 @@ func (r editRenderer) Head(c view.Call) (toolview.Line, bool) {
 	}
 	return head, true
 }
+
+// Loud keeps an edit on the screen, and so its diff: its output, "edited
+// x.go", is one line, and the client would fold it away with the calls
+// that say nothing.
+func (editRenderer) Loud() bool { return true }
 
 func (r editRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	var out []toolview.Line

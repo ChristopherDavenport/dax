@@ -5,6 +5,16 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: in the terminal client a `read` shows the first 3 lines it
+  read, with their line numbers, and how many more there are, in place
+  of a count alone, so the transcript shows where the agent is looking.
+- Changed: `toolrender`'s `edit` and `write` renderers are loud
+  (`toolview.Loud`): a client that folds short calls into one line
+  never folds these, so an edit's diff is always on the screen. It
+  takes effect with the agentconsole release that reads it.
+
 ## v0.0.44 - 2026-11-27
 
 - Added: `base_url` and `-base-url` for the `anthropic` provider, the

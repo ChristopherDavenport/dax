@@ -16,8 +16,10 @@
 // and not the tool; the tests run the real tools to keep the two in
 // step.
 //
-// Collapsed, a call is a line and a short body: an edit's diff, the end
-// of a failing command, a count for the rest. Expanded (ctrl+o), an
+// Collapsed, a call is a line and a short body: an edit's diff, the
+// first lines a read read, the end of a failing command, a count for the
+// rest. An edit and a write are loud ([toolview.Loud]): the client never
+// folds them into a run of quiet calls. Expanded (ctrl+o), an
 // edit's whole diff, a write's content and a command's whole output, and
 // the client's raw output for the others.
 package toolrender
@@ -73,6 +75,9 @@ func Peers(names ...string) toolview.Renderers {
 const (
 	// collapsedLines is the most lines a collapsed body shows.
 	collapsedLines = 8
+	// excerptLines is how much of what a read read a collapsed call
+	// shows, from its start.
+	excerptLines = 3
 	// tailLines is how much of a failing command's output a collapsed
 	// call shows, from its end.
 	tailLines = 3
