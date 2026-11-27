@@ -60,7 +60,7 @@ dax -provider anthropic      # a hosted model
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | not supported |
 | `openrouter` | `deepseek/deepseek-v4-pro-0813`; sub-agents `deepseek/deepseek-v4.1-flash` | `OPENROUTER_API_KEY` | not supported |
 | `openresponses` | none; `-model` is required | the variable `-api-key-env` names, or none | required |
-| `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | default `https://api.anthropic.com`; another server that speaks the Messages API (give the URL the SDK adds `/v1/messages` to) |
+| `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | default `https://api.anthropic.com`; another server that speaks the Messages API (the URL without `/v1`, which is added; the key goes as a bearer token) |
 | `gemini` | `gemini-2.5-pro` | `GEMINI_API_KEY` | not supported |
 | `vertex` | `claude-sonnet-5-5` | none; Google Application Default Credentials | not supported |
 

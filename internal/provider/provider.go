@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -213,6 +214,11 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		if spec.BaseURL != "" && spec.Provider != "ollama" && spec.Provider != "anthropic" {
 			return m, fmt.Errorf("%s: base_url is not supported; use the openresponses provider for another server", spec.Provider)
 		}
+		if spec.Provider == "anthropic" && spec.BaseURL != "" {
+			if err := CheckMessagesBaseURL(spec.BaseURL); err != nil {
+				return m, err
+			}
+		}
 		m.KeyEnv = KeyEnv(spec.Provider)
 		if spec.Provider == "vertex" {
 			if spec.SessionHeader != "" || spec.ClientHeader != "" {
@@ -374,6 +380,20 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		m.SubagentStreamer = nil
 	}
 	return m, nil
+}
+
+// CheckMessagesBaseURL refuses an anthropic base_url that ends in /v1:
+// the SDK adds /v1/messages itself, so such a URL would be sent to
+// /v1/v1/messages and come back as a 404 from the server.
+func CheckMessagesBaseURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil {
+		return fmt.Errorf("anthropic: base_url %q: %w", base, err)
+	}
+	if p := strings.TrimRight(u.Path, "/"); p == "/v1" || strings.HasSuffix(p, "/v1") {
+		return fmt.Errorf("anthropic: base_url %q ends in /v1, but the client adds /v1/messages itself; leave the /v1 off", base)
+	}
+	return nil
 }
 
 // vertexLocation is the Vertex AI location the environment names, empty

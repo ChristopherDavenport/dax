@@ -9,8 +9,11 @@ versions may break flags and the config file.
 
 - Added: `base_url` and `-base-url` for the `anthropic` provider, the
   Messages API server it talks to in place of `api.anthropic.com`, such
-  as a proxy or a private deployment. With `api_key_command` the key
-  goes as `Authorization: Bearer`, as for any other server. Claude's
+  as a proxy or a private deployment. The key goes as
+  `Authorization: Bearer`, from `ANTHROPIC_API_KEY` or from
+  `api_key_command` alike, so a server that reads only `x-api-key` will
+  refuse it. Give the URL without a trailing `/v1`: the client adds
+  `/v1/messages`, and a URL that ends in `/v1` is refused. Claude's
   thinking blocks, signatures and cache control are kept, as with
   Anthropic itself. A project file still may not set it.
 

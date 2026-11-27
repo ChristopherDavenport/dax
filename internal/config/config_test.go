@@ -97,6 +97,8 @@ func TestSwitchingProviderLeavesItsSettingsBehind(t *testing.T) {
 		{"the user's subagent model goes with its provider", user(`{"provider":"ollama","model":"a","subagent_model":"b"}`), Flags{Provider: ptr("openrouter")}, "openrouter", "", "", "", "default"},
 		{"a model flag alone is the file's provider's", user(`{"provider":"anthropic","model":"claude-x"}`), Flags{Model: ptr("claude-y")}, "anthropic", "claude-y", "", "", "flag"},
 		{"an openresponses server's settings, a provider flag", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{Provider: ptr("openai")}, "openai", "", "", "", "default"},
+		{"an anthropic base_url is kept", user(`{"provider":"anthropic","base_url":"https://proxy.example/anthropic"}`), Flags{}, "anthropic", "", "https://proxy.example/anthropic", "", "default"},
+		{"an anthropic base_url flag", user(`{"provider":"anthropic"}`), Flags{BaseURL: ptr("https://proxy.example/anthropic")}, "anthropic", "", "https://proxy.example/anthropic", "", "default"},
 		{"no switch, nothing dropped", user(`{"provider":"openresponses","base_url":"https://llm/v1","model":"m","api_key_env":"K"}`), Flags{}, "openresponses", "m", "https://llm/v1", "K", "/home/u/.config/dax/config.json"},
 	}
 	for _, tc := range tests {
