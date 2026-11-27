@@ -18,6 +18,9 @@ versions may break flags and the config file.
   the modes) as soon as the space is there.
 - Changed: `/help` lists itself, and `/clear` and `/exit` on lines of
   their own.
+- Dependencies: agentconsole v0.0.25, up from v0.0.24: the client asks
+  about the empty word after a space, so a command's subcommands are
+  listed before any is typed.
 
 ## v0.0.46 - 2026-11-27
 
