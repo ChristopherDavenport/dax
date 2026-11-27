@@ -102,8 +102,8 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	// The whole file: read from the top, with nothing left behind it.
 	whole := n > 0 && note == "" && parseArgs(c.Args).num("offset") <= 1
 	if whole {
-		// The head names the lines.
-		return []toolview.Line{dim("· whole file")}, true
+		// The head names the lines; the count says how much that is.
+		return []toolview.Line{dim("· whole file, " + plural(n, "line", "lines"))}, true
 	}
 	if n == 0 || n > shortRead {
 		return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true

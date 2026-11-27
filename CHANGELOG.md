@@ -11,7 +11,7 @@ versions may break flags and the config file.
   at most 20 lines, shows what it read with its line numbers, so a
   piece of a file the agent is working with is in the transcript. A
   longer read stays a count, and a read of a whole file says `whole
-  file`, whatever its length. A read's line names every line it read
+  file` and how many lines, whatever its length. A read's line names every line it read
   (`a.go:1-212`), whether or not a range was asked for.
 - Changed: in the terminal client a `write` shows the first 8 lines of
   what it wrote, as added lines, and how many more there are, where it
