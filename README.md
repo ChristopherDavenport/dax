@@ -1672,6 +1672,9 @@ short body under it:
 | `grep`, `glob`, `ls` | the pattern or directory, where and how | the matches and files, the files or the entries counted | the output |
 | `explore`, `task` | the brief's first line, `fork` and `main model` when set | the report's first 2 lines | the report |
 
+The code in a diff, in what a write wrote and in a short read is drawn in
+its language's colors, which the file's name says.
+
 An `edit`, a `write` and a `read` are always drawn: the client folds a run
 of calls that say little into one line, and these are never in one. A call
 that failed shows its error in place of the body. A call waiting on

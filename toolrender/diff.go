@@ -98,7 +98,10 @@ func counts(ops []op) (added, removed int) {
 // diffLines draws ops. Collapsed, the kept lines at either end are cut
 // to one, so the change itself fills the room, and the whole is cut to
 // collapsedLines with a note of what is left.
-func diffLines(ops []op, expanded bool) []toolview.Line {
+//
+// Each line's text is code in syntax, the file's name, for a client that
+// colors code; the mark before it is not.
+func diffLines(ops []op, expanded bool, syntax string) []toolview.Line {
 	if !expanded {
 		first, last := 0, len(ops)
 		for first < last && ops[first].kind == ' ' {
@@ -126,7 +129,7 @@ func diffLines(ops []op, expanded bool) []toolview.Line {
 		case '-':
 			role = toolview.Removed
 		}
-		out = append(out, toolview.Line{toolview.S(role, string(o.kind)+" "+text)})
+		out = append(out, toolview.Line{toolview.S(role, string(o.kind)+" "), toolview.Code(role, syntax, text)})
 	}
 	return out
 }

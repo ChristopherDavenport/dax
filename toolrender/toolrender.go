@@ -194,6 +194,16 @@ func (ps paths) show(p string) string {
 	return p
 }
 
+// syntaxOf is what the text of a file at path is as code, for a client
+// that colors it ([toolview.Span.Syntax]): the file's name, which says
+// its language by its extension or by itself (a Makefile).
+func syntaxOf(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
+}
+
 // failure is the message of a call that ended in a tool error, the
 // "Error: …" text agenttool writes for one.
 func failure(c view.Call) (string, bool) {

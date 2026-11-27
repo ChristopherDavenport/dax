@@ -116,7 +116,10 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	for _, s := range shown {
 		// A tab is drawn as four columns, so the indentation reads.
 		text := strings.ReplaceAll(s[1], "\t", "    ")
-		out = append(out, dim(clip(fmt.Sprintf("%*s  %s", width, s[0], text))))
+		out = append(out, toolview.Line{
+			toolview.S(toolview.Dim, fmt.Sprintf("%*s  ", width, s[0])),
+			toolview.Code(toolview.Dim, syntaxOf(parseArgs(c.Args).str("path")), clip(text)),
+		})
 	}
 	if note != "" {
 		out = append(out, dim("…"+clip(note)))
@@ -189,7 +192,7 @@ func (r writeRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) 
 			}
 			l = clip(l)
 		}
-		out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "+l)})
+		out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "), toolview.Code(toolview.Added, syntaxOf(a.str("path")), l)})
 	}
 	return out, true
 }
@@ -235,7 +238,7 @@ func (r editRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	if !a.complete {
 		return out, out != nil
 	}
-	return append(out, diffLines(diff(lines(a.str("old_string")), lines(a.str("new_string"))), expanded)...), true
+	return append(out, diffLines(diff(lines(a.str("old_string")), lines(a.str("new_string"))), expanded, syntaxOf(a.str("path")))...), true
 }
 
 // ---- glob, grep, ls

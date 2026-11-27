@@ -250,7 +250,7 @@ func TestDiff(t *testing.T) {
 		{"from nothing", "", "a", []string{"+ a"}},
 		{"to nothing", "a", "", []string{"- a"}},
 	} {
-		got := drawn(diffLines(diff(lines(c.old), lines(c.new)), true), true)
+		got := drawn(diffLines(diff(lines(c.old), lines(c.new)), true, "a.go"), true)
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
@@ -268,12 +268,12 @@ func TestACollapsedDiffKeepsToTheChange(t *testing.T) {
 			}
 		}
 	}
-	got := drawn(diffLines(diff(old, new), false), true)
+	got := drawn(diffLines(diff(old, new), false, "a.go"), true)
 	want := []string{"  same", "+ added a", "+ added b", "+ added c", "+ added d", "+ added e", "+ added f", "+ added g", "… 6 more lines (ctrl+o)"}
 	if !slices.Equal(got, want) {
 		t.Errorf("collapsed: %q, want %q", got, want)
 	}
-	if n := len(diffLines(diff(old, new), true)); n != 42 {
+	if n := len(diffLines(diff(old, new), true, "a.go")); n != 42 {
 		t.Errorf("expanded: %d lines, want all 42", n)
 	}
 }
@@ -329,10 +329,15 @@ func TestTheLinesCarryTheirRoles(t *testing.T) {
 	if got, want := roles(h), []toolview.Role{toolview.Emphasis, toolview.Plain, toolview.Added, toolview.Plain, toolview.Removed}; !slices.Equal(got, want) {
 		t.Errorf("edit head roles %v, want %v", got, want)
 	}
+	// A line of the diff is one role through, its mark and its text.
 	body, _ := rs["edit"].Body(edit, false)
 	var got []toolview.Role
 	for _, l := range body {
-		got = append(got, roles(l)...)
+		rs := slices.Compact(roles(l))
+		if len(rs) != 1 {
+			t.Errorf("a diff's line has roles %v, want one", rs)
+		}
+		got = append(got, rs...)
 	}
 	if want := []toolview.Role{toolview.Dim, toolview.Removed, toolview.Added}; !slices.Equal(got, want) {
 		t.Errorf("edit body roles %v, want %v", got, want)
@@ -514,6 +519,40 @@ func TestEditWriteAndReadAreLoud(t *testing.T) {
 		loud := ok && l.Loud()
 		if want := name == "edit" || name == "write" || name == "read"; loud != want {
 			t.Errorf("%s: loud = %v, want %v", name, loud, want)
+		}
+	}
+}
+
+// The lines of a diff, of what a write wrote and of a short read say
+// their text is code in the file, by its name, for a client that colors
+// code; the mark or the number before the text is not code.
+func TestCodeLinesNameTheirFile(t *testing.T) {
+	rs := Renderers("/work")
+	for name, c := range map[string]view.Call{
+		"edit":  {Name: "edit", Args: `{"path":"/work/cmd/main.go","old_string":"a := 1","new_string":"a := 2"}`, State: view.CallEnded, Output: "edited cmd/main.go"},
+		"write": {Name: "write", Args: `{"path":"cmd/main.go","content":"package main\n"}`, State: view.CallEnded, Output: "wrote 13 bytes to cmd/main.go"},
+		"read":  {Name: "read", Args: `{"path":"cmd/main.go","offset":4,"limit":1}`, State: view.CallEnded, Output: "     4\tfunc main() {}\n... (3 more lines; use offset=5)\n"},
+	} {
+		for _, expanded := range []bool{false, true} {
+			body, ok := rs[name].Body(c, expanded)
+			if !ok {
+				continue // an expanded read is the client's
+			}
+			code := 0
+			for _, l := range body {
+				for i, sp := range l {
+					if sp.Syntax == "" {
+						continue
+					}
+					code++
+					if sp.Syntax != "main.go" || i == 0 {
+						t.Errorf("%s: span %d %q has syntax %q, want the text after the mark as main.go", name, i, sp.Text, sp.Syntax)
+					}
+				}
+			}
+			if code == 0 {
+				t.Errorf("%s (expanded %v): no line says it is code: %v", name, expanded, body)
+			}
 		}
 	}
 }
