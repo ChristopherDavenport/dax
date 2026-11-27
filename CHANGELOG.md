@@ -12,6 +12,32 @@ versions may break flags and the config file.
   (`EnvEntry.Checkouts`, `CheckoutChanges`); a record dax appends to
   is raised to 0.22. agenteval v0.0.18, up from v0.0.17: a snapshot
   names its checkout (`Snapshot.Path`).
+- Added: a session's `env` entries list the git checkouts it works in
+  (format 0.22's `checkouts`): the one at the directory dax works in,
+  and every checkout a git command runs in or makes (a worktree, a
+  clone), with its commit, branch, upstream and whether it is dirty.
+  Each is read at a run's start and end and, after a bash call that
+  runs a git command that can move one, the one it ran in; a resumed
+  session goes on following what its record lists. No diff is taken
+  and no remote URL recorded. See README, "The checkouts a session
+  works in".
+- Added: `-p`'s run-end snapshot covers each other checkout the run
+  changed, one `agenteval:snapshot` entry per checkout with its `path`,
+  against the commit the run found it at (or made it at), named in
+  `-result`'s `checkout_snapshots`.
+- Changed: every recorded session's `env` entry names the commit the
+  directory dax works in is on (`vcs`), read with its checkout; before,
+  only a `-p` run with `-snapshot` read it. A run's checkouts entry is
+  written after its end, or after its snapshots when it has them.
+- Changed: package `extension`'s `Env` gains `CheckoutsMoved`, which a
+  tool's extension calls after a call that may have moved a checkout;
+  dax-coding calls it after a bash call that runs git. Package `tool`
+  gains `ReadCheckout`, `GitCheckout`, `GitMoves`, `GitDiffIn`,
+  `ErrNoGit` and `ErrGone`; package `agent`'s `Snapshots` gains
+  `Checkouts` and `SnapshotWritten` gains `Path`.
+- Fixed: a workspace with no git installed has `-p`'s snapshot say so
+  once a session, and begins no snapshot, rather than failing to read
+  the tree on every run.
 
 ## v0.0.42 - 2026-11-26
 
