@@ -493,6 +493,20 @@ type Env interface {
 	// does not. fn sees no other extension's tool. Called anywhere but
 	// the extension's Kit, it does nothing.
 	WrapOwned(fn func(agenttool.Tool) agenttool.Tool)
+	// CheckoutsMoved says a call may have moved the version control
+	// state of the checkouts holding dirs, names relative to the
+	// workspace's root, or made or removed one there: a git command
+	// that commits, switches, pushes or adds a worktree. The session
+	// follows each such checkout from then on, reads it again through
+	// the workspace, and records an env entry, in the session the call
+	// on ctx belongs to, when one changed (agentsession's env
+	// checkouts). No dirs reads every checkout the session follows,
+	// for a call that ran git where the caller cannot tell. It never
+	// fails the call, and does nothing for a session that records
+	// nothing. dax-coding calls it after a bash call that runs git; an
+	// extension whose tool moves a checkout another way calls it the
+	// same.
+	CheckoutsMoved(ctx context.Context, dirs ...string)
 	// OnClose registers fn to run when the session closes, before its
 	// kit, record and workspace do, so work an extension started that
 	// outlives a call (a background sub-agent) ends while what it

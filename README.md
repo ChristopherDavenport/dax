@@ -2246,7 +2246,10 @@ held when the run started, when it held one:
 `entry` is the entry's ID in the session, `base` the commit the patch
 applies to, `digest` the patch's SHA-256 and `size` its length in
 bytes; a snapshot that holds no patch has `error` in place of `base`
-and `digest`.
+and `digest`. `checkout_snapshots` lists one such snapshot, with its
+`path`, for each other git checkout the session follows that the run
+changed (a worktree it made, say; see [The checkouts a session works
+in](#the-checkouts-a-session-works-in)).
 
 ### The workspace a run left
 
@@ -2294,6 +2297,50 @@ into them, a secret among it, as `write`'s and `edit`'s arguments
 already do; and for a tree dirty at the start, your own uncommitted
 changes under the directory dax works in. Redact or keep the session
 as you would the files.
+
+### The checkouts a session works in
+
+A session's `env` entries list the git checkouts it works in
+(agentsession's format 0.22, `checkouts`), so its record says which
+worktrees it made and which commit, branch and upstream the work moved
+to, and a replay can rebuild each one:
+
+```json
+"checkouts": [
+  {"path": ".", "repo": ".git", "vcs": {"system": "git", "revision": "3f2a...e91c"}, "branch": "main",
+   "upstream": {"name": "origin/main", "revision": "3f2a...e91c"}},
+  {"path": ".worktrees/fix", "repo": ".git", "vcs": {"system": "git", "revision": "9a1f...", "dirty": true}, "branch": "fix"}
+]
+```
+
+- dax follows the checkout at the directory it works in, if it is one,
+  and every checkout a git command runs in (by `-C` or a `cd`) or makes
+  (`git worktree add`, `git clone`), never every worktree of a
+  repository. A resumed session goes on following the ones its record
+  lists. A path is relative to the directory dax works in; `repo` is
+  the repository's common git directory, which a repository's worktrees
+  share.
+- It reads each at a run's start and end, and, after a bash call whose
+  command runs a git command that can move one (`commit`, `switch`,
+  `checkout`, `merge`, `rebase`, `reset`, `pull`, `fetch`, `push`,
+  `branch`, `stash`, `cherry-pick`, `am`, `tag`, `revert`, `worktree`,
+  `clone`, `init`), the checkout it ran in. A command the analyzer
+  cannot read that names git has every checkout read. A git command a
+  script runs is caught at the run's end.
+- A read is HEAD's commit, the branch, the upstream's name and commit,
+  and whether `git status` shows anything, through the workspace the
+  tools act in. It never takes a diff and never records a remote's
+  URL. An entry is written only when a checkout changed. The checkout
+  at the directory dax works in carries the entry's own `vcs`.
+- A repository whose own config names a program git would run is
+  listed with no `vcs`, as the status line withholds it, and so is a
+  colocated Jujutsu repository (a `.jj` beside the `.git`). A worktree
+  is read when its `.git` file is git's own link to a repository in the
+  workspace whose config passes the same check; the analyzer still asks
+  before an unasked git command in one.
+- A workspace with no git installed records no `checkouts`, and dax
+  says so once. Outside a git work tree with nothing followed the list
+  is empty. `-sessions ""` records nothing.
 
 ## Sessions
 

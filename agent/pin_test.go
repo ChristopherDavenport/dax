@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/agentturn/compact"
 	"github.com/ChristopherDavenport/openresponses"
@@ -228,9 +229,11 @@ func TestAFoldAfterAResumeKeepsUnclaimedPrompts(t *testing.T) {
 			}
 			if tc.older {
 				data := projected(t, o, s)
-				older := strings.Replace(string(data), `"format":"agentsession/0.21"`, `"format":"agentsession/0.20"`, 1)
+				// The record is written at the library's format, whatever
+				// minor that is; read back as 0.20, it predates claims.
+				older := strings.Replace(string(data), `"format":"`+agentsession.Format+`"`, `"format":"agentsession/0.20"`, 1)
 				if older == string(data) {
-					t.Fatal("the record names no format 0.21")
+					t.Fatalf("the record names no format %s", agentsession.Format)
 				}
 				file := filepath.Join(t.TempDir(), "older.jsonl")
 				if err := os.WriteFile(file, []byte(older), 0o644); err != nil {

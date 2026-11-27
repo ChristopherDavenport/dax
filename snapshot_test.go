@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -189,13 +190,20 @@ func TestPrintSnapshotReproducesTheTree(t *testing.T) {
 	if r.Digest != s.Digest || agentsession.HashBytes(r.Data) != r.Digest || r.Base != base {
 		t.Errorf("the entry's digest %s, base %s, want -result's %s and %s", r.Digest, r.Base, s.Digest, base)
 	}
-	// The target is the run's last entry, the one before the snapshot.
+	// The target is the run's last entry, the one before the snapshot;
+	// what follows the snapshot is the checkouts' env entry at most.
 	path := rec.Path(rec.Leaf())
-	if len(path) < 2 || path[len(path)-1].Base().ID != s.Entry || path[len(path)-2].Base().ID != r.Target {
-		t.Errorf("the snapshot targets %s, want the entry before it", r.Target)
+	at := slices.IndexFunc(path, func(e agentsession.Entry) bool { return e.Base().ID == s.Entry })
+	if at < 1 || path[at-1].Base().ID != r.Target {
+		t.Fatalf("the snapshot targets %s, want the entry before it", r.Target)
 	}
-	if end, ok := path[len(path)-2].(*agentsession.RunEntry); !ok || !end.IsEnd() {
-		t.Errorf("the entry before the snapshot is %T, want the run's end", path[len(path)-2])
+	if end, ok := path[at-1].(*agentsession.RunEntry); !ok || !end.IsEnd() {
+		t.Errorf("the entry before the snapshot is %T, want the run's end", path[at-1])
+	}
+	for _, e := range path[at+1:] {
+		if _, ok := e.(*agentsession.EnvEntry); !ok {
+			t.Errorf("after the snapshot the path holds a %T, want an env entry at most", e)
+		}
 	}
 	// agenteval reads it back as the run's.
 	res, err := agenteval.ResultAt(t.Context(), storeOf(t, sess), sess.ID(), "")
@@ -205,11 +213,15 @@ func TestPrintSnapshotReproducesTheTree(t *testing.T) {
 	if res.Snapshot == nil || res.Snapshot.Digest != s.Digest || res.Snapshot.Error != "" {
 		t.Errorf("agenteval.ResultAt's snapshot %+v, want the entry's", res.Snapshot)
 	}
-	// The env entry names the commit the run started from.
+	// The env entry in force for the run names the commit it started
+	// from; one after the snapshot names the tree the run left.
 	var env *agentsession.EnvEntry
 	for _, e := range path {
 		if v, ok := e.(*agentsession.EnvEntry); ok {
 			env = v
+		}
+		if e.Base().ID == s.Entry {
+			break
 		}
 	}
 	if env == nil {
@@ -327,7 +339,8 @@ func TestPrintSnapshotLeavesTheRepositoryAlone(t *testing.T) {
 }
 
 // No snapshot is written outside a git tree, without a word, nor with
-// -snapshot=false in one; a patch over the bound is recorded with its
+// -snapshot=false in one, where the env entry still follows the
+// checkout at the root; a patch over the bound is recorded with its
 // size and no data.
 func TestPrintSnapshotWhenNone(t *testing.T) {
 	t.Run("not git", func(t *testing.T) {
@@ -358,9 +371,17 @@ func TestPrintSnapshotWhenNone(t *testing.T) {
 		if _, ids := snapshotsOn(rec); len(ids) != 0 {
 			t.Errorf("-snapshot=false: the record holds snapshots %v", ids)
 		}
+		// The session still follows the checkout at its root, so the
+		// env entry names its commit, read with the checkout, and the
+		// checkout at . carries the same vcs; no snapshot reads a patch.
 		for _, e := range rec.Entries() {
-			if v, ok := e.(*agentsession.EnvEntry); ok && v.VCS != nil {
-				t.Errorf("-snapshot=false: the env entry's vcs %+v, want none read", v.VCS)
+			v, ok := e.(*agentsession.EnvEntry)
+			if !ok {
+				continue
+			}
+			co := v.Checkout(".")
+			if co == nil || v.VCS == nil || !v.VCS.Dirty || co.VCS == nil || co.VCS.Revision != v.VCS.Revision || co.VCS.Dirty != v.VCS.Dirty {
+				t.Errorf("-snapshot=false: the env entry's vcs %+v, checkout %+v, want the root's checkout, dirty, with the same vcs", v.VCS, co)
 			}
 		}
 	})

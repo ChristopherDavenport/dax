@@ -135,12 +135,18 @@ type runResult struct {
 	// that was dirty; absent when none was recorded.
 	Snapshot      *resultSnapshot `json:"snapshot,omitempty"`
 	StartSnapshot *resultSnapshot `json:"start_snapshot,omitempty"`
+	// CheckoutSnapshots name the entries that record the change of each
+	// other git checkout the session follows that the run changed (a
+	// worktree it made, a repository below the root), each by the path
+	// the env entry gives it.
+	CheckoutSnapshots []*resultSnapshot `json:"checkout_snapshots,omitempty"`
 }
 
 // resultSnapshot is a snapshot entry as -result names it: its ID in the
 // session, the base its patch applies to, the patch's digest and size,
 // or why it holds no patch.
 type resultSnapshot struct {
+	Path   string `json:"path,omitempty"`
 	Entry  string `json:"entry"`
 	Base   string `json:"base,omitempty"`
 	Digest string `json:"digest,omitempty"`
@@ -152,7 +158,7 @@ func resultSnapshotOf(w *agent.SnapshotWritten) *resultSnapshot {
 	if w == nil {
 		return nil
 	}
-	return &resultSnapshot{Entry: w.Entry, Base: w.Base, Digest: w.Digest, Size: w.Size, Error: w.Error}
+	return &resultSnapshot{Path: w.Path, Entry: w.Entry, Base: w.Base, Digest: w.Digest, Size: w.Size, Error: w.Error}
 }
 
 type resultCall struct {
@@ -175,6 +181,9 @@ func writeResult(path, session string, end *agentturn.RunEnd, usage resultUsage,
 	r := runResult{Session: session, Reason: endReason(end), Cause: string(end.Cause), Refusal: end.Refusal, Incomplete: end.Incomplete, Pending: []resultCall{}, Exit: exitStatus(end), Usage: usage}
 	if snaps != nil {
 		r.Snapshot, r.StartSnapshot = resultSnapshotOf(snaps.Final), resultSnapshotOf(snaps.Start)
+		for _, w := range snaps.Checkouts {
+			r.CheckoutSnapshots = append(r.CheckoutSnapshots, resultSnapshotOf(w))
+		}
 	}
 	if end.Err != nil {
 		r.Error = end.Err.Error()
