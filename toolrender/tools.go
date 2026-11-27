@@ -13,7 +13,8 @@ import (
 // ---- read
 
 // readRenderer shows a read as its path and the lines asked for, and
-// once it has ended the lines it read, all of them, on its line. A
+// once it has ended the lines it read, all of them, on its line, but
+// for a read of the whole file, which is its path alone. A
 // short read of a part of a file, a piece a person can take in at a
 // glance, shows what it read with its line numbers, so the transcript
 // has what the agent is working with. A longer one says how much it
@@ -27,10 +28,13 @@ func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
 		return nil, false
 	}
 	head := toolview.Line{toolview.S(toolview.Emphasis, r.show(a.str("path")))}
-	// Once it has ended, the lines it read, whatever was asked for: a
-	// read of a whole file names them too, and one a cap cut short names
-	// where it stopped.
+	// Once it has ended, the lines it read, whatever was asked for: one
+	// a cap cut short names where it stopped. A read of the whole file
+	// names none: the path is all of it, and the body says so.
 	if first, last, ok := readRange(c); ok {
+		if wholeRead(c) {
+			return head, true
+		}
 		if first == last {
 			return append(head, toolview.S(toolview.Dim, fmt.Sprintf(":%d", first))), true
 		}
@@ -99,10 +103,8 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
-	// The whole file: read from the top, with nothing left behind it.
-	whole := n > 0 && note == "" && parseArgs(c.Args).num("offset") <= 1
-	if whole {
-		// The head names the lines; the count says how much that is.
+	if wholeRead(c) {
+		// The head names no lines; the count says how much it is.
 		return []toolview.Line{dim("· whole file, " + plural(n, "line", "lines"))}, true
 	}
 	if n == 0 || n > shortRead {
@@ -126,6 +128,22 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 // are drawn, and the client would fold it away with the calls that say
 // nothing.
 func (readRenderer) Loud() bool { return true }
+
+// wholeRead reports whether an ended read read its whole file: from the
+// top, with lines and with no note of more behind them.
+func wholeRead(c view.Call) bool {
+	if c.State != view.CallEnded || parseArgs(c.Args).num("offset") > 1 {
+		return false
+	}
+	any := false
+	for _, l := range lines(c.Output) {
+		if strings.HasPrefix(l, "... (") {
+			return false
+		}
+		any = any || numbered.MatchString(l)
+	}
+	return any
+}
 
 // ---- write
 
