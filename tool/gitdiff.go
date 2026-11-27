@@ -83,10 +83,24 @@ if [ "$size" -le "$2" ]; then cat "$d/diff"; fi
 // repository whose own configuration would run a program is not read,
 // as for GitHead (execConfigKey): Withheld says why.
 func GitDiff(ctx context.Context, f *Files, base string, max int64) (GitChange, error) {
+	return GitDiffIn(ctx, f, ".", base, max)
+}
+
+// GitDiffIn is GitDiff of the directory dir, a name relative to the
+// workspace's root ("." for the root): the change of the work tree
+// under dir against base, read with git running in dir. A session that
+// follows several checkouts (a worktree a run made, a repository below
+// the root) reads each one's change at its top this way. A dir outside
+// the workspace is ErrOutside.
+func GitDiffIn(ctx context.Context, f *Files, dir, base string, max int64) (GitChange, error) {
+	rel, err := f.Rel(dir)
+	if err != nil {
+		return GitChange{}, err
+	}
 	ws := f.Workspace()
 	env := append(gitEnv(), "CDPATH=", "LC_ALL=C")
 	probe, cancel := context.WithTimeout(ctx, 10*time.Second)
-	out, err := ws.Exec(probe, workspace.Command{Args: []string{"git", "rev-parse", "--is-inside-work-tree"}, Env: env})
+	out, err := ws.Exec(probe, workspace.Command{Args: []string{"git", "rev-parse", "--is-inside-work-tree"}, Dir: rel, Env: env})
 	cancel()
 	if err != nil {
 		return GitChange{}, fmt.Errorf("git rev-parse: %w", err)
@@ -94,7 +108,7 @@ func GitDiff(ctx context.Context, f *Files, base string, max int64) (GitChange, 
 	if out.ExitCode != 0 || strings.TrimSpace(string(out.Stdout)) != "true" {
 		return GitChange{}, nil
 	}
-	key, err := execConfigKey(ctx, f, f.Dir(), false)
+	key, err := checkoutConfigKey(ctx, f, rel)
 	if err != nil {
 		return GitChange{Repo: true}, err
 	}
@@ -106,7 +120,7 @@ func GitDiff(ctx context.Context, f *Files, base string, max int64) (GitChange, 
 	}
 	ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err = ws.Exec(ctx, workspace.Command{Args: []string{"sh", "-c", diffScript, "sh", base, strconv.FormatInt(max, 10)}, Env: env})
+	out, err = ws.Exec(ctx, workspace.Command{Args: []string{"sh", "-c", diffScript, "sh", base, strconv.FormatInt(max, 10)}, Dir: rel, Env: env})
 	switch {
 	case err != nil:
 		return GitChange{Repo: true}, fmt.Errorf("git diff: %w", err)

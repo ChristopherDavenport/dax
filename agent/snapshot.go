@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sync"
 	"time"
 
@@ -47,6 +48,23 @@ type snapshots struct {
 	// read.
 	start tool.GitChange
 	err   error
+	// bases are the commits of the other checkouts the session follows
+	// as the run found them, by path: what each one's snapshot at the
+	// end is against.
+	bases map[string]string
+	// noGit is set once a read found no git in the workspace, which is
+	// said once, after which a run starts no snapshot.
+	noGit bool
+	// done is set once EndSnapshot has written the run's snapshots.
+	done bool
+}
+
+// pending is whether StartSnapshot began a snapshot that EndSnapshot
+// has not written yet.
+func (sn *snapshots) pending() bool {
+	sn.mu.Lock()
+	defer sn.mu.Unlock()
+	return sn.on && !sn.done
 }
 
 // vcs is the env entry's vcs for the start, nil when there is none.
@@ -65,9 +83,13 @@ func (sn *snapshots) vcs() *agentsession.VCS {
 // whether the tree was dirty), and, for a dirty tree, the change
 // already there. max bounds the bytes of each snapshot's patch kept; 0
 // is DefaultSnapshotMax. A workspace that is not a git tree, or a
-// session nothing is recorded for, starts none and is no error. An
-// error reading the tree is returned, and EndSnapshot records it as
-// the snapshot's.
+// session nothing is recorded for, starts none and is no error. A
+// workspace with no git installed starts none either, and the first
+// run that finds so returns an error saying it (wrapping
+// tool.ErrNoGit), the runs after it none. Any other error reading the
+// tree is returned, and EndSnapshot records it as the snapshot's. The
+// commits of the other checkouts the session follows are read too, for
+// EndSnapshot's snapshot of each one the run changes.
 func (s *Session) StartSnapshot(ctx context.Context, max int64) error {
 	if !s.recorded {
 		return nil
@@ -77,11 +99,25 @@ func (s *Session) StartSnapshot(ctx context.Context, max int64) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
 	defer cancel()
-	c, err := tool.GitDiff(ctx, s.files, "", max)
 	sn := &s.snap
 	sn.mu.Lock()
+	quiet := sn.noGit
+	sn.mu.Unlock()
+	if quiet {
+		return nil
+	}
+	c, err := tool.GitDiff(ctx, s.files, "", max)
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		sn.mu.Lock()
+		sn.on, sn.noGit = false, true
+		sn.mu.Unlock()
+		return fmt.Errorf("snapshot: %w: %v", tool.ErrNoGit, err)
+	}
+	s.readCheckouts(ctx)
+	bases := s.checkoutRevisions()
+	sn.mu.Lock()
 	defer sn.mu.Unlock()
-	sn.on, sn.max, sn.start, sn.err = c.Repo || err != nil, max, c, err
+	sn.on, sn.max, sn.start, sn.err, sn.bases, sn.done = c.Repo || err != nil, max, c, err, bases, false
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
@@ -91,6 +127,9 @@ func (s *Session) StartSnapshot(ctx context.Context, max int64) error {
 // SnapshotWritten is a snapshot entry EndSnapshot appended: its ID,
 // and the snapshot as recorded (its data left out).
 type SnapshotWritten struct {
+	// Path is the checkout the snapshot is of, as the env entry names
+	// it; empty for the workspace's root.
+	Path   string
 	Entry  string
 	Base   string
 	Digest string
@@ -100,9 +139,13 @@ type SnapshotWritten struct {
 }
 
 // Snapshots are what EndSnapshot appended: the run's final snapshot,
-// and the start's when the tree was dirty at the start.
+// and the start's when the tree was dirty at the start, of the
+// workspace's root; and the final snapshot of each other checkout the
+// session follows that the run changed, in the order it was first
+// followed.
 type Snapshots struct {
 	Final, Start *SnapshotWritten
+	Checkouts    []*SnapshotWritten
 }
 
 // EndSnapshot reads the change the workspace holds against the commit
@@ -119,11 +162,19 @@ type Snapshots struct {
 func (s *Session) EndSnapshot(ctx context.Context) (*Snapshots, error) {
 	sn := &s.snap
 	sn.mu.Lock()
-	on, max, start, startErr := sn.on, sn.max, sn.start, sn.err
+	on, max, start, startErr, bases := sn.on, sn.max, sn.start, sn.err, sn.bases
 	sn.mu.Unlock()
 	if !on {
 		return nil, nil
 	}
+	// The checkouts' env entry the run's end held back follows the
+	// snapshots, however they end.
+	defer func() {
+		sn.mu.Lock()
+		sn.done = true
+		sn.mu.Unlock()
+		s.writeCheckouts(context.WithoutCancel(ctx))
+	}()
 	var final agenteval.Snapshot
 	var size int64
 	switch {
@@ -158,6 +209,22 @@ func (s *Session) EndSnapshot(ctx context.Context) (*Snapshots, error) {
 		return out, err
 	}
 	out.Final = w
+	// Each other checkout the run changed: its change against the
+	// commit the run found it on, or the one the session first followed
+	// it at, for one the run made.
+	s.readCheckouts(ctx)
+	for _, ch := range s.changedSince(bases) {
+		rctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
+		c, err := tool.GitDiffIn(rctx, s.files, ch.dir, ch.base, max)
+		cancel()
+		snap, n := snapshotOf(c, err, ch.base, max)
+		snap.Path = ch.path
+		w, err := s.appendSnapshot(ctx, snap, n, target)
+		if err != nil {
+			return out, err
+		}
+		out.Checkouts = append(out.Checkouts, w)
+	}
 	return out, nil
 }
 
@@ -191,5 +258,5 @@ func (s *Session) appendSnapshot(ctx context.Context, snap agenteval.Snapshot, s
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
 	rec, _ := agenteval.ReadSnapshot(e)
-	return &SnapshotWritten{Entry: id, Base: rec.Base, Digest: rec.Digest, Size: size, Error: rec.Error}, nil
+	return &SnapshotWritten{Path: rec.Path, Entry: id, Base: rec.Base, Digest: rec.Digest, Size: size, Error: rec.Error}, nil
 }

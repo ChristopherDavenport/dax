@@ -10,6 +10,8 @@
 package coding
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -80,11 +82,15 @@ func New(maxRead int64) extension.Extension {
 			// Plan mode is for reading: no write or edit, over any allow.
 			policy.ModePlan: {Deny: []string{"write", "edit"}},
 		},
-		GrantRule:    grantRule,
-		Lifts:        lifts,
-		Instructions: instructions,
-		Renderers:    toolrender.Renderers,
-		Summarizers:  toolrender.Summarizers,
+		// After a bash call that runs git, the checkouts it ran in are
+		// read again, so the record says which commit, branch and
+		// upstream the work moved to (agentsession's env checkouts).
+		AfterToolCall: gitAfterBash,
+		GrantRule:     grantRule,
+		Lifts:         lifts,
+		Instructions:  instructions,
+		Renderers:     toolrender.Renderers,
+		Summarizers:   toolrender.Summarizers,
 	}
 }
 
@@ -142,4 +148,33 @@ func clip(s string, n int) string {
 		n--
 	}
 	return s[:n] + "..."
+}
+
+// gitAfterBash is dax-coding's after-call hook: a bash call whose
+// command runs a git command that can move a checkout (tool.GitMoves)
+// has the session read the checkouts it ran in, or made, again
+// (Env.CheckoutsMoved); one whose command the parser cannot read but
+// that names git has every checkout read. It never changes the result.
+func gitAfterBash(env extension.Env) (func(context.Context, agentturn.ToolResultInfo) (*agentturn.ToolOverride, error), error) {
+	files := env.ToolEnv().Files
+	if files == nil {
+		return nil, nil
+	}
+	return func(ctx context.Context, info agentturn.ToolResultInfo) (*agentturn.ToolOverride, error) {
+		if info.Call == nil || info.Call.Name != "bash" {
+			return nil, nil
+		}
+		var args tool.BashArgs
+		if err := json.Unmarshal(info.Args, &args); err != nil || args.Command == "" {
+			return nil, nil
+		}
+		dirs, all := tool.GitMoves(args.Command, files)
+		switch {
+		case all:
+			env.CheckoutsMoved(ctx)
+		case len(dirs) > 0:
+			env.CheckoutsMoved(ctx, dirs...)
+		}
+		return nil, nil
+	}, nil
 }

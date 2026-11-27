@@ -635,6 +635,9 @@ type Session struct {
 	// snap is where the workspace started, as StartSnapshot read it
 	// (snapshot.go).
 	snap snapshots
+	// checkouts are the git checkouts the session follows and what it
+	// last read of each (checkouts.go).
+	checkouts checkouts
 }
 
 // live is what /think and /model have set, read by each sub-agent
@@ -1336,6 +1339,14 @@ func open(ctx context.Context, o Options, store agentsession.Store, own bool, re
 	s.ag.Subscribe((&truncationWatch{log: o.log}).handle)
 	// A mode asked for during a run starts at its next turn.
 	s.ag.Subscribe(s.modeAtTurn)
+	// The checkouts once a run has ended, its record written: a commit
+	// no call said was git's is on the record before the next run.
+	s.ag.Subscribe(func(ctx context.Context, ev agentturn.Event) error {
+		if _, ok := ev.(*agentturn.RunEnd); ok {
+			s.checkoutsAtRunEnd(ctx)
+		}
+		return nil
+	})
 	// The extensions' AfterRun hooks, once a run is on the record.
 	if len(s.after.hooks) > 0 {
 		actx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -1406,8 +1417,26 @@ func newHeader(o Options, root string, extra map[string]json.RawMessage) agentse
 // last one on the path, so a session that stays in one workspace holds
 // one entry and a resume in another says so. Once StartSnapshot has
 // read the commit the workspace's git tree is on, the entry's vcs says
-// it, and whether the tree was dirty.
-func (s *Session) envOption() session.Option { return session.WithEnv(envOf(s.x, s.snap.vcs)) }
+// it, and whether the tree was dirty. A recorded session's entry lists
+// the git checkouts it follows too (checkouts.go), read as the entry is
+// asked for, and the vcs is then the one of the checkout holding the
+// root, read with them.
+func (s *Session) envOption() session.Option {
+	base := envOf(s.x, s.snap.vcs)
+	return session.WithEnv(func(ctx context.Context) (*agentsession.EnvEntry, error) {
+		e, err := base(ctx)
+		if err != nil || e == nil {
+			return e, err
+		}
+		if list, vcs, rooted, ok := s.readCheckouts(ctx); ok {
+			e.Checkouts = list
+			if rooted {
+				e.VCS = vcs
+			}
+		}
+		return e, nil
+	})
+}
 
 // envOf is the environment entry of the workspace x's tools act in,
 // with vcs's answer as its vcs when vcs is set.
