@@ -3,6 +3,7 @@ package toolrender
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentconsole/toolview"
@@ -11,7 +12,8 @@ import (
 
 // ---- read
 
-// readRenderer shows a read as its path and the lines asked for. A
+// readRenderer shows a read as its path and the lines asked for, and
+// once it has ended the lines it read, all of them, on its line. A
 // short read of a part of a file, a piece a person can take in at a
 // glance, shows what it read with its line numbers, so the transcript
 // has what the agent is working with. A longer one says how much it
@@ -25,6 +27,15 @@ func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
 		return nil, false
 	}
 	head := toolview.Line{toolview.S(toolview.Emphasis, r.show(a.str("path")))}
+	// Once it has ended, the lines it read, whatever was asked for: a
+	// read of a whole file names them too, and one a cap cut short names
+	// where it stopped.
+	if first, last, ok := readRange(c); ok {
+		if first == last {
+			return append(head, toolview.S(toolview.Dim, fmt.Sprintf(":%d", first))), true
+		}
+		return append(head, toolview.S(toolview.Dim, fmt.Sprintf(":%d-%d", first, last))), true
+	}
 	from, n := a.num("offset"), a.num("limit")
 	switch {
 	case from > 0 && n > 0:
@@ -39,6 +50,29 @@ func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
 
 // numbered is a line read wrote: its number, a tab and the text.
 var numbered = regexp.MustCompile(`^ *\d+\t`)
+
+// readRange is the first and the last line an ended read read, by the
+// numbers it wrote, and whether it read any.
+func readRange(c view.Call) (first, last int, ok bool) {
+	if c.State != view.CallEnded {
+		return 0, 0, false
+	}
+	for _, l := range lines(c.Output) {
+		if !numbered.MatchString(l) {
+			continue
+		}
+		num, _, _ := strings.Cut(l, "\t")
+		n, err := strconv.Atoi(strings.TrimSpace(num))
+		if err != nil {
+			continue
+		}
+		if !ok {
+			first, ok = n, true
+		}
+		last = n
+	}
+	return first, last, ok
+}
 
 func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	if msg, failed := failure(c); failed {
@@ -68,7 +102,8 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	// The whole file: read from the top, with nothing left behind it.
 	whole := n > 0 && note == "" && parseArgs(c.Args).num("offset") <= 1
 	if whole {
-		return []toolview.Line{dim("· whole file, " + plural(n, "line", "lines"))}, true
+		// The head names the lines.
+		return []toolview.Line{dim("· whole file")}, true
 	}
 	if n == 0 || n > shortRead {
 		return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true

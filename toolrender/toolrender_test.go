@@ -84,7 +84,7 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		{name: "read a range", tool: "read", args: `{"path":"a.go","offset":3,"limit":4}`,
 			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "6  line 6", "… (4 more lines; use offset=7)"}},
 		{name: "read a whole file", tool: "read", args: `{"path":"sub/b.go"}`,
-			head: "sub/b.go", body: []string{"· whole file, 3 lines"}},
+			head: "sub/b.go:1-3", body: []string{"· whole file"}},
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
@@ -189,7 +189,7 @@ func TestAToolOfAnotherShapeIsDeclined(t *testing.T) {
 	}
 	// A sub-agent's call carries no schema, and is drawn.
 	c.Schema = nil
-	if got := head(rs["read"], c); got != "a.go" {
+	if got := head(rs["read"], c); got != "a.go:1" {
 		t.Errorf("a child call: %q", got)
 	}
 }
@@ -452,19 +452,23 @@ func TestAShortReadShowsItsLinesAndALongOneACount(t *testing.T) {
 		t.Errorf("%d lines read: %d lines drawn, want them all", shortRead, len(got))
 	}
 	c.Output = output(5, 5+shortRead)
+	// The head names every line read, not the ones drawn or asked for.
+	if got, want := head(rs["read"], c), fmt.Sprintf("a.go:5-%d", 5+shortRead); got != want {
+		t.Errorf("head = %q, want %q", got, want)
+	}
 	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{fmt.Sprintf("· %d lines", shortRead+1)}) {
 		t.Errorf("past the cutoff = %q", got)
 	}
 	// A read of the whole file says so and shows none of it, however
 	// short the file.
 	c.Args, c.Output = `{"path":"a.go"}`, output(1, 3)
-	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file, 3 lines"}) {
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file"}) || head(rs["read"], c) != "a.go:1-3" {
 		t.Errorf("a short whole file = %q", got)
 	}
 	// A long read from the top says when it was the whole file: with a
 	// limit that cut it, the tool's note says what is left.
 	c.Args, c.Output = `{"path":"a.go"}`, output(1, 30)
-	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file, 30 lines"}) {
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file"}) || head(rs["read"], c) != "a.go:1-30" {
 		t.Errorf("whole file = %q", got)
 	}
 	c.Args, c.Output = `{"path":"a.go","limit":30}`, output(1, 30)+"... (40 more lines; use offset=31)\n"
