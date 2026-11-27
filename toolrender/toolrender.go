@@ -17,8 +17,8 @@
 // step.
 //
 // Collapsed, a call is a line and a short body: an edit's diff, the
-// first lines a read read, the end of a failing command, a count for the
-// rest. An edit and a write are loud ([toolview.Loud]): the client never
+// first lines of a read from inside a file, the end of a failing command,
+// a count for the rest. An edit and a write are loud ([toolview.Loud]): the client never
 // folds them into a run of quiet calls. Expanded (ctrl+o), an
 // edit's whole diff, a write's content and a command's whole output, and
 // the client's raw output for the others.

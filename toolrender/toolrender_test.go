@@ -84,7 +84,7 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		{name: "read a range", tool: "read", args: `{"path":"a.go","offset":3,"limit":4}`,
 			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "… 1 more line (ctrl+o) (4 more lines; use offset=7)"}},
 		{name: "read a whole file", tool: "read", args: `{"path":"sub/b.go"}`,
-			head: "sub/b.go", body: []string{"1  package b", "2  ", "3  func Steer() {}"}},
+			head: "sub/b.go", body: []string{"· whole file, 3 lines"}},
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
@@ -442,6 +442,16 @@ func TestAReadShowsItsFirstLinesNumbered(t *testing.T) {
 				t.Errorf("span %q has role %v, want dim", sp.Text, sp.Role)
 			}
 		}
+	}
+	// A read from the top is a count, and says when it was the whole
+	// file: with a limit that cut it, the tool's note says what is left.
+	top := view.Call{Name: "read", Args: `{"path":"a.go"}`, State: view.CallEnded, Output: out}
+	if got := drawn(rs["read"].Body(top, false)); !slices.Equal(got, []string{"· whole file, 23 lines"}) {
+		t.Errorf("whole file = %q", got)
+	}
+	top.Args, top.Output = `{"path":"a.go","offset":1,"limit":23}`, out+"... (40 more lines; use offset=24)\n"
+	if got := drawn(rs["read"].Body(top, false)); !slices.Equal(got, []string{"· 23 lines (40 more lines; use offset=24)"}) {
+		t.Errorf("cut from the top = %q", got)
 	}
 	// An empty file is a count, and expanded the client shows the output.
 	empty := view.Call{Name: "read", Args: `{"path":"e"}`, State: view.CallEnded}

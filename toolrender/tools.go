@@ -11,9 +11,11 @@ import (
 
 // ---- read
 
-// readRenderer shows a read as its path and the lines asked for, and
-// what it read as its first lines with their numbers, so the person
-// sees where the agent is looking, and a count of the rest.
+// readRenderer shows a read as its path and the lines asked for. A read
+// from inside a file shows its first lines with their numbers, so the
+// person sees where the agent is looking, and a count of the rest. A read
+// from the top says how much it read, and that it was the whole file
+// when it was: a file's first lines are its header, which says little.
 type readRenderer struct{ paths }
 
 func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -62,8 +64,12 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
-	if n == 0 {
-		return []toolview.Line{dim("· 0 lines" + clip(note))}, true
+	if parseArgs(c.Args).num("offset") <= 1 || n == 0 {
+		count := "· " + plural(n, "line", "lines")
+		if note == "" && n > 0 {
+			count = "· whole file, " + plural(n, "line", "lines")
+		}
+		return []toolview.Line{dim(count + clip(note))}, true
 	}
 	// The numbers share a column, the width of the last one shown.
 	width := len(shown[len(shown)-1][0])
