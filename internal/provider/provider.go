@@ -108,8 +108,10 @@ type Spec struct {
 	// SubagentModel is the sub-agents' model name; empty takes
 	// DefaultSubagentModel, and failing that the main model.
 	SubagentModel string
-	// BaseURL is for ollama, where empty takes the default, and for
-	// openresponses, where it is required.
+	// BaseURL is for ollama, where empty takes the default; for
+	// openresponses, where it is required; and for anthropic, where
+	// empty is Anthropic's own API and otherwise a server that speaks
+	// the Messages API.
 	BaseURL string
 	// KeyEnv names the variable holding the openresponses provider's
 	// key; empty sends none. The other providers' are fixed.
@@ -208,7 +210,7 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 		if spec.KeyEnv != "" {
 			return m, fmt.Errorf("%s: api_key_env is for the openresponses provider", spec.Provider)
 		}
-		if spec.BaseURL != "" && spec.Provider != "ollama" {
+		if spec.BaseURL != "" && spec.Provider != "ollama" && spec.Provider != "anthropic" {
 			return m, fmt.Errorf("%s: base_url is not supported; use the openresponses provider for another server", spec.Provider)
 		}
 		m.KeyEnv = KeyEnv(spec.Provider)
@@ -304,11 +306,18 @@ func New(ctx context.Context, spec Spec) (Model, error) {
 			m.Describer = modelinfo.OpenRouter(base, nil)
 		}
 	case "anthropic":
-		client := anthropicClient(spec, key, keys)
+		var ropts []option.RequestOption
+		if spec.BaseURL != "" {
+			ropts = append(ropts, option.WithBaseURL(spec.BaseURL))
+		}
+		client := anthropicClient(spec, key, keys, ropts...)
 		var sub openresponses.Adapter
 		m.Streamer, sub, separate = claudeAdapters(client.Messages, spec)
 		m.SubagentStreamer = sub
 		m.Endpoint = "api.anthropic.com"
+		if spec.BaseURL != "" {
+			m.Endpoint = spec.BaseURL
+		}
 		m.Describer = modelinfo.Anthropic(&client.Models)
 	case "vertex":
 		find := spec.Credentials

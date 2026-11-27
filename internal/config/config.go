@@ -66,7 +66,9 @@ type Config struct {
 	// provider's default for them, else the main model.
 	SubagentModel string `json:"subagent_model,omitempty"`
 	// BaseURL is the endpoint of an Open Responses server: another
-	// Ollama host, or the server the openresponses provider talks to.
+	// Ollama host, or the server the openresponses provider talks to;
+	// or, for anthropic, a server that speaks the Messages API in
+	// place of api.anthropic.com.
 	BaseURL string `json:"base_url,omitempty"`
 	// APIKeyEnv names the environment variable that holds the
 	// openresponses provider's key; the key itself never goes in a
@@ -2761,8 +2763,8 @@ func Resolve(layers []Layer, f Flags, defaultMemory string) (Settings, error) {
 		if err := checkBaseURL(s.BaseURL); err != nil {
 			return s, err
 		}
-		if s.Provider != "ollama" && s.Provider != "openresponses" {
-			return s, fmt.Errorf("base_url is for the ollama and openresponses providers, not %s (%s); use provider openresponses for another server", s.Provider, s.Sources["base_url"])
+		if s.Provider != "ollama" && s.Provider != "openresponses" && s.Provider != "anthropic" {
+			return s, fmt.Errorf("base_url is for the ollama, openresponses and anthropic providers, not %s (%s); use provider openresponses for another server", s.Provider, s.Sources["base_url"])
 		}
 	}
 	if !slices.Contains(Efforts, s.Effort) {

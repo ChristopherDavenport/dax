@@ -60,7 +60,7 @@ dax -provider anthropic      # a hosted model
 | `openai` | `gpt-5` | `OPENAI_API_KEY` | not supported |
 | `openrouter` | `deepseek/deepseek-v4-pro-0813`; sub-agents `deepseek/deepseek-v4.1-flash` | `OPENROUTER_API_KEY` | not supported |
 | `openresponses` | none; `-model` is required | the variable `-api-key-env` names, or none | required |
-| `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | not supported |
+| `anthropic` | `claude-sonnet-5-5` | `ANTHROPIC_API_KEY` | default `https://api.anthropic.com`; another server that speaks the Messages API (give the URL the SDK adds `/v1/messages` to) |
 | `gemini` | `gemini-2.5-pro` | `GEMINI_API_KEY` | not supported |
 | `vertex` | `claude-sonnet-5-5` | none; Google Application Default Credentials | not supported |
 
@@ -520,7 +520,7 @@ names the file and the field.
 
 | field | meaning |
 |---|---|
-| `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama` and `openresponses` |
+| `provider`, `model`, `subagent_model`, `base_url`, `think`, `effort` | as above; `base_url` is for `ollama`, `openresponses` and `anthropic` |
 | `plan_model`, `act_model` | the model plan mode moves to, and the one your approval of a plan moves to (see [Permission modes](#permission-modes)); empty leaves the model as it is. Like `model`, each is the provider's it was set beside |
 | `agents` | offer the explore and task sub-agents; default `true` |
 | `show_reasoning` | start the terminal client with every reasoning row expanded, as Ctrl-R with no row selected does; Ctrl-R still toggles. Default `false`: reasoning is a collapsed row. Your file only |

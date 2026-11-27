@@ -143,3 +143,33 @@ func TestVertexRefusesTheHeaders(t *testing.T) {
 		t.Errorf("err = %v, want vertex to refuse session_header", err)
 	}
 }
+
+// The anthropic provider with a base_url sends to that server, with the
+// key from the command as a bearer token and the session and client
+// headers.
+func TestAnthropicBaseURLIsTheServerSent(t *testing.T) {
+	const sid = "019a0000-0000-7000-8000-0000000000bb"
+	srv := newHeaderServer(t)
+	m, err := New(context.Background(), Spec{
+		Provider: "anthropic", BaseURL: srv.URL, KeyCommand: helper(t, "gw-key"),
+		SessionHeader: "X-Session-Id", ClientHeader: "X-Client", Client: "dax/v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Endpoint != srv.URL {
+		t.Errorf("endpoint %q, want %q", m.Endpoint, srv.URL)
+	}
+	ctx := session.ContextWithSessionID(context.Background(), sid)
+	_ = m.Streamer.CreateStream(ctx, openresponses.Request{Model: "claude-sonnet-5-5", Input: openresponses.Items{openresponses.UserText("hi")}}, discard)
+	h := srv.last(t)
+	if got := h.Get("Authorization"); got != "Bearer gw-key" {
+		t.Errorf("authorization %q, want the key from the command as a bearer token", got)
+	}
+	if got := h.Get("X-Session-Id"); got != sid {
+		t.Errorf("session header %q, want %q", got, sid)
+	}
+	if got := h.Get("X-Client"); got != "dax/v1.2.3" {
+		t.Errorf("client header %q", got)
+	}
+}

@@ -508,7 +508,7 @@ func TestResolveRefusals(t *testing.T) {
 		want   string
 	}{
 		{"flag provider", nil, Flags{Provider: ptr("nope")}, `provider "nope"`},
-		{"base url with anthropic", []Layer{parse(t, `{"provider":"anthropic","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama and openresponses providers, not anthropic"},
+		{"base url with gemini", []Layer{parse(t, `{"provider":"gemini","base_url":"https://x"}`, false)}, Flags{}, "base_url is for the ollama, openresponses and anthropic providers, not gemini"},
 		{"base url flag with gemini", nil, Flags{Provider: ptr("gemini"), BaseURL: ptr("https://x")}, "not gemini"},
 		// openai means OpenAI; another server is openresponses.
 		{"base url with openai", []Layer{parse(t, `{"provider":"openai","base_url":"https://openrouter.ai/api/v1"}`, false)}, Flags{}, "not openai (/home/u/.config/dax/config.json); use provider openresponses"},
