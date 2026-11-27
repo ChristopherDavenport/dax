@@ -7,15 +7,15 @@ versions may break flags and the config file.
 
 ## Unreleased
 
-- Changed: in the terminal client a `read` from inside a file (an
-  `offset` past 1) shows the first 3 lines it read, with their line
-  numbers, and how many more there are, in place of a count alone, so
-  the transcript shows where the agent is looking. A read from the top
-  stays a count, and says `whole file` when it read all of it.
-- Changed: `toolrender`'s `edit` and `write` renderers are loud
+- Changed: in the terminal client a short `read`, at most 20 lines,
+  shows what it read with its line numbers, so a piece of a file the
+  agent is working with is in the transcript. A longer read stays a
+  count, and says `whole file` when it read all of it.
+- Changed: `toolrender`'s `edit`, `write` and `read` renderers are loud
   (`toolview.Loud`): a client that folds short calls into one line
-  never folds these, so an edit's diff is always on the screen. It
-  takes effect with the agentconsole release that reads it.
+  never folds these, so an edit's diff and a short read's lines are
+  always on the screen. It takes effect with the agentconsole release
+  that reads it.
 
 ## v0.0.44 - 2026-11-27
 

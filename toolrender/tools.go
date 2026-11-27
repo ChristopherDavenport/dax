@@ -11,11 +11,11 @@ import (
 
 // ---- read
 
-// readRenderer shows a read as its path and the lines asked for. A read
-// from inside a file shows its first lines with their numbers, so the
-// person sees where the agent is looking, and a count of the rest. A read
-// from the top says how much it read, and that it was the whole file
-// when it was: a file's first lines are its header, which says little.
+// readRenderer shows a read as its path and the lines asked for. A
+// short read, a piece of a file a person can take in at a glance, shows
+// what it read with its line numbers, so the transcript has what the
+// agent is working with; a longer one says how much it read, and that
+// it was the whole file when it was.
 type readRenderer struct{ paths }
 
 func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -47,12 +47,12 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 		return nil, false
 	}
 	n, note := 0, ""
-	var shown [][2]string // the number and the text of the first lines
+	var shown [][2]string // the number and the text of a short read's lines
 	for _, l := range lines(c.Output) {
 		switch {
 		case numbered.MatchString(l):
 			n++
-			if len(shown) < excerptLines {
+			if len(shown) <= shortRead {
 				num, text, _ := strings.Cut(l, "\t")
 				shown = append(shown, [2]string{strings.TrimSpace(num), text})
 			}
@@ -64,14 +64,14 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
-	if parseArgs(c.Args).num("offset") <= 1 || n == 0 {
+	if n == 0 || n > shortRead {
 		count := "· " + plural(n, "line", "lines")
-		if note == "" && n > 0 {
+		if note == "" && n > 0 && parseArgs(c.Args).num("offset") <= 1 {
 			count = "· whole file, " + plural(n, "line", "lines")
 		}
 		return []toolview.Line{dim(count + clip(note))}, true
 	}
-	// The numbers share a column, the width of the last one shown.
+	// The numbers share a column, the width of the last one.
 	width := len(shown[len(shown)-1][0])
 	out := make([]toolview.Line, 0, len(shown)+1)
 	for _, s := range shown {
@@ -79,15 +79,16 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 		text := strings.ReplaceAll(s[1], "\t", "    ")
 		out = append(out, dim(clip(fmt.Sprintf("%*s  %s", width, s[0], text))))
 	}
-	switch rest := n - len(shown); {
-	case rest > 0:
-		l := more(rest)
-		out = append(out, append(l, toolview.S(toolview.Dim, clip(note))))
-	case note != "":
+	if note != "" {
 		out = append(out, dim("…"+clip(note)))
 	}
 	return out, true
 }
+
+// Loud keeps a read on the screen: a short one is the one whose lines
+// are drawn, and the client would fold it away with the calls that say
+// nothing.
+func (readRenderer) Loud() bool { return true }
 
 // ---- write
 

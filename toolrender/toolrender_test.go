@@ -82,9 +82,9 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		body, expanded   []string // nil: the renderer declines
 	}{
 		{name: "read a range", tool: "read", args: `{"path":"a.go","offset":3,"limit":4}`,
-			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "… 1 more line (ctrl+o) (4 more lines; use offset=7)"}},
+			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "6  line 6", "… (4 more lines; use offset=7)"}},
 		{name: "read a whole file", tool: "read", args: `{"path":"sub/b.go"}`,
-			head: "sub/b.go", body: []string{"· whole file, 3 lines"}},
+			head: "sub/b.go", body: []string{"1  package b", "2  ", "3  func Steer() {}"}},
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
@@ -421,18 +421,21 @@ func TestBashAndBackgroundHeadsStandInForTheName(t *testing.T) {
 	}
 }
 
-// A read's excerpt keeps the numbers in one column and a tab's indent,
-// and says how many lines are behind it.
-func TestAReadShowsItsFirstLinesNumbered(t *testing.T) {
+// A short read shows what it read, the numbers in one column and a
+// tab's indent kept; a longer one is a count.
+func TestAShortReadShowsItsLinesAndALongOneACount(t *testing.T) {
 	rs := Renderers("")
-	out := ""
-	for i := 98; i <= 120; i++ {
-		out += fmt.Sprintf("%6d\t\tx := %d\n", i, i)
+	output := func(from, to int) string {
+		out := ""
+		for i := from; i <= to; i++ {
+			out += fmt.Sprintf("%6d\t\tx := %d\n", i, i)
+		}
+		return out
 	}
-	c := view.Call{Name: "read", Args: `{"path":"a.go","offset":98}`, State: view.CallEnded, Output: out}
-	want := []string{" 98      x := 98", " 99      x := 99", "100      x := 100", "… 20 more lines (ctrl+o)"}
+	c := view.Call{Name: "read", Args: `{"path":"a.go","offset":98,"limit":3}`, State: view.CallEnded, Output: output(98, 100) + "... (40 more lines; use offset=101)\n"}
+	want := []string{" 98      x := 98", " 99      x := 99", "100      x := 100", "… (40 more lines; use offset=101)"}
 	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, want) {
-		t.Errorf("body = %q, want %q", got, want)
+		t.Errorf("short = %q, want %q", got, want)
 	}
 	// Every line of it is dim: it is context, not a change.
 	body, _ := rs["read"].Body(c, false)
@@ -443,14 +446,23 @@ func TestAReadShowsItsFirstLinesNumbered(t *testing.T) {
 			}
 		}
 	}
-	// A read from the top is a count, and says when it was the whole
-	// file: with a limit that cut it, the tool's note says what is left.
-	top := view.Call{Name: "read", Args: `{"path":"a.go"}`, State: view.CallEnded, Output: out}
-	if got := drawn(rs["read"].Body(top, false)); !slices.Equal(got, []string{"· whole file, 23 lines"}) {
+	// The cutoff: shortRead lines are shown, one more is a count.
+	c.Args, c.Output = `{"path":"a.go","offset":5}`, output(5, 4+shortRead)
+	if got := drawn(rs["read"].Body(c, false)); len(got) != shortRead {
+		t.Errorf("%d lines read: %d lines drawn, want them all", shortRead, len(got))
+	}
+	c.Output = output(5, 5+shortRead)
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{fmt.Sprintf("· %d lines", shortRead+1)}) {
+		t.Errorf("past the cutoff = %q", got)
+	}
+	// A long read from the top says when it was the whole file: with a
+	// limit that cut it, the tool's note says what is left.
+	c.Args, c.Output = `{"path":"a.go"}`, output(1, 30)
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file, 30 lines"}) {
 		t.Errorf("whole file = %q", got)
 	}
-	top.Args, top.Output = `{"path":"a.go","offset":1,"limit":23}`, out+"... (40 more lines; use offset=24)\n"
-	if got := drawn(rs["read"].Body(top, false)); !slices.Equal(got, []string{"· 23 lines (40 more lines; use offset=24)"}) {
+	c.Args, c.Output = `{"path":"a.go","limit":30}`, output(1, 30)+"... (40 more lines; use offset=31)\n"
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· 30 lines (40 more lines; use offset=31)"}) {
 		t.Errorf("cut from the top = %q", got)
 	}
 	// An empty file is a count, and expanded the client shows the output.
@@ -463,15 +475,15 @@ func TestAReadShowsItsFirstLinesNumbered(t *testing.T) {
 	}
 }
 
-// An edit and a write are never folded into a run of quiet calls, and
-// the tools that only look may be.
-func TestEditAndWriteAreLoud(t *testing.T) {
+// An edit, a write and a read are never folded into a run of quiet
+// calls, and the other tools may be.
+func TestEditWriteAndReadAreLoud(t *testing.T) {
 	for name, r := range Renderers("") {
 		// toolview.Loud, spelled out: the agentconsole dax requires may
 		// be older than the interface.
 		l, ok := r.(interface{ Loud() bool })
 		loud := ok && l.Loud()
-		if want := name == "edit" || name == "write"; loud != want {
+		if want := name == "edit" || name == "write" || name == "read"; loud != want {
 			t.Errorf("%s: loud = %v, want %v", name, loud, want)
 		}
 	}

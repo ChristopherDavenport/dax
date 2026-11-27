@@ -1668,12 +1668,12 @@ short body under it:
 | `edit` | the path, the lines it adds and removes (`+3 −1`) | the change as a diff, up to 8 lines | the whole diff |
 | `write` | the path and the content's lines | | the content |
 | `bash` | `$` and the command's first line, its timeout if set | how many lines it printed; a failure's exit status and last 3 lines | the whole output and the exit status |
-| `read` | the path and the lines asked for (`a.go:120-199`) | from inside a file, the first 3 lines it read, numbered, and how many more; from the top, how many lines, and `whole file` when it was | the output |
+| `read` | the path and the lines asked for (`a.go:120-199`) | what it read, numbered, when that is at most 20 lines; otherwise how many lines, and `whole file` when it was | the output |
 | `grep`, `glob`, `ls` | the pattern or directory, where and how | the matches and files, the files or the entries counted | the output |
 | `explore`, `task` | the brief's first line, `fork` and `main model` when set | the report's first 2 lines | the report |
 
-An `edit` and a `write` are always drawn: the client folds a run of calls
-that say little into one line, and these two are never in one. A call
+An `edit`, a `write` and a `read` are always drawn: the client folds a run
+of calls that say little into one line, and these are never in one. A call
 that failed shows its error in place of the body. A call waiting on
 a permission shows what it would do: an edit its diff, a command of several
 lines the rest of it. Any other tool (`skill`, memory, an MCP server's) is
