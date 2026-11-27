@@ -17,10 +17,16 @@ versions may break flags and the config file.
   what it wrote, as added lines, and how many more there are, where it
   showed the path and a line count alone.
 - Changed: `toolrender`'s `edit`, `write` and `read` renderers are loud
-  (`toolview.Loud`): a client that folds short calls into one line
-  never folds these, so an edit's diff and a short read's lines are
-  always on the screen. It takes effect with the agentconsole release
-  that reads it.
+  (`toolview.Loud`): the terminal client never folds them into a run of
+  quiet calls, so an edit's diff and a short read's lines are always on
+  the screen. `toolrender.Summarizers` no longer sums up a run of reads
+  (`read a.go, b.go`), since a read is never in one.
+- Dependencies: agentconsole v0.0.23, up from v0.0.22. Consecutive
+  turns of tool calls with no message are one block under one header
+  (`turns 1–8 · 10 calls`) in place of a `turn N` header each; a
+  call's count is on its own line (`○ glob *  · 11 files`); a line a
+  change adds or removes has a tinted background; and a renderer can
+  keep its tool's calls from being folded (`toolview.Loud`).
 
 ## v0.0.44 - 2026-11-27
 

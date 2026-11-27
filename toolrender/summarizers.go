@@ -12,14 +12,15 @@ import (
 
 // Summarizers are the summarizers of dax-coding's tools, for the line a
 // collapsed run of quiet calls shows: bash's commands by their first
-// words (`ran 3 commands: mkdir, cd, touch`) and read's files
-// (`read a.go, b.go`), in place of the client's counts. Each reads the
-// calls alone and declines a run it cannot say anything useful of. A
-// path inside dir is shown relative to it.
+// words (`ran 3 commands: mkdir, cd, touch`), in place of the client's
+// counts. It reads the calls alone and declines a run it cannot say
+// anything useful of. A read has none: its renderer is loud, so a read
+// is never in a run. dir is the workspace, for a summarizer that shows
+// paths; none does now.
 func Summarizers(dir string) toolview.Summarizers {
+	_ = dir
 	return toolview.Summarizers{
 		"bash": bashSummarizer{},
-		"read": readSummarizer{paths{dir: dir}},
 	}
 }
 
@@ -123,35 +124,4 @@ func (bashSummarizer) Summarize(calls []view.Call) (toolview.Line, bool) {
 		line = append(line, toolview.S(toolview.Error, fmt.Sprintf(" · %d failed", failed)))
 	}
 	return line, true
-}
-
-// readSummarizer sums up a run of reads as the files, each once.
-type readSummarizer struct{ paths }
-
-func (r readSummarizer) Summarize(calls []view.Call) (toolview.Line, bool) {
-	var names []string
-	seen := map[string]bool{}
-	for _, c := range calls {
-		p := parseArgs(c.Args).str("path")
-		if !fits(c.Schema, "path") || p == "" {
-			return nil, false
-		}
-		p = clipTo(strings.Map(func(r rune) rune {
-			if r < ' ' || r == 0x7f {
-				return -1
-			}
-			return r
-		}, r.show(p)), 60)
-		if !seen[p] {
-			seen[p] = true
-			names = append(names, p)
-		}
-	}
-	if len(names) == 0 {
-		return nil, false
-	}
-	return toolview.Line{
-		toolview.S(toolview.Dim, "read "),
-		toolview.S(toolview.Emphasis, listed(names)),
-	}, true
 }

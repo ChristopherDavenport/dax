@@ -510,9 +510,7 @@ func TestAWriteShowsTheStartOfItsContent(t *testing.T) {
 // calls, and the other tools may be.
 func TestEditWriteAndReadAreLoud(t *testing.T) {
 	for name, r := range Renderers("") {
-		// toolview.Loud, spelled out: the agentconsole dax requires may
-		// be older than the interface.
-		l, ok := r.(interface{ Loud() bool })
+		l, ok := r.(toolview.Loud)
 		loud := ok && l.Loud()
 		if want := name == "edit" || name == "write" || name == "read"; loud != want {
 			t.Errorf("%s: loud = %v, want %v", name, loud, want)

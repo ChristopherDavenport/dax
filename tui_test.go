@@ -465,9 +465,9 @@ func TestTheTUIDrawsDaxsToolsWithItsRenderers(t *testing.T) {
 // An extension's summarizer reaches the client: a run of quiet bash
 // calls is drawn with the summarizer's line, not the client's counts.
 func TestTheTUISumsUpAQuietRunWithAnExtensionsSummarizer(t *testing.T) {
-	m := &steps{parent: [][2]string{{"read", `{"path":"main.go"}`}, {"read", `{"path":"main.go"}`}}}
+	m := &steps{parent: [][2]string{{"bash", `{"command":"echo one"}`}, {"bash", `{"command":"echo two"}`}}}
 	ext := extension.Extension{Name: "acme-sum", Summarizers: func(string) toolview.Summarizers {
-		return toolview.Summarizers{"read": acmeSummarizer{}}
+		return toolview.Summarizers{"bash": acmeSummarizer{}}
 	}}
 	r := startRig(t, m, policy.Rules{Allow: []string{"bash(echo:*)"}}, nil, func(f *tuiFront) {
 		s, err := extension.Summarizers(f.info.Dir, []extension.Extension{ext})
@@ -477,14 +477,20 @@ func TestTheTUISumsUpAQuietRunWithAnExtensionsSummarizer(t *testing.T) {
 		f.info.Summarizers = s
 	}, true)
 	r.type_("go\r")
-	r.waitOutput("acme summed 2 calls")
+	// The run's line is drawn for the first call and redrawn for both,
+	// and the renderer writes only the cells that change: the two lines
+	// share no cell, so the second is written whole.
+	r.waitOutput("TWO CALLS")
 	r.quit()
 }
 
 type acmeSummarizer struct{}
 
 func (acmeSummarizer) Summarize(cs []view.Call) (toolview.Line, bool) {
-	return toolview.Line{toolview.S(toolview.Plain, fmt.Sprintf("acme summed %d calls", len(cs)))}, true
+	if len(cs) == 2 {
+		return toolview.Line{toolview.S(toolview.Plain, "TWO CALLS")}, true
+	}
+	return toolview.Line{toolview.S(toolview.Plain, fmt.Sprintf("%d-call", len(cs)))}, true
 }
 
 func TestASecretPathAskNamesTheRuleAndTheFile(t *testing.T) {
