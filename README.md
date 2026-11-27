@@ -1744,7 +1744,10 @@ it, with each one's arguments and what it does, narrowed as you type:
 Up and Down choose, Tab puts the chosen command in the input, Esc
 closes the list, and Enter sends the line as typed. The list has dax's
 commands, your prompt templates and the MCP servers' prompts; under
-`dax attach`, dax's commands.
+`dax attach`, dax's commands. After a command, the next word lists its
+subcommands and the values its argument takes (`/mcp `: `add`,
+`remove`; `/think `: `on`, `off`; `/mode `: the modes), as soon as the
+space is typed or Tab has put the command in.
 
 - `/<name> args` runs a prompt template: a markdown file
   `~/.dax/prompts/<name>.md`, or the project's `.dax/prompts/<name>.md`

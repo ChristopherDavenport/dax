@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -319,17 +320,21 @@ func firstCompletion(fns ...completion) completion {
 	}
 }
 
-// commandCompletion lists the slash commands when the input's first
-// word starts with a slash, narrowed to those the word begins: dax's
-// own (commandList), then the session's prompt templates and its MCP
-// servers' prompts, where ctl offers them (dax attach offers neither).
-// So a lone slash shows every command, and Tab puts the chosen one in
-// the input, with a space after it when it takes arguments. A word
-// later in the input, or one that starts with two slashes, is the
-// model's text and completes nothing. The servers' prompts are listed
-// again at most every few seconds, as the resources are; a name or a
-// help line that would carry a terminal's controls is left out or
-// cleaned.
+// commandCompletion completes a slash command's line as it is typed,
+// from commandList. The first word, a slash that starts the input,
+// lists the commands the word begins: dax's own, then the session's
+// prompt templates and its MCP servers' prompts, where ctl offers them
+// (dax attach offers neither). So a lone slash shows every command.
+// After one of dax's commands, the next word lists its subcommands and
+// the values its argument takes (/mcp: add, remove; /think: on, off),
+// and after a subcommand its values. Tab puts the chosen one in the
+// input, with a space after it when more follows, and the client then
+// asks about the word that space starts, so what follows is listed
+// before any of it is typed. A line that starts with two slashes, and
+// any line after the first, is the model's text and completes nothing.
+// The servers' prompts are listed again at most every few seconds, as
+// the resources are; a name or a help line that would carry a
+// terminal's controls is left out or cleaned.
 func commandCompletion(ctl agent.Controls) completion {
 	var mu sync.Mutex
 	var cached []agent.MCPPrompt
@@ -350,45 +355,81 @@ func commandCompletion(ctl agent.Controls) completion {
 		return cached
 	}
 	return func(ctx context.Context, c console.Completing) []console.Completion {
-		if c.Before != c.Word || !strings.HasPrefix(c.Word, "/") || strings.HasPrefix(c.Word, "//") {
+		if !strings.HasPrefix(c.Before, "/") || strings.HasPrefix(c.Before, "//") || strings.Contains(c.Before, "\n") {
 			return nil
 		}
 		var out []console.Completion
 		seen := map[string]bool{}
-		add := func(name, args, help string) {
-			if seen[name] || !strings.HasPrefix(name, c.Word) || view.CleanLine(name) != name {
+		// add offers word when the typed word begins it, once; more is
+		// whether something follows it on the line.
+		add := func(word string, more bool, args, help string) {
+			if seen[word] || !strings.HasPrefix(word, c.Word) || view.CleanLine(word) != word {
 				return
 			}
-			seen[name] = true
-			text := name
-			if args != "" {
+			seen[word] = true
+			text := word
+			if more {
 				text += " "
 			}
 			out = append(out, console.Completion{Text: text, Help: strings.TrimSpace(args + "  " + oneLine(help, maxDescription))})
 		}
-		for _, s := range commandList {
-			if strings.HasPrefix(s.name, "/") && !strings.HasPrefix(s.name, "//") {
-				add(s.name, s.args, s.help)
+		values := func(s commandSpec) {
+			for _, v := range s.values {
+				add(v, false, "", "")
 			}
 		}
-		if tp, ok := ctl.(templater); ok {
-			for _, p := range tp.Templates() {
-				help := "prompt template " + p.Path
-				if p.Project {
-					help += " (the project's)"
+		prior := strings.Fields(strings.TrimSuffix(c.Before, c.Word))
+		switch len(prior) {
+		case 0:
+			for _, s := range commandList {
+				if s.slash() {
+					add(s.name, commandTakes(s.name), strings.TrimSpace(s.sub+" "+s.args), s.help)
 				}
-				add("/"+p.Name, "[args]", help)
 			}
-		}
-		for _, p := range prompts(ctx) {
-			var args []string
-			for _, a := range p.Arguments {
-				args = append(args, "<"+oneLine(a, maxField)+">")
+			if tp, ok := ctl.(templater); ok {
+				for _, p := range tp.Templates() {
+					help := "prompt template " + p.Path
+					if p.Project {
+						help += " (the project's)"
+					}
+					add("/"+p.Name, true, "[args]", help)
+				}
 			}
-			add("/"+p.Command, strings.Join(args, " "), p.Description)
+			for _, p := range prompts(ctx) {
+				var args []string
+				for _, a := range p.Arguments {
+					args = append(args, "<"+oneLine(a, maxField)+">")
+				}
+				add("/"+p.Command, len(args) > 0, strings.Join(args, " "), p.Description)
+			}
+		case 1:
+			for _, s := range commandList {
+				if !s.slash() || s.name != prior[0] {
+					continue
+				}
+				if s.sub == "" {
+					values(s)
+				} else {
+					add(s.sub, s.args != "", s.args, s.help)
+				}
+			}
+		case 2:
+			for _, s := range commandList {
+				if s.slash() && s.name == prior[0] && s.sub == prior[1] {
+					values(s)
+				}
+			}
 		}
 		return out
 	}
+}
+
+// commandTakes is whether anything follows name on a line: one of its
+// forms has a subcommand or arguments.
+func commandTakes(name string) bool {
+	return slices.ContainsFunc(commandList, func(s commandSpec) bool {
+		return s.name == name && (s.sub != "" || s.args != "")
+	})
 }
 
 // mentionCompletion completes a word that starts with @ from the MCP

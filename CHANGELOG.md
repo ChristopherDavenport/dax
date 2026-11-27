@@ -12,7 +12,10 @@ versions may break flags and the config file.
   narrowed as you type: Up and Down choose, Tab puts the chosen command
   in the input (with a space after it when it takes arguments) and Esc
   closes the list. It lists dax's commands, the prompt templates and
-  the MCP servers' prompts; under `dax attach`, dax's commands.
+  the MCP servers' prompts; under `dax attach`, dax's commands. After
+  a command, the next word lists its subcommands and its argument's
+  values (`/mcp `: `add`, `remove`; `/think `: `on`, `off`; `/mode `:
+  the modes) as soon as the space is there.
 - Changed: `/help` lists itself, and `/clear` and `/exit` on lines of
   their own.
 
