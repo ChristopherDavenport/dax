@@ -94,8 +94,9 @@ func (readRenderer) Loud() bool { return true }
 
 // ---- write
 
-// writeRenderer shows a write as its path and the size of the content;
-// the content itself is behind ctrl+o.
+// writeRenderer shows a write as its path and the size of the content,
+// and the content as added lines: its start collapsed, as an edit's
+// diff is cut, and all of it behind ctrl+o.
 type writeRenderer struct{ paths }
 
 func (r writeRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -110,7 +111,7 @@ func (r writeRenderer) Head(c view.Call) (toolview.Line, bool) {
 	return head, true
 }
 
-// Loud keeps a write on the screen: its output, "wrote 120 bytes to
+// Loud keeps a write on the screen, and so what it wrote: its output, "wrote 120 bytes to
 // x.go", is one line, and the client would fold it away with the calls
 // that say nothing.
 func (writeRenderer) Loud() bool { return true }
@@ -124,12 +125,19 @@ func (r writeRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) 
 	if !a.complete {
 		return out, out != nil
 	}
-	if expanded {
-		for _, l := range lines(a.str("content")) {
-			out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "+l)})
+	// "wrote 120 bytes to x.go" says nothing the head does not; what was
+	// written is the content.
+	content := lines(a.str("content"))
+	for i, l := range content {
+		if !expanded {
+			if i == collapsedLines {
+				out = append(out, more(len(content)-i))
+				break
+			}
+			l = clip(l)
 		}
+		out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "+l)})
 	}
-	// "wrote 120 bytes to x.go" says nothing the head does not.
 	return out, true
 }
 

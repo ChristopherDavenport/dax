@@ -88,7 +88,7 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
-			head: "new.go (2 lines)", body: []string{}, expanded: []string{"+ a", "+ b"}},
+			head: "new.go (2 lines)", body: []string{"+ a", "+ b"}, expanded: []string{"+ a", "+ b"}},
 		{name: "edit", tool: "edit", args: `{"path":"a.go","old_string":"line 3\nline 4","new_string":"line 3\nLINE 4\nline 4b"}`,
 			head: "a.go +2 −1", body: []string{"  line 3", "- line 4", "+ LINE 4", "+ line 4b"},
 			expanded: []string{"  line 3", "- line 4", "+ LINE 4", "+ line 4b"}},
@@ -478,6 +478,24 @@ func TestAShortReadShowsItsLinesAndALongOneACount(t *testing.T) {
 	}
 	if _, ok := rs["read"].Body(c, true); ok {
 		t.Error("an expanded read did not leave the output to the client")
+	}
+}
+
+// A write shows the start of what it wrote, cut as an edit's diff is,
+// and all of it expanded.
+func TestAWriteShowsTheStartOfItsContent(t *testing.T) {
+	rs := Renderers("")
+	content := ""
+	for i := 1; i <= 12; i++ {
+		content += fmt.Sprintf("line %d\\n", i)
+	}
+	c := view.Call{Name: "write", Args: `{"path":"n.go","content":"` + content + `"}`, State: view.CallEnded, Output: "wrote 90 bytes to n.go"}
+	got := drawn(rs["write"].Body(c, false))
+	if len(got) != collapsedLines+1 || got[0] != "+ line 1" || got[collapsedLines] != "… 4 more lines (ctrl+o)" {
+		t.Errorf("collapsed = %q", got)
+	}
+	if got := drawn(rs["write"].Body(c, true)); len(got) != 12 || got[11] != "+ line 12" {
+		t.Errorf("expanded = %q", got)
 	}
 }
 

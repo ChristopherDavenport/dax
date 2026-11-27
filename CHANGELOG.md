@@ -12,6 +12,9 @@ versions may break flags and the config file.
   piece of a file the agent is working with is in the transcript. A
   longer read stays a count, and a read of a whole file says `whole
   file` and its lines, whatever its length.
+- Changed: in the terminal client a `write` shows the first 8 lines of
+  what it wrote, as added lines, and how many more there are, where it
+  showed the path and a line count alone.
 - Changed: `toolrender`'s `edit`, `write` and `read` renderers are loud
   (`toolview.Loud`): a client that folds short calls into one line
   never folds these, so an edit's diff and a short read's lines are

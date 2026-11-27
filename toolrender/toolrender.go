@@ -16,7 +16,8 @@
 // and not the tool; the tests run the real tools to keep the two in
 // step.
 //
-// Collapsed, a call is a line and a short body: an edit's diff, what a
+// Collapsed, a call is a line and a short body: an edit's diff, the
+// start of what a write wrote, what a
 // short read of a part of a file read, the end of a failing command, a count for the rest.
 // An edit, a write and a read are loud ([toolview.Loud]): the client
 // never folds them into a run of quiet calls. Expanded (ctrl+o), an
