@@ -5,6 +5,29 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: in the terminal client a short `read` of a part of a file,
+  at most 20 lines, shows what it read with its line numbers, so a
+  piece of a file the agent is working with is in the transcript. A
+  longer read stays a count, and a read of a whole file says `whole
+  file` and how many lines, whatever its length. A read of a part names every line it read
+  on its line (`a.go:40-212`), whether or not a range was asked for.
+- Changed: in the terminal client a `write` shows the first 8 lines of
+  what it wrote, as added lines, and how many more there are, where it
+  showed the path and a line count alone.
+- Changed: `toolrender`'s `edit`, `write` and `read` renderers are loud
+  (`toolview.Loud`): the terminal client never folds them into a run of
+  quiet calls, so an edit's diff and a short read's lines are always on
+  the screen. `toolrender.Summarizers` no longer sums up a run of reads
+  (`read a.go, b.go`), since a read is never in one.
+- Dependencies: agentconsole v0.0.23, up from v0.0.22. Consecutive
+  turns of tool calls with no message are one block under one header
+  (`turns 1–8 · 10 calls`) in place of a `turn N` header each; a
+  call's count is on its own line (`○ glob *  · 11 files`); a line a
+  change adds or removes has a tinted background; and a renderer can
+  keep its tool's calls from being folded (`toolview.Loud`).
+
 ## v0.0.44 - 2026-11-27
 
 - Added: `base_url` and `-base-url` for the `anthropic` provider, the

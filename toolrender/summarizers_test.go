@@ -24,15 +24,6 @@ func withOut(calls []view.Call, outs ...string) []view.Call {
 	return calls
 }
 
-func readCalls(paths ...string) []view.Call {
-	var out []view.Call
-	for _, p := range paths {
-		a, _ := json.Marshal(map[string]string{"path": p})
-		out = append(out, view.Call{Name: "read", Args: string(a), State: view.CallEnded, Committed: true})
-	}
-	return out
-}
-
 func TestSummarizersSumUpARun(t *testing.T) {
 	other := json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string"}}}`)
 	foreign := bashCalls("ls")
@@ -67,10 +58,6 @@ func TestSummarizersSumUpARun(t *testing.T) {
 		{"background note, zero", "bash", withOut(bashCalls("x &"), "[exit 0; a process it left running in the background still holds its output and keeps running after this call]"), "ran 1 command: x"},
 		{"a status in the middle does not count", "bash", withOut(bashCalls("cat log"), "[exit 1]\n[killed after 5s]\nmore\n[exit 0]"), "ran 1 command: cat"},
 		{"the output's text is never shown", "bash", withOut(bashCalls("cat log"), "secret-token\n[exit 4]"), "ran 1 command: cat · 1 failed"},
-		{"read lists the files", "read", readCalls("/work/a.go", "b/c.go", "/etc/hosts"), "read a.go, b/c.go, /etc/hosts"},
-		{"read names a file once", "read", readCalls("a.go", "a.go", "b.go"), "read a.go, b.go"},
-		{"read past four", "read", readCalls("a", "b", "c", "d", "e"), "read a, b, c, d +1 more"},
-		{"read with no path declines", "read", garbled, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := Summarizers("/work")[tc.tool]

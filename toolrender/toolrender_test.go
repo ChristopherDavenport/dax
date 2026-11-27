@@ -82,13 +82,13 @@ func TestRenderersDrawWhatTheToolsWrote(t *testing.T) {
 		body, expanded   []string // nil: the renderer declines
 	}{
 		{name: "read a range", tool: "read", args: `{"path":"a.go","offset":3,"limit":4}`,
-			head: "a.go:3-6", body: []string{"· 4 lines (4 more lines; use offset=7)"}},
+			head: "a.go:3-6", body: []string{"3  line 3", "4  line 4", "5  line 5", "6  line 6", "… (4 more lines; use offset=7)"}},
 		{name: "read a whole file", tool: "read", args: `{"path":"sub/b.go"}`,
-			head: "sub/b.go", body: []string{"· 3 lines"}},
+			head: "sub/b.go", body: []string{"· whole file, 3 lines"}},
 		{name: "read past the end", tool: "read", args: `{"path":"a.go","offset":40}`,
 			head: "a.go:40-", body: []string{"(file has 10 lines; offset 40 is past the end)"}},
 		{name: "write", tool: "write", args: `{"path":"new.go","content":"a\nb\n"}`,
-			head: "new.go (2 lines)", body: []string{}, expanded: []string{"+ a", "+ b"}},
+			head: "new.go (2 lines)", body: []string{"+ a", "+ b"}, expanded: []string{"+ a", "+ b"}},
 		{name: "edit", tool: "edit", args: `{"path":"a.go","old_string":"line 3\nline 4","new_string":"line 3\nLINE 4\nline 4b"}`,
 			head: "a.go +2 −1", body: []string{"  line 3", "- line 4", "+ LINE 4", "+ line 4b"},
 			expanded: []string{"  line 3", "- line 4", "+ LINE 4", "+ line 4b"}},
@@ -417,6 +417,103 @@ func TestBashAndBackgroundHeadsStandInForTheName(t *testing.T) {
 	for name, args := range map[string]string{"bash": `{"command":"ls"}`, "background": `{"action":"start","command":"ls"}`} {
 		if _, ok := rs[name].Head(view.Call{Name: name, Args: args, Schema: other}); ok {
 			t.Errorf("%s drew a call against another schema", name)
+		}
+	}
+}
+
+// A short read shows what it read, the numbers in one column and a
+// tab's indent kept; a longer one is a count.
+func TestAShortReadShowsItsLinesAndALongOneACount(t *testing.T) {
+	rs := Renderers("")
+	output := func(from, to int) string {
+		out := ""
+		for i := from; i <= to; i++ {
+			out += fmt.Sprintf("%6d\t\tx := %d\n", i, i)
+		}
+		return out
+	}
+	c := view.Call{Name: "read", Args: `{"path":"a.go","offset":98,"limit":3}`, State: view.CallEnded, Output: output(98, 100) + "... (40 more lines; use offset=101)\n"}
+	want := []string{" 98      x := 98", " 99      x := 99", "100      x := 100", "… (40 more lines; use offset=101)"}
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, want) {
+		t.Errorf("short = %q, want %q", got, want)
+	}
+	// Every line of it is dim: it is context, not a change.
+	body, _ := rs["read"].Body(c, false)
+	for _, l := range body {
+		for _, sp := range l {
+			if sp.Role != toolview.Dim {
+				t.Errorf("span %q has role %v, want dim", sp.Text, sp.Role)
+			}
+		}
+	}
+	// The cutoff: shortRead lines are shown, one more is a count.
+	c.Args, c.Output = `{"path":"a.go","offset":5}`, output(5, 4+shortRead)
+	if got := drawn(rs["read"].Body(c, false)); len(got) != shortRead {
+		t.Errorf("%d lines read: %d lines drawn, want them all", shortRead, len(got))
+	}
+	c.Output = output(5, 5+shortRead)
+	// The head names every line read, not the ones drawn or asked for.
+	if got, want := head(rs["read"], c), fmt.Sprintf("a.go:5-%d", 5+shortRead); got != want {
+		t.Errorf("head = %q, want %q", got, want)
+	}
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{fmt.Sprintf("· %d lines", shortRead+1)}) {
+		t.Errorf("past the cutoff = %q", got)
+	}
+	// A read of the whole file says so and shows none of it, however
+	// short the file.
+	c.Args, c.Output = `{"path":"a.go"}`, output(1, 3)
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file, 3 lines"}) || head(rs["read"], c) != "a.go" {
+		t.Errorf("a short whole file = %q", got)
+	}
+	// A long read from the top says when it was the whole file: with a
+	// limit that cut it, the tool's note says what is left.
+	c.Args, c.Output = `{"path":"a.go"}`, output(1, 30)
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· whole file, 30 lines"}) || head(rs["read"], c) != "a.go" {
+		t.Errorf("whole file = %q", got)
+	}
+	c.Args, c.Output = `{"path":"a.go","limit":30}`, output(1, 30)+"... (40 more lines; use offset=31)\n"
+	if got := head(rs["read"], c); got != "a.go:1-30" {
+		t.Errorf("cut from the top: head = %q, want the lines it read", got)
+	}
+	if got := drawn(rs["read"].Body(c, false)); !slices.Equal(got, []string{"· 30 lines (40 more lines; use offset=31)"}) {
+		t.Errorf("cut from the top = %q", got)
+	}
+	// An empty file is a count, and expanded the client shows the output.
+	empty := view.Call{Name: "read", Args: `{"path":"e"}`, State: view.CallEnded}
+	if got := drawn(rs["read"].Body(empty, false)); !slices.Equal(got, []string{"· 0 lines"}) {
+		t.Errorf("empty = %q", got)
+	}
+	if _, ok := rs["read"].Body(c, true); ok {
+		t.Error("an expanded read did not leave the output to the client")
+	}
+}
+
+// A write shows the start of what it wrote, cut as an edit's diff is,
+// and all of it expanded.
+func TestAWriteShowsTheStartOfItsContent(t *testing.T) {
+	rs := Renderers("")
+	content := ""
+	for i := 1; i <= 12; i++ {
+		content += fmt.Sprintf("line %d\\n", i)
+	}
+	c := view.Call{Name: "write", Args: `{"path":"n.go","content":"` + content + `"}`, State: view.CallEnded, Output: "wrote 90 bytes to n.go"}
+	got := drawn(rs["write"].Body(c, false))
+	if len(got) != collapsedLines+1 || got[0] != "+ line 1" || got[collapsedLines] != "… 4 more lines (ctrl+o)" {
+		t.Errorf("collapsed = %q", got)
+	}
+	if got := drawn(rs["write"].Body(c, true)); len(got) != 12 || got[11] != "+ line 12" {
+		t.Errorf("expanded = %q", got)
+	}
+}
+
+// An edit, a write and a read are never folded into a run of quiet
+// calls, and the other tools may be.
+func TestEditWriteAndReadAreLoud(t *testing.T) {
+	for name, r := range Renderers("") {
+		l, ok := r.(toolview.Loud)
+		loud := ok && l.Loud()
+		if want := name == "edit" || name == "write" || name == "read"; loud != want {
+			t.Errorf("%s: loud = %v, want %v", name, loud, want)
 		}
 	}
 }

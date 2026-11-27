@@ -3,6 +3,7 @@ package toolrender
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ChristopherDavenport/agentconsole/toolview"
@@ -12,7 +13,13 @@ import (
 // ---- read
 
 // readRenderer shows a read as its path and the lines asked for, and
-// what it read as a count.
+// once it has ended the lines it read, all of them, on its line, but
+// for a read of the whole file, which is its path alone. A
+// short read of a part of a file, a piece a person can take in at a
+// glance, shows what it read with its line numbers, so the transcript
+// has what the agent is working with. A longer one says how much it
+// read, and a read of a whole file says that, however short the file:
+// the path already names what was read.
 type readRenderer struct{ paths }
 
 func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -21,6 +28,18 @@ func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
 		return nil, false
 	}
 	head := toolview.Line{toolview.S(toolview.Emphasis, r.show(a.str("path")))}
+	// Once it has ended, the lines it read, whatever was asked for: one
+	// a cap cut short names where it stopped. A read of the whole file
+	// names none: the path is all of it, and the body says so.
+	if first, last, ok := readRange(c); ok {
+		if wholeRead(c) {
+			return head, true
+		}
+		if first == last {
+			return append(head, toolview.S(toolview.Dim, fmt.Sprintf(":%d", first))), true
+		}
+		return append(head, toolview.S(toolview.Dim, fmt.Sprintf(":%d-%d", first, last))), true
+	}
 	from, n := a.num("offset"), a.num("limit")
 	switch {
 	case from > 0 && n > 0:
@@ -36,6 +55,29 @@ func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
 // numbered is a line read wrote: its number, a tab and the text.
 var numbered = regexp.MustCompile(`^ *\d+\t`)
 
+// readRange is the first and the last line an ended read read, by the
+// numbers it wrote, and whether it read any.
+func readRange(c view.Call) (first, last int, ok bool) {
+	if c.State != view.CallEnded {
+		return 0, 0, false
+	}
+	for _, l := range lines(c.Output) {
+		if !numbered.MatchString(l) {
+			continue
+		}
+		num, _, _ := strings.Cut(l, "\t")
+		n, err := strconv.Atoi(strings.TrimSpace(num))
+		if err != nil {
+			continue
+		}
+		if !ok {
+			first, ok = n, true
+		}
+		last = n
+	}
+	return first, last, ok
+}
+
 func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	if msg, failed := failure(c); failed {
 		return errorLines(msg, expanded), true
@@ -44,10 +86,15 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 		return nil, false
 	}
 	n, note := 0, ""
+	var shown [][2]string // the number and the text of a short read's lines
 	for _, l := range lines(c.Output) {
 		switch {
 		case numbered.MatchString(l):
 			n++
+			if len(shown) <= shortRead {
+				num, text, _ := strings.Cut(l, "\t")
+				shown = append(shown, [2]string{strings.TrimSpace(num), text})
+			}
 		case strings.HasPrefix(l, "... ("):
 			// "... (312 more lines; use offset=81)" or the byte cap.
 			note = " " + strings.TrimPrefix(l, "... ")
@@ -56,13 +103,53 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
-	return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true
+	if wholeRead(c) {
+		// The head names no lines; the count says how much it is.
+		return []toolview.Line{dim("· whole file, " + plural(n, "line", "lines"))}, true
+	}
+	if n == 0 || n > shortRead {
+		return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true
+	}
+	// The numbers share a column, the width of the last one.
+	width := len(shown[len(shown)-1][0])
+	out := make([]toolview.Line, 0, len(shown)+1)
+	for _, s := range shown {
+		// A tab is drawn as four columns, so the indentation reads.
+		text := strings.ReplaceAll(s[1], "\t", "    ")
+		out = append(out, dim(clip(fmt.Sprintf("%*s  %s", width, s[0], text))))
+	}
+	if note != "" {
+		out = append(out, dim("…"+clip(note)))
+	}
+	return out, true
+}
+
+// Loud keeps a read on the screen: a short one is the one whose lines
+// are drawn, and the client would fold it away with the calls that say
+// nothing.
+func (readRenderer) Loud() bool { return true }
+
+// wholeRead reports whether an ended read read its whole file: from the
+// top, with lines and with no note of more behind them.
+func wholeRead(c view.Call) bool {
+	if c.State != view.CallEnded || parseArgs(c.Args).num("offset") > 1 {
+		return false
+	}
+	any := false
+	for _, l := range lines(c.Output) {
+		if strings.HasPrefix(l, "... (") {
+			return false
+		}
+		any = any || numbered.MatchString(l)
+	}
+	return any
 }
 
 // ---- write
 
-// writeRenderer shows a write as its path and the size of the content;
-// the content itself is behind ctrl+o.
+// writeRenderer shows a write as its path and the size of the content,
+// and the content as added lines: its start collapsed, as an edit's
+// diff is cut, and all of it behind ctrl+o.
 type writeRenderer struct{ paths }
 
 func (r writeRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -77,6 +164,11 @@ func (r writeRenderer) Head(c view.Call) (toolview.Line, bool) {
 	return head, true
 }
 
+// Loud keeps a write on the screen, and so what it wrote: its output, "wrote 120 bytes to
+// x.go", is one line, and the client would fold it away with the calls
+// that say nothing.
+func (writeRenderer) Loud() bool { return true }
+
 func (r writeRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	var out []toolview.Line
 	if msg, failed := failure(c); failed {
@@ -86,12 +178,19 @@ func (r writeRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) 
 	if !a.complete {
 		return out, out != nil
 	}
-	if expanded {
-		for _, l := range lines(a.str("content")) {
-			out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "+l)})
+	// "wrote 120 bytes to x.go" says nothing the head does not; what was
+	// written is the content.
+	content := lines(a.str("content"))
+	for i, l := range content {
+		if !expanded {
+			if i == collapsedLines {
+				out = append(out, more(len(content)-i))
+				break
+			}
+			l = clip(l)
 		}
+		out = append(out, toolview.Line{toolview.S(toolview.Added, "+ "+l)})
 	}
-	// "wrote 120 bytes to x.go" says nothing the head does not.
 	return out, true
 }
 
@@ -118,6 +217,11 @@ func (r editRenderer) Head(c view.Call) (toolview.Line, bool) {
 	}
 	return head, true
 }
+
+// Loud keeps an edit on the screen, and so its diff: its output, "edited
+// x.go", is one line, and the client would fold it away with the calls
+// that say nothing.
+func (editRenderer) Loud() bool { return true }
 
 func (r editRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 	var out []toolview.Line
