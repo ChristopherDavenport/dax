@@ -13,7 +13,8 @@ versions may break flags and the config file.
   in the input (with a space after it when it takes arguments) and Esc
   closes the list. It lists dax's commands, the prompt templates and
   the MCP servers' prompts; under `dax attach`, dax's commands.
-- Changed: `/help` lists itself.
+- Changed: `/help` lists itself, and `/clear` and `/exit` on lines of
+  their own.
 
 ## v0.0.46 - 2026-11-27
 

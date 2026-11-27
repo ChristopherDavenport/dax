@@ -63,7 +63,8 @@ var commandList = []commandSpec{
 	{"/think", "on|off", "reasoning from the next request"},
 	{"/tools", "", "the tools offered and what was left out"},
 	{"/session", "", "the session's ID and where it is kept"},
-	{"/new", "", "a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)"},
+	{"/new", "", "a new session, keeping the model, reasoning, mode and /mcp add servers"},
+	{"/clear", "", "the same as /new"},
 	{"/name", "<text>", "name this session; -list and /resume show it"},
 	{"/resume", "[n|ID|name]", "this project's sessions, newest first; with one, continue it here"},
 	{"/mcp", "", "the MCP servers, where each runs and what it is for"},
@@ -78,6 +79,7 @@ var commandList = []commandSpec{
 	{"/follow", "<text>", "a follow-up, taken when the model would stop"},
 	{"/abort", "", "abort the run"},
 	{"/quit", "", "leave"},
+	{"/exit", "", "the same as /quit"},
 	{"!<command>", "", "run a command yourself; its output goes with the next prompt"},
 	{"//text, !!text", "", "send /text, !text to the model"},
 }

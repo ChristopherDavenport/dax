@@ -99,7 +99,7 @@ func TestSlashCompletesTheCommands(t *testing.T) {
 		return out
 	}
 	all := texts("/")
-	for _, want := range []string{"/help", "/model ", "/mcp", "/quit", "/review ", "/mcp__team__review_pr "} {
+	for _, want := range []string{"/help", "/model ", "/mcp", "/clear", "/quit", "/exit", "/review ", "/mcp__team__review_pr "} {
 		if !slices.Contains(all, want) {
 			t.Errorf("a lone slash lacks %q: %q", want, all)
 		}
