@@ -5,6 +5,14 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Dependencies: agentsession v0.0.42, up from v0.0.40: format 0.22,
+  whose `env` entry lists the checkouts a session worked in
+  (`EnvEntry.Checkouts`, `CheckoutChanges`); a record dax appends to
+  is raised to 0.22. agenteval v0.0.18, up from v0.0.17: a snapshot
+  names its checkout (`Snapshot.Path`).
+
 ## v0.0.42 - 2026-11-26
 
 - Dependencies: agenttool, agenttool/mcpclient and agenttool/mcpserver

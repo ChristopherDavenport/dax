@@ -16,8 +16,8 @@ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdB
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 github.com/ChristopherDavenport/agentconsole v0.0.22 h1:2DNhiOUw05S7df23tvRsN2mC3wQsjayT+Wj9aBusbtw=
 github.com/ChristopherDavenport/agentconsole v0.0.22/go.mod h1:LdXwuyJDwsnpvdoIRVzPh6971FlHy5KjoF6A64PbYwI=
-github.com/ChristopherDavenport/agenteval v0.0.17 h1:Mu1xNABnSTyMBWoyclsR9lXAbrrFWPOSzYVdGHvoGsU=
-github.com/ChristopherDavenport/agenteval v0.0.17/go.mod h1:LO9Rt6SQC/jJ3WhmUG9pe9mX43AMpASxXOrKnvV7r6w=
+github.com/ChristopherDavenport/agenteval v0.0.18 h1:zteTKY9UzfLtwebpvh8Ua/LTf5lXtrgPll6agov/ky4=
+github.com/ChristopherDavenport/agenteval v0.0.18/go.mod h1:+tKBLqA4pMNjnFhXMVquY4U15xjDSJpbY9ot+cjPrOE=
 github.com/ChristopherDavenport/agentkit v0.0.21 h1:ebCh1kMzAMieZgZaCNrSEIJZPPq9pwY5Fm3/ufb/Rtc=
 github.com/ChristopherDavenport/agentkit v0.0.21/go.mod h1:2J+cV9ngTkoGTgPRTv3i9X6ZqB0vHraeNWzvy/n5BQg=
 github.com/ChristopherDavenport/agentmemory v0.0.14 h1:SZWZK1GM+k0zWnGBjO4pCqn325zSK3sGZ3vb7IbMKt4=
@@ -28,8 +28,8 @@ github.com/ChristopherDavenport/agentredact v0.0.4 h1:LBwaUIBmdYmlEAb5m0Q5QEt7HU
 github.com/ChristopherDavenport/agentredact v0.0.4/go.mod h1:7gBwC3PtAt0eKboYB4ZTl26qRFsow2eaL2k3RMp2Rq8=
 github.com/ChristopherDavenport/agentredact/secrets v0.0.4 h1:C49uUCOmDX1fFkGxi/z9WkjFqX4vaq4ME/SitMuSUdw=
 github.com/ChristopherDavenport/agentredact/secrets v0.0.4/go.mod h1:7OiSEvCQTOCrByjsq0MF3K03lnrgU9h0YiNfS2XHQ4o=
-github.com/ChristopherDavenport/agentsession v0.0.40 h1:gIJWxMii1BqvLAltMogX0E83Z3+iPf5xLBaKTdAQm5E=
-github.com/ChristopherDavenport/agentsession v0.0.40/go.mod h1:p1YUil1k6AlU0R5d8TogaYBuHQRNRSD5gN4ALAX2TWY=
+github.com/ChristopherDavenport/agentsession v0.0.42 h1:cTGj0SGW5FI2FYouDFt7cV9k4MYd6c7R3zI/jmf7n8U=
+github.com/ChristopherDavenport/agentsession v0.0.42/go.mod h1:p1YUil1k6AlU0R5d8TogaYBuHQRNRSD5gN4ALAX2TWY=
 github.com/ChristopherDavenport/agentskill v0.0.12 h1:8rAmdk+CC5TNnbGjKjfEObAZM9ZzsXd0iyz5kp3wAsE=
 github.com/ChristopherDavenport/agentskill v0.0.12/go.mod h1:T69z4M/C/M1lqSVnI94h4DWVDed64OtS7zrsk4Y9w7g=
 github.com/ChristopherDavenport/agentsmd v0.0.6 h1:EZju8k6BUTzQBU0Q4vMZkdCvg2ouGKqEW8zM9SAyg5g=
