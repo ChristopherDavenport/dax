@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.43 - 2026-11-26
 
 - Dependencies: agentsession v0.0.42, up from v0.0.40: format 0.22,
   whose `env` entry lists the checkouts a session worked in
