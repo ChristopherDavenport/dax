@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.46 - 2026-11-27
 
 - Changed: in the terminal client the code in an `edit`'s diff, in what
   a `write` wrote and in a short `read` is drawn in its language's
