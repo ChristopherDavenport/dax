@@ -5,6 +5,14 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Changed: in the terminal client the code in an `edit`'s diff, in what
+  a `write` wrote and in a short `read` is drawn in its language's
+  colors, by the file's name. `toolrender`'s lines say so with
+  `toolview.Span.Syntax`; the mark or the line number before the code
+  is a span of its own.
+
 ## v0.0.45 - 2026-11-27
 
 - Changed: in the terminal client a short `read` of a part of a file,
