@@ -1695,6 +1695,7 @@ drawn as the client draws any call, its name and arguments.
 | Ctrl-P, Ctrl-N, Ctrl-B, Tab | move over the rows, continue from a row, open its detail (policy decision, who decided, verification) |
 | click | select the row under the pointer; a click on the selected row expands or collapses it |
 | drag | select text anywhere on the screen; it stays drawn until the next key or press |
+| `/` first, then Up, Down, Tab, Esc | list the commands over the input, choose one, put it in the input, close the list (see [Commands](#commands)) |
 | Shift-Tab | the next permission mode: default, acceptEdits, plan, dontAsk, never bypassPermissions (see [Permission modes](#permission-modes)) |
 | Ctrl-/ or F1 | list every key; Esc, q or Ctrl-/ goes back |
 
@@ -1738,6 +1739,12 @@ client and the REPL alike; the model never sees it. Start a line with
 `//` to send the model a line that begins with a slash (`//etc/hosts`
 sends `/etc/hosts`). In the terminal client a command's output shows over
 the input until the next line, and an error gives the line back to edit.
+There, a slash that starts the input opens the list of commands over
+it, with each one's arguments and what it does, narrowed as you type:
+Up and Down choose, Tab puts the chosen command in the input, Esc
+closes the list, and Enter sends the line as typed. The list has dax's
+commands, your prompt templates and the MCP servers' prompts; under
+`dax attach`, dax's commands.
 
 - `/<name> args` runs a prompt template: a markdown file
   `~/.dax/prompts/<name>.md`, or the project's `.dax/prompts/<name>.md`

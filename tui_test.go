@@ -1036,6 +1036,30 @@ func TestASlashLineInTheTUIIsDaxsCommand(t *testing.T) {
 	}
 }
 
+// TestASlashInTheTUIListsTheCommands: a slash that starts the input
+// opens the list of commands over it, Down chooses, and Tab puts the
+// chosen one in the input, ready for its arguments. The keys are sent
+// once the list is drawn and none of them changes the word, so the
+// list they act on is the one waited for: /help, /model, then /think.
+func TestASlashInTheTUIListsTheCommands(t *testing.T) {
+	r := startTUI(t, &steps{}, policy.Rules{}, nil)
+	r.type_("/")
+	r.waitOutput("on|off  reasoning from the next request")
+	r.waitOutput("tab: complete, esc: close")
+	r.type_("\x1b[B\x1b[B\t")
+	r.type_("on\r")
+	r.waitOutput("[reasoning on from the next request]")
+	r.type_("/quit\r")
+	select {
+	case err := <-r.done:
+		if err != nil {
+			t.Fatalf("Run after /quit: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("/quit did not end the client")
+	}
+}
+
 // wordsOf is whose words each user message on sess's path is, by its
 // text, as the record says (agentsession.WordsOf).
 func wordsOf(t *testing.T, sess *agent.Session) map[string]agentsession.Words {

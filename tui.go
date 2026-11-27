@@ -286,8 +286,9 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 		o := sess.GrantOffer(ctx, p.CallID)
 		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
 	}))
-	// @ completes the MCP servers' resources as mentions.
-	opts = append(opts, console.WithCompletion(mentionCompletion(sess)))
+	// A slash at the start of the input lists the commands, and @
+	// completes the MCP servers' resources as mentions.
+	opts = append(opts, console.WithCompletion(firstCompletion(commandCompletion(sess), mentionCompletion(sess))))
 	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
 	// A command that opens a session (/new, /resume) ends this client,
 	// and Run enters it again over the new one.
@@ -299,6 +300,95 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 		return n, nil
 	}
 	return nil, err
+}
+
+// completion is the function the terminal client asks to complete the
+// input's word (console.WithCompletion).
+type completion = func(context.Context, console.Completing) []console.Completion
+
+// firstCompletion asks each of fns in turn and gives the first list
+// with anything in it.
+func firstCompletion(fns ...completion) completion {
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		for _, fn := range fns {
+			if out := fn(ctx, c); len(out) > 0 {
+				return out
+			}
+		}
+		return nil
+	}
+}
+
+// commandCompletion lists the slash commands when the input's first
+// word starts with a slash, narrowed to those the word begins: dax's
+// own (commandList), then the session's prompt templates and its MCP
+// servers' prompts, where ctl offers them (dax attach offers neither).
+// So a lone slash shows every command, and Tab puts the chosen one in
+// the input, with a space after it when it takes arguments. A word
+// later in the input, or one that starts with two slashes, is the
+// model's text and completes nothing. The servers' prompts are listed
+// again at most every few seconds, as the resources are; a name or a
+// help line that would carry a terminal's controls is left out or
+// cleaned.
+func commandCompletion(ctl agent.Controls) completion {
+	var mu sync.Mutex
+	var cached []agent.MCPPrompt
+	var at time.Time
+	prompts := func(ctx context.Context) []agent.MCPPrompt {
+		mp, ok := ctl.(mcpPrompter)
+		if !ok {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if at.IsZero() || time.Since(at) > resourcesFresh {
+			mu.Unlock()
+			list := mp.MCPPrompts(ctx)
+			mu.Lock()
+			cached, at = list, time.Now()
+		}
+		return cached
+	}
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		if c.Before != c.Word || !strings.HasPrefix(c.Word, "/") || strings.HasPrefix(c.Word, "//") {
+			return nil
+		}
+		var out []console.Completion
+		seen := map[string]bool{}
+		add := func(name, args, help string) {
+			if seen[name] || !strings.HasPrefix(name, c.Word) || view.CleanLine(name) != name {
+				return
+			}
+			seen[name] = true
+			text := name
+			if args != "" {
+				text += " "
+			}
+			out = append(out, console.Completion{Text: text, Help: strings.TrimSpace(args + "  " + oneLine(help, maxDescription))})
+		}
+		for _, s := range commandList {
+			if strings.HasPrefix(s.name, "/") && !strings.HasPrefix(s.name, "//") {
+				add(s.name, s.args, s.help)
+			}
+		}
+		if tp, ok := ctl.(templater); ok {
+			for _, p := range tp.Templates() {
+				help := "prompt template " + p.Path
+				if p.Project {
+					help += " (the project's)"
+				}
+				add("/"+p.Name, "[args]", help)
+			}
+		}
+		for _, p := range prompts(ctx) {
+			var args []string
+			for _, a := range p.Arguments {
+				args = append(args, "<"+oneLine(a, maxField)+">")
+			}
+			add("/"+p.Command, strings.Join(args, " "), p.Description)
+		}
+		return out
+	}
 }
 
 // mentionCompletion completes a word that starts with @ from the MCP

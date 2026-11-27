@@ -48,29 +48,49 @@ type userCommander interface {
 	RunUserCommand(ctx context.Context, line string) (agent.UserCommand, error)
 }
 
+// commandSpec is one line of the commands' list: the command's name,
+// the arguments it takes and what it does.
+type commandSpec struct {
+	name, args, help string
+}
+
+// commandList is the commands, for /help, an unknown command and the
+// terminal client's completion of a line's first word. A command with
+// several forms has a line for each, its plainest first.
+var commandList = []commandSpec{
+	{"/help", "", "this list"},
+	{"/model", "<name>", "the model from the next request"},
+	{"/think", "on|off", "reasoning from the next request"},
+	{"/tools", "", "the tools offered and what was left out"},
+	{"/session", "", "the session's ID and where it is kept"},
+	{"/new", "", "a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)"},
+	{"/name", "<text>", "name this session; -list and /resume show it"},
+	{"/resume", "[n|ID|name]", "this project's sessions, newest first; with one, continue it here"},
+	{"/mcp", "", "the MCP servers, where each runs and what it is for"},
+	{"/mcp", "add <name> <command>", "start an MCP server; its tools from the next prompt"},
+	{"/mcp", "remove <label>", "stop an MCP server"},
+	{"/mode", "[name]", "the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions"},
+	{"/permissions", "", "the rules in force, where each came from, the mode and the grants"},
+	{"/skills", "approve <name>", "let a skill the model wrote grant its allowed-tools under -trust-skills"},
+	{"/memory", "undo", "revert the latest background memory pass's changes; again for the pass before"},
+	{"/compact", "[instructions]", "fold the conversation at the next request, keeping what you say"},
+	{"/port", "<port>", "reach a port where the tools act from this machine's loopback"},
+	{"/follow", "<text>", "a follow-up, taken when the model would stop"},
+	{"/abort", "", "abort the run"},
+	{"/quit", "", "leave"},
+	{"!<command>", "", "run a command yourself; its output goes with the next prompt"},
+	{"//text, !!text", "", "send /text, !text to the model"},
+}
+
 // commandHelp lists the commands, for /help and an unknown command.
-const commandHelp = `commands:
-  /model <name>             the model from the next request
-  /think on|off             reasoning from the next request
-  /tools                    the tools offered and what was left out
-  /session                  the session's ID and where it is kept
-  /new                      a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)
-  /name <text>              name this session; -list and /resume show it
-  /resume [n|ID|name]       this project's sessions, newest first; with one, continue it here
-  /mcp                      the MCP servers, where each runs and what it is for
-  /mcp add <name> <command> start an MCP server; its tools from the next prompt
-  /mcp remove <label>       stop an MCP server
-  /mode [name]              the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions
-  /permissions              the rules in force, where each came from, the mode and the grants
-  /skills approve <name>    let a skill the model wrote grant its allowed-tools under -trust-skills
-  /memory undo              revert the latest background memory pass's changes; again for the pass before
-  /compact [instructions]   fold the conversation at the next request, keeping what you say
-  /port <port>              reach a port where the tools act from this machine's loopback
-  /follow <text>            a follow-up, taken when the model would stop
-  /abort                    abort the run
-  /quit                     leave
-  !<command>                run a command yourself; its output goes with the next prompt
-  //text, !!text            send /text, !text to the model`
+var commandHelp = func() string {
+	var b strings.Builder
+	b.WriteString("commands:")
+	for _, c := range commandList {
+		fmt.Fprintf(&b, "\n  %-25s %s", strings.TrimSpace(c.name+" "+c.args), c.help)
+	}
+	return b.String()
+}()
 
 // commandResult is what a command did: out is what it says, quit
 // whether the front should end.
