@@ -12,10 +12,11 @@ import (
 // ---- read
 
 // readRenderer shows a read as its path and the lines asked for. A
-// short read, a piece of a file a person can take in at a glance, shows
-// what it read with its line numbers, so the transcript has what the
-// agent is working with; a longer one says how much it read, and that
-// it was the whole file when it was.
+// short read of a part of a file, a piece a person can take in at a
+// glance, shows what it read with its line numbers, so the transcript
+// has what the agent is working with. A longer one says how much it
+// read, and a read of a whole file says that, however short the file:
+// the path already names what was read.
 type readRenderer struct{ paths }
 
 func (r readRenderer) Head(c view.Call) (toolview.Line, bool) {
@@ -64,12 +65,13 @@ func (r readRenderer) Body(c view.Call, expanded bool) ([]toolview.Line, bool) {
 			return []toolview.Line{dim(clip(l))}, true
 		}
 	}
+	// The whole file: read from the top, with nothing left behind it.
+	whole := n > 0 && note == "" && parseArgs(c.Args).num("offset") <= 1
+	if whole {
+		return []toolview.Line{dim("· whole file, " + plural(n, "line", "lines"))}, true
+	}
 	if n == 0 || n > shortRead {
-		count := "· " + plural(n, "line", "lines")
-		if note == "" && n > 0 && parseArgs(c.Args).num("offset") <= 1 {
-			count = "· whole file, " + plural(n, "line", "lines")
-		}
-		return []toolview.Line{dim(count + clip(note))}, true
+		return []toolview.Line{dim("· " + plural(n, "line", "lines") + clip(note))}, true
 	}
 	// The numbers share a column, the width of the last one.
 	width := len(shown[len(shown)-1][0])
