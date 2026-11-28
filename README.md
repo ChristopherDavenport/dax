@@ -1743,7 +1743,7 @@ There, a slash that starts the input opens the list of commands over
 it, with each one's arguments and what it does, narrowed as you type:
 Up and Down choose, Tab puts the chosen command in the input, Esc
 closes the list, and Enter sends the line as typed. The list has dax's
-commands, your prompt templates and the MCP servers' prompts; under
+commands, your prompt templates, the skills and the MCP servers' prompts; under
 `dax attach`, dax's commands. After a command, the next word lists its
 subcommands and the values its argument takes (`/mcp `: `add`,
 `remove`; `/think `: `on`, `off`; `/mode `: the modes), as soon as the
@@ -1764,6 +1764,24 @@ model wrote.
   marks the project's. A name is lowercase letters, digits, `-` and `_`;
   one of dax's own commands, or a file over 64 KiB, is left out and
   said once. `-bare` leaves out yours; `dax attach` offers none.
+- `/<skill> args` reads a skill for you: the read the model makes with
+  its `skill` tool, made on your behalf. Its instructions and file list
+  are sent with your arguments after them, as a prompt, or a steer
+  while a run goes, recorded as composed from the skill
+  (`instructions_part`, source `agentskill`), never as words you wrote,
+  with the read beside it marked as made for you (`by: "user"`). The
+  read grants what the model's read grants: under `-trust-skills` the
+  skill's `allowed-tools` run unasked until your next message, for a
+  skill in `~/.dax/skills` or `skills_dirs`, or one the model wrote
+  that you approved. A repository's skill grants nothing and is sent
+  marked untrusted (`trust`), as one the model wrote and you have not
+  approved is. Typing the command is your own act, as `!` is: the read
+  asks nothing of the policy, where the model's read of a project's
+  skill is held to `read`'s asks. A skill edited between your typing
+  and the turn that takes the message grants nothing; invoke it again.
+  One of dax's own commands or a prompt template keeps a name a skill
+  shares, and a skill listed under a qualified name is the model's to
+  read. `/help` lists the skills; `dax attach` offers none.
 - `/mcp__<server>__<prompt> args` runs a prompt an MCP server offers
   (`prompts/get`), its arguments the prompt's declared ones in order,
   split on white space, the last taking the rest; its messages are sent

@@ -35,6 +35,7 @@ import (
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/agentsession/cas"
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agentsmd"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agenttool/mcpclient"
@@ -579,6 +580,10 @@ type Session struct {
 	// skillsStale is set when an extension asked for its skills to be
 	// discovered again (skillsTurn).
 	skillsStale atomic.Bool
+	// ownSkill says a skill's text is the person's own, as the
+	// extension that gives the skills says (extension.Env.OwnSkills);
+	// nil when none says.
+	ownSkill func(*agentskill.Skill) bool
 	// views counts the views attached to it (Viewing), which an A2A
 	// caller's conversation's questions need.
 	views views

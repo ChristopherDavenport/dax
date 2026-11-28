@@ -352,6 +352,15 @@ func runCommand(ctx context.Context, t agentturn.Control, ctl agent.Controls, li
 			return commandResult{send: []openresponses.Item{item}}, nil
 		}
 	}
+	if sk, ok := ctl.(skiller); ok && name != "/" {
+		if slices.ContainsFunc(skillCommands(ctl), func(s agent.Skill) bool { return "/"+s.Name == name }) {
+			item, err := sk.Skill(ctx, strings.TrimPrefix(name, "/"), arg)
+			if err != nil {
+				return commandResult{}, err
+			}
+			return commandResult{send: []openresponses.Item{item}}, nil
+		}
+	}
 	if mp, ok := ctl.(mcpPrompter); ok && strings.HasPrefix(name, "/mcp__") {
 		items, err := mp.MCPPrompt(ctx, strings.TrimPrefix(name, "/"), arg)
 		if err != nil {
@@ -595,6 +604,35 @@ type templater interface {
 	Template(name, args string) (openresponses.Item, error)
 }
 
+// skiller is what a skill's command asks of the session's controls: the
+// session's own (agent.Session.Skills and Skill), which hold its
+// catalogue and read the skill where the session runs; dax attach
+// offers none.
+type skiller interface {
+	Skills() []agent.Skill
+	Skill(ctx context.Context, name, args string) (openresponses.Item, error)
+}
+
+// skillCommands are the skills ctl's person can invoke as /<name>: the
+// session's, less any whose name one of dax's commands or a prompt
+// template holds, which the line runs instead.
+func skillCommands(ctl agent.Controls) []agent.Skill {
+	sk, ok := ctl.(skiller)
+	if !ok {
+		return nil
+	}
+	taken := map[string]bool{}
+	for _, c := range commandList {
+		taken[c.name] = true
+	}
+	if tp, ok := ctl.(templater); ok {
+		for _, p := range tp.Templates() {
+			taken["/"+p.Name] = true
+		}
+	}
+	return slices.DeleteFunc(sk.Skills(), func(s agent.Skill) bool { return taken["/"+s.Name] })
+}
+
 // templateHelp lists the session's prompt templates for /help, the
 // project's marked, since its text is the repository's.
 func templateHelp(ctx context.Context, ctl agent.Controls) string {
@@ -605,6 +643,15 @@ func templateHelp(ctx context.Context, ctl agent.Controls) string {
 			fmt.Fprintf(&b, "\n  /%-24s %s", p.Name+" [args]", p.Path)
 			if p.Project {
 				b.WriteString(" (the project's: its text is the repository's)")
+			}
+		}
+	}
+	if skills := skillCommands(ctl); len(skills) > 0 {
+		b.WriteString("\nskills (read for you, as the model's skill tool reads them; args follow the instructions):")
+		for _, s := range skills {
+			fmt.Fprintf(&b, "\n  /%-24s %s", s.Name+" [args]", oneLine(s.Description, maxDescription))
+			if s.Untrusted {
+				b.WriteString(" (not your own text: sent as untrusted)")
 			}
 		}
 	}

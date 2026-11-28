@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ChristopherDavenport/agentconsole/console"
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -355,5 +356,57 @@ func TestAPromptTemplateIsACommand(t *testing.T) {
 	}
 	if _, err := command(context.Background(), &fakeTurn{}, ctl, "/mcp__team__nope", false); err == nil {
 		t.Error("an MCP prompt the server does not offer was run")
+	}
+}
+
+// templateControls also offers skills: one to invoke, one a prompt
+// template's name holds and one a command of dax's does.
+func (*templateControls) Skills() []agent.Skill {
+	return []agent.Skill{
+		{Name: "release-notes", Description: "Write the release\nnotes.", Untrusted: true},
+		{Name: "review", Description: "shadowed by the template"},
+		{Name: "mode", Description: "shadowed by dax's command"},
+	}
+}
+
+func (*templateControls) Skill(_ context.Context, name, args string) (openresponses.Item, error) {
+	return openresponses.UserText("skill " + name + ": " + args), nil
+}
+
+// A skill is a command that sends its message, after dax's own commands
+// and the prompt templates, which keep a name they hold; /help lists
+// it, marking one whose text is not the person's (#230). Controls that
+// offer none (dax attach) run none.
+func TestASkillIsACommand(t *testing.T) {
+	ctx := context.Background()
+	ctl := &templateControls{}
+	r, err := command(ctx, &fakeTurn{}, ctl, "/release-notes since v1.2", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := r.send[0].(*openresponses.Message); len(r.send) != 1 || !ok || m.Text() != "skill release-notes: since v1.2" {
+		t.Errorf("sent %#v", r.send)
+	}
+	// The template keeps its name.
+	r, err = command(ctx, &fakeTurn{}, ctl, "/review x", false)
+	if err != nil || r.send[0].(*openresponses.Message).Text() != "review: x" {
+		t.Errorf("/review sent %#v, %v", r.send, err)
+	}
+	if names := skillCommands(ctl); len(names) != 1 || names[0].Name != "release-notes" {
+		t.Errorf("skill commands = %+v, want release-notes alone", names)
+	}
+	h, _ := command(ctx, &fakeTurn{}, ctl, "/help", false)
+	if !strings.Contains(h.out, "/release-notes [args]") || !strings.Contains(h.out, "Write the release notes. (not your own text: sent as untrusted)") {
+		t.Errorf("/help:\n%s", h.out)
+	}
+	if strings.Contains(h.out, "shadowed") {
+		t.Errorf("/help lists a skill another command's name holds:\n%s", h.out)
+	}
+	if _, err := command(ctx, &fakeTurn{}, &fakeControls{}, "/release-notes", false); err == nil {
+		t.Error("controls that offer no skills ran one")
+	}
+	got := commandCompletion(ctl)(ctx, console.Completing{Before: "/rel", Word: "/rel"})
+	if len(got) != 1 || got[0].Text != "/release-notes " || got[0].Help != "[args]  skill: Write the release notes." {
+		t.Errorf("/rel completes %+v", got)
 	}
 }

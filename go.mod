@@ -6,21 +6,21 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8
 	github.com/ChristopherDavenport/agentconsole v0.0.25
 	github.com/ChristopherDavenport/agenteval v0.0.18
-	github.com/ChristopherDavenport/agentkit v0.0.21
+	github.com/ChristopherDavenport/agentkit v0.0.23
 	github.com/ChristopherDavenport/agentmemory v0.0.14
 	github.com/ChristopherDavenport/agentpolicy v0.0.20
 	github.com/ChristopherDavenport/agentredact v0.0.4
 	github.com/ChristopherDavenport/agentredact/secrets v0.0.4
 	github.com/ChristopherDavenport/agentsession v0.0.42
-	github.com/ChristopherDavenport/agentskill v0.0.12
+	github.com/ChristopherDavenport/agentskill v0.0.13
 	github.com/ChristopherDavenport/agentsmd v0.0.6
 	github.com/ChristopherDavenport/agenttool v0.0.31
 	github.com/ChristopherDavenport/agenttool/mcpclient v0.0.31
 	github.com/ChristopherDavenport/agenttool/mcpserver v0.0.31
-	github.com/ChristopherDavenport/agentturn v0.0.41
-	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.41
-	github.com/ChristopherDavenport/agentturn/session v0.0.41
-	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.41
+	github.com/ChristopherDavenport/agentturn v0.0.44
+	github.com/ChristopherDavenport/agentturn/front/a2a v0.0.44
+	github.com/ChristopherDavenport/agentturn/session v0.0.44
+	github.com/ChristopherDavenport/agentturn/tools/a2a v0.0.44
 	github.com/ChristopherDavenport/agentworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/mcpworkspace v0.0.12
 	github.com/ChristopherDavenport/agentworkspace/tunnel v0.0.12

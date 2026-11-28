@@ -29,6 +29,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	workspace "github.com/ChristopherDavenport/agentworkspace"
@@ -397,6 +398,14 @@ type Env interface {
 	// request on, in the run that wrote it or the next. A failed reload
 	// is a warning, and the catalogue in force stays.
 	ReloadSkills()
+	// OwnSkills says which skills' text is the person's own, for the
+	// extension that gives the session its skills: own reports it of a
+	// skill in the catalogue. When the person invokes a skill
+	// themselves (/<skill>) the session sends its instructions marked
+	// untrusted unless own says they are the person's, and every skill
+	// is so marked when no extension says. It decides the mark alone:
+	// what a skill may grant is the extension's skill grants'.
+	OwnSkills(own func(*agentskill.Skill) bool)
 	// SystemPrompt is the main agent's part of the system prompt, with
 	// the instructions of the extensions named in except left out: a
 	// sub-agent's prompt is built from it.
