@@ -26,8 +26,13 @@ import (
 )
 
 // Commands are the names of dax's own slash commands, which no prompt
-// template may take.
-var Commands = []string{"help", "quit", "exit", "abort", "follow", "tools", "session", "model", "think", "mcp", "compact", "port"}
+// template may take. The terminal's command list is the source; a test
+// there holds this to it.
+var Commands = []string{
+	"help", "model", "think", "tools", "session", "new", "clear", "name",
+	"resume", "mcp", "mode", "permissions", "skills", "memory", "compact",
+	"port", "follow", "abort", "quit", "exit",
+}
 
 // PromptTemplate is a prompt template the session offers as
 // /<Name>.
