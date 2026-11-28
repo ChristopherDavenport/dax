@@ -14,6 +14,7 @@ import (
 	"github.com/ChristopherDavenport/agentkit"
 	"github.com/ChristopherDavenport/agentpolicy"
 	"github.com/ChristopherDavenport/agentsession"
+	"github.com/ChristopherDavenport/agentskill"
 	"github.com/ChristopherDavenport/agenttool"
 	"github.com/ChristopherDavenport/agentturn"
 	"github.com/ChristopherDavenport/openresponses"
@@ -417,6 +418,9 @@ func (e *sessionEnv) ReadOnlyTools() []agenttool.Tool { return e.capped(e.a.read
 func (e *sessionEnv) SubagentTools() []agenttool.Tool { return e.capped(e.sub) }
 
 func (e *sessionEnv) ReloadSkills() { e.s.skillsStale.Store(true) }
+
+// OwnSkills implements extension.Env (skills.go).
+func (e *sessionEnv) OwnSkills(own func(*agentskill.Skill) bool) { e.s.ownSkill = own }
 
 // Deliver implements extension.Env (deliver.go).
 func (e *sessionEnv) Deliver(d extension.Delivery) error { return e.s.deliver(d) }

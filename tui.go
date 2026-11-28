@@ -323,8 +323,8 @@ func firstCompletion(fns ...completion) completion {
 // commandCompletion completes a slash command's line as it is typed,
 // from commandList. The first word, a slash that starts the input,
 // lists the commands the word begins: dax's own, then the session's
-// prompt templates and its MCP servers' prompts, where ctl offers them
-// (dax attach offers neither). So a lone slash shows every command.
+// prompt templates, its skills and its MCP servers' prompts, where ctl
+// offers them (dax attach offers none of them). So a lone slash shows every command.
 // After one of dax's commands, the next word lists its subcommands and
 // the values its argument takes (/mcp: add, remove; /think: on, off),
 // and after a subcommand its values, those the session has among them
@@ -434,6 +434,9 @@ func commandCompletion(ctl agent.Controls) completion {
 					}
 					add("/"+p.Name, true, "[args]", help)
 				}
+			}
+			for _, s := range skillCommands(ctl) {
+				add("/"+s.Name, true, "[args]", "skill: "+s.Description)
 			}
 			for _, p := range prompts(ctx) {
 				var args []string

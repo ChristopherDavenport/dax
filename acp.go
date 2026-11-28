@@ -371,12 +371,15 @@ func (a *acpSession) modeChanged() {
 }
 
 // announce sends the commands the editor may offer: the prompt
-// templates and the MCP servers' prompts. dax's other slash commands
+// templates, the skills and the MCP servers' prompts. dax's other slash commands
 // act on a terminal.
 func (a *acpSession) announce() {
 	var cmds []acp.AvailableCommand
 	for _, p := range a.sess.Templates() {
 		cmds = append(cmds, acp.AvailableCommand{Name: p.Name, Description: "prompt template " + p.Path, Input: &acp.CommandInput{Hint: "arguments"}})
+	}
+	for _, s := range skillCommands(a.sess) {
+		cmds = append(cmds, acp.AvailableCommand{Name: s.Name, Description: "skill: " + oneLine(s.Description, maxDescription), Input: &acp.CommandInput{Hint: "arguments"}})
 	}
 	for _, p := range a.sess.MCPPrompts(context.Background()) {
 		cmds = append(cmds, acp.AvailableCommand{Name: p.Command, Description: p.Description, Input: &acp.CommandInput{Hint: strings.Join(p.Arguments, " ")}})
@@ -670,9 +673,10 @@ func (a *acpSession) items(ctx context.Context, blocks []acp.ContentBlock) (item
 		name, _, _ := strings.Cut(text, " ")
 		name = strings.TrimPrefix(name, "/")
 		known := slices.ContainsFunc(a.sess.Templates(), func(p agent.PromptTemplate) bool { return p.Name == name }) ||
+			slices.ContainsFunc(skillCommands(a.sess), func(s agent.Skill) bool { return s.Name == name }) ||
 			slices.ContainsFunc(a.sess.MCPPrompts(ctx), func(p agent.MCPPrompt) bool { return p.Command == name })
 		if !known {
-			return nil, "dax's slash commands act on its terminal; over ACP it runs prompt templates and MCP prompts alone.", nil
+			return nil, "dax's slash commands act on its terminal; over ACP it runs prompt templates, skills and MCP prompts alone.", nil
 		}
 		r, err := command(ctx, a.sess, a.sess, text, false)
 		if err != nil {

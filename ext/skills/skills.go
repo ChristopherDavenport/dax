@@ -135,32 +135,34 @@ func New(o Options) extension.Extension {
 			if ok {
 				opts = append(opts, agentkit.WithSkillTool(agentskill.WithFileClaim(projectFileClaim(env.ToolEnv().Files, project.Location))))
 			}
+			// Only a skill from a directory the user named is trusted:
+			// ~/.dax/skills and the config's skills_dirs. A repository's
+			// skill is text from the repository; its allowed-tools are
+			// withheld like any untrusted rule.
+			// The project's is refused by its location before any path
+			// on this machine is consulted, since the workspace's paths
+			// need not be this machine's.
+			//
+			// A skill the model wrote is trusted only as the person
+			// approved it: its frontmatter's digest in the approvals
+			// file (Approve).
+			roots := append([]string{user}, o.Dirs...)
+			trusted := func(sk *agentskill.Skill) bool {
+				switch {
+				case ok && inside(project.Location, sk.Location):
+					return false
+				case learned != "" && inside(learned, sk.Location):
+					return approved(env.UserDir(), sk.Name, sk.FrontmatterSHA256())
+				}
+				return under(roots, sk.Location)
+			}
+			// The same decision marks the instructions of a skill the
+			// person invokes: the person's own text, or not.
+			env.OwnSkills(trusted)
 			if o.Trust {
-				roots := append([]string{user}, o.Dirs...)
 				opts = append(opts,
 					agentkit.WithSkillGrants(func(sk *agentskill.Skill) agentpolicy.Source {
-						// Only a skill from a directory the user named is
-						// trusted: ~/.dax/skills and the config's
-						// skills_dirs. A repository's skill is text from
-						// the repository; its allowed-tools are withheld
-						// like any untrusted rule.
-						// The project's is refused by its location before
-						// any path on this machine is consulted, since
-						// the workspace's paths need not be this
-						// machine's.
-						//
-						// A skill the model wrote is trusted only as the
-						// person approved it: its frontmatter's digest
-						// in the approvals file (Approve).
-						var trusted bool
-						switch {
-						case ok && inside(project.Location, sk.Location):
-						case learned != "" && inside(learned, sk.Location):
-							trusted = approved(env.UserDir(), sk.Name, sk.FrontmatterSHA256())
-						default:
-							trusted = under(roots, sk.Location)
-						}
-						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: trusted}
+						return agentpolicy.Source{Name: "skill:" + sk.ListedName(), Path: sk.Location, Trusted: trusted(sk)}
 					}),
 					agentkit.WithSkillGrantScope(),
 					agentkit.WithSkillGrantReport(func(g agentkit.SkillGrant) {

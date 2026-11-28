@@ -7,6 +7,28 @@ versions may break flags and the config file.
 
 ## Unreleased
 
+- Added: `/<skill> args` reads a skill for you, the read the model
+  makes with its `skill` tool, made on your behalf: its instructions
+  are sent with your arguments, recorded as composed from the skill
+  with the read marked as made for you, and it grants what the model's
+  read grants under `-trust-skills`, until your next message. A
+  repository's skill, and one the model wrote that you have not
+  approved, grants nothing and is sent marked untrusted. The read asks
+  nothing of the policy, as `!` does not. `/help`, the terminal
+  client's command list and ACP's available commands list the skills;
+  one of dax's commands or a prompt template keeps a name a skill
+  shares; `dax attach` offers none. (#230)
+- Changed: `extension.Env` gains `OwnSkills(own)`, with which the
+  extension that gives the session its skills says which are the
+  person's own text; dax-skills says so by the decision its grants
+  use. `agent.Session` gains `Skills()` and `Skill(ctx, name, args)`,
+  and `agent.Skill`.
+- Dependencies: agentkit v0.0.23, up from v0.0.21: `Kit.SkillMessage`
+  and the turn hook that makes a read for the person, grants it and
+  records it. agentturn and its `session`, `front/a2a` and `tools/a2a`
+  modules v0.0.44, up from v0.0.41: a turn's inputs carry their
+  provenance. agentskill v0.0.13, up from v0.0.12: `Catalog.Read` and
+  `Read.By`.
 - Added: in the terminal client the word after a command lists the
   values the session has for it: `/resume ` the project's other
   sessions, found by ID or by part of the name, `/mcp remove ` the
