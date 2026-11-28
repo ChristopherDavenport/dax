@@ -5,6 +5,14 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Fixed: a prompt template named for one of dax's newer commands
+  (`/new`, `/clear`, `/name`, `/resume`, `/mode`, `/permissions`,
+  `/skills`, `/memory`) is left out with a warning, as one named for
+  `/model` is, rather than loaded and listed but never run, since the
+  command keeps its name. `agent.Commands` names every command.
+
 ## v0.0.48 - 2026-11-27
 
 - Added: `/<skill> args` reads a skill for you, the read the model

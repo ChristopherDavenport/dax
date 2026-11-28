@@ -359,6 +359,26 @@ func TestAPromptTemplateIsACommand(t *testing.T) {
 	}
 }
 
+// Every one of dax's commands is a name no prompt template may take, and
+// the reserved names are only dax's commands: a template named for a
+// command loaded and was then never run.
+func TestAPromptTemplateTakesNoCommandsName(t *testing.T) {
+	var names []string
+	for _, c := range commandList {
+		name, ok := strings.CutPrefix(c.name, "/")
+		if !ok || strings.ContainsAny(name, "/ ") {
+			continue // !<command>, //text: not a command's name
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	got, want := slices.Sorted(slices.Values(agent.Commands)), slices.Sorted(slices.Values(names))
+	if !slices.Equal(got, want) {
+		t.Errorf("agent.Commands = %v, the command list's names %v", got, want)
+	}
+}
+
 // templateControls also offers skills: one to invoke, one a prompt
 // template's name holds and one a command of dax's does.
 func (*templateControls) Skills() []agent.Skill {
