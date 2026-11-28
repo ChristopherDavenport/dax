@@ -3,14 +3,18 @@ package dax
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ChristopherDavenport/agentconsole/console"
+	"github.com/ChristopherDavenport/agentsession"
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/ext/skills"
 	"github.com/ChristopherDavenport/dax/policy"
 )
 
@@ -174,6 +178,80 @@ func TestSlashCompletesTheCommands(t *testing.T) {
 		}
 		if _, err := command(ctx, nil, &fakeControls{}, c.name, false); err != nil && strings.HasPrefix(err.Error(), "unknown command") {
 			t.Errorf("%s is listed and unknown", c.name)
+		}
+	}
+}
+
+// valueControls has sessions to resume, a server /mcp add started and a
+// user directory with a learned skill.
+type valueControls struct {
+	fakeControls
+	dir    string
+	listed int
+}
+
+func (v *valueControls) Sessions(context.Context) ([]agentsession.Summary, error) {
+	v.listed++
+	sum := func(id, name string) agentsession.Summary {
+		s := agentsession.Summary{Name: name}
+		s.Header.ID = id
+		return s
+	}
+	return []agentsession.Summary{sum("s1", "this one"), sum("0a1b-older", "Fix the parser"), sum("0c2d-oldest", "evil \x1b[31m")}, nil
+}
+
+func (v *valueControls) UserDir() string { return v.dir }
+
+// The word after a command lists the values the session has for it:
+// the other sessions for /resume, by ID or by part of the name; the
+// servers /mcp add started for /mcp remove; the skills the model wrote
+// for /skills approve. The sessions are listed once while fresh, and a
+// name is one cleaned line. Controls that offer none (dax attach)
+// complete none.
+func TestACommandsValuesCompleteFromTheSession(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(skills.LearnedDir(dir), "release-notes"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	v := &valueControls{dir: dir}
+	v.mcp = []agent.MCPServerInfo{{Name: "cfg"}, {Name: "docs", Added: "docs"}}
+	complete := commandCompletion(v)
+	texts := func(before, word string) []string {
+		var out []string
+		for _, c := range complete(ctx, console.Completing{Before: before, Word: word}) {
+			out = append(out, c.Text)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		before, word string
+		want         []string
+	}{
+		{"/resume ", "", []string{"0a1b-older", "0c2d-oldest"}},
+		{"/resume 0a", "0a", []string{"0a1b-older"}},
+		{"/resume pars", "pars", []string{"0a1b-older"}},
+		{"/resume zz", "zz", nil},
+		{"/mcp remove ", "", []string{"docs"}},
+		{"/mcp remove c", "c", nil},
+		{"/skills approve ", "", []string{"release-notes"}},
+		{"/skills approve rel", "rel", []string{"release-notes"}},
+	} {
+		if got := texts(tc.before, tc.word); !slices.Equal(got, tc.want) {
+			t.Errorf("%q completes %q, want %q", tc.before, got, tc.want)
+		}
+	}
+	if v.listed != 1 {
+		t.Errorf("the sessions were listed %d times, want once while fresh", v.listed)
+	}
+	got := complete(ctx, console.Completing{Before: "/resume 0", Word: "0"})
+	if len(got) != 2 || !strings.Contains(got[0].Help, `"Fix the parser"`) || strings.ContainsAny(got[1].Help, "\n\x1b") {
+		t.Errorf("/resume 0 completes %+v", got)
+	}
+	attached := commandCompletion(&fakeControls{})
+	for _, before := range []string{"/resume ", "/mcp remove ", "/skills approve "} {
+		if got := attached(ctx, console.Completing{Before: before}); got != nil {
+			t.Errorf("over attach %q completes %+v", before, got)
 		}
 	}
 }

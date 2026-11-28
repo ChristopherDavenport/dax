@@ -1747,7 +1747,11 @@ commands, your prompt templates and the MCP servers' prompts; under
 `dax attach`, dax's commands. After a command, the next word lists its
 subcommands and the values its argument takes (`/mcp `: `add`,
 `remove`; `/think `: `on`, `off`; `/mode `: the modes), as soon as the
-space is typed or Tab has put the command in.
+space is typed or Tab has put the command in. Where the values are the
+session's, they are listed too: `/resume ` the project's other
+sessions, found by ID or by part of the name, `/mcp remove ` the
+servers `/mcp add` started, and `/skills approve ` the skills the
+model wrote.
 
 - `/<name> args` runs a prompt template: a markdown file
   `~/.dax/prompts/<name>.md`, or the project's `.dax/prompts/<name>.md`

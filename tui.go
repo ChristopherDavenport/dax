@@ -327,7 +327,9 @@ func firstCompletion(fns ...completion) completion {
 // (dax attach offers neither). So a lone slash shows every command.
 // After one of dax's commands, the next word lists its subcommands and
 // the values its argument takes (/mcp: add, remove; /think: on, off),
-// and after a subcommand its values. Tab puts the chosen one in the
+// and after a subcommand its values, those the session has among them
+// (the sessions /resume takes, the servers /mcp remove does, the
+// skills /skills approve does). Tab puts the chosen one in the
 // input, with a space after it when more follows, and the client then
 // asks about the word that space starts, so what follows is listed
 // before any of it is typed. A line that starts with two slashes, and
@@ -354,6 +356,31 @@ func commandCompletion(ctl agent.Controls) completion {
 		}
 		return cached
 	}
+	// A command's live values are read again at most every few
+	// seconds too: the sessions are a listing of the store.
+	type read struct {
+		values []commandValue
+		at     time.Time
+	}
+	var liveMu sync.Mutex
+	reads := map[string]read{}
+	live := func(ctx context.Context, s commandSpec) []commandValue {
+		if s.live == nil {
+			return nil
+		}
+		key := s.usage()
+		liveMu.Lock()
+		r, ok := reads[key]
+		liveMu.Unlock()
+		if ok && time.Since(r.at) <= resourcesFresh {
+			return r.values
+		}
+		r = read{values: s.live(ctx, ctl), at: time.Now()}
+		liveMu.Lock()
+		reads[key] = r
+		liveMu.Unlock()
+		return r.values
+	}
 	return func(ctx context.Context, c console.Completing) []console.Completion {
 		if !strings.HasPrefix(c.Before, "/") || strings.HasPrefix(c.Before, "//") || strings.Contains(c.Before, "\n") {
 			return nil
@@ -376,6 +403,19 @@ func commandCompletion(ctl agent.Controls) completion {
 		values := func(s commandSpec) {
 			for _, v := range s.values {
 				add(v, false, "", "")
+			}
+			word := strings.ToLower(c.Word)
+			for _, v := range live(ctx, s) {
+				// A value is offered by what it is also known by, too:
+				// Tab puts its text in whichever the word was part of.
+				if v.also != "" && word != "" && !strings.HasPrefix(v.text, c.Word) && strings.Contains(strings.ToLower(v.also), word) {
+					if !seen[v.text] && view.CleanLine(v.text) == v.text {
+						seen[v.text] = true
+						out = append(out, console.Completion{Text: v.text, Help: oneLine(v.help, maxDescription)})
+					}
+					continue
+				}
+				add(v.text, false, "", v.help)
 			}
 		}
 		prior := strings.Fields(strings.TrimSuffix(c.Before, c.Word))
