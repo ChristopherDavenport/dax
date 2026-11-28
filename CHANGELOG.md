@@ -5,7 +5,7 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
-## Unreleased
+## v0.0.47 - 2026-11-27
 
 - Added: in the terminal client a slash that starts the input opens the
   list of commands over it, each with its arguments and what it does,
