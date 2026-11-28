@@ -5,6 +5,23 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: in the terminal client a slash that starts the input opens the
+  list of commands over it, each with its arguments and what it does,
+  narrowed as you type: Up and Down choose, Tab puts the chosen command
+  in the input (with a space after it when it takes arguments) and Esc
+  closes the list. It lists dax's commands, the prompt templates and
+  the MCP servers' prompts; under `dax attach`, dax's commands. After
+  a command, the next word lists its subcommands and its argument's
+  values (`/mcp `: `add`, `remove`; `/think `: `on`, `off`; `/mode `:
+  the modes) as soon as the space is there.
+- Changed: `/help` lists itself, and `/clear` and `/exit` on lines of
+  their own.
+- Dependencies: agentconsole v0.0.25, up from v0.0.24: the client asks
+  about the empty word after a space, so a command's subcommands are
+  listed before any is typed.
+
 ## v0.0.46 - 2026-11-27
 
 - Changed: in the terminal client the code in an `edit`'s diff, in what

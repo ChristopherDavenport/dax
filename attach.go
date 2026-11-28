@@ -211,6 +211,8 @@ func (f *attachFront) Run(ctx context.Context, base, token string) error {
 	if f.cost != nil {
 		opts = append(opts, console.WithCost(f.cost))
 	}
+	// A slash at the start of the input lists the commands.
+	opts = append(opts, console.WithCompletion(commandCompletion(controls)))
 	rec := &remoteRecord{store: store, controls: controls}
 	err = runConsole(ctx, f.run, rec, ctl, withModes(attachController(ctl, controls), controls, nil), ctl, controls, opts)
 	out := f.out

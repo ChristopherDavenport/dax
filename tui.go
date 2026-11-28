@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,8 +287,9 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 		o := sess.GrantOffer(ctx, p.CallID)
 		return client.GrantOffer{Rule: o.Rule, Saved: o.Saved}
 	}))
-	// @ completes the MCP servers' resources as mentions.
-	opts = append(opts, console.WithCompletion(mentionCompletion(sess)))
+	// A slash at the start of the input lists the commands, and @
+	// completes the MCP servers' resources as mentions.
+	opts = append(opts, console.WithCompletion(firstCompletion(commandCompletion(sess), mentionCompletion(sess))))
 	act := withModes(withGrants(answeredBy(client.Direct(sess, client.WithAnswers(daxAnswer)), agent.AtTerminal), sess), sess, redraw)
 	// A command that opens a session (/new, /resume) ends this client,
 	// and Run enters it again over the new one.
@@ -299,6 +301,135 @@ func (f *tuiFront) session(ctx context.Context, sess *agent.Session) (*agent.Ses
 		return n, nil
 	}
 	return nil, err
+}
+
+// completion is the function the terminal client asks to complete the
+// input's word (console.WithCompletion).
+type completion = func(context.Context, console.Completing) []console.Completion
+
+// firstCompletion asks each of fns in turn and gives the first list
+// with anything in it.
+func firstCompletion(fns ...completion) completion {
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		for _, fn := range fns {
+			if out := fn(ctx, c); len(out) > 0 {
+				return out
+			}
+		}
+		return nil
+	}
+}
+
+// commandCompletion completes a slash command's line as it is typed,
+// from commandList. The first word, a slash that starts the input,
+// lists the commands the word begins: dax's own, then the session's
+// prompt templates and its MCP servers' prompts, where ctl offers them
+// (dax attach offers neither). So a lone slash shows every command.
+// After one of dax's commands, the next word lists its subcommands and
+// the values its argument takes (/mcp: add, remove; /think: on, off),
+// and after a subcommand its values. Tab puts the chosen one in the
+// input, with a space after it when more follows, and the client then
+// asks about the word that space starts, so what follows is listed
+// before any of it is typed. A line that starts with two slashes, and
+// any line after the first, is the model's text and completes nothing.
+// The servers' prompts are listed again at most every few seconds, as
+// the resources are; a name or a help line that would carry a
+// terminal's controls is left out or cleaned.
+func commandCompletion(ctl agent.Controls) completion {
+	var mu sync.Mutex
+	var cached []agent.MCPPrompt
+	var at time.Time
+	prompts := func(ctx context.Context) []agent.MCPPrompt {
+		mp, ok := ctl.(mcpPrompter)
+		if !ok {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if at.IsZero() || time.Since(at) > resourcesFresh {
+			mu.Unlock()
+			list := mp.MCPPrompts(ctx)
+			mu.Lock()
+			cached, at = list, time.Now()
+		}
+		return cached
+	}
+	return func(ctx context.Context, c console.Completing) []console.Completion {
+		if !strings.HasPrefix(c.Before, "/") || strings.HasPrefix(c.Before, "//") || strings.Contains(c.Before, "\n") {
+			return nil
+		}
+		var out []console.Completion
+		seen := map[string]bool{}
+		// add offers word when the typed word begins it, once; more is
+		// whether something follows it on the line.
+		add := func(word string, more bool, args, help string) {
+			if seen[word] || !strings.HasPrefix(word, c.Word) || view.CleanLine(word) != word {
+				return
+			}
+			seen[word] = true
+			text := word
+			if more {
+				text += " "
+			}
+			out = append(out, console.Completion{Text: text, Help: strings.TrimSpace(args + "  " + oneLine(help, maxDescription))})
+		}
+		values := func(s commandSpec) {
+			for _, v := range s.values {
+				add(v, false, "", "")
+			}
+		}
+		prior := strings.Fields(strings.TrimSuffix(c.Before, c.Word))
+		switch len(prior) {
+		case 0:
+			for _, s := range commandList {
+				if s.slash() {
+					add(s.name, commandTakes(s.name), strings.TrimSpace(s.sub+" "+s.args), s.help)
+				}
+			}
+			if tp, ok := ctl.(templater); ok {
+				for _, p := range tp.Templates() {
+					help := "prompt template " + p.Path
+					if p.Project {
+						help += " (the project's)"
+					}
+					add("/"+p.Name, true, "[args]", help)
+				}
+			}
+			for _, p := range prompts(ctx) {
+				var args []string
+				for _, a := range p.Arguments {
+					args = append(args, "<"+oneLine(a, maxField)+">")
+				}
+				add("/"+p.Command, len(args) > 0, strings.Join(args, " "), p.Description)
+			}
+		case 1:
+			for _, s := range commandList {
+				if !s.slash() || s.name != prior[0] {
+					continue
+				}
+				if s.sub == "" {
+					values(s)
+				} else {
+					add(s.sub, s.args != "", s.args, s.help)
+				}
+			}
+		case 2:
+			for _, s := range commandList {
+				if s.slash() && s.name == prior[0] && s.sub == prior[1] {
+					values(s)
+				}
+			}
+		}
+		return out
+	}
+}
+
+// commandTakes is whether anything follows name on a line: one of its
+// forms has a subcommand or arguments.
+func commandTakes(name string) bool {
+	return slices.ContainsFunc(commandList, func(s commandSpec) bool {
+		return s.name == name && (s.sub != "" || s.args != "")
+	})
 }
 
 // mentionCompletion completes a word that starts with @ from the MCP

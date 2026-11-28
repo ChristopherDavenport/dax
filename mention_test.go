@@ -3,6 +3,7 @@ package dax
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/ChristopherDavenport/openresponses"
 
 	"github.com/ChristopherDavenport/dax/agent"
+	"github.com/ChristopherDavenport/dax/policy"
 )
 
 // fakeMentions is controls whose servers offer resources.
@@ -79,5 +81,99 @@ func TestAtCompletesTheServersResources(t *testing.T) {
 	}
 	if f.listed != 1 {
 		t.Errorf("listed %d times, want once while fresh", f.listed)
+	}
+}
+
+// A slash that starts the input lists the commands, narrowed by what is
+// typed: dax's own, each once with its plainest form's help, then the
+// session's prompt templates and its servers' prompts. A command that
+// takes arguments or a subcommand completes with a space after it, and
+// the word after it lists its subcommands and its argument's values,
+// the empty word too. A slash later in the input, or two of them, is
+// the model's text.
+func TestSlashCompletesTheCommands(t *testing.T) {
+	ctx := context.Background()
+	complete := commandCompletion(&templateControls{})
+	texts := func(word string) []string {
+		var out []string
+		for _, c := range complete(ctx, console.Completing{Before: word, Word: word}) {
+			out = append(out, c.Text)
+		}
+		return out
+	}
+	all := texts("/")
+	for _, want := range []string{"/help", "/model ", "/mcp ", "/clear", "/quit", "/exit", "/review ", "/mcp__team__review_pr "} {
+		if !slices.Contains(all, want) {
+			t.Errorf("a lone slash lacks %q: %q", want, all)
+		}
+	}
+	if n := len(all); n != len(slices.Compact(slices.Sorted(slices.Values(all)))) {
+		t.Errorf("a command listed twice: %q", all)
+	}
+	if got := texts("/mo"); !slices.Equal(got, []string{"/model ", "/mode "}) {
+		t.Errorf("/mo completes %q", got)
+	}
+	got := complete(ctx, console.Completing{Before: "/mcp", Word: "/mcp"})
+	if len(got) != 2 || got[0].Text != "/mcp " || got[0].Help != "the MCP servers, where each runs and what it is for" ||
+		got[1].Help != "<number>  review a pull request" {
+		t.Errorf("/mcp completes %+v", got)
+	}
+	if got := complete(ctx, console.Completing{Before: "/think", Word: "/think"}); len(got) != 1 || got[0].Help != "on|off  reasoning from the next request" {
+		t.Errorf("/think completes %+v", got)
+	}
+	for _, tc := range []struct {
+		before, word string
+		want         []string
+	}{
+		{"/mcp ", "", []string{"add ", "remove "}},
+		{"/mcp r", "r", []string{"remove "}},
+		{"/mcp  add", "add", []string{"add "}},
+		{"/think ", "", []string{"on", "off"}},
+		{"/think of", "of", []string{"off"}},
+		{"/mode ", "", policy.Modes},
+		{"/mode pl", "pl", []string{"plan"}},
+		{"/memory ", "", []string{"undo"}},
+		{"/skills a", "a", []string{"approve "}},
+		{"/model ", "", nil},
+		{"/mcp add ", "", nil},
+		{"/mcp add x", "x", nil},
+		{"/review ", "", nil},
+		{"/nope ", "", nil},
+		{"//mcp ", "", nil},
+		{"say\n/mcp ", "", nil},
+	} {
+		var got []string
+		for _, c := range complete(ctx, console.Completing{Before: tc.before, Word: tc.word}) {
+			got = append(got, c.Text)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%q completes %q, want %q", tc.before, got, tc.want)
+		}
+	}
+	if got := complete(ctx, console.Completing{Before: "/mcp a", Word: "a"}); len(got) != 1 || got[0].Help != "<name> <command>  start an MCP server; its tools from the next prompt" {
+		t.Errorf("/mcp a completes %+v", got)
+	}
+	for _, c := range []console.Completing{
+		{Before: "see /mo", Word: "/mo"},
+		{Before: "first\n/mo", Word: "/mo"},
+		{Before: "//etc", Word: "//etc"},
+		{Before: "mo", Word: "mo"},
+	} {
+		if got := complete(ctx, c); got != nil {
+			t.Errorf("%q completes %+v", c.Before, got)
+		}
+	}
+	// Over dax attach the controls offer no templates and no prompts.
+	if got := commandCompletion(&fakeControls{})(ctx, console.Completing{Before: "/re", Word: "/re"}); len(got) != 1 || got[0].Text != "/resume " {
+		t.Errorf("over attach /re completes %+v", got)
+	}
+	// Every command the list completes is one dax runs.
+	for _, c := range commandList {
+		if !strings.HasPrefix(c.name, "/") || strings.HasPrefix(c.name, "//") {
+			continue
+		}
+		if _, err := command(ctx, nil, &fakeControls{}, c.name, false); err != nil && strings.HasPrefix(err.Error(), "unknown command") {
+			t.Errorf("%s is listed and unknown", c.name)
+		}
 	}
 }

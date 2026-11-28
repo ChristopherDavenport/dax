@@ -48,29 +48,67 @@ type userCommander interface {
 	RunUserCommand(ctx context.Context, line string) (agent.UserCommand, error)
 }
 
+// commandSpec is one line of the commands' list: the command's name,
+// the subcommand this line is for when it has one, the arguments it
+// takes and what it does. values are what its next argument may be,
+// where those are a fixed few.
+type commandSpec struct {
+	name, sub, args, help string
+	values                []string
+}
+
+// slash is whether the line is a slash command's, not the user's own
+// command's (!) or how a slash is sent to the model (//).
+func (c commandSpec) slash() bool {
+	return strings.HasPrefix(c.name, "/") && !strings.HasPrefix(c.name, "//")
+}
+
+// usage is the command as its line of the list shows it.
+func (c commandSpec) usage() string {
+	return strings.Join(strings.Fields(c.name+" "+c.sub+" "+c.args), " ")
+}
+
+// commandList is the commands, for /help, an unknown command and the
+// terminal client's completion of a command line, which walks it: the
+// names for the first word, a name's subcommands and values for the
+// second. A command with several forms has a line for each, its
+// plainest first; a new subcommand is a line here.
+var commandList = []commandSpec{
+	{name: "/help", help: "this list"},
+	{name: "/model", args: "<name>", help: "the model from the next request"},
+	{name: "/think", args: "on|off", help: "reasoning from the next request", values: []string{"on", "off"}},
+	{name: "/tools", help: "the tools offered and what was left out"},
+	{name: "/session", help: "the session's ID and where it is kept"},
+	{name: "/new", help: "a new session, keeping the model, reasoning, mode and /mcp add servers"},
+	{name: "/clear", help: "the same as /new"},
+	{name: "/name", args: "<text>", help: "name this session; -list and /resume show it"},
+	{name: "/resume", args: "[n|ID|name]", help: "this project's sessions, newest first; with one, continue it here"},
+	{name: "/mcp", help: "the MCP servers, where each runs and what it is for"},
+	{name: "/mcp", sub: "add", args: "<name> <command>", help: "start an MCP server; its tools from the next prompt"},
+	{name: "/mcp", sub: "remove", args: "<label>", help: "stop an MCP server"},
+	{name: "/mode", args: "[name]", help: "the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions", values: policy.Modes},
+	{name: "/permissions", help: "the rules in force, where each came from, the mode and the grants"},
+	{name: "/skills", sub: "approve", args: "<name>", help: "let a skill the model wrote grant its allowed-tools under -trust-skills"},
+	{name: "/memory", sub: "undo", help: "revert the latest background memory pass's changes; again for the pass before"},
+	{name: "/compact", args: "[instructions]", help: "fold the conversation at the next request, keeping what you say"},
+	{name: "/port", args: "<port>", help: "reach a port where the tools act from this machine's loopback"},
+	{name: "/follow", args: "<text>", help: "a follow-up, taken when the model would stop"},
+	{name: "/abort", help: "abort the run"},
+	{name: "/quit", help: "leave"},
+	{name: "/exit", help: "the same as /quit"},
+	{name: "!<command>", help: "run a command yourself; its output goes with the next prompt"},
+	{name: "//text, !!text", help: "send /text, !text to the model"},
+}
+
 // commandHelp lists the commands, for /help and an unknown command.
-const commandHelp = `commands:
-  /model <name>             the model from the next request
-  /think on|off             reasoning from the next request
-  /tools                    the tools offered and what was left out
-  /session                  the session's ID and where it is kept
-  /new                      a new session, keeping the model, reasoning, mode and /mcp add servers (also /clear)
-  /name <text>              name this session; -list and /resume show it
-  /resume [n|ID|name]       this project's sessions, newest first; with one, continue it here
-  /mcp                      the MCP servers, where each runs and what it is for
-  /mcp add <name> <command> start an MCP server; its tools from the next prompt
-  /mcp remove <label>       stop an MCP server
-  /mode [name]              the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions
-  /permissions              the rules in force, where each came from, the mode and the grants
-  /skills approve <name>    let a skill the model wrote grant its allowed-tools under -trust-skills
-  /memory undo              revert the latest background memory pass's changes; again for the pass before
-  /compact [instructions]   fold the conversation at the next request, keeping what you say
-  /port <port>              reach a port where the tools act from this machine's loopback
-  /follow <text>            a follow-up, taken when the model would stop
-  /abort                    abort the run
-  /quit                     leave
-  !<command>                run a command yourself; its output goes with the next prompt
-  //text, !!text            send /text, !text to the model`
+var commandHelp = func() string {
+	var b strings.Builder
+	b.WriteString("commands:")
+	for _, c := range commandList {
+		fmt.Fprintf(&b, "\n  %-25s %s", c.usage(), c.help)
+	}
+	return b.String()
+}()
 
 // commandResult is what a command did: out is what it says, quit
 // whether the front should end.
