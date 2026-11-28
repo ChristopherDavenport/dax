@@ -5,6 +5,14 @@ All user-visible changes to dax. The format follows
 uses [Semantic Versioning](https://semver.org/); before v1.0.0 minor
 versions may break flags and the config file.
 
+## Unreleased
+
+- Added: in the terminal client the word after a command lists the
+  values the session has for it: `/resume ` the project's other
+  sessions, found by ID or by part of the name, `/mcp remove ` the
+  servers `/mcp add` started, and `/skills approve ` the skills the
+  model wrote.
+
 ## v0.0.47 - 2026-11-27
 
 - Added: in the terminal client a slash that starts the input opens the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,10 +52,20 @@ type userCommander interface {
 // commandSpec is one line of the commands' list: the command's name,
 // the subcommand this line is for when it has one, the arguments it
 // takes and what it does. values are what its next argument may be,
-// where those are a fixed few.
+// where those are a fixed few, and live reads them from the session
+// where they are its own (the servers /mcp remove takes, the sessions
+// /resume does).
 type commandSpec struct {
 	name, sub, args, help string
 	values                []string
+	live                  func(context.Context, agent.Controls) []commandValue
+}
+
+// commandValue is one value a command's argument may be: text, what is
+// typed, help, a line about it, and also, another text it is known by
+// (a session's name beside its ID), which the typed word may be part of.
+type commandValue struct {
+	text, help, also string
 }
 
 // slash is whether the line is a slash command's, not the user's own
@@ -82,13 +93,13 @@ var commandList = []commandSpec{
 	{name: "/new", help: "a new session, keeping the model, reasoning, mode and /mcp add servers"},
 	{name: "/clear", help: "the same as /new"},
 	{name: "/name", args: "<text>", help: "name this session; -list and /resume show it"},
-	{name: "/resume", args: "[n|ID|name]", help: "this project's sessions, newest first; with one, continue it here"},
+	{name: "/resume", args: "[n|ID|name]", help: "this project's sessions, newest first; with one, continue it here", live: otherSessions},
 	{name: "/mcp", help: "the MCP servers, where each runs and what it is for"},
 	{name: "/mcp", sub: "add", args: "<name> <command>", help: "start an MCP server; its tools from the next prompt"},
-	{name: "/mcp", sub: "remove", args: "<label>", help: "stop an MCP server"},
+	{name: "/mcp", sub: "remove", args: "<label>", help: "stop an MCP server", live: addedServers},
 	{name: "/mode", args: "[name]", help: "the permission mode, or switch to default, acceptEdits, plan, dontAsk or bypassPermissions", values: policy.Modes},
 	{name: "/permissions", help: "the rules in force, where each came from, the mode and the grants"},
-	{name: "/skills", sub: "approve", args: "<name>", help: "let a skill the model wrote grant its allowed-tools under -trust-skills"},
+	{name: "/skills", sub: "approve", args: "<name>", help: "let a skill the model wrote grant its allowed-tools under -trust-skills", live: learnedSkills},
 	{name: "/memory", sub: "undo", help: "revert the latest background memory pass's changes; again for the pass before"},
 	{name: "/compact", args: "[instructions]", help: "fold the conversation at the next request, keeping what you say"},
 	{name: "/port", args: "<port>", help: "reach a port where the tools act from this machine's loopback"},
@@ -109,6 +120,66 @@ var commandHelp = func() string {
 	}
 	return b.String()
 }()
+
+// otherSessions are the sessions /resume takes: the project's but the
+// one the front is on, newest first, each by its ID with when it began
+// and its name. Over dax attach there are none to move to.
+func otherSessions(ctx context.Context, ctl agent.Controls) []commandValue {
+	l, ok := ctl.(lister)
+	if !ok {
+		return nil
+	}
+	sums, err := l.Sessions(ctx)
+	if err != nil {
+		return nil
+	}
+	current := ctl.Info().ID
+	var out []commandValue
+	for _, s := range sums {
+		if s.Header.ID == current {
+			continue
+		}
+		help := s.Header.CreatedAt.Local().Format("2006-01-02 15:04")
+		if s.Name != "" {
+			help += "  " + strconv.Quote(oneLine(s.Name, maxField))
+		}
+		out = append(out, commandValue{text: s.Header.ID, help: help, also: s.Name})
+	}
+	return out
+}
+
+// addedServers are the labels /mcp remove takes: the servers /mcp add
+// started, each with the name its tools carry.
+func addedServers(_ context.Context, ctl agent.Controls) []commandValue {
+	var out []commandValue
+	for _, m := range ctl.Info().MCP {
+		if m.Added != "" {
+			out = append(out, commandValue{text: m.Added, help: "mcp__" + m.Name})
+		}
+	}
+	return out
+}
+
+// learnedSkills are the names /skills approve takes: the skills the
+// model wrote, in this machine's user directory, approved or not, since
+// a changed one needs approving again.
+func learnedSkills(_ context.Context, ctl agent.Controls) []commandValue {
+	u, ok := ctl.(userDirer)
+	if !ok || u.UserDir() == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(skills.LearnedDir(u.UserDir()))
+	if err != nil {
+		return nil
+	}
+	var out []commandValue
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, commandValue{text: e.Name(), help: "a skill the model wrote"})
+		}
+	}
+	return out
+}
 
 // commandResult is what a command did: out is what it says, quit
 // whether the front should end.
